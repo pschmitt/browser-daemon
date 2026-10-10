@@ -106,6 +106,36 @@ in
       default = null;
       description = "Path to file containing shared cluster secret for peer-to-peer authentication.";
     };
+
+    recordingsDir = lib.mkOption {
+      type = lib.types.str;
+      default = "${cfg.dataDir}/recordings";
+      description = "Directory where session screencast recordings are saved.";
+    };
+
+    recordSessions = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether to automatically record browser sessions by default.";
+    };
+
+    recordingMaxStorageMB = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 2048;
+      description = "Maximum storage in MB allocated for session recordings before auto-vacuum.";
+    };
+
+    recordingMaxAgeHours = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 168; # 7 days
+      description = "Maximum age in hours before recordings are pruned by auto-vacuum.";
+    };
+
+    recordingMaxCount = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 100;
+      description = "Maximum number of recordings kept before auto-vacuum.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -152,6 +182,14 @@ in
             cfg.display
             "--profile-dir"
             "${cfg.dataDir}/profiles"
+            "--recordings-dir"
+            cfg.recordingsDir
+            "--recording-max-storage-mb"
+            (toString cfg.recordingMaxStorageMB)
+            "--recording-max-age-hours"
+            (toString cfg.recordingMaxAgeHours)
+            "--recording-max-count"
+            (toString cfg.recordingMaxCount)
             "--max-sessions"
             (toString cfg.maxSessions)
             "--default-width"
@@ -176,6 +214,9 @@ in
           ++ lib.optionals (cfg.clusterSecret != null) [
             "--cluster-secret"
             cfg.clusterSecret
+          ]
+          ++ lib.optionals cfg.recordSessions [
+            "--record-sessions"
           ]
         );
         Restart = "always";

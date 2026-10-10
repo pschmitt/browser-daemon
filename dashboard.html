@@ -289,13 +289,19 @@
     grid-template-columns: repeat(12, 1fr);
     gap: 16px;
   }
+  .col-3 { grid-column: span 3; }
   .col-4 { grid-column: span 4; }
-  .col-8 { grid-column: span 8; }
+  .col-5 { grid-column: span 5; }
   .col-6 { grid-column: span 6; }
+  .col-8 { grid-column: span 8; }
   .col-12 { grid-column: span 12; }
 
+  .speed-btn { padding: 2px 7px; min-width: 34px; }
+  .pulse { animation: recPulse 1.5s infinite; }
+  @keyframes recPulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }
+
   @media (max-width: 860px) {
-    .col-4, .col-8, .col-6 { grid-column: span 12; }
+    .col-3, .col-4, .col-5, .col-6, .col-8 { grid-column: span 12; }
     .brand-badge { max-width: 110px; }
     main { padding: 14px; gap: 16px; }
   }
@@ -996,7 +1002,7 @@
     </div>
 
     <!-- Real-time Activity History Graph -->
-    <div class="chart-card col-8">
+    <div class="chart-card col-5">
       <div class="chart-header">
         <div class="chart-title">
           <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -1020,7 +1026,30 @@
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--muted);">
         <span>Past 60 seconds</span>
-        <span>Display :98 (Xvfb) &bull; AutomationControlled disabled</span>
+        <span>Display :98 (Xvfb)</span>
+      </div>
+    </div>
+
+    <!-- Storage & Auto-Vacuum Quota Card -->
+    <div class="stat-card col-3">
+      <div class="stat-card-header">
+        <span class="stat-label">Storage &amp; Vacuum</span>
+        <button class="btn btn-ghost btn-xs" onclick="triggerVacuum()" title="Run auto-vacuum retention policy now" style="padding:2px 7px;">
+          Vacuum
+        </button>
+      </div>
+      <div>
+        <div class="stat-val-group">
+          <div class="stat-val" id="storageUsedVal" style="font-size:24px;">0 MB</div>
+          <small>/ <span id="storageMaxVal">2.0 GB</span></small>
+        </div>
+        <div style="background:var(--code-bg);border:1px solid var(--card-border);border-radius:999px;height:7px;margin-top:8px;overflow:hidden;position:relative;">
+          <div id="storageProgressBar" style="background:var(--accent);height:100%;width:0%;transition:width 0.3s;"></div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;">
+        <span id="recordingsCountSummary">0 recordings saved</span>
+        <span style="color:var(--ok);font-weight:600;" id="vacuumPolicyText">Auto-Vacuum Active</span>
       </div>
     </div>
   </div>
@@ -1067,6 +1096,31 @@
       </div>
     </div>
     <div id="profilesContainer">
+      <!-- Injected by JS -->
+    </div>
+  </div>
+
+  <!-- Session Recordings & Playback Card -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+        Session Recordings &amp; Playback
+        <span id="recordingCountBadge" class="badge badge-accent">0</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="storageUsageBadge" style="font-size:12px;color:var(--muted);margin-right:4px;">0 MB used</span>
+        <button class="btn btn-ghost btn-sm" onclick="triggerVacuum()" title="Run auto-vacuum retention policy now">
+          <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          Vacuum Storage
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="refreshData()">
+          <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Refresh
+        </button>
+      </div>
+    </div>
+    <div id="recordingsContainer">
       <!-- Injected by JS -->
     </div>
   </div>
@@ -1159,6 +1213,12 @@
             <span><strong>Keep Session Alive (Persistent)</strong> — don't terminate when client disconnects</span>
           </label>
         </div>
+        <div class="form-group">
+          <label class="form-checkbox-label">
+            <input type="checkbox" id="sessionRecordInput" checked>
+            <span><strong>Record Session</strong> — screencast frames and playback metadata</span>
+          </label>
+        </div>
         <div class="form-row">
           <div class="form-group">
             <label class="form-label" for="sessionWidthInput">Width (px)</label>
@@ -1238,6 +1298,58 @@
         </div>
         <button type="submit" class="btn btn-accent btn-sm" id="submitPeerBtn" style="height:38px;">+ Add Peer</button>
       </form>
+    </div>
+  </div>
+<!-- Modal: Recording Playback Player -->
+<div id="playerModal" class="modal-overlay" onclick="handlePlayerModalOverlayClick(event)">
+  <div class="modal-card" style="max-width: 980px; width: 95%;">
+    <div class="modal-header">
+      <div class="card-title" style="min-width:0;flex:1;">
+        <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+        <span id="playerModalTitle" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Session Playback</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button class="btn btn-ghost btn-xs" id="exportWebmBtn" onclick="exportRecordingWebM()" title="Export session recording as WebM video">
+          <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export WebM
+        </button>
+        <button class="btn btn-ghost btn-xs" onclick="closePlayerModal()">&times;</button>
+      </div>
+    </div>
+    <div class="modal-body" style="padding:14px;background:#05070a;display:flex;flex-direction:column;align-items:center;position:relative;">
+      <!-- Page URL & Title overlay -->
+      <div id="playerUrlOverlay" style="position:absolute;top:18px;left:20px;right:20px;background:rgba(18,21,32,0.85);backdrop-filter:blur(8px);padding:6px 12px;border-radius:6px;border:1px solid var(--card-border);font-size:12px;display:flex;justify-content:space-between;align-items:center;z-index:2;pointer-events:none;">
+        <span id="playerPageTitle" style="font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;">Loading frames...</span>
+        <span id="playerPageUrl" style="color:var(--muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%;"></span>
+      </div>
+
+      <!-- Canvas Viewport -->
+      <div style="width:100%;max-height:560px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:8px;background:#000;">
+        <canvas id="playerCanvas" style="max-width:100%;max-height:560px;object-fit:contain;display:block;"></canvas>
+      </div>
+
+      <!-- Scrubber & Controls -->
+      <div style="width:100%;margin-top:12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <input type="range" id="playerScrubber" min="0" max="0" value="0" style="flex:1;accent-color:var(--accent);cursor:pointer;" oninput="onScrubberInput(this.value)">
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;color:#e9ecf5;font-size:12px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <button class="btn btn-accent btn-xs" id="playerPlayBtn" onclick="togglePlayPause()" style="min-width:60px;">Play</button>
+            <button class="btn btn-ghost btn-xs" onclick="stepFrame(-1)" title="Step back one frame">&laquo; Step</button>
+            <button class="btn btn-ghost btn-xs" onclick="stepFrame(1)" title="Step forward one frame">Step &raquo;</button>
+            <span id="playerTimeDisplay" style="font-family:monospace;font-size:12px;margin-left:6px;">00:00 / 00:00</span>
+            <span id="playerFrameDisplay" style="color:var(--muted);font-size:11px;">(0 / 0 frames)</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="color:var(--muted);font-size:11px;">Speed:</span>
+            <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(0.5, this)">0.5x</button>
+            <button class="btn btn-accent btn-xs speed-btn" onclick="setPlaySpeed(1, this)">1x</button>
+            <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(2, this)">2x</button>
+            <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(4, this)">4x</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -1400,6 +1512,7 @@ async function submitNewSession(e) {
   const node = document.getElementById('sessionNodeInput')?.value;
   const profile = document.getElementById('sessionProfileInput').value.trim() || null;
   const persistent = document.getElementById('sessionPersistentInput').checked;
+  const record = document.getElementById('sessionRecordInput')?.checked ?? true;
   const width = parseInt(document.getElementById('sessionWidthInput').value, 10) || 1920;
   const height = parseInt(document.getElementById('sessionHeightInput').value, 10) || 1080;
 
@@ -1409,7 +1522,7 @@ async function submitNewSession(e) {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ profile, persistent, width, height })
+      body: JSON.stringify({ profile, persistent, width, height, record })
     });
 
     if (!res.ok) {
@@ -1824,6 +1937,47 @@ function renderMeshOverview(ov) {
   updateGauge(activeCount, maxCount);
   updateHistoryChart(activeCount, maxCount);
 
+  let usedStorage = 0;
+  let maxStorage = 0;
+  if (selectedNodeFilter === 'all') {
+    usedStorage = ov.total_storage_bytes || 0;
+    maxStorage = ov.max_storage_bytes || (2048 * 1024 * 1024 * allNodes.length);
+  } else {
+    const targetNode = allNodes.find(n => n.name === selectedNodeFilter);
+    if (targetNode) {
+      if (targetNode.isLocal) {
+        usedStorage = ov.local_node.storage_used_bytes || 0;
+        maxStorage = ov.local_node.max_storage_bytes || (2048 * 1024 * 1024);
+      } else {
+        const peer = ov.peers.find(p => p.name === selectedNodeFilter);
+        if (peer) {
+          usedStorage = peer.storage_used_bytes || 0;
+          maxStorage = (2048 * 1024 * 1024);
+        }
+      }
+    }
+  }
+
+  const storageUsedElem = document.getElementById('storageUsedVal');
+  if (storageUsedElem) storageUsedElem.textContent = formatBytes(usedStorage);
+  const storageMaxElem = document.getElementById('storageMaxVal');
+  if (storageMaxElem) storageMaxElem.textContent = formatBytes(maxStorage);
+  const storageProgress = document.getElementById('storageProgressBar');
+  if (storageProgress) {
+    const pct = maxStorage > 0 ? Math.min(100, Math.round((usedStorage / maxStorage) * 100)) : 0;
+    storageProgress.style.width = `${pct}%`;
+    storageProgress.style.background = pct > 85 ? 'var(--danger)' : pct > 65 ? 'var(--warn)' : 'var(--accent)';
+  }
+  const storageBadge = document.getElementById('storageUsageBadge');
+  if (storageBadge) storageBadge.textContent = `${formatBytes(usedStorage)} used`;
+
+  const filteredRecordings = selectedNodeFilter === 'all'
+    ? (ov.recordings || [])
+    : (ov.recordings || []).filter(r => r.node_name === selectedNodeFilter);
+
+  const recSummary = document.getElementById('recordingsCountSummary');
+  if (recSummary) recSummary.textContent = `${filteredRecordings.length} recordings saved`;
+
   // Render Sessions Table
   document.getElementById('sessionCountBadge').textContent = filteredSessions.length;
   const sContainer = document.getElementById('sessionsContainer');
@@ -1865,18 +2019,25 @@ function renderMeshOverview(ov) {
       const uptime = formatUptime(s.uptime_seconds);
       const wsUrl = `wss://${s.node_url.replace(/^https?:\/\//, '')}/chromium?session_id=${sid}`;
       const handoffUrl = `${s.node_url}/handoff/`;
+      const recBadge = s.is_recording
+        ? ` <span class="badge badge-danger pulse" style="font-size:10px;padding:2px 6px;" title="Recording screencast">REC</span>`
+        : '';
+      const recBtn = s.is_recording
+        ? `<button class="btn btn-ghost btn-xs" onclick="stopRecording('${sid}', '${escapeHtml(s.node_name)}')" title="Stop session recording">Stop Rec</button>`
+        : `<button class="btn btn-ghost btn-xs" onclick="startRecording('${sid}', '${escapeHtml(s.node_name)}')" title="Start recording session">Record</button>`;
 
       html += `
         <tr>
           <td><span class="badge badge-accent" title="${sid}">${sid.slice(0, 8)}</span></td>
           <td>${nodeBadge}</td>
-          <td><strong>${prof}</strong></td>
+          <td><strong>${prof}</strong>${recBadge}</td>
           <td>${modeBadge}</td>
           <td>${uptime}</td>
           <td><span class="badge badge-muted">${s.client_count} conn</span></td>
           <td><span class="badge badge-muted">${s.tabs_count} tabs</span></td>
           <td style="text-align:right;">
             <div style="display:inline-flex;gap:6px;">
+              ${recBtn}
               <button class="btn btn-ghost btn-xs" onclick="copyText('${wsUrl}', this)" title="Copy WebSocket CDP URL">Copy WS</button>
               <a href="${handoffUrl}" class="btn btn-accent btn-xs" title="Open Mobile Handoff on ${escapeHtml(s.node_name)}">Handoff</a>
               <button class="btn btn-danger btn-xs" onclick="terminateSession('${sid}', '${escapeHtml(s.node_name)}')" title="Terminate browser process on ${escapeHtml(s.node_name)}">Terminate</button>
@@ -1956,6 +2117,74 @@ function renderMeshOverview(ov) {
     }
     html += `</tbody></table></div>`;
     pContainer.innerHTML = html;
+  }
+
+  // Render Session Recordings Table
+  document.getElementById('recordingCountBadge').textContent = filteredRecordings.length;
+  const rContainer = document.getElementById('recordingsContainer');
+  if (filteredRecordings.length === 0) {
+    rContainer.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+        </div>
+        <div class="empty-title">No recordings available ${selectedNodeFilter !== 'all' ? `on ${escapeHtml(selectedNodeFilter)}` : ''}</div>
+        <div class="empty-desc">
+          Sessions with recording enabled automatically save screencasts and metadata here.
+        </div>
+      </div>`;
+  } else {
+    let html = `
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Recording</th>
+              <th>Node</th>
+              <th>Profile / Target</th>
+              <th>Started</th>
+              <th>Duration</th>
+              <th>Frames</th>
+              <th>Size</th>
+              <th>Status</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>`;
+    for (const r of filteredRecordings) {
+      const recId = escapeHtml(r.id);
+      const nodeName = escapeHtml(r.node_name);
+      const nodeBadge = `<span class="badge badge-node">${nodeName}</span>`;
+      const prof = r.profile ? escapeHtml(r.profile) : (r.title ? escapeHtml(r.title) : '<em style="color:var(--muted);">ephemeral</em>');
+      const started = new Date(r.started_at_secs * 1000).toLocaleString();
+      const dur = formatUptime(r.duration_seconds);
+      const frames = `${r.frame_count} frames`;
+      const size = formatBytes(r.size_bytes);
+      const statusBadge = r.status === 'recording'
+        ? `<span class="badge badge-danger pulse">Recording</span>`
+        : `<span class="badge badge-ok">Completed</span>`;
+
+      html += `
+        <tr>
+          <td><span class="badge badge-accent" title="${recId}">${recId.slice(0, 8)}</span></td>
+          <td>${nodeBadge}</td>
+          <td><strong>${prof}</strong></td>
+          <td style="font-size:12px;color:var(--muted);">${started}</td>
+          <td>${dur}</td>
+          <td><span class="badge badge-muted">${frames}</span></td>
+          <td>${size}</td>
+          <td>${statusBadge}</td>
+          <td style="text-align:right;">
+            <div style="display:inline-flex;gap:6px;">
+              <button class="btn btn-accent btn-xs" onclick="openPlayerModal('${recId}', '${nodeName}')" title="Play back session recording">Play</button>
+              <button class="btn btn-ghost btn-xs" onclick="exportWebMFromRecording('${recId}', '${nodeName}')" title="Download recording as WebM">Export</button>
+              <button class="btn btn-danger btn-xs" onclick="deleteRecording('${recId}', '${nodeName}')" title="Delete recording from disk">Delete</button>
+            </div>
+          </td>
+        </tr>`;
+    }
+    html += `</tbody></table></div>`;
+    rContainer.innerHTML = html;
   }
 
   // Render Targets & Quick Connect Banner
@@ -2093,6 +2322,345 @@ function copyText(text, btn) {
     setTimeout(() => { btn.textContent = old; }, 1500);
   });
 }
+
+// ---------------------------------------------------------------------------
+// Recording Management & Playback Player
+// ---------------------------------------------------------------------------
+
+async function startRecording(sid, node) {
+  const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+  const url = isLocal ? `/api/sessions/${encodeURIComponent(sid)}/record` : `/api/peers/${encodeURIComponent(node)}/sessions/${encodeURIComponent(sid)}/record`;
+  try {
+    const res = await fetch(url, { method: 'POST', headers: getAuthHeaders() });
+    if (res.ok) {
+      refreshData();
+    } else {
+      alert(`Failed to start recording: ${res.statusText}`);
+    }
+  } catch(e) {
+    alert(`Error: ${e}`);
+  }
+}
+
+async function stopRecording(sid, node) {
+  const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+  const url = isLocal ? `/api/sessions/${encodeURIComponent(sid)}/stop-record` : `/api/peers/${encodeURIComponent(node)}/sessions/${encodeURIComponent(sid)}/stop-record`;
+  try {
+    const res = await fetch(url, { method: 'POST', headers: getAuthHeaders() });
+    if (res.ok) {
+      refreshData();
+    } else {
+      alert(`Failed to stop recording: ${res.statusText}`);
+    }
+  } catch(e) {
+    alert(`Error: ${e}`);
+  }
+}
+
+async function deleteRecording(id, node) {
+  if (!confirm(`Are you sure you want to delete recording ${id.slice(0, 8)} on node ${node}?`)) return;
+  const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+  const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}`;
+  try {
+    const res = await fetch(url, { method: 'DELETE', headers: getAuthHeaders() });
+    if (res.ok) {
+      refreshData();
+    } else {
+      alert(`Failed to delete recording: ${res.statusText}`);
+    }
+  } catch(e) {
+    alert(`Error: ${e}`);
+  }
+}
+
+async function triggerVacuum() {
+  const node = selectedNodeFilter;
+  const isLocal = node === 'all' || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+  const targetName = node === 'all' ? (currentOverview?.local_node?.name || 'local') : node;
+  if (!confirm(`Run auto-vacuum retention policy now on ${targetName}? This prunes expired recordings according to storage limits.`)) return;
+  try {
+    const url = isLocal ? '/api/recordings/vacuum' : `/api/peers/${encodeURIComponent(targetName)}/recordings/vacuum`;
+    const res = await fetch(url, { method: 'POST', headers: getAuthHeaders() });
+    if (res.ok) {
+      const stats = await res.json();
+      alert(`Auto-vacuum complete on ${targetName}:\n• Vacuumed recordings: ${stats.vacuumed_count}\n• Freed space: ${formatBytes(stats.freed_bytes)}\n• Current storage: ${formatBytes(stats.current_storage_bytes)} / ${formatBytes(stats.max_storage_bytes)}`);
+      refreshData();
+    } else {
+      alert(`Vacuum failed: ${res.statusText}`);
+    }
+  } catch(e) {
+    alert(`Vacuum error: ${e}`);
+  }
+}
+
+let activePlayer = null;
+
+function handlePlayerModalOverlayClick(e) {
+  if (e.target.id === 'playerModal') {
+    closePlayerModal();
+  }
+}
+
+function closePlayerModal() {
+  if (activePlayer) {
+    activePlayer.isPlaying = false;
+    if (activePlayer.timer) clearTimeout(activePlayer.timer);
+    activePlayer = null;
+  }
+  document.getElementById('playerModal').classList.remove('open');
+}
+
+async function openPlayerModal(id, node) {
+  const modal = document.getElementById('playerModal');
+  const titleElem = document.getElementById('playerModalTitle');
+  titleElem.textContent = `Recording Playback — ${id.slice(0, 8)} [${node}]`;
+
+  document.getElementById('playerPageTitle').textContent = 'Loading frames...';
+  document.getElementById('playerPageUrl').textContent = '';
+  document.getElementById('playerScrubber').value = 0;
+  document.getElementById('playerScrubber').max = 0;
+  document.getElementById('playerPlayBtn').textContent = 'Play';
+
+  modal.classList.add('open');
+
+  const canvas = document.getElementById('playerCanvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = 1280;
+  canvas.height = 800;
+  ctx.fillStyle = '#090b10';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#8892ad';
+  ctx.font = '16px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillText('Loading recorded frames...', canvas.width / 2, canvas.height / 2);
+
+  try {
+    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+    const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}/frames` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}/frames`;
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) {
+      alert(`Failed to load recording frames: ${res.statusText}`);
+      closePlayerModal();
+      return;
+    }
+    const text = await res.text();
+    const lines = text.trim().split('\n');
+    const frames = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try { frames.push(JSON.parse(line)); } catch(e) {}
+    }
+
+    if (frames.length === 0) {
+      alert('No frames found in this recording.');
+      closePlayerModal();
+      return;
+    }
+
+    activePlayer = {
+      id,
+      node,
+      frames,
+      currentIndex: 0,
+      isPlaying: false,
+      speed: 1,
+      timer: null,
+      cachedImages: new Map(),
+    };
+
+    document.getElementById('playerScrubber').max = frames.length - 1;
+    document.getElementById('playerFrameDisplay').textContent = `(1 / ${frames.length} frames)`;
+    renderPlayerFrame(0);
+  } catch(e) {
+    alert(`Failed to parse recording frames: ${e}`);
+    closePlayerModal();
+  }
+}
+
+function renderPlayerFrame(idx) {
+  if (!activePlayer || !activePlayer.frames[idx]) return;
+  activePlayer.currentIndex = idx;
+  const frame = activePlayer.frames[idx];
+  const totalFrames = activePlayer.frames.length;
+
+  document.getElementById('playerScrubber').value = idx;
+  document.getElementById('playerFrameDisplay').textContent = `(${idx + 1} / ${totalFrames} frames)`;
+
+  const curSec = Math.floor(frame.t / 1000);
+  const maxSec = Math.floor(activePlayer.frames[totalFrames - 1].t / 1000);
+  const pad = n => String(n).padStart(2, '0');
+  document.getElementById('playerTimeDisplay').textContent =
+    `${pad(Math.floor(curSec / 60))}:${pad(curSec % 60)} / ${pad(Math.floor(maxSec / 60))}:${pad(maxSec % 60)}`;
+
+  if (frame.title) document.getElementById('playerPageTitle').textContent = frame.title;
+  if (frame.url) document.getElementById('playerPageUrl').textContent = frame.url;
+
+  const canvas = document.getElementById('playerCanvas');
+  const ctx = canvas.getContext('2d');
+
+  let img = activePlayer.cachedImages.get(idx);
+  if (!img) {
+    img = new Image();
+    img.src = 'data:image/jpeg;base64,' + frame.data;
+    activePlayer.cachedImages.set(idx, img);
+    if (activePlayer.cachedImages.size > 200) {
+      const firstKey = activePlayer.cachedImages.keys().next().value;
+      activePlayer.cachedImages.delete(firstKey);
+    }
+  }
+
+  if (img.complete && img.naturalWidth > 0) {
+    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+    }
+    ctx.drawImage(img, 0, 0);
+  } else {
+    img.onload = () => {
+      if (activePlayer && activePlayer.currentIndex === idx) {
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        ctx.drawImage(img, 0, 0);
+      }
+    };
+  }
+}
+
+function togglePlayPause() {
+  if (!activePlayer) return;
+  activePlayer.isPlaying = !activePlayer.isPlaying;
+  document.getElementById('playerPlayBtn').textContent = activePlayer.isPlaying ? 'Pause' : 'Play';
+  if (activePlayer.isPlaying) {
+    if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+      activePlayer.currentIndex = 0;
+    }
+    playNextFrame();
+  } else if (activePlayer.timer) {
+    clearTimeout(activePlayer.timer);
+  }
+}
+
+function playNextFrame() {
+  if (!activePlayer || !activePlayer.isPlaying) return;
+  if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+    activePlayer.isPlaying = false;
+    document.getElementById('playerPlayBtn').textContent = 'Play';
+    return;
+  }
+
+  const curr = activePlayer.frames[activePlayer.currentIndex];
+  const next = activePlayer.frames[activePlayer.currentIndex + 1];
+  let delay = Math.max(16, (next.t - curr.t) / activePlayer.speed);
+  if (delay > 2000) delay = 1000;
+
+  activePlayer.timer = setTimeout(() => {
+    if (!activePlayer || !activePlayer.isPlaying) return;
+    renderPlayerFrame(activePlayer.currentIndex + 1);
+    playNextFrame();
+  }, delay);
+}
+
+function stepFrame(delta) {
+  if (!activePlayer) return;
+  if (activePlayer.isPlaying) togglePlayPause();
+  const next = Math.max(0, Math.min(activePlayer.frames.length - 1, activePlayer.currentIndex + delta));
+  renderPlayerFrame(next);
+}
+
+function onScrubberInput(val) {
+  if (!activePlayer) return;
+  const idx = parseInt(val, 10);
+  renderPlayerFrame(idx);
+}
+
+function setPlaySpeed(s, btn) {
+  if (!activePlayer) return;
+  activePlayer.speed = s;
+  document.querySelectorAll('.speed-btn').forEach(b => {
+    b.classList.remove('btn-accent');
+    b.classList.add('btn-ghost');
+  });
+  btn.classList.remove('btn-ghost');
+  btn.classList.add('btn-accent');
+}
+
+async function exportRecordingWebM() {
+  if (!activePlayer || !activePlayer.frames || activePlayer.frames.length === 0) return;
+  const btn = document.getElementById('exportWebmBtn');
+  btn.disabled = true;
+  btn.textContent = 'Exporting...';
+
+  const canvas = document.getElementById('playerCanvas');
+  const stream = canvas.captureStream(25);
+  let mediaRecorder;
+  try {
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
+  } catch(e) {
+    try {
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+    } catch(err) {
+      alert('WebM export not supported in this browser: ' + err);
+      btn.disabled = false;
+      btn.textContent = 'Export WebM';
+      return;
+    }
+  }
+
+  const chunks = [];
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(chunks, { type: 'video/webm' });
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = u;
+    a.download = `session-${activePlayer.id}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(u);
+    btn.disabled = false;
+    btn.textContent = 'Export WebM';
+  };
+
+  mediaRecorder.start();
+
+  const originalIndex = activePlayer.currentIndex;
+  const wasPlaying = activePlayer.isPlaying;
+  activePlayer.isPlaying = false;
+
+  for (let i = 0; i < activePlayer.frames.length; i++) {
+    renderPlayerFrame(i);
+    await new Promise(r => setTimeout(r, 40));
+  }
+
+  mediaRecorder.stop();
+  renderPlayerFrame(originalIndex);
+  if (wasPlaying) togglePlayPause();
+}
+
+async function exportWebMFromRecording(id, node) {
+  await openPlayerModal(id, node);
+  setTimeout(() => exportRecordingWebM(), 300);
+}
+
+// Keyboard shortcuts for player
+window.addEventListener('keydown', e => {
+  const modal = document.getElementById('playerModal');
+  if (!modal || !modal.classList.contains('open') || !activePlayer) return;
+  if (e.key === ' ' || e.code === 'Space') {
+    e.preventDefault();
+    togglePlayPause();
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    stepFrame(1);
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    stepFrame(-1);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closePlayerModal();
+  }
+});
 
 updateHostInfo();
 refreshData();

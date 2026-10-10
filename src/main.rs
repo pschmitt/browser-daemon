@@ -1,5 +1,6 @@
 mod browser;
 mod proxy;
+mod recorder;
 
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path as AxumPath, Query, State};
@@ -14,7 +15,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
@@ -22,6 +23,7 @@ use uuid::Uuid;
 
 use crate::browser::{ActiveBrowser, BrowserConfig};
 use crate::proxy::bridge_websockets;
+use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
 
 static HANDOFF_HTML: &str = include_str!("../handoff.html");
 static DASHBOARD_HTML: &str = include_str!("../dashboard.html");
@@ -64,6 +66,21 @@ pub struct Args {
 
     #[arg(long, help = "Path to file containing shared cluster secret")]
     pub cluster_secret_file: Option<PathBuf>,
+
+    #[arg(long, default_value = "/var/lib/browser-daemon/recordings")]
+    pub recordings_dir: PathBuf,
+
+    #[arg(long, default_value_t = true)]
+    pub record_sessions: bool,
+
+    #[arg(long, default_value_t = 2048)]
+    pub recording_max_storage_mb: u64,
+
+    #[arg(long, default_value_t = 168)]
+    pub recording_max_age_hours: u64,
+
+    #[arg(long, default_value_t = 100)]
+    pub recording_max_count: usize,
 }
 
 #[derive(Clone)]
@@ -79,7 +96,7 @@ pub struct ManagedSession {
 }
 
 impl ManagedSession {
-    pub async fn to_summary(&self, http_client: &reqwest::Client) -> SessionSummary {
+    pub async fn to_summary(&self, http_client: &reqwest::Client, is_recording: bool) -> SessionSummary {
         let tabs_count = {
             let url = format!("http://127.0.0.1:{}/json/list", self.port);
             if let Ok(res) = http_client.get(&url).send().await {
@@ -102,6 +119,7 @@ impl ManagedSession {
             uptime_seconds: self.created_at.elapsed().as_secs(),
             client_count: self.client_count.load(Ordering::SeqCst),
             tabs_count,
+            is_recording,
         }
     }
 }
@@ -116,6 +134,7 @@ pub struct SessionSummary {
     pub uptime_seconds: u64,
     pub client_count: usize,
     pub tabs_count: usize,
+    pub is_recording: bool,
 }
 
 #[derive(Clone)]
@@ -129,6 +148,8 @@ pub struct AppState {
     pub peers: Arc<RwLock<HashMap<String, String>>>,
     pub start_time: Instant,
     pub cluster_secret: Option<String>,
+    pub recorder_config: Arc<RecorderConfig>,
+    pub active_recordings: Arc<RwLock<HashMap<Uuid, SessionRecorderHandle>>>,
 }
 
 impl AppState {
@@ -171,6 +192,7 @@ impl AppState {
         persistent: bool,
         width: Option<u32>,
         height: Option<u32>,
+        record: Option<bool>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         // If a profile was given, check if an existing session is already running it
         if let Some(prof_name) = profile {
@@ -224,10 +246,25 @@ impl AppState {
             guard.insert(session.id, session.clone());
         }
 
+        if record.unwrap_or(self.recorder_config.enabled) {
+            let handle = recorder::start_recording(
+                session.id,
+                session.port,
+                session.profile.clone(),
+                self.node_name.clone(),
+                (*self.recorder_config).clone(),
+            );
+            self.active_recordings.write().await.insert(session.id, handle);
+        }
+
         Ok(session)
     }
 
     pub async fn terminate_session(&self, id: &Uuid) -> bool {
+        if let Some(handle) = self.active_recordings.write().await.remove(id) {
+            handle.stop();
+        }
+
         let removed = {
             let mut guard = self.sessions.write().await;
             guard.remove(id)
@@ -253,6 +290,7 @@ pub struct LaunchParams {
     pub persistent: Option<bool>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub record: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -262,6 +300,7 @@ pub struct CreateSessionRequest {
     pub persistent: bool,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub record: Option<bool>,
 }
 
 fn default_true() -> bool {
@@ -333,6 +372,9 @@ pub struct NodeInfo {
     pub active_sessions: usize,
     pub max_sessions: usize,
     pub profiles_count: usize,
+    pub recordings_count: usize,
+    pub storage_used_bytes: u64,
+    pub max_storage_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -344,6 +386,10 @@ pub struct PeerState {
     pub active_sessions: usize,
     pub max_sessions: usize,
     pub profiles_count: usize,
+    #[serde(default)]
+    pub recordings_count: usize,
+    #[serde(default)]
+    pub storage_used_bytes: u64,
     pub uptime_seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -377,17 +423,30 @@ pub struct MeshTarget {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MeshRecording {
+    #[serde(flatten)]
+    pub recording: RecordingMeta,
+    pub node_name: String,
+    pub node_url: String,
+    pub is_local: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MeshOverview {
     pub local_node: NodeInfo,
     pub peers: Vec<PeerState>,
     pub sessions: Vec<MeshSession>,
     pub profiles: Vec<MeshProfile>,
     pub targets: Vec<MeshTarget>,
+    pub recordings: Vec<MeshRecording>,
     pub total_sessions: usize,
     pub total_capacity: usize,
     pub total_profiles: usize,
+    pub total_recordings: usize,
     pub total_nodes: usize,
     pub online_nodes: usize,
+    pub total_storage_bytes: u64,
+    pub max_storage_bytes: u64,
 }
 
 #[derive(Deserialize, Debug)]
@@ -498,6 +557,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_height: args.default_height,
     });
 
+    let recorder_config = Arc::new(RecorderConfig {
+        enabled: args.record_sessions,
+        recordings_dir: args.recordings_dir.clone(),
+        max_storage_bytes: args.recording_max_storage_mb * 1024 * 1024,
+        max_age_secs: args.recording_max_age_hours * 3600,
+        max_count: args.recording_max_count,
+    });
+    let active_recordings = Arc::new(RwLock::new(HashMap::new()));
+
+    // Run initial auto-vacuum and background periodic vacuum every 10 mins
+    let vac_cfg = (*recorder_config).clone();
+    tokio::spawn(async move {
+        recorder::vacuum_recordings(&vac_cfg).await;
+        let mut interval = tokio::time::interval(Duration::from_secs(600));
+        loop {
+            interval.tick().await;
+            recorder::vacuum_recordings(&vac_cfg).await;
+        }
+    });
+
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -510,6 +589,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),
         cluster_secret,
+        recorder_config,
+        active_recordings,
     };
 
     let app = Router::new()
@@ -526,6 +607,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // REST Management APIs for sessions and profiles
         .route("/api/sessions", get(api_list_sessions).post(api_create_session))
         .route("/api/sessions/{id}", get(api_get_session).delete(api_delete_session))
+        .route("/api/sessions/{id}/record", post(api_session_start_record))
+        .route("/api/sessions/{id}/stop-record", post(api_session_stop_record))
         .route("/api/profiles", get(api_list_profiles).post(api_create_profile))
         .route(
             "/api/profiles/{name}",
@@ -535,6 +618,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .delete(api_delete_profile),
         )
         .route("/api/profiles/{name}/clone", post(api_clone_profile))
+        // Recording APIs
+        .route("/api/recordings", get(api_list_recordings))
+        .route("/api/recordings/{id}", get(api_get_recording).delete(api_delete_recording))
+        .route("/api/recordings/{id}/frames", get(api_get_recording_frames))
+        .route("/api/recordings/vacuum", post(api_vacuum_recordings))
         // Peer-to-Peer Mesh APIs
         .route("/api/mesh/node", get(api_mesh_node))
         .route("/api/mesh/overview", get(api_mesh_overview))
@@ -550,6 +638,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .put(api_peer_update_profile),
         )
         .route("/api/peers/{peer}/profiles/{name}/clone", post(api_peer_clone_profile))
+        .route("/api/peers/{peer}/recordings", get(api_peer_list_recordings))
+        .route("/api/peers/{peer}/recordings/{id}", get(api_peer_get_recording).delete(api_peer_delete_recording))
+        .route("/api/peers/{peer}/recordings/{id}/frames", get(api_peer_get_recording_frames))
+        .route("/api/peers/{peer}/recordings/vacuum", post(api_peer_vacuum_recordings))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
@@ -654,6 +746,7 @@ async fn handle_chromium_ws(
                 persistent,
                 params.width,
                 params.height,
+                params.record,
             )
             .await
         {
@@ -739,10 +832,12 @@ async fn get_local_sessions(state: &AppState) -> Vec<SessionSummary> {
         let guard = state.sessions.read().await;
         guard.values().cloned().collect()
     };
+    let rec_guard = state.active_recordings.read().await;
 
     let mut summaries = Vec::new();
     for session in sessions {
-        summaries.push(session.to_summary(&state.http_client).await);
+        let is_rec = rec_guard.contains_key(&session.id);
+        summaries.push(session.to_summary(&state.http_client, is_rec).await);
     }
     summaries
 }
@@ -814,11 +909,13 @@ async fn api_create_session(
             req.persistent,
             req.width,
             req.height,
+            req.record,
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
 
-    let summary = session.to_summary(&state.http_client).await;
+    let is_rec = state.active_recordings.read().await.contains_key(&session.id);
+    let summary = session.to_summary(&state.http_client, is_rec).await;
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
@@ -836,7 +933,8 @@ async fn api_get_session(
             .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Session not found" }))))?
     };
 
-    let summary = session.to_summary(&state.http_client).await;
+    let is_rec = state.active_recordings.read().await.contains_key(&session.id);
+    let summary = session.to_summary(&state.http_client, is_rec).await;
     let url = format!("http://127.0.0.1:{}/json/list", session.port);
     let targets = if let Ok(res) = state.http_client.get(&url).send().await {
         res.json::<Vec<DevToolsTarget>>().await.unwrap_or_default()
@@ -983,7 +1081,10 @@ async fn api_get_profile(
 
     let session_id = active_session.as_ref().map(|s| s.id);
     let session_summary = match active_session {
-        Some(s) => Some(s.to_summary(&state.http_client).await),
+        Some(s) => {
+            let is_rec = state.active_recordings.read().await.contains_key(&s.id);
+            Some(s.to_summary(&state.http_client, is_rec).await)
+        }
         None => None,
     };
 
@@ -1277,6 +1378,10 @@ async fn api_mesh_node(
         }
         Err(_) => 0,
     };
+    let local_recordings = recorder::list_recordings(&state.recorder_config).await;
+    let recordings_count = local_recordings.len();
+    let storage_used_bytes: u64 = local_recordings.iter().map(|r| r.size_bytes).sum();
+    let max_storage_bytes = state.recorder_config.max_storage_bytes;
 
     Ok(Json(NodeInfo {
         name: state.node_name.clone(),
@@ -1286,6 +1391,9 @@ async fn api_mesh_node(
         active_sessions: sessions_count,
         max_sessions: state.max_sessions,
         profiles_count,
+        recordings_count,
+        storage_used_bytes,
+        max_storage_bytes,
     }))
 }
 
@@ -1297,6 +1405,8 @@ async fn api_mesh_overview(
     let local_sessions = get_local_sessions(&state).await;
     let local_profiles = get_local_profiles(&state).await;
     let local_targets = get_local_targets(&state).await;
+    let local_recordings = recorder::list_recordings(&state.recorder_config).await;
+    let local_storage_used_bytes: u64 = local_recordings.iter().map(|r| r.size_bytes).sum();
 
     let local_node = NodeInfo {
         name: state.node_name.clone(),
@@ -1306,6 +1416,9 @@ async fn api_mesh_overview(
         active_sessions: local_sessions.len(),
         max_sessions: state.max_sessions,
         profiles_count: local_profiles.len(),
+        recordings_count: local_recordings.len(),
+        storage_used_bytes: local_storage_used_bytes,
+        max_storage_bytes: state.recorder_config.max_storage_bytes,
     };
 
     let peers: Vec<(String, String)> = {
@@ -1334,6 +1447,7 @@ async fn api_mesh_overview(
             let sessions_url = format!("{}/api/sessions", p_url);
             let profiles_url = format!("{}/api/profiles", p_url);
             let targets_url = format!("{}/json/list", p_url);
+            let recordings_url = format!("{}/api/recordings", p_url);
 
             let node_res = add_auth(c.get(&node_url))
                 .timeout(std::time::Duration::from_millis(1800))
@@ -1344,7 +1458,7 @@ async fn api_mesh_overview(
             match node_res {
                 Ok(res) if res.status().is_success() => {
                     let node_info: Result<NodeInfo, _> = res.json().await;
-                    let (node_name, active_sessions, max_sessions, profiles_count, uptime_seconds) =
+                    let (node_name, active_sessions, max_sessions, profiles_count, uptime_seconds, recordings_count, storage_used_bytes, max_storage_bytes) =
                         match node_info {
                             Ok(info) => (
                                 info.name,
@@ -1352,8 +1466,11 @@ async fn api_mesh_overview(
                                 info.max_sessions,
                                 info.profiles_count,
                                 info.uptime_seconds,
+                                info.recordings_count,
+                                info.storage_used_bytes,
+                                info.max_storage_bytes,
                             ),
-                            Err(_) => (p_name.clone(), 0, 8, 0, 0),
+                            Err(_) => (p_name.clone(), 0, 8, 0, 0, 0, 0, 0),
                         };
 
                     let p_sessions: Vec<SessionSummary> = match add_auth(c.get(&sessions_url))
@@ -1383,6 +1500,15 @@ async fn api_mesh_overview(
                         Err(_) => Vec::new(),
                     };
 
+                    let p_recordings: Vec<RecordingMeta> = match add_auth(c.get(&recordings_url))
+                        .timeout(std::time::Duration::from_millis(1800))
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r.json().await.unwrap_or_default(),
+                        Err(_) => Vec::new(),
+                    };
+
                     (
                         PeerState {
                             name: node_name.clone(),
@@ -1392,6 +1518,8 @@ async fn api_mesh_overview(
                             active_sessions,
                             max_sessions,
                             profiles_count,
+                            recordings_count,
+                            storage_used_bytes,
                             uptime_seconds,
                             error: None,
                         },
@@ -1400,6 +1528,8 @@ async fn api_mesh_overview(
                         p_sessions,
                         p_profiles,
                         p_targets,
+                        p_recordings,
+                        max_storage_bytes,
                     )
                 }
                 Ok(res) => (
@@ -1411,6 +1541,8 @@ async fn api_mesh_overview(
                         active_sessions: 0,
                         max_sessions: 8,
                         profiles_count: 0,
+                        recordings_count: 0,
+                        storage_used_bytes: 0,
                         uptime_seconds: 0,
                         error: Some(format!("HTTP {}", res.status())),
                     },
@@ -1419,6 +1551,8 @@ async fn api_mesh_overview(
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
+                    Vec::new(),
+                    0,
                 ),
                 Err(err) => (
                     PeerState {
@@ -1429,6 +1563,8 @@ async fn api_mesh_overview(
                         active_sessions: 0,
                         max_sessions: 8,
                         profiles_count: 0,
+                        recordings_count: 0,
+                        storage_used_bytes: 0,
                         uptime_seconds: 0,
                         error: Some(err.to_string()),
                     },
@@ -1437,6 +1573,8 @@ async fn api_mesh_overview(
                     Vec::new(),
                     Vec::new(),
                     Vec::new(),
+                    Vec::new(),
+                    0,
                 ),
             }
         }));
@@ -1446,6 +1584,7 @@ async fn api_mesh_overview(
     let mut all_sessions = Vec::new();
     let mut all_profiles = Vec::new();
     let mut all_targets = Vec::new();
+    let mut all_recordings = Vec::new();
 
     // Add local items
     for s in local_sessions {
@@ -1475,14 +1614,27 @@ async fn api_mesh_overview(
         });
     }
 
+    for r in local_recordings {
+        all_recordings.push(MeshRecording {
+            recording: r,
+            node_name: local_node.name.clone(),
+            node_url: local_node.url.clone(),
+            is_local: true,
+        });
+    }
+
     let mut total_capacity = local_node.max_sessions;
     let mut online_nodes = 1;
+    let mut total_storage_bytes = local_node.storage_used_bytes;
+    let mut max_storage_bytes = local_node.max_storage_bytes;
 
     for task in peer_futures {
-        if let Ok((p_state, node_name, node_url, p_sessions, p_profiles, p_targets)) = task.await {
+        if let Ok((p_state, node_name, node_url, p_sessions, p_profiles, p_targets, p_recordings, p_max_storage)) = task.await {
             if p_state.status == "online" {
                 online_nodes += 1;
                 total_capacity += p_state.max_sessions;
+                total_storage_bytes += p_state.storage_used_bytes;
+                max_storage_bytes += p_max_storage;
             }
             peer_states.push(p_state);
 
@@ -1510,12 +1662,23 @@ async fn api_mesh_overview(
                     is_local: false,
                 });
             }
+            for r in p_recordings {
+                all_recordings.push(MeshRecording {
+                    recording: r,
+                    node_name: node_name.clone(),
+                    node_url: node_url.clone(),
+                    is_local: false,
+                });
+            }
         }
     }
+
+    all_recordings.sort_by(|a, b| b.recording.started_at_secs.cmp(&a.recording.started_at_secs));
 
     let total_nodes = 1 + peer_states.len();
     let total_sessions = all_sessions.len();
     let total_profiles = all_profiles.len();
+    let total_recordings = all_recordings.len();
 
     Ok(Json(MeshOverview {
         local_node,
@@ -1523,11 +1686,15 @@ async fn api_mesh_overview(
         sessions: all_sessions,
         profiles: all_profiles,
         targets: all_targets,
+        recordings: all_recordings,
         total_sessions,
         total_capacity,
         total_profiles,
+        total_recordings,
         total_nodes,
         online_nodes,
+        total_storage_bytes,
+        max_storage_bytes,
     }))
 }
 
@@ -1872,6 +2039,277 @@ async fn api_peer_update_profile(
         .json(&req)
         .send()
         .await;
+    proxy_response(res).await
+}
+
+// ---------------------------------------------------------------------------
+// Recording & Auto-Vacuum APIs
+// ---------------------------------------------------------------------------
+
+async fn api_list_recordings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let list = recorder::list_recordings(&state.recorder_config).await;
+    Ok(Json(list))
+}
+
+async fn api_get_recording(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let rec = recorder::get_recording(&state.recorder_config, id)
+        .await
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Recording not found" })),
+        ))?;
+    Ok(Json(rec))
+}
+
+async fn api_get_recording_frames(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let frames_path = state.recorder_config.recordings_dir.join(id.to_string()).join("frames.jsonl");
+    if !frames_path.exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Frames not found for recording" })),
+        ));
+    }
+    match fs::read(&frames_path).await {
+        Ok(data) => Ok((
+            StatusCode::OK,
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            )],
+            data,
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("Failed to read frames: {}", e) })),
+        )),
+    }
+}
+
+async fn api_delete_recording(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    if recorder::delete_recording(&state.recorder_config, id).await {
+        Ok(Json(serde_json::json!({ "status": "deleted", "id": id })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Recording not found" })),
+        ))
+    }
+}
+
+async fn api_vacuum_recordings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let stats = recorder::vacuum_recordings(&state.recorder_config).await;
+    Ok(Json(stats))
+}
+
+async fn api_session_start_record(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let session = {
+        let guard = state.sessions.read().await;
+        guard.get(&id).cloned().ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        ))?
+    };
+
+    if state.active_recordings.read().await.contains_key(&id) {
+        return Ok(Json(serde_json::json!({ "status": "already_recording", "session_id": id })));
+    }
+
+    let handle = recorder::start_recording(
+        session.id,
+        session.port,
+        session.profile.clone(),
+        state.node_name.clone(),
+        (*state.recorder_config).clone(),
+    );
+    let rec_id = handle.recording_id;
+    state.active_recordings.write().await.insert(session.id, handle);
+    Ok(Json(serde_json::json!({
+        "status": "recording_started",
+        "session_id": id,
+        "recording_id": rec_id
+    })))
+}
+
+async fn api_session_stop_record(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    if let Some(handle) = state.active_recordings.write().await.remove(&id) {
+        handle.stop();
+        Ok(Json(serde_json::json!({
+            "status": "recording_stopped",
+            "session_id": id,
+            "recording_id": handle.recording_id
+        })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session is not actively recording" })),
+        ))
+    }
+}
+
+async fn api_peer_list_recordings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(peer): AxumPath<String>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/api/recordings", peer_url);
+    let res = state.peer_request(state.http_client.get(&url)).send().await;
+    proxy_response(res).await
+}
+
+async fn api_peer_get_recording(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/api/recordings/{}", peer_url, id);
+    let res = state.peer_request(state.http_client.get(&url)).send().await;
+    proxy_response(res).await
+}
+
+async fn api_peer_get_recording_frames(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/api/recordings/{}/frames", peer_url, id);
+    let res = state.peer_request(state.http_client.get(&url)).send().await;
+    match res {
+        Ok(r) => {
+            let status = StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let bytes = r.bytes().await.unwrap_or_default();
+            (
+                status,
+                [(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                )],
+                bytes,
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("Peer communication failed: {}", e) })),
+        )
+            .into_response(),
+    }
+}
+
+async fn api_peer_delete_recording(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/api/recordings/{}", peer_url, id);
+    let res = state.peer_request(state.http_client.delete(&url)).send().await;
+    proxy_response(res).await
+}
+
+async fn api_peer_vacuum_recordings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(peer): AxumPath<String>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/api/recordings/vacuum", peer_url);
+    let res = state.peer_request(state.http_client.post(&url)).send().await;
     proxy_response(res).await
 }
 
