@@ -75,6 +75,10 @@ impl ActiveBrowser {
             .arg("--disable-breakpad")
             .arg("--disable-dev-shm-usage")
             .arg("--disable-gpu")
+            .arg("--disable-background-timer-throttling")
+            .arg("--disable-backgrounding-occluded-windows")
+            .arg("--disable-renderer-backgrounding")
+            .arg("--force-color-profile=srgb")
             .arg("--password-store=basic")
             .arg("about:blank")
             .kill_on_drop(true);
