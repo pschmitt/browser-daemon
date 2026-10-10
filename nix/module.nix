@@ -76,6 +76,24 @@ in
       default = "browser-daemon";
       description = "Group under which browser-daemon runs.";
     };
+
+    nodeName = lib.mkOption {
+      type = lib.types.str;
+      default = config.networking.hostName;
+      description = "Node identifier for peer-to-peer mesh.";
+    };
+
+    publicUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Public or mesh base URL of this node.";
+    };
+
+    peers = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "List of peer browser-daemon base URLs for cluster meshing.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -111,7 +129,35 @@ in
       wants = [ "browser-daemon-xvfb.service" ];
       after = [ "browser-daemon-xvfb.service" ];
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/browser-daemon --bind ${cfg.bind} --chromium ${lib.getExe cfg.chromiumPackage} --display ${cfg.display} --profile-dir ${cfg.dataDir}/profiles --max-sessions ${toString cfg.maxSessions} --default-width ${toString cfg.defaultWidth} --default-height ${toString cfg.defaultHeight}";
+        ExecStart = lib.concatStringsSep " " (
+          [
+            "${cfg.package}/bin/browser-daemon"
+            "--bind"
+            cfg.bind
+            "--chromium"
+            (lib.getExe cfg.chromiumPackage)
+            "--display"
+            cfg.display
+            "--profile-dir"
+            "${cfg.dataDir}/profiles"
+            "--max-sessions"
+            (toString cfg.maxSessions)
+            "--default-width"
+            (toString cfg.defaultWidth)
+            "--default-height"
+            (toString cfg.defaultHeight)
+            "--node-name"
+            cfg.nodeName
+          ]
+          ++ lib.optionals (cfg.publicUrl != null) [
+            "--public-url"
+            cfg.publicUrl
+          ]
+          ++ lib.concatMap (p: [
+            "--peer"
+            p
+          ]) cfg.peers
+        );
         Restart = "always";
         RestartSec = 2;
         User = cfg.user;

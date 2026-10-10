@@ -525,6 +525,77 @@
     background: var(--btn);
     color: var(--muted);
   }
+  .badge-node {
+    background: color-mix(in oklab, var(--accent) 18%, transparent);
+    color: var(--accent);
+    border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
+    font-weight: 700;
+  }
+
+  /* Mesh Bar & Node Tabs */
+  .mesh-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 10px 16px;
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    flex-wrap: wrap;
+  }
+  .mesh-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .mesh-cluster-icon {
+    font-size: 16px;
+  }
+  .mesh-cluster-label {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--fg);
+  }
+  .mesh-node-tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--btn);
+    padding: 3px;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    flex-wrap: wrap;
+  }
+  .node-tab {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .node-tab:hover {
+    color: var(--fg);
+    background: var(--btn-hover);
+  }
+  .node-tab.active {
+    color: #fff;
+    background: var(--accent);
+    box-shadow: 0 1px 4px var(--accent-glow);
+  }
+  .mesh-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
 
   /* Endpoints list */
   .endpoints-list {
@@ -855,6 +926,26 @@
 </header>
 
 <main>
+  <!-- Cluster Mesh Status & Node Selector Bar -->
+  <div id="meshBar" class="mesh-bar">
+    <div class="mesh-bar-left">
+      <span class="mesh-cluster-icon">🌐</span>
+      <span class="mesh-cluster-label">Browser Mesh</span>
+      <span id="meshClusterStatus" class="badge badge-ok">1 / 1 Nodes Online</span>
+      <div class="mesh-node-tabs" id="meshNodeTabs">
+        <button class="node-tab active" data-node="all" onclick="selectNodeFilter('all')">
+          All Nodes (<span id="meshTotalNodesCount">1</span>)
+        </button>
+      </div>
+    </div>
+    <div class="mesh-bar-right">
+      <button class="btn btn-ghost btn-xs" onclick="openClusterModal()" title="View and manage mesh cluster nodes">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Cluster Nodes
+      </button>
+    </div>
+  </div>
+
   <!-- Interactive Quick Connect banner when sessions are active -->
   <div id="quickConnectBanner" class="quick-connect-banner" onclick="quickConnectHandoff()">
     <div class="quick-connect-left">
@@ -1052,6 +1143,12 @@
     <form id="newSessionForm" onsubmit="submitNewSession(event)">
       <div class="modal-body">
         <div class="form-group">
+          <label class="form-label" for="sessionNodeInput">Target Cluster Node</label>
+          <select id="sessionNodeInput" class="form-input">
+          </select>
+          <span class="form-hint">Host where the browser instance will be started.</span>
+        </div>
+        <div class="form-group">
           <label class="form-label" for="sessionProfileInput">Profile Name</label>
           <input type="text" id="sessionProfileInput" class="form-input" placeholder="e.g. work, banking (blank for ephemeral)" autocomplete="off">
           <span class="form-hint">Persistent profiles save cookies, login state, and browser cache to disk.</span>
@@ -1094,6 +1191,12 @@
     <form id="newProfileForm" onsubmit="submitNewProfile(event)">
       <div class="modal-body">
         <div class="form-group">
+          <label class="form-label" for="profileNodeInput">Target Cluster Node</label>
+          <select id="profileNodeInput" class="form-input">
+          </select>
+          <span class="form-hint">Host where the profile data will be stored on disk.</span>
+        </div>
+        <div class="form-group">
           <label class="form-label" for="profileNameInput">Profile Name</label>
           <input type="text" id="profileNameInput" class="form-input" placeholder="e.g. hrworks, staging, dev" required autocomplete="off">
           <span class="form-hint">Alphanumeric, dashes, and underscores only.</span>
@@ -1114,12 +1217,41 @@
   </div>
 </div>
 
+<!-- Modal: Cluster Nodes -->
+<div id="clusterModal" class="modal-overlay" onclick="handleClusterModalOverlayClick(event)">
+  <div class="modal-card" style="max-width: 680px;">
+    <div class="modal-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Browser Mesh Cluster Nodes
+      </div>
+      <button class="btn btn-ghost btn-xs" onclick="closeClusterModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="clusterNodesList" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
+      </div>
+      <hr style="border:none;border-top:1px solid var(--card-border);margin:16px 0;">
+      <form id="addPeerForm" onsubmit="submitAddPeer(event)" style="display:flex;gap:10px;align-items:flex-end;">
+        <div class="form-group" style="flex:1;margin:0;">
+          <label class="form-label" for="addPeerUrlInput">Add Peer by Mesh URL</label>
+          <input type="url" id="addPeerUrlInput" class="form-input" placeholder="https://browser.rofl-13.ts.brkn.lol" required autocomplete="off">
+        </div>
+        <button type="submit" class="btn btn-accent btn-sm" id="submitPeerBtn" style="height:38px;">+ Add Peer</button>
+      </form>
+    </div>
+  </div>
+</div>
+
 <footer>
   Browser Daemon &bull; Multi-Tenant Headless Chrome with Mobile Handoff &bull; Protected by Authelia
 </footer>
 
 <script>
 let firstPageId = null;
+let firstPageNodeUrl = null;
+let currentOverview = null;
+let selectedNodeFilter = 'all';
+let availableNodes = [];
 const HISTORY_LEN = 30;
 const historyData = new Array(HISTORY_LEN).fill(0);
 let peakSessions = 0;
@@ -1136,7 +1268,9 @@ function updateHostInfo() {
 }
 
 function quickConnectHandoff() {
-  if (firstPageId) {
+  if (firstPageId && firstPageNodeUrl) {
+    location.href = `${firstPageNodeUrl}/handoff/?page=${encodeURIComponent(firstPageId)}`;
+  } else if (firstPageId) {
     location.href = `/handoff/?page=${encodeURIComponent(firstPageId)}`;
   } else {
     location.href = '/handoff/';
@@ -1150,7 +1284,7 @@ function updateGauge(active, max) {
   document.getElementById('capacityBadge').textContent = `${active} / ${max} Active`;
   document.getElementById('gaugePct').textContent = `${pct}%`;
 
-  const circumference = 2 * Math.PI * 36; // 226.19
+  const circumference = 2 * Math.PI * 36;
   const offset = circumference - (pct / 100) * circumference;
   document.getElementById('gaugeCircle').style.strokeDashoffset = offset;
 }
@@ -1178,7 +1312,6 @@ function updateHistoryChart(currentActive, maxVal) {
     return { x, y };
   });
 
-  // Construct smooth SVG path
   let pathD = `M ${points[0].x} ${points[0].y}`;
   for (let i = 1; i < points.length; i++) {
     const prev = points[i - 1];
@@ -1188,7 +1321,6 @@ function updateHistoryChart(currentActive, maxVal) {
   }
 
   document.getElementById('chartLine').setAttribute('d', pathD);
-
   const areaD = `${pathD} L ${width} ${height} L 0 ${height} Z`;
   document.getElementById('chartArea').setAttribute('d', areaD);
 }
@@ -1209,6 +1341,16 @@ function formatBytes(bytes) {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function selectNodeFilter(node) {
+  selectedNodeFilter = node;
+  document.querySelectorAll('.node-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.node === node);
+  });
+  if (currentOverview) {
+    renderMeshOverview(currentOverview);
+  }
 }
 
 function openNewSessionModal(prefillProfile) {
@@ -1237,13 +1379,16 @@ async function submitNewSession(e) {
   btn.disabled = true;
   btn.textContent = 'Launching...';
 
+  const node = document.getElementById('sessionNodeInput')?.value;
   const profile = document.getElementById('sessionProfileInput').value.trim() || null;
   const persistent = document.getElementById('sessionPersistentInput').checked;
   const width = parseInt(document.getElementById('sessionWidthInput').value, 10) || 1920;
   const height = parseInt(document.getElementById('sessionHeightInput').value, 10) || 1080;
 
   try {
-    const res = await fetch('/api/sessions', {
+    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+    const url = isLocal ? '/api/sessions' : `/api/peers/${encodeURIComponent(node)}/sessions`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ profile, persistent, width, height })
@@ -1251,7 +1396,7 @@ async function submitNewSession(e) {
 
     if (!res.ok) {
       const err = await res.text();
-      alert(`Failed to launch session: ${err}`);
+      alert(`Failed to launch session on ${node || 'local'}: ${err}`);
     } else {
       closeNewSessionModal();
       document.getElementById('sessionProfileInput').value = '';
@@ -1265,14 +1410,16 @@ async function submitNewSession(e) {
   }
 }
 
-async function terminateSession(id) {
-  if (!confirm(`Are you sure you want to terminate session ${id.slice(0, 8)}?`)) return;
+async function terminateSession(id, node) {
+  if (!confirm(`Are you sure you want to terminate session ${id.slice(0, 8)} on node ${node || 'local'}?`)) return;
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+    const url = isLocal ? `/api/sessions/${encodeURIComponent(id)}` : `/api/peers/${encodeURIComponent(node)}/sessions/${encodeURIComponent(id)}`;
+    const res = await fetch(url, { method: 'DELETE' });
     if (res.ok) {
       refreshData();
     } else {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       alert(`Error terminating session: ${err.error || res.statusText}`);
     }
   } catch (err) {
@@ -1280,9 +1427,11 @@ async function terminateSession(id) {
   }
 }
 
-async function launchProfile(name) {
+async function launchProfile(name, node) {
   try {
-    const res = await fetch('/api/sessions', {
+    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+    const url = isLocal ? '/api/sessions' : `/api/peers/${encodeURIComponent(node)}/sessions`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ profile: name, persistent: true })
@@ -1291,7 +1440,7 @@ async function launchProfile(name) {
       refreshData();
     } else {
       const err = await res.text();
-      alert(`Failed to launch profile session: ${err}`);
+      alert(`Failed to launch profile session on ${node || 'local'}: ${err}`);
     }
   } catch (err) {
     alert(`Error: ${err}`);
@@ -1307,7 +1456,7 @@ function openNewProfileModal() {
   for (const p of currentProfilesList) {
     const opt = document.createElement('option');
     opt.value = p.name;
-    opt.textContent = `${p.name} (${formatBytes(p.size_bytes)})`;
+    opt.textContent = `${p.name} [${p.node_name}] (${formatBytes(p.size_bytes)})`;
     sel.appendChild(opt);
   }
   document.getElementById('profileNameInput').value = '';
@@ -1331,19 +1480,22 @@ async function submitNewProfile(e) {
   btn.disabled = true;
   btn.textContent = 'Creating...';
 
+  const node = document.getElementById('profileNodeInput')?.value;
   const name = document.getElementById('profileNameInput').value.trim();
   const cloneFrom = document.getElementById('profileCloneFromInput').value || null;
 
   try {
-    const res = await fetch('/api/profiles', {
+    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+    const url = isLocal ? '/api/profiles' : `/api/peers/${encodeURIComponent(node)}/profiles`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, clone_from: cloneFrom })
     });
 
     if (!res.ok) {
-      const err = await res.json();
-      alert(`Failed to create profile: ${err.error || res.statusText}`);
+      const err = await res.json().catch(() => ({}));
+      alert(`Failed to create profile on ${node || 'local'}: ${err.error || res.statusText}`);
     } else {
       closeNewProfileModal();
       refreshData();
@@ -1356,19 +1508,23 @@ async function submitNewProfile(e) {
   }
 }
 
-async function renameProfile(oldName) {
-  const newName = prompt(`Enter new name for profile "${oldName}":`, oldName);
+async function renameProfile(oldName, node) {
+  const newName = prompt(`Enter new name for profile "${oldName}" on ${node || 'local'}:`, oldName);
   if (!newName || newName.trim() === oldName) return;
 
   try {
-    const res = await fetch(`/api/profiles/${encodeURIComponent(oldName)}`, {
+    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+    const url = isLocal
+      ? `/api/profiles/${encodeURIComponent(oldName)}`
+      : `/api/peers/${encodeURIComponent(node)}/profiles/${encodeURIComponent(oldName)}`;
+    const res = await fetch(url, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newName.trim() })
     });
 
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       alert(`Failed to rename profile: ${err.error || res.statusText}`);
     } else {
       refreshData();
@@ -1378,19 +1534,23 @@ async function renameProfile(oldName) {
   }
 }
 
-async function cloneProfile(sourceName) {
-  const targetName = prompt(`Enter name for the new cloned copy of "${sourceName}":`, `${sourceName}-copy`);
+async function cloneProfile(sourceName, node) {
+  const targetName = prompt(`Enter name for the cloned copy of "${sourceName}" on ${node || 'local'}:`, `${sourceName}-copy`);
   if (!targetName || !targetName.trim()) return;
 
   try {
-    const res = await fetch(`/api/profiles/${encodeURIComponent(sourceName)}/clone`, {
+    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+    const url = isLocal
+      ? `/api/profiles/${encodeURIComponent(sourceName)}/clone`
+      : `/api/peers/${encodeURIComponent(node)}/profiles/${encodeURIComponent(sourceName)}/clone`;
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_name: targetName.trim() })
     });
 
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       alert(`Failed to clone profile: ${err.error || res.statusText}`);
     } else {
       refreshData();
@@ -1400,15 +1560,18 @@ async function cloneProfile(sourceName) {
   }
 }
 
-async function deleteProfile(name, isActive) {
-  let url = `/api/profiles/${encodeURIComponent(name)}`;
+async function deleteProfile(name, node, isActive) {
+  const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+  let url = isLocal
+    ? `/api/profiles/${encodeURIComponent(name)}`
+    : `/api/peers/${encodeURIComponent(node)}/profiles/${encodeURIComponent(name)}`;
   if (isActive) {
-    if (!confirm(`Profile "${name}" is currently ACTIVE in a running session.\n\nTerminating the session and deleting this profile will wipe its cookies and data. Force delete?`)) {
+    if (!confirm(`Profile "${name}" on ${node || 'local'} is currently ACTIVE in a running session.\n\nTerminating the session and deleting this profile will wipe its cookies and data. Force delete?`)) {
       return;
     }
     url += '?force=true';
   } else {
-    if (!confirm(`Delete profile "${name}" and all stored user data/cookies from disk?`)) return;
+    if (!confirm(`Delete profile "${name}" on ${node || 'local'} and all stored user data/cookies from disk?`)) return;
   }
 
   try {
@@ -1416,7 +1579,7 @@ async function deleteProfile(name, isActive) {
     if (res.ok) {
       refreshData();
     } else {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       alert(`Failed to delete profile: ${err.error || res.statusText}`);
     }
   } catch (err) {
@@ -1424,202 +1587,479 @@ async function deleteProfile(name, isActive) {
   }
 }
 
+function openClusterModal() {
+  renderClusterModal();
+  document.getElementById('clusterModal').classList.add('open');
+}
+
+function closeClusterModal() {
+  document.getElementById('clusterModal').classList.remove('open');
+}
+
+function handleClusterModalOverlayClick(e) {
+  if (e.target.id === 'clusterModal') {
+    closeClusterModal();
+  }
+}
+
+function renderClusterModal() {
+  const container = document.getElementById('clusterNodesList');
+  if (!currentOverview) {
+    container.innerHTML = '<div style="color:var(--muted);padding:10px;">Loading cluster state…</div>';
+    return;
+  }
+
+  const nodes = [
+    {
+      name: currentOverview.local_node.name,
+      url: currentOverview.local_node.url,
+      status: 'online',
+      latency_ms: 0,
+      active_sessions: currentOverview.local_node.active_sessions,
+      max_sessions: currentOverview.local_node.max_sessions,
+      profiles_count: currentOverview.local_node.profiles_count,
+      isLocal: true,
+    },
+    ...currentOverview.peers.map(p => ({ ...p, isLocal: false }))
+  ];
+
+  let html = '';
+  for (const n of nodes) {
+    const isOnline = n.status === 'online';
+    const statusDot = isOnline
+      ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px;"></span>'
+      : '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-right:6px;"></span>';
+    const statusText = isOnline
+      ? `${statusDot} Online ${n.latency_ms > 0 ? `(${n.latency_ms}ms)` : ''}`
+      : `${statusDot} Unreachable (${escapeHtml(n.error || 'offline')})`;
+    const localBadge = n.isLocal
+      ? '<span class="badge badge-accent" style="margin-left:6px;">This Node</span>'
+      : '';
+
+    html += `
+      <div style="background:var(--card-hover);border:1px solid var(--card-border);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <div style="min-width:0;">
+          <div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:14px;color:var(--fg);">
+            ${escapeHtml(n.name)} ${localBadge}
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            ${escapeHtml(n.url)}
+          </div>
+          <div style="display:flex;gap:12px;font-size:12px;margin-top:6px;color:var(--muted);">
+            <span>${statusText}</span>
+            <span>&bull;</span>
+            <span><strong>${n.active_sessions}</strong> / ${n.max_sessions} sessions</span>
+            <span>&bull;</span>
+            <span><strong>${n.profiles_count}</strong> profiles</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <a href="${escapeHtml(n.url)}/" class="btn btn-ghost btn-xs" target="_blank" title="Open this node's dashboard">Dashboard ↗</a>
+          ${!n.isLocal ? `<button class="btn btn-danger btn-xs" onclick="removePeer('${escapeHtml(n.name)}')" title="Disconnect peer from mesh">Remove</button>` : ''}
+        </div>
+      </div>`;
+  }
+  container.innerHTML = html;
+}
+
+async function submitAddPeer(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submitPeerBtn');
+  btn.disabled = true;
+  btn.textContent = 'Adding...';
+  const url = document.getElementById('addPeerUrlInput').value.trim();
+
+  try {
+    const res = await fetch('/api/peers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    if (res.ok) {
+      document.getElementById('addPeerUrlInput').value = '';
+      await refreshData();
+      renderClusterModal();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      alert(`Failed to add peer: ${err.error || res.statusText}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '+ Add Peer';
+  }
+}
+
+async function removePeer(name) {
+  if (!confirm(`Remove peer "${name}" from the mesh cluster?`)) return;
+  try {
+    const res = await fetch(`/api/peers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (res.ok) {
+      await refreshData();
+      renderClusterModal();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      alert(`Failed to remove peer: ${err.error || res.statusText}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  }
+}
+
+function renderMeshOverview(ov) {
+  const allNodes = [
+    { name: ov.local_node.name, url: ov.local_node.url, isLocal: true, status: 'online' },
+    ...ov.peers.map(p => ({ name: p.name, url: p.url, isLocal: false, status: p.status }))
+  ];
+  availableNodes = allNodes;
+
+  const tabsContainer = document.getElementById('meshNodeTabs');
+  if (tabsContainer) {
+    let tabsHtml = `
+      <button class="node-tab ${selectedNodeFilter === 'all' ? 'active' : ''}" data-node="all" onclick="selectNodeFilter('all')">
+        All Nodes (${allNodes.length})
+      </button>`;
+    for (const n of allNodes) {
+      const isAct = selectedNodeFilter === n.name ? 'active' : '';
+      const dot = n.status === 'online' ? '🟢' : '🔴';
+      tabsHtml += `
+        <button class="node-tab ${isAct}" data-node="${escapeHtml(n.name)}" onclick="selectNodeFilter('${escapeHtml(n.name)}')">
+          ${dot} ${escapeHtml(n.name)}${n.isLocal ? ' (local)' : ''}
+        </button>`;
+    }
+    tabsContainer.innerHTML = tabsHtml;
+  }
+
+  const countElem = document.getElementById('meshTotalNodesCount');
+  if (countElem) countElem.textContent = allNodes.length;
+
+  const statusBadge = document.getElementById('meshClusterStatus');
+  if (statusBadge) {
+    statusBadge.textContent = `${ov.online_nodes} / ${ov.total_nodes} Nodes Online`;
+    statusBadge.className = ov.online_nodes === ov.total_nodes ? 'badge badge-ok' : 'badge badge-accent';
+  }
+
+  const sessionNodeSelect = document.getElementById('sessionNodeInput');
+  if (sessionNodeSelect) {
+    const curVal = sessionNodeSelect.value;
+    sessionNodeSelect.innerHTML = allNodes.map(n =>
+      `<option value="${escapeHtml(n.name)}">${escapeHtml(n.name)}${n.isLocal ? ' (this node)' : ''}</option>`
+    ).join('');
+    if (curVal && allNodes.some(n => n.name === curVal)) {
+      sessionNodeSelect.value = curVal;
+    } else if (selectedNodeFilter !== 'all' && allNodes.some(n => n.name === selectedNodeFilter)) {
+      sessionNodeSelect.value = selectedNodeFilter;
+    } else {
+      sessionNodeSelect.value = ov.local_node.name;
+    }
+  }
+
+  const profileNodeSelect = document.getElementById('profileNodeInput');
+  if (profileNodeSelect) {
+    const curVal = profileNodeSelect.value;
+    profileNodeSelect.innerHTML = allNodes.map(n =>
+      `<option value="${escapeHtml(n.name)}">${escapeHtml(n.name)}${n.isLocal ? ' (this node)' : ''}</option>`
+    ).join('');
+    if (curVal && allNodes.some(n => n.name === curVal)) {
+      profileNodeSelect.value = curVal;
+    } else if (selectedNodeFilter !== 'all' && allNodes.some(n => n.name === selectedNodeFilter)) {
+      profileNodeSelect.value = selectedNodeFilter;
+    } else {
+      profileNodeSelect.value = ov.local_node.name;
+    }
+  }
+
+  const filteredSessions = selectedNodeFilter === 'all'
+    ? ov.sessions
+    : ov.sessions.filter(s => s.node_name === selectedNodeFilter);
+
+  const filteredProfiles = selectedNodeFilter === 'all'
+    ? ov.profiles
+    : ov.profiles.filter(p => p.node_name === selectedNodeFilter);
+
+  const filteredTargets = selectedNodeFilter === 'all'
+    ? ov.targets
+    : ov.targets.filter(t => t.node_name === selectedNodeFilter);
+
+  let activeCount = 0;
+  let maxCount = 8;
+  if (selectedNodeFilter === 'all') {
+    activeCount = ov.total_sessions;
+    maxCount = ov.total_capacity;
+  } else {
+    const targetNode = allNodes.find(n => n.name === selectedNodeFilter);
+    if (targetNode) {
+      if (targetNode.isLocal) {
+        activeCount = ov.local_node.active_sessions;
+        maxCount = ov.local_node.max_sessions;
+      } else {
+        const peer = ov.peers.find(p => p.name === selectedNodeFilter);
+        if (peer) {
+          activeCount = peer.active_sessions;
+          maxCount = peer.max_sessions;
+        }
+      }
+    }
+  }
+
+  updateGauge(activeCount, maxCount);
+  updateHistoryChart(activeCount, maxCount);
+
+  // Render Sessions Table
+  document.getElementById('sessionCountBadge').textContent = filteredSessions.length;
+  const sContainer = document.getElementById('sessionsContainer');
+  if (filteredSessions.length === 0) {
+    sContainer.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <div class="empty-title">No active sessions ${selectedNodeFilter !== 'all' ? `on ${escapeHtml(selectedNodeFilter)}` : ''}</div>
+        <div class="empty-desc">
+          Launch a new session with "+ Launch" or connect via WebSocket CDP / Playwright MCP.
+        </div>
+      </div>`;
+  } else {
+    let html = `
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Session ID</th>
+              <th>Node</th>
+              <th>Profile</th>
+              <th>Mode</th>
+              <th>Uptime</th>
+              <th>Clients</th>
+              <th>Tabs</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>`;
+    for (const s of filteredSessions) {
+      const sid = escapeHtml(s.id);
+      const nodeBadge = `<span class="badge badge-node" title="${escapeHtml(s.node_url)}">${escapeHtml(s.node_name)}</span>`;
+      const prof = s.profile ? escapeHtml(s.profile) : '<em style="color:var(--muted);">ephemeral</em>';
+      const modeBadge = s.persistent
+        ? `<span class="badge badge-ok">Persistent</span>`
+        : `<span class="badge badge-muted">Ephemeral</span>`;
+      const uptime = formatUptime(s.uptime_seconds);
+      const wsUrl = `wss://${s.node_url.replace(/^https?:\/\//, '')}/chromium?session_id=${sid}`;
+      const handoffUrl = `${s.node_url}/handoff/`;
+
+      html += `
+        <tr>
+          <td><span class="badge badge-accent" title="${sid}">${sid.slice(0, 8)}</span></td>
+          <td>${nodeBadge}</td>
+          <td><strong>${prof}</strong></td>
+          <td>${modeBadge}</td>
+          <td>${uptime}</td>
+          <td><span class="badge badge-muted">${s.client_count} conn</span></td>
+          <td><span class="badge badge-muted">${s.tabs_count} tabs</span></td>
+          <td style="text-align:right;">
+            <div style="display:inline-flex;gap:6px;">
+              <button class="btn btn-ghost btn-xs" onclick="copyText('${wsUrl}', this)" title="Copy WebSocket CDP URL">Copy WS</button>
+              <a href="${handoffUrl}" class="btn btn-accent btn-xs" title="Open Mobile Handoff on ${escapeHtml(s.node_name)}">Handoff</a>
+              <button class="btn btn-danger btn-xs" onclick="terminateSession('${sid}', '${escapeHtml(s.node_name)}')" title="Terminate browser process on ${escapeHtml(s.node_name)}">Terminate</button>
+            </div>
+          </td>
+        </tr>`;
+    }
+    html += `</tbody></table></div>`;
+    sContainer.innerHTML = html;
+  }
+
+  // Render Stored Profiles Table
+  currentProfilesList = filteredProfiles;
+  document.getElementById('profileCountBadge').textContent = filteredProfiles.length;
+  const pContainer = document.getElementById('profilesContainer');
+  if (filteredProfiles.length === 0) {
+    pContainer.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div class="empty-title">No persistent profiles stored ${selectedNodeFilter !== 'all' ? `on ${escapeHtml(selectedNodeFilter)}` : ''}</div>
+        <div class="empty-desc">
+          Create a profile with "+ New Profile" or launch a session specifying a profile name.
+        </div>
+      </div>`;
+  } else {
+    let html = `
+      <div class="table-responsive">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Profile Name</th>
+              <th>Node</th>
+              <th>Disk Usage</th>
+              <th>Status</th>
+              <th style="text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>`;
+    for (const p of filteredProfiles) {
+      const name = escapeHtml(p.name);
+      const nodeName = escapeHtml(p.node_name);
+      const nodeBadge = `<span class="badge badge-node">${nodeName}</span>`;
+      const size = formatBytes(p.size_bytes);
+      const statusBadge = p.is_active
+        ? `<span class="badge badge-ok">Active (${p.session_id ? escapeHtml(p.session_id).slice(0, 8) : 'Running'})</span>`
+        : `<span class="badge badge-muted">Stored</span>`;
+
+      const launchBtn = p.is_active
+        ? `<a href="${p.node_url}/handoff/" class="btn btn-accent btn-xs" title="Take over session in Handoff on ${nodeName}">Take Over</a>`
+        : `<button class="btn btn-accent btn-xs" onclick="launchProfile('${name}', '${nodeName}')" title="Launch browser session on ${nodeName}">Launch</button>`;
+
+      const cloneBtn = `<button class="btn btn-ghost btn-xs" onclick="cloneProfile('${name}', '${nodeName}')" title="Duplicate profile on ${nodeName}">Clone</button>`;
+
+      const renameBtn = p.is_active
+        ? `<button class="btn btn-ghost btn-xs" disabled style="opacity:0.4;cursor:not-allowed;" title="Cannot rename active profile">Rename</button>`
+        : `<button class="btn btn-ghost btn-xs" onclick="renameProfile('${name}', '${nodeName}')" title="Rename profile on ${nodeName}">Rename</button>`;
+
+      const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteProfile('${name}', '${nodeName}', ${p.is_active})" title="${p.is_active ? 'Force terminate session & delete' : 'Delete profile'}">Delete</button>`;
+
+      html += `
+        <tr>
+          <td><strong>${name}</strong></td>
+          <td>${nodeBadge}</td>
+          <td>${size}</td>
+          <td>${statusBadge}</td>
+          <td style="text-align:right;">
+            <div style="display:inline-flex;gap:6px;">
+              ${launchBtn}
+              ${cloneBtn}
+              ${renameBtn}
+              ${deleteBtn}
+            </div>
+          </td>
+        </tr>`;
+    }
+    html += `</tbody></table></div>`;
+    pContainer.innerHTML = html;
+  }
+
+  // Render Targets & Quick Connect Banner
+  const pages = filteredTargets.filter(t => t.type === 'page');
+  document.getElementById('tabCountBadge').textContent = pages.length;
+
+  const banner = document.getElementById('quickConnectBanner');
+  if (pages.length > 0) {
+    firstPageId = pages[0].id;
+    firstPageNodeUrl = pages[0].node_url;
+    banner.style.display = 'flex';
+    document.getElementById('quickConnectSub').textContent =
+      `[${pages[0].node_name}] Click to take over: "${pages[0].title || 'Active Tab'}" (${pages[0].url || 'blank'})`;
+  } else {
+    firstPageId = null;
+    firstPageNodeUrl = null;
+    banner.style.display = 'none';
+  }
+
+  const container = document.getElementById('tabsContainer');
+  if (pages.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <div class="empty-title">No open pages / tabs ${selectedNodeFilter !== 'all' ? `on ${escapeHtml(selectedNodeFilter)}` : ''}</div>
+        <div class="empty-desc">
+          Active web pages and tabs from running sessions will appear here as interactive handoff cards.
+        </div>
+      </div>`;
+  } else {
+    let html = '<div class="sessions-cards-grid">';
+    for (const p of pages) {
+      const handoffUrl = `${p.node_url}/handoff/?page=${encodeURIComponent(p.id)}`;
+      const title = escapeHtml(p.title || '(Untitled Page)');
+      const url = escapeHtml(p.url || 'about:blank');
+      let host = url;
+      try { host = new URL(p.url).hostname; } catch(e) {}
+      const pid = escapeHtml(p.id);
+      const nodeBadge = `<span class="badge badge-node">${escapeHtml(p.node_name)}</span>`;
+
+      html += `
+        <div class="session-card" onclick="location.href='${handoffUrl}'" title="Click to connect in Mobile Handoff on ${escapeHtml(p.node_name)}">
+          <div class="session-card-header">
+            <div class="session-card-icon">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            </div>
+            <div class="session-card-title-group" style="min-width:0;flex:1;">
+              <div class="session-card-title">${title}</div>
+              <div class="session-card-url" title="${url}">${escapeHtml(host)} &bull; ${url}</div>
+            </div>
+          </div>
+          <div class="session-card-footer">
+            <div style="display:flex;align-items:center;gap:6px;">
+              ${nodeBadge}
+              <span class="session-card-badge">ID: ${pid.slice(0, 8)}</span>
+            </div>
+            <span class="session-connect-action">
+              Take Over ↗
+            </span>
+          </div>
+        </div>`;
+    }
+    html += '</div>';
+    container.innerHTML = html;
+  }
+}
+
+async function fallbackLocalRefresh() {
+  let activeCount = 0;
+  let maxCount = 8;
+  const healthRes = await fetch('/health').catch(() => null);
+  if (healthRes && healthRes.ok) {
+    const health = await healthRes.json();
+    activeCount = health.active_sessions || 0;
+    maxCount = health.max_sessions || 8;
+    updateGauge(activeCount, maxCount);
+    updateHistoryChart(activeCount, maxCount);
+  }
+  const sessionsRes = await fetch('/api/sessions').catch(() => null);
+  const profilesRes = await fetch('/api/profiles').catch(() => null);
+  const listRes = await fetch('/json/list').catch(() => null);
+  const sessions = sessionsRes && sessionsRes.ok ? await sessionsRes.json() : [];
+  const profiles = profilesRes && profilesRes.ok ? await profilesRes.json() : [];
+  const targets = listRes && listRes.ok ? await listRes.json() : [];
+
+  renderMeshOverview({
+    local_node: {
+      name: location.hostname.split('.')[0] || 'local',
+      url: location.origin,
+      version: '0.1.0',
+      uptime_seconds: 0,
+      active_sessions: sessions.length,
+      max_sessions: maxCount,
+      profiles_count: profiles.length,
+    },
+    peers: [],
+    sessions: sessions.map(s => ({ ...s, node_name: location.hostname.split('.')[0] || 'local', node_url: location.origin, is_local: true })),
+    profiles: profiles.map(p => ({ ...p, node_name: location.hostname.split('.')[0] || 'local', node_url: location.origin, is_local: true })),
+    targets: targets.map(t => ({ ...t, node_name: location.hostname.split('.')[0] || 'local', node_url: location.origin, is_local: true })),
+    total_sessions: sessions.length,
+    total_capacity: maxCount,
+    total_profiles: profiles.length,
+    total_nodes: 1,
+    online_nodes: 1,
+  });
+}
+
 async function refreshData() {
   try {
-    let activeCount = 0;
-    let maxCount = 8;
-
-    // 1. Health
-    const healthRes = await fetch('/health');
-    if (healthRes.ok) {
-      const health = await healthRes.json();
-      activeCount = health.active_sessions || 0;
-      maxCount = health.max_sessions || 8;
-      updateGauge(activeCount, maxCount);
-      updateHistoryChart(activeCount, maxCount);
+    const res = await fetch('/api/mesh/overview');
+    if (res.ok) {
+      currentOverview = await res.json();
+      renderMeshOverview(currentOverview);
+    } else {
+      await fallbackLocalRefresh();
     }
-
-    // 2. Managed Sessions (/api/sessions)
-    const sessionsRes = await fetch('/api/sessions');
-    if (sessionsRes.ok) {
-      const sessions = await sessionsRes.json();
-      document.getElementById('sessionCountBadge').textContent = sessions.length;
-      const sContainer = document.getElementById('sessionsContainer');
-
-      if (sessions.length === 0) {
-        sContainer.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-icon">
-              <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-            </div>
-            <div class="empty-title">No active browser sessions</div>
-            <div class="empty-desc">
-              Launch a new session with "+ Launch" or connect via WebSocket CDP / Playwright MCP.
-            </div>
-          </div>`;
-      } else {
-        let html = `
-          <div class="table-responsive">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Session ID</th>
-                  <th>Profile</th>
-                  <th>Mode</th>
-                  <th>Uptime</th>
-                  <th>Clients</th>
-                  <th>Tabs</th>
-                  <th style="text-align:right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody>`;
-        for (const s of sessions) {
-          const sid = escapeHtml(s.id);
-          const prof = s.profile ? escapeHtml(s.profile) : '<em style="color:var(--muted);">ephemeral</em>';
-          const modeBadge = s.persistent
-            ? `<span class="badge badge-ok">Persistent</span>`
-            : `<span class="badge badge-muted">Ephemeral</span>`;
-          const uptime = formatUptime(s.uptime_seconds);
-
-          html += `
-            <tr>
-              <td>
-                <span class="badge badge-accent" title="${sid}">${sid.slice(0, 8)}</span>
-              </td>
-              <td><strong>${prof}</strong></td>
-              <td>${modeBadge}</td>
-              <td>${uptime}</td>
-              <td><span class="badge badge-muted">${s.client_count} conn</span></td>
-              <td><span class="badge badge-muted">${s.tabs_count} tabs</span></td>
-              <td style="text-align:right;">
-                <div style="display:inline-flex;gap:6px;">
-                  <button class="btn btn-ghost btn-xs" onclick="copyText('wss://' + location.host + '/chromium?session_id=${sid}', this)" title="Copy WebSocket CDP URL">Copy WS</button>
-                  <a href="/handoff/" class="btn btn-accent btn-xs" title="Open Mobile Handoff">Handoff</a>
-                  <button class="btn btn-danger btn-xs" onclick="terminateSession('${sid}')" title="Terminate browser process">Terminate</button>
-                </div>
-              </td>
-            </tr>`;
-        }
-        html += `</tbody></table></div>`;
-        sContainer.innerHTML = html;
-      }
-    }
-
-    // 3. Stored Profiles (/api/profiles)
-    const profRes = await fetch('/api/profiles');
-    if (profRes.ok) {
-      const profiles = await profRes.json();
-      currentProfilesList = profiles;
-      document.getElementById('profileCountBadge').textContent = profiles.length;
-      const pContainer = document.getElementById('profilesContainer');
-
-      if (profiles.length === 0) {
-        pContainer.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-icon">
-              <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            </div>
-            <div class="empty-title">No persistent profiles stored</div>
-            <div class="empty-desc">
-              Create a profile with "+ New Profile" or launch a session specifying a profile name.
-            </div>
-          </div>`;
-      } else {
-        let html = `
-          <div class="table-responsive">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Profile Name</th>
-                  <th>Disk Usage</th>
-                  <th>Status</th>
-                  <th style="text-align:right;">Actions</th>
-                </tr>
-              </thead>
-              <tbody>`;
-        for (const p of profiles) {
-          const name = escapeHtml(p.name);
-          const size = formatBytes(p.size_bytes);
-          const statusBadge = p.is_active
-            ? `<span class="badge badge-ok">Active (${p.session_id ? escapeHtml(p.session_id).slice(0, 8) : 'Running'})</span>`
-            : `<span class="badge badge-muted">Stored</span>`;
-
-          const launchBtn = p.is_active
-            ? `<a href="/handoff/" class="btn btn-accent btn-xs" title="Take over session in Handoff">Take Over</a>`
-            : `<button class="btn btn-accent btn-xs" onclick="launchProfile('${name}')" title="Launch browser session">Launch</button>`;
-
-          const cloneBtn = `<button class="btn btn-ghost btn-xs" onclick="cloneProfile('${name}')" title="Duplicate profile directory">Clone</button>`;
-
-          const renameBtn = p.is_active
-            ? `<button class="btn btn-ghost btn-xs" disabled style="opacity:0.4;cursor:not-allowed;" title="Cannot rename active profile">Rename</button>`
-            : `<button class="btn btn-ghost btn-xs" onclick="renameProfile('${name}')" title="Rename profile directory">Rename</button>`;
-
-          const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteProfile('${name}', ${p.is_active})" title="${p.is_active ? 'Force terminate session & delete' : 'Delete profile'}">Delete</button>`;
-
-          html += `
-            <tr>
-              <td><strong>${name}</strong></td>
-              <td>${size}</td>
-              <td>${statusBadge}</td>
-              <td style="text-align:right;">
-                <div style="display:inline-flex;gap:6px;">
-                  ${launchBtn}
-                  ${cloneBtn}
-                  ${renameBtn}
-                  ${deleteBtn}
-                </div>
-              </td>
-            </tr>`;
-        }
-        html += `</tbody></table></div>`;
-        pContainer.innerHTML = html;
-      }
-    }
-
-    // 4. Targets (/json/list)
-    const listRes = await fetch('/json/list');
-    if (listRes.ok) {
-      const targets = await listRes.json();
-      const pages = targets.filter(t => t.type === 'page');
-      document.getElementById('tabCountBadge').textContent = pages.length;
-
-      const banner = document.getElementById('quickConnectBanner');
-      if (pages.length > 0) {
-        firstPageId = pages[0].id;
-        banner.style.display = 'flex';
-        document.getElementById('quickConnectSub').textContent =
-          `Click to take over: "${pages[0].title || 'Active Tab'}" (${pages[0].url || 'blank'})`;
-      } else {
-        firstPageId = null;
-        banner.style.display = 'none';
-      }
-
-      const container = document.getElementById('tabsContainer');
-      if (pages.length === 0) {
-        container.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-icon">
-              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-            </div>
-            <div class="empty-title">No open browser tabs</div>
-            <div class="empty-desc">
-              Active web pages and tabs from running sessions will appear here as interactive handoff cards.
-            </div>
-          </div>`;
-      } else {
-        let html = `<div class="sessions-cards-grid">`;
-        for (const p of pages) {
-          const title = escapeHtml(p.title || '(untitled)');
-          const url = escapeHtml(p.url || 'about:blank');
-          const id = escapeHtml(p.id);
-          const handoffUrl = `/handoff/?page=${encodeURIComponent(p.id)}`;
-
-          html += `
-            <div class="session-card" onclick="location.href='${handoffUrl}'" title="Click to connect in Mobile Handoff">
-              <div class="session-card-header">
-                <div class="session-card-icon">
-                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-                </div>
+  } catch (err) {
+    await fallbackLocalRefresh();
+  }
+}
                 <div class="session-card-title-group">
                   <div class="session-card-title">${title}</div>
                   <div class="session-card-url" title="${url}">${url}</div>
