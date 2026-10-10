@@ -5,16 +5,18 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{delete, get};
 use axum::{Json, Router};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use tokio::fs;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -49,29 +51,176 @@ pub struct Args {
     pub default_height: u32,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct SessionInfo {
+#[derive(Clone)]
+pub struct ManagedSession {
     pub id: Uuid,
     pub port: u16,
     pub ws_path: String,
     pub profile: Option<String>,
-    #[serde(skip)]
+    pub persistent: bool,
     pub created_at: Instant,
+    pub client_count: Arc<AtomicUsize>,
+    pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
+}
+
+impl ManagedSession {
+    pub async fn to_summary(&self, http_client: &reqwest::Client) -> SessionSummary {
+        let tabs_count = {
+            let url = format!("http://127.0.0.1:{}/json/list", self.port);
+            if let Ok(res) = http_client.get(&url).send().await {
+                if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
+                    targets.iter().filter(|t| t.target_type == "page").count()
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        };
+
+        SessionSummary {
+            id: self.id,
+            port: self.port,
+            ws_path: self.ws_path.clone(),
+            profile: self.profile.clone(),
+            persistent: self.persistent,
+            uptime_seconds: self.created_at.elapsed().as_secs(),
+            client_count: self.client_count.load(Ordering::SeqCst),
+            tabs_count,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionSummary {
+    pub id: Uuid,
+    pub port: u16,
+    pub ws_path: String,
+    pub profile: Option<String>,
+    pub persistent: bool,
+    pub uptime_seconds: u64,
+    pub client_count: usize,
+    pub tabs_count: usize,
 }
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<BrowserConfig>,
     pub max_sessions: usize,
-    pub sessions: Arc<RwLock<HashMap<Uuid, SessionInfo>>>,
+    pub sessions: Arc<RwLock<HashMap<Uuid, ManagedSession>>>,
     pub http_client: reqwest::Client,
+}
+
+impl AppState {
+    pub async fn spawn_session(
+        &self,
+        profile: Option<&str>,
+        persistent: bool,
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<ManagedSession, (StatusCode, &'static str)> {
+        // If a profile was given, check if an existing session is already running it
+        if let Some(prof_name) = profile {
+            let sanitized = sanitize_profile_name(prof_name);
+            if !sanitized.is_empty() {
+                let sessions = self.sessions.read().await;
+                for session in sessions.values() {
+                    if let Some(ref p) = session.profile {
+                        if p == &sanitized {
+                            info!(session_id = %session.id, profile = %sanitized, "Attaching to existing profile session");
+                            return Ok(session.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        let active_count = self.sessions.read().await.len();
+        if active_count >= self.max_sessions {
+            warn!(active = active_count, max = self.max_sessions, "Session limit reached");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Session limit reached. Try again later.",
+            ));
+        }
+
+        let browser = match ActiveBrowser::spawn(&self.config, profile, width, height).await {
+            Ok(b) => b,
+            Err(e) => {
+                error!(error = %e, "Failed to spawn Chromium instance");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to spawn browser process",
+                ));
+            }
+        };
+
+        let session = ManagedSession {
+            id: browser.id,
+            port: browser.port,
+            ws_path: browser.ws_path.clone(),
+            profile: browser.profile_name.clone(),
+            persistent,
+            created_at: browser.created_at,
+            client_count: Arc::new(AtomicUsize::new(0)),
+            browser: Arc::new(Mutex::new(Some(browser))),
+        };
+
+        {
+            let mut guard = self.sessions.write().await;
+            guard.insert(session.id, session.clone());
+        }
+
+        Ok(session)
+    }
+
+    pub async fn terminate_session(&self, id: &Uuid) -> bool {
+        let removed = {
+            let mut guard = self.sessions.write().await;
+            guard.remove(id)
+        };
+
+        if let Some(session) = removed {
+            let mut b_guard = session.browser.lock().await;
+            if let Some(mut b) = b_guard.take() {
+                b.terminate().await;
+                info!(session_id = %id, "Session terminated");
+                return true;
+            }
+        }
+        false
+    }
 }
 
 #[derive(Deserialize, Debug)]
 pub struct LaunchParams {
+    pub session_id: Option<Uuid>,
     pub profile: Option<String>,
+    #[serde(default)]
+    pub persistent: Option<bool>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct CreateSessionRequest {
+    pub profile: Option<String>,
+    #[serde(default = "default_true")]
+    pub persistent: bool,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Serialize, Debug)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub size_bytes: u64,
+    pub is_active: bool,
+    pub session_id: Option<Uuid>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -128,6 +277,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/handoff", get(|| async { Redirect::to("/handoff/") }))
         .route("/chromium", get(handle_chromium_ws))
         .route("/devtools/page/{page_id}", get(handle_page_ws))
+        // REST Management APIs for sessions and profiles
+        .route("/api/sessions", get(api_list_sessions).post(api_create_session))
+        .route("/api/sessions/{id}", get(api_get_session).delete(api_delete_session))
+        .route("/api/profiles", get(api_list_profiles))
+        .route("/api/profiles/{name}", delete(api_delete_profile))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
@@ -157,9 +311,9 @@ async fn json_version() -> impl IntoResponse {
 }
 
 async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
-    let sessions = {
+    let sessions: Vec<ManagedSession> = {
         let guard = state.sessions.read().await;
-        guard.values().cloned().collect::<Vec<_>>()
+        guard.values().cloned().collect()
     };
 
     let mut all_targets = Vec::new();
@@ -205,65 +359,51 @@ async fn handle_chromium_ws(
     Query(params): Query<LaunchParams>,
     State(state): State<AppState>,
 ) -> Response {
-    let active_count = state.sessions.read().await.len();
-    if active_count >= state.max_sessions {
-        warn!(active = active_count, max = state.max_sessions, "Session limit reached");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Session limit reached. Try again later.",
-        )
-            .into_response();
-    }
+    let session = if let Some(sid) = params.session_id {
+        let guard = state.sessions.read().await;
+        match guard.get(&sid).cloned() {
+            Some(s) => s,
+            None => {
+                return (StatusCode::NOT_FOUND, "Requested session ID not found").into_response();
+            }
+        }
+    } else {
+        let persistent = params.persistent.unwrap_or(false);
+        match state
+            .spawn_session(
+                params.profile.as_deref(),
+                persistent,
+                params.width,
+                params.height,
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err((status, msg)) => return (status, msg).into_response(),
+        }
+    };
 
     ws.on_upgrade(move |socket| async move {
-        let mut browser = match ActiveBrowser::spawn(
-            &state.config,
-            params.profile.as_deref(),
-            params.width,
-            params.height,
-        )
-        .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                error!(error = %e, "Failed to spawn browser instance");
-                return;
-            }
-        };
+        session.client_count.fetch_add(1, Ordering::SeqCst);
 
-        let session_info = SessionInfo {
-            id: browser.id,
-            port: browser.port,
-            ws_path: browser.ws_path.clone(),
-            profile: browser.profile_name.clone(),
-            created_at: browser.created_at,
-        };
-
-        {
-            let mut guard = state.sessions.write().await;
-            guard.insert(browser.id, session_info);
-        }
-
-        let ws_path = browser.ws_path.trim_start_matches('/');
-        let backend_ws_url = format!("ws://127.0.0.1:{}/{}", browser.port, ws_path);
-        info!(session_id = %browser.id, url = %backend_ws_url, "Connecting to Chromium DevTools");
+        let ws_path = session.ws_path.trim_start_matches('/');
+        let backend_ws_url = format!("ws://127.0.0.1:{}/{}", session.port, ws_path);
+        info!(session_id = %session.id, url = %backend_ws_url, "Connecting client to Chromium DevTools");
 
         match tokio_tungstenite::connect_async(&backend_ws_url).await {
             Ok((server_ws, _)) => {
                 bridge_websockets(socket, server_ws).await;
             }
             Err(e) => {
-                error!(session_id = %browser.id, error = %e, "Failed to connect to Chromium backend");
+                error!(session_id = %session.id, error = %e, "Failed to connect to Chromium backend");
             }
         }
 
-        {
-            let mut guard = state.sessions.write().await;
-            guard.remove(&browser.id);
+        let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if !session.persistent && remaining == 0 {
+            info!(session_id = %session.id, "Auto-terminating non-persistent session");
+            state.terminate_session(&session.id).await;
         }
-
-        browser.terminate().await;
-        info!(session_id = %browser.id, "Session cleaned up");
     })
 }
 
@@ -272,9 +412,9 @@ async fn handle_page_ws(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> Response {
-    let sessions = {
+    let sessions: Vec<ManagedSession> = {
         let guard = state.sessions.read().await;
-        guard.values().cloned().collect::<Vec<_>>()
+        guard.values().cloned().collect()
     };
 
     let mut target_port: Option<u16> = None;
@@ -309,4 +449,191 @@ async fn handle_page_ws(
             }
         }
     })
+}
+
+// ---------------------------------------------------------------------------
+// REST API Handlers
+// ---------------------------------------------------------------------------
+
+async fn api_list_sessions(State(state): State<AppState>) -> impl IntoResponse {
+    let sessions: Vec<ManagedSession> = {
+        let guard = state.sessions.read().await;
+        guard.values().cloned().collect()
+    };
+
+    let mut summaries = Vec::new();
+    for session in sessions {
+        summaries.push(session.to_summary(&state.http_client).await);
+    }
+
+    Json(summaries)
+}
+
+async fn api_create_session(
+    State(state): State<AppState>,
+    Json(req): Json<CreateSessionRequest>,
+) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+    let session = state
+        .spawn_session(
+            req.profile.as_deref(),
+            req.persistent,
+            req.width,
+            req.height,
+        )
+        .await?;
+
+    let summary = session.to_summary(&state.http_client).await;
+    Ok((StatusCode::CREATED, Json(summary)))
+}
+
+async fn api_get_session(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let session = {
+        let guard = state.sessions.read().await;
+        guard.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
+    };
+
+    let summary = session.to_summary(&state.http_client).await;
+    let url = format!("http://127.0.0.1:{}/json/list", session.port);
+    let targets = if let Ok(res) = state.http_client.get(&url).send().await {
+        res.json::<Vec<DevToolsTarget>>().await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    Ok(Json(serde_json::json!({
+        "session": summary,
+        "targets": targets,
+    })))
+}
+
+async fn api_delete_session(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    if state.terminate_session(&id).await {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "terminated", "id": id })),
+        )
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        )
+    }
+}
+
+async fn api_list_profiles(State(state): State<AppState>) -> impl IntoResponse {
+    let active_profiles: HashMap<String, Uuid> = {
+        let guard = state.sessions.read().await;
+        guard
+            .values()
+            .filter_map(|s| s.profile.as_ref().map(|p| (p.clone(), s.id)))
+            .collect()
+    };
+
+    let mut profiles = Vec::new();
+    let dir = &state.config.profiles_dir;
+    if let Ok(mut entries) = fs::read_dir(dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(meta) = entry.metadata().await {
+                if meta.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let size_bytes = compute_dir_size(entry.path()).await;
+                    let is_active = active_profiles.contains_key(&name);
+                    let session_id = active_profiles.get(&name).cloned();
+
+                    profiles.push(ProfileInfo {
+                        name,
+                        size_bytes,
+                        is_active,
+                        session_id,
+                    });
+                }
+            }
+        }
+    }
+
+    profiles.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(profiles)
+}
+
+async fn api_delete_profile(
+    AxumPath(name): AxumPath<String>,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let sanitized = sanitize_profile_name(&name);
+    if sanitized.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid profile name" })),
+        ));
+    }
+
+    // Check if profile is active in an ongoing session
+    {
+        let guard = state.sessions.read().await;
+        if let Some(s) = guard.values().find(|s| s.profile.as_deref() == Some(&sanitized)) {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("Profile is currently in use by active session {}", s.id)
+                })),
+            ));
+        }
+    }
+
+    let dir = state.config.profiles_dir.join(&sanitized);
+    if !dir.exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Profile directory not found" })),
+        ));
+    }
+
+    if let Err(e) = fs::remove_dir_all(&dir).await {
+        error!(profile = %sanitized, error = %e, "Failed to remove profile directory");
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to remove profile directory" })),
+        ));
+    }
+
+    info!(profile = %sanitized, "Profile directory removed");
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "deleted", "profile": sanitized })),
+    ))
+}
+
+fn sanitize_profile_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+        .collect()
+}
+
+async fn compute_dir_size(path: PathBuf) -> u64 {
+    tokio::task::spawn_blocking(move || {
+        fn walk(p: &Path) -> u64 {
+            let mut s = 0;
+            if let Ok(rd) = std::fs::read_dir(p) {
+                for entry in rd.flatten() {
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_file() {
+                            s += meta.len();
+                        } else if meta.is_dir() {
+                            s += walk(&entry.path());
+                        }
+                    }
+                }
+            }
+            s
+        }
+        walk(&path)
+    })
+    .await
+    .unwrap_or(0)
 }

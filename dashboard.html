@@ -20,6 +20,8 @@
     --ok: #10b981;
     --ok-bg: rgba(16, 185, 129, 0.12);
     --warn: #f59e0b;
+    --danger: #ef4444;
+    --danger-bg: rgba(239, 68, 68, 0.12);
     --btn: #1b2032;
     --btn-hover: #262c44;
     --code-bg: #07080d;
@@ -38,6 +40,8 @@
       --accent-hover: #4f3ee2;
       --accent-bg: rgba(99, 82, 232, 0.08);
       --accent-glow: rgba(99, 82, 232, 0.2);
+      --danger: #dc2626;
+      --danger-bg: rgba(220, 38, 38, 0.08);
       --btn: #edf0f8;
       --btn-hover: #e2e6f2;
       --code-bg: #f0f2f9;
@@ -183,10 +187,25 @@
     background: var(--btn-hover);
     border-color: var(--line);
   }
+  .btn-danger {
+    background: var(--danger-bg);
+    color: var(--danger);
+    border-color: rgba(239, 68, 68, 0.25);
+  }
+  .btn-danger:hover {
+    background: var(--danger);
+    color: #fff;
+    border-color: var(--danger);
+  }
   .btn-sm {
     padding: 5px 10px;
     font-size: 12px;
     border-radius: 6px;
+  }
+  .btn-xs {
+    padding: 3px 7px;
+    font-size: 11px;
+    border-radius: 5px;
   }
   .btn svg {
     width: 14px;
@@ -272,10 +291,11 @@
   }
   .col-4 { grid-column: span 4; }
   .col-8 { grid-column: span 8; }
+  .col-6 { grid-column: span 6; }
   .col-12 { grid-column: span 12; }
 
   @media (max-width: 860px) {
-    .col-4, .col-8 { grid-column: span 12; }
+    .col-4, .col-8, .col-6 { grid-column: span 12; }
     .brand-badge { max-width: 110px; }
     main { padding: 14px; gap: 16px; }
   }
@@ -448,6 +468,64 @@
     padding: 18px;
   }
 
+  /* Responsive Data Tables */
+  .table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+  .data-table th {
+    text-align: left;
+    padding: 10px 14px;
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--line);
+    background: var(--card);
+  }
+  .data-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+  .data-table tr:last-child td {
+    border-bottom: none;
+  }
+  .data-table tr:hover td {
+    background: var(--card-hover);
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  .badge-accent {
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  .badge-ok {
+    background: var(--ok-bg);
+    color: var(--ok);
+  }
+  .badge-muted {
+    background: var(--btn);
+    color: var(--muted);
+  }
+
   /* Endpoints list */
   .endpoints-list {
     display: flex;
@@ -609,7 +687,7 @@
 
   /* Empty state */
   .empty-state {
-    padding: 44px 20px;
+    padding: 36px 20px;
     text-align: center;
     display: flex;
     flex-direction: column;
@@ -617,26 +695,121 @@
     gap: 10px;
   }
   .empty-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 14px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
     background: var(--accent-bg);
     color: var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
   }
-  .empty-icon svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .empty-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; }
   .empty-title {
-    font-size: 15.5px;
+    font-size: 14.5px;
     font-weight: 700;
   }
   .empty-desc {
-    font-size: 13px;
+    font-size: 12.5px;
     color: var(--muted);
-    max-width: 440px;
+    max-width: 420px;
     line-height: 1.5;
+  }
+
+  /* Modal Form */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 20px;
+  }
+  .modal-overlay.open {
+    display: flex;
+  }
+  .modal-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    width: 100%;
+    max-width: 460px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    animation: modalIn 0.15s ease-out;
+  }
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+  .modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .modal-footer {
+    padding: 14px 20px;
+    border-top: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.12);
+  }
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .form-label {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .form-hint {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .form-input {
+    background: var(--code-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: var(--fg);
+    font-size: 13.5px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .form-input:focus {
+    border-color: var(--accent);
+  }
+  .form-row {
+    display: flex;
+    gap: 12px;
+  }
+  .form-row > * {
+    flex: 1;
+  }
+  .form-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    user-select: none;
   }
 
   footer {
@@ -670,7 +843,11 @@
       <div class="pulse-dot"></div>
       <span id="daemonStatus">Online</span>
     </div>
-    <a href="/handoff/" class="btn btn-accent btn-sm" title="Launch Mobile Handoff Canvas">
+    <button class="btn btn-accent btn-sm" onclick="openNewSessionModal()">
+      <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      New Session
+    </button>
+    <a href="/handoff/" class="btn btn-ghost btn-sm" title="Launch Mobile Handoff Canvas">
       <svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
       Handoff
     </a>
@@ -757,6 +934,62 @@
     </div>
   </div>
 
+  <!-- Managed Sessions Card -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        Managed Sessions (REST API)
+        <span id="sessionCountBadge" class="badge badge-accent">0</span>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="refreshData()">
+          <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Refresh
+        </button>
+        <button class="btn btn-accent btn-sm" onclick="openNewSessionModal()">
+          + Launch
+        </button>
+      </div>
+    </div>
+    <div id="sessionsContainer">
+      <!-- Injected by JS -->
+    </div>
+  </div>
+
+  <!-- Persistent Profiles Card -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        Stored Persistent Profiles
+        <span id="profileCountBadge" class="badge badge-accent">0</span>
+      </div>
+      <span style="font-size:11.5px;color:var(--muted);">Cached browser states, cookies, &amp; storage</span>
+    </div>
+    <div id="profilesContainer">
+      <!-- Injected by JS -->
+    </div>
+  </div>
+
+  <!-- Active Pages & Sessions Interactive Cards -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+        Active Pages &amp; Tabs
+        <span id="tabCountBadge" class="badge badge-accent">0</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="refreshData()">
+        <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Refresh
+      </button>
+    </div>
+    <div id="tabsContainer">
+      <!-- Injected by JS -->
+    </div>
+  </div>
+
   <!-- Endpoints Card -->
   <div class="card">
     <div class="card-header">
@@ -764,7 +997,7 @@
         <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
         Connection Endpoints
       </div>
-      <span style="font-size:11.5px;color:var(--muted);">CDP WebSocket Protocol</span>
+      <span style="font-size:11.5px;color:var(--muted);">CDP WebSocket &amp; Management API</span>
     </div>
     <div class="card-content">
       <div class="endpoints-list">
@@ -783,37 +1016,57 @@
           <span class="endpoint-val">hrworks worker --cdp-url ws://127.0.0.1:3001/chromium</span>
           <button class="copy-btn" onclick="copyText('hrworks worker --cdp-url ws://127.0.0.1:3001/chromium', this)">Copy</button>
         </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Active Pages & Sessions Interactive Cards -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">
-        <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
-        Active Pages &amp; Tabs
-        <span id="tabCountBadge" style="font-size:11px;font-weight:700;padding:2px 7px;background:var(--accent-bg);color:var(--accent);border-radius:999px;">0</span>
-      </div>
-      <button class="btn btn-ghost btn-sm" onclick="refreshData()">
-        <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        Refresh
-      </button>
-    </div>
-    <div id="tabsContainer">
-      <div class="empty-state">
-        <div class="empty-icon">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
-        </div>
-        <div class="empty-title">No active browser sessions</div>
-        <div class="empty-desc">
-          Chromium instances spin up on-demand whenever a client connects over WebSocket CDP.
-          Once an agent, MCP server, or hrworks worker initiates a connection, interactive cards will appear here.
+        <div class="endpoint-row">
+          <span class="endpoint-label">Sessions API</span>
+          <span class="endpoint-val" id="apiEndpoint">POST /api/sessions {"profile":"my-profile","persistent":true}</span>
+          <button class="copy-btn" onclick="copyText(document.getElementById('apiEndpoint').textContent, this)">Copy</button>
         </div>
       </div>
     </div>
   </div>
 </main>
+
+<!-- Modal: Launch New Session -->
+<div id="newSessionModal" class="modal-overlay" onclick="handleModalOverlayClick(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        Launch New Browser Session
+      </div>
+      <button class="btn btn-ghost btn-xs" onclick="closeNewSessionModal()">&times;</button>
+    </div>
+    <form id="newSessionForm" onsubmit="submitNewSession(event)">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="sessionProfileInput">Profile Name</label>
+          <input type="text" id="sessionProfileInput" class="form-input" placeholder="e.g. work, banking (blank for ephemeral)" autocomplete="off">
+          <span class="form-hint">Persistent profiles save cookies, login state, and browser cache to disk.</span>
+        </div>
+        <div class="form-group">
+          <label class="form-checkbox-label">
+            <input type="checkbox" id="sessionPersistentInput" checked>
+            <span><strong>Keep Session Alive (Persistent)</strong> — don't terminate when client disconnects</span>
+          </label>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="sessionWidthInput">Width (px)</label>
+            <input type="number" id="sessionWidthInput" class="form-input" value="1920" min="320" max="3840">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="sessionHeightInput">Height (px)</label>
+            <input type="number" id="sessionHeightInput" class="form-input" value="1080" min="240" max="2160">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="closeNewSessionModal()">Cancel</button>
+        <button type="submit" class="btn btn-accent btn-sm" id="submitSessionBtn">Launch Session</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <footer>
   Browser Daemon &bull; Multi-Tenant Headless Chrome with Mobile Handoff &bull; Protected by Authelia
@@ -833,6 +1086,7 @@ function updateHostInfo() {
   const wsUrl = `${proto}//${host}${port}/chromium`;
   document.getElementById('wsEndpoint').textContent = wsUrl;
   document.getElementById('mcpEndpoint').textContent = `playwright-mcp --cdp-endpoint=${wsUrl}`;
+  document.getElementById('apiEndpoint').textContent = `curl -X POST https://${host}${port}/api/sessions -d '{"profile":"work","persistent":true}'`;
 }
 
 function quickConnectHandoff() {
@@ -893,11 +1147,132 @@ function updateHistoryChart(currentActive, maxVal) {
   document.getElementById('chartArea').setAttribute('d', areaD);
 }
 
+function formatUptime(secs) {
+  if (!secs || secs < 0) return '0s';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function openNewSessionModal(prefillProfile) {
+  const modal = document.getElementById('newSessionModal');
+  const profInput = document.getElementById('sessionProfileInput');
+  if (prefillProfile) {
+    profInput.value = prefillProfile;
+  }
+  modal.classList.add('open');
+  profInput.focus();
+}
+
+function closeNewSessionModal() {
+  document.getElementById('newSessionModal').classList.remove('open');
+}
+
+function handleModalOverlayClick(e) {
+  if (e.target.id === 'newSessionModal') {
+    closeNewSessionModal();
+  }
+}
+
+async function submitNewSession(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submitSessionBtn');
+  btn.disabled = true;
+  btn.textContent = 'Launching...';
+
+  const profile = document.getElementById('sessionProfileInput').value.trim() || null;
+  const persistent = document.getElementById('sessionPersistentInput').checked;
+  const width = parseInt(document.getElementById('sessionWidthInput').value, 10) || 1920;
+  const height = parseInt(document.getElementById('sessionHeightInput').value, 10) || 1080;
+
+  try {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile, persistent, width, height })
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      alert(`Failed to launch session: ${err}`);
+    } else {
+      closeNewSessionModal();
+      document.getElementById('sessionProfileInput').value = '';
+      refreshData();
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Launch Session';
+  }
+}
+
+async function terminateSession(id) {
+  if (!confirm(`Are you sure you want to terminate session ${id.slice(0, 8)}?`)) return;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (res.ok) {
+      refreshData();
+    } else {
+      const err = await res.json();
+      alert(`Error terminating session: ${err.error || res.statusText}`);
+    }
+  } catch (err) {
+    alert(`Failed to terminate session: ${err}`);
+  }
+}
+
+async function launchProfile(name) {
+  try {
+    const res = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: name, persistent: true })
+    });
+    if (res.ok) {
+      refreshData();
+    } else {
+      const err = await res.text();
+      alert(`Failed to launch profile session: ${err}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  }
+}
+
+async function deleteProfile(name) {
+  if (!confirm(`Delete profile "${name}" and all stored user data/cookies from disk?`)) return;
+  try {
+    const res = await fetch(`/api/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (res.ok) {
+      refreshData();
+    } else {
+      const err = await res.json();
+      alert(`Failed to delete profile: ${err.error || res.statusText}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  }
+}
+
 async function refreshData() {
   try {
     let activeCount = 0;
     let maxCount = 8;
 
+    // 1. Health
     const healthRes = await fetch('/health');
     if (healthRes.ok) {
       const health = await healthRes.json();
@@ -907,6 +1282,137 @@ async function refreshData() {
       updateHistoryChart(activeCount, maxCount);
     }
 
+    // 2. Managed Sessions (/api/sessions)
+    const sessionsRes = await fetch('/api/sessions');
+    if (sessionsRes.ok) {
+      const sessions = await sessionsRes.json();
+      document.getElementById('sessionCountBadge').textContent = sessions.length;
+      const sContainer = document.getElementById('sessionsContainer');
+
+      if (sessions.length === 0) {
+        sContainer.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            </div>
+            <div class="empty-title">No active browser sessions</div>
+            <div class="empty-desc">
+              Launch a new session with "+ Launch" or connect via WebSocket CDP / Playwright MCP.
+            </div>
+          </div>`;
+      } else {
+        let html = `
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Session ID</th>
+                  <th>Profile</th>
+                  <th>Mode</th>
+                  <th>Uptime</th>
+                  <th>Clients</th>
+                  <th>Tabs</th>
+                  <th style="text-align:right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody>`;
+        for (const s of sessions) {
+          const sid = escapeHtml(s.id);
+          const prof = s.profile ? escapeHtml(s.profile) : '<em style="color:var(--muted);">ephemeral</em>';
+          const modeBadge = s.persistent
+            ? `<span class="badge badge-ok">Persistent</span>`
+            : `<span class="badge badge-muted">Ephemeral</span>`;
+          const uptime = formatUptime(s.uptime_seconds);
+
+          html += `
+            <tr>
+              <td>
+                <span class="badge badge-accent" title="${sid}">${sid.slice(0, 8)}</span>
+              </td>
+              <td><strong>${prof}</strong></td>
+              <td>${modeBadge}</td>
+              <td>${uptime}</td>
+              <td><span class="badge badge-muted">${s.client_count} conn</span></td>
+              <td><span class="badge badge-muted">${s.tabs_count} tabs</span></td>
+              <td style="text-align:right;">
+                <div style="display:inline-flex;gap:6px;">
+                  <button class="btn btn-ghost btn-xs" onclick="copyText('wss://' + location.host + '/chromium?session_id=${sid}', this)" title="Copy WebSocket CDP URL">Copy WS</button>
+                  <a href="/handoff/" class="btn btn-accent btn-xs" title="Open Mobile Handoff">Handoff</a>
+                  <button class="btn btn-danger btn-xs" onclick="terminateSession('${sid}')" title="Terminate browser process">Terminate</button>
+                </div>
+              </td>
+            </tr>`;
+        }
+        html += `</tbody></table></div>`;
+        sContainer.innerHTML = html;
+      }
+    }
+
+    // 3. Stored Profiles (/api/profiles)
+    const profRes = await fetch('/api/profiles');
+    if (profRes.ok) {
+      const profiles = await profRes.json();
+      document.getElementById('profileCountBadge').textContent = profiles.length;
+      const pContainer = document.getElementById('profilesContainer');
+
+      if (profiles.length === 0) {
+        pContainer.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="empty-title">No persistent profiles stored</div>
+            <div class="empty-desc">
+              When you launch a session with a profile name, its state and storage will persist on disk and appear here.
+            </div>
+          </div>`;
+      } else {
+        let html = `
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Profile Name</th>
+                  <th>Disk Usage</th>
+                  <th>Status</th>
+                  <th style="text-align:right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody>`;
+        for (const p of profiles) {
+          const name = escapeHtml(p.name);
+          const size = formatBytes(p.size_bytes);
+          const statusBadge = p.is_active
+            ? `<span class="badge badge-ok">Active (${p.session_id ? escapeHtml(p.session_id).slice(0, 8) : 'Running'})</span>`
+            : `<span class="badge badge-muted">Stored</span>`;
+
+          const launchBtn = p.is_active
+            ? `<a href="/handoff/" class="btn btn-accent btn-xs">Take Over</a>`
+            : `<button class="btn btn-accent btn-xs" onclick="launchProfile('${name}')">Launch</button>`;
+
+          const deleteBtn = p.is_active
+            ? `<button class="btn btn-ghost btn-xs" disabled style="opacity:0.4;cursor:not-allowed;" title="Cannot delete active profile">Delete</button>`
+            : `<button class="btn btn-danger btn-xs" onclick="deleteProfile('${name}')">Delete</button>`;
+
+          html += `
+            <tr>
+              <td><strong>${name}</strong></td>
+              <td>${size}</td>
+              <td>${statusBadge}</td>
+              <td style="text-align:right;">
+                <div style="display:inline-flex;gap:6px;">
+                  ${launchBtn}
+                  ${deleteBtn}
+                </div>
+              </td>
+            </tr>`;
+        }
+        html += `</tbody></table></div>`;
+        pContainer.innerHTML = html;
+      }
+    }
+
+    // 4. Targets (/json/list)
     const listRes = await fetch('/json/list');
     if (listRes.ok) {
       const targets = await listRes.json();
@@ -931,10 +1437,9 @@ async function refreshData() {
             <div class="empty-icon">
               <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
             </div>
-            <div class="empty-title">No active browser sessions</div>
+            <div class="empty-title">No open browser tabs</div>
             <div class="empty-desc">
-              Chromium instances spin up on-demand whenever a client connects over WebSocket CDP.
-              Once an agent, MCP server, or hrworks worker initiates a connection, interactive cards will appear here.
+              Active web pages and tabs from running sessions will appear here as interactive handoff cards.
             </div>
           </div>`;
       } else {
@@ -975,6 +1480,7 @@ async function refreshData() {
 }
 
 function escapeHtml(s) {
+  if (!s) return '';
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
