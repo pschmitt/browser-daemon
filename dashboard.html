@@ -965,7 +965,15 @@
         Stored Persistent Profiles
         <span id="profileCountBadge" class="badge badge-accent">0</span>
       </div>
-      <span style="font-size:11.5px;color:var(--muted);">Cached browser states, cookies, &amp; storage</span>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="refreshData()">
+          <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Refresh
+        </button>
+        <button class="btn btn-accent btn-sm" onclick="openNewProfileModal()">
+          + New Profile
+        </button>
+      </div>
     </div>
     <div id="profilesContainer">
       <!-- Injected by JS -->
@@ -1021,6 +1029,11 @@
           <span class="endpoint-val" id="apiEndpoint">POST /api/sessions {"profile":"my-profile","persistent":true}</span>
           <button class="copy-btn" onclick="copyText(document.getElementById('apiEndpoint').textContent, this)">Copy</button>
         </div>
+        <div class="endpoint-row">
+          <span class="endpoint-label">Profiles API</span>
+          <span class="endpoint-val" id="profileApiEndpoint">POST /api/profiles {"name":"hrworks"}</span>
+          <button class="copy-btn" onclick="copyText('POST /api/profiles {\x22name\x22:\x22hrworks\x22}', this)">Copy</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1063,6 +1076,39 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-ghost btn-sm" onclick="closeNewSessionModal()">Cancel</button>
         <button type="submit" class="btn btn-accent btn-sm" id="submitSessionBtn">Launch Session</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Create New Profile -->
+<div id="newProfileModal" class="modal-overlay" onclick="handleProfileModalOverlayClick(event)">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        Create Persistent Profile
+      </div>
+      <button class="btn btn-ghost btn-xs" onclick="closeNewProfileModal()">&times;</button>
+    </div>
+    <form id="newProfileForm" onsubmit="submitNewProfile(event)">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="profileNameInput">Profile Name</label>
+          <input type="text" id="profileNameInput" class="form-input" placeholder="e.g. hrworks, staging, dev" required autocomplete="off">
+          <span class="form-hint">Alphanumeric, dashes, and underscores only.</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="profileCloneFromInput">Clone From Existing Profile (Optional)</label>
+          <select id="profileCloneFromInput" class="form-input">
+            <option value="">(None - empty profile)</option>
+          </select>
+          <span class="form-hint">Copies saved cookies, session state, and storage from an existing profile.</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="closeNewProfileModal()">Cancel</button>
+        <button type="submit" class="btn btn-accent btn-sm" id="submitProfileBtn">Create Profile</button>
       </div>
     </form>
   </div>
@@ -1252,10 +1298,121 @@ async function launchProfile(name) {
   }
 }
 
-async function deleteProfile(name) {
-  if (!confirm(`Delete profile "${name}" and all stored user data/cookies from disk?`)) return;
+let currentProfilesList = [];
+
+function openNewProfileModal() {
+  const modal = document.getElementById('newProfileModal');
+  const sel = document.getElementById('profileCloneFromInput');
+  sel.innerHTML = '<option value="">(None - empty profile)</option>';
+  for (const p of currentProfilesList) {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = `${p.name} (${formatBytes(p.size_bytes)})`;
+    sel.appendChild(opt);
+  }
+  document.getElementById('profileNameInput').value = '';
+  modal.classList.add('open');
+  document.getElementById('profileNameInput').focus();
+}
+
+function closeNewProfileModal() {
+  document.getElementById('newProfileModal').classList.remove('open');
+}
+
+function handleProfileModalOverlayClick(e) {
+  if (e.target.id === 'newProfileModal') {
+    closeNewProfileModal();
+  }
+}
+
+async function submitNewProfile(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submitProfileBtn');
+  btn.disabled = true;
+  btn.textContent = 'Creating...';
+
+  const name = document.getElementById('profileNameInput').value.trim();
+  const cloneFrom = document.getElementById('profileCloneFromInput').value || null;
+
   try {
-    const res = await fetch(`/api/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const res = await fetch('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, clone_from: cloneFrom })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Failed to create profile: ${err.error || res.statusText}`);
+    } else {
+      closeNewProfileModal();
+      refreshData();
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create Profile';
+  }
+}
+
+async function renameProfile(oldName) {
+  const newName = prompt(`Enter new name for profile "${oldName}":`, oldName);
+  if (!newName || newName.trim() === oldName) return;
+
+  try {
+    const res = await fetch(`/api/profiles/${encodeURIComponent(oldName)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName.trim() })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Failed to rename profile: ${err.error || res.statusText}`);
+    } else {
+      refreshData();
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  }
+}
+
+async function cloneProfile(sourceName) {
+  const targetName = prompt(`Enter name for the new cloned copy of "${sourceName}":`, `${sourceName}-copy`);
+  if (!targetName || !targetName.trim()) return;
+
+  try {
+    const res = await fetch(`/api/profiles/${encodeURIComponent(sourceName)}/clone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_name: targetName.trim() })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Failed to clone profile: ${err.error || res.statusText}`);
+    } else {
+      refreshData();
+    }
+  } catch (err) {
+    alert(`Error: ${err}`);
+  }
+}
+
+async function deleteProfile(name, isActive) {
+  let url = `/api/profiles/${encodeURIComponent(name)}`;
+  if (isActive) {
+    if (!confirm(`Profile "${name}" is currently ACTIVE in a running session.\n\nTerminating the session and deleting this profile will wipe its cookies and data. Force delete?`)) {
+      return;
+    }
+    url += '?force=true';
+  } else {
+    if (!confirm(`Delete profile "${name}" and all stored user data/cookies from disk?`)) return;
+  }
+
+  try {
+    const res = await fetch(url, { method: 'DELETE' });
     if (res.ok) {
       refreshData();
     } else {
@@ -1352,6 +1509,7 @@ async function refreshData() {
     const profRes = await fetch('/api/profiles');
     if (profRes.ok) {
       const profiles = await profRes.json();
+      currentProfilesList = profiles;
       document.getElementById('profileCountBadge').textContent = profiles.length;
       const pContainer = document.getElementById('profilesContainer');
 
@@ -1363,7 +1521,7 @@ async function refreshData() {
             </div>
             <div class="empty-title">No persistent profiles stored</div>
             <div class="empty-desc">
-              When you launch a session with a profile name, its state and storage will persist on disk and appear here.
+              Create a profile with "+ New Profile" or launch a session specifying a profile name.
             </div>
           </div>`;
       } else {
@@ -1387,12 +1545,16 @@ async function refreshData() {
             : `<span class="badge badge-muted">Stored</span>`;
 
           const launchBtn = p.is_active
-            ? `<a href="/handoff/" class="btn btn-accent btn-xs">Take Over</a>`
-            : `<button class="btn btn-accent btn-xs" onclick="launchProfile('${name}')">Launch</button>`;
+            ? `<a href="/handoff/" class="btn btn-accent btn-xs" title="Take over session in Handoff">Take Over</a>`
+            : `<button class="btn btn-accent btn-xs" onclick="launchProfile('${name}')" title="Launch browser session">Launch</button>`;
 
-          const deleteBtn = p.is_active
-            ? `<button class="btn btn-ghost btn-xs" disabled style="opacity:0.4;cursor:not-allowed;" title="Cannot delete active profile">Delete</button>`
-            : `<button class="btn btn-danger btn-xs" onclick="deleteProfile('${name}')">Delete</button>`;
+          const cloneBtn = `<button class="btn btn-ghost btn-xs" onclick="cloneProfile('${name}')" title="Duplicate profile directory">Clone</button>`;
+
+          const renameBtn = p.is_active
+            ? `<button class="btn btn-ghost btn-xs" disabled style="opacity:0.4;cursor:not-allowed;" title="Cannot rename active profile">Rename</button>`
+            : `<button class="btn btn-ghost btn-xs" onclick="renameProfile('${name}')" title="Rename profile directory">Rename</button>`;
+
+          const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteProfile('${name}', ${p.is_active})" title="${p.is_active ? 'Force terminate session & delete' : 'Delete profile'}">Delete</button>`;
 
           html += `
             <tr>
@@ -1402,6 +1564,8 @@ async function refreshData() {
               <td style="text-align:right;">
                 <div style="display:inline-flex;gap:6px;">
                   ${launchBtn}
+                  ${cloneBtn}
+                  ${renameBtn}
                   ${deleteBtn}
                 </div>
               </td>
