@@ -89,7 +89,7 @@ in
     fonts.packages = [
       pkgs.dejavu_fonts
       pkgs.noto-fonts
-      pkgs.noto-fonts-emoji
+      pkgs.noto-fonts-color-emoji
       pkgs.noto-fonts-cjk-sans
     ];
 
