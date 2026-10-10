@@ -22,6 +22,7 @@ use crate::browser::{ActiveBrowser, BrowserConfig};
 use crate::proxy::bridge_websockets;
 
 static HANDOFF_HTML: &str = include_str!("../handoff.html");
+static DASHBOARD_HTML: &str = include_str!("../dashboard.html");
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Native NixOS remote browser daemon")]
@@ -117,7 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let app = Router::new()
-        .route("/", get(|| async { Redirect::to("/handoff/") }))
+        .route("/", get(dashboard_page))
+        .route("/dashboard", get(|| async { Redirect::to("/") }))
         .route("/health", get(health_check))
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
@@ -176,6 +178,16 @@ async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
     }
 
     Json(all_targets)
+}
+
+async fn dashboard_page() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=utf-8"),
+        )],
+        Html(DASHBOARD_HTML),
+    )
 }
 
 async fn handoff_page() -> impl IntoResponse {

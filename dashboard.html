@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Browser Daemon — Dashboard</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --card: #131722;
+    --card-border: #212638;
+    --fg: #e8eaf2;
+    --muted: #8c95ae;
+    --accent: #7c6cf0;
+    --accent-hover: #9082f6;
+    --accent-bg: rgba(124, 108, 240, 0.12);
+    --ok: #10b981;
+    --ok-bg: rgba(16, 185, 129, 0.12);
+    --warn: #f59e0b;
+    --btn: #1b2030;
+    --btn-hover: #262c42;
+    --code-bg: #07090d;
+    --line: #1e2333;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6fa;
+      --card: #ffffff;
+      --card-border: #e2e5ee;
+      --fg: #131722;
+      --muted: #647087;
+      --accent: #6352e8;
+      --accent-hover: #503fe0;
+      --accent-bg: rgba(99, 82, 232, 0.08);
+      --btn: #eef0f7;
+      --btn-hover: #e2e5ee;
+      --code-bg: #f0f2f8;
+      --line: #e2e5ee;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 14.5px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: var(--card);
+    border-bottom: 1px solid var(--card-border);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .brand-logo {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), #4f46e5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+  }
+  .brand-logo svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .brand-title {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .brand-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ok);
+    background: var(--ok-bg);
+    padding: 5px 12px;
+    border-radius: 999px;
+  }
+  .pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+    70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    text-decoration: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .btn-accent {
+    background: var(--accent);
+    color: #fff;
+  }
+  .btn-accent:hover {
+    background: var(--accent-hover);
+  }
+  .btn-ghost {
+    background: var(--btn);
+    color: var(--fg);
+    border-color: var(--card-border);
+  }
+  .btn-ghost:hover {
+    background: var(--btn-hover);
+  }
+  .btn-sm {
+    padding: 5px 10px;
+    font-size: 12.5px;
+    border-radius: 6px;
+  }
+  .btn svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+  }
+
+  main {
+    flex: 1;
+    max-width: 1180px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .stat-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stat-val {
+    font-size: 26px;
+    font-weight: 700;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .stat-val small {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .stat-desc {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .progress-bar {
+    width: 100%;
+    height: 6px;
+    background: var(--line);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+    transition: width 0.3s ease;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .card-title {
+    font-size: 15.5px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-content {
+    padding: 20px;
+  }
+
+  .endpoints-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .endpoint-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--code-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 13px;
+  }
+  .endpoint-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    font-family: system-ui, sans-serif;
+    text-transform: uppercase;
+    min-width: 80px;
+  }
+  .endpoint-val {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg);
+  }
+  .copy-btn {
+    background: var(--btn);
+    color: var(--muted);
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .copy-btn:hover {
+    color: var(--fg);
+    background: var(--btn-hover);
+  }
+
+  .tabs-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }
+  .tabs-table th {
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--card-border);
+  }
+  .tabs-table td {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13.5px;
+    vertical-align: middle;
+  }
+  .tabs-table tr:last-child td {
+    border-bottom: none;
+  }
+  .tab-title-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-width: 440px;
+  }
+  .tab-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tab-url {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: ui-monospace, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tab-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .empty-state {
+    padding: 48px 24px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .empty-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 16px;
+    background: var(--accent-bg);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 4px;
+  }
+  .empty-icon svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .empty-title {
+    font-size: 16px;
+    font-weight: 600;
+  }
+  .empty-desc {
+    font-size: 13.5px;
+    color: var(--muted);
+    max-width: 460px;
+    line-height: 1.5;
+  }
+
+  footer {
+    padding: 20px 24px;
+    border-top: 1px solid var(--card-border);
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: auto;
+  }
+  footer a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="brand-logo">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+    </div>
+    <div class="brand-title">
+      Browser Daemon
+      <span class="brand-badge" id="hostBadge">Mesh</span>
+    </div>
+  </div>
+  <div class="header-actions">
+    <div class="status-pill">
+      <div class="pulse-dot"></div>
+      <span id="daemonStatus">Online</span>
+    </div>
+    <a href="/handoff/" class="btn btn-accent btn-sm">
+      <svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+      Mobile Handoff
+    </a>
+  </div>
+</header>
+
+<main>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Active Sessions</div>
+      <div class="stat-val">
+        <span id="activeSessions">0</span>
+        <small>/ <span id="maxSessions">8</span></small>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="sessionProgress" style="width: 0%;"></div>
+      </div>
+      <div class="stat-desc">Multi-tenant Chrome instances</div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-label">Open Pages / Tabs</div>
+      <div class="stat-val">
+        <span id="activeTabs">0</span>
+      </div>
+      <div class="stat-desc">DevTools CDP targets available</div>
+    </div>
+
+    <div class="stat-card">
+      <div class="stat-label">Anti-Botguard State</div>
+      <div class="stat-val" style="font-size: 20px; color: var(--ok);">
+        Stealth Active
+      </div>
+      <div class="stat-desc">Xvfb virtual display (:98), webdriver false</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        Connection Endpoints
+      </div>
+    </div>
+    <div class="card-content">
+      <div class="endpoints-list">
+        <div class="endpoint-row">
+          <span class="endpoint-label">WebSocket CDP</span>
+          <span class="endpoint-val" id="wsEndpoint">wss://.../chromium</span>
+          <button class="copy-btn" onclick="copyText(document.getElementById('wsEndpoint').textContent, this)">Copy</button>
+        </div>
+        <div class="endpoint-row">
+          <span class="endpoint-label">Playwright MCP</span>
+          <span class="endpoint-val" id="mcpEndpoint">playwright-mcp --cdp-endpoint=wss://.../chromium</span>
+          <button class="copy-btn" onclick="copyText(document.getElementById('mcpEndpoint').textContent, this)">Copy</button>
+        </div>
+        <div class="endpoint-row">
+          <span class="endpoint-label">HR WORKS CLI</span>
+          <span class="endpoint-val">hrworks worker --cdp-url ws://127.0.0.1:3001/chromium</span>
+          <button class="copy-btn" onclick="copyText('hrworks worker --cdp-url ws://127.0.0.1:3001/chromium', this)">Copy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+        Active Pages &amp; Tabs
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="refreshData()">
+        <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Refresh
+      </button>
+    </div>
+    <div id="tabsContainer">
+      <div class="empty-state">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+        </div>
+        <div class="empty-title">No active browser sessions</div>
+        <div class="empty-desc">
+          Chromium instances spin up on-demand whenever a client connects over WebSocket CDP.
+          Once an agent, MCP server, or hrworks worker initiates a connection, tabs will appear here.
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  Browser Daemon &bull; Multi-Tenant Headless Chrome with Mobile Handoff &bull; Protected by Authelia
+</footer>
+
+<script>
+function updateHostInfo() {
+  const host = location.hostname;
+  document.getElementById('hostBadge').textContent = host;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const port = location.port ? (':' + location.port) : '';
+  const wsUrl = `${proto}//${host}${port}/chromium`;
+  document.getElementById('wsEndpoint').textContent = wsUrl;
+  document.getElementById('mcpEndpoint').textContent = `playwright-mcp --cdp-endpoint=${wsUrl}`;
+}
+
+async function refreshData() {
+  try {
+    const healthRes = await fetch('/health');
+    if (healthRes.ok) {
+      const health = await healthRes.json();
+      document.getElementById('activeSessions').textContent = health.active_sessions || 0;
+      document.getElementById('maxSessions').textContent = health.max_sessions || 8;
+      const pct = Math.min(100, Math.round(((health.active_sessions || 0) / (health.max_sessions || 8)) * 100));
+      document.getElementById('sessionProgress').style.width = pct + '%';
+    }
+
+    const listRes = await fetch('/json/list');
+    if (listRes.ok) {
+      const targets = await listRes.json();
+      const pages = targets.filter(t => t.type === 'page');
+      document.getElementById('activeTabs').textContent = pages.length;
+
+      const container = document.getElementById('tabsContainer');
+      if (pages.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M16 16s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+            </div>
+            <div class="empty-title">No active browser sessions</div>
+            <div class="empty-desc">
+              Chromium instances spin up on-demand whenever a client connects over WebSocket CDP.
+              Once an agent, MCP server, or hrworks worker initiates a connection, tabs will appear here.
+            </div>
+          </div>`;
+      } else {
+        let html = `
+          <table class="tabs-table">
+            <thead>
+              <tr>
+                <th>Page Details</th>
+                <th>Target ID</th>
+                <th style="text-align: right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>`;
+        for (const p of pages) {
+          const title = escapeHtml(p.title || '(untitled)');
+          const url = escapeHtml(p.url || 'about:blank');
+          const id = escapeHtml(p.id);
+          html += `
+            <tr>
+              <td>
+                <div class="tab-title-cell">
+                  <div class="tab-title">${title}</div>
+                  <div class="tab-url" title="${url}">${url}</div>
+                </div>
+              </td>
+              <td style="font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);">
+                ${id.slice(0, 8)}...
+              </td>
+              <td>
+                <div class="tab-actions">
+                  <a href="/handoff/?page=${encodeURIComponent(p.id)}" class="btn btn-accent btn-sm">
+                    <svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                    Take Over
+                  </a>
+                </div>
+              </td>
+            </tr>`;
+        }
+        html += `</tbody></table>`;
+        container.innerHTML = html;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to refresh data:', err);
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const old = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  });
+}
+
+updateHostInfo();
+refreshData();
+setInterval(refreshData, 3000);
+</script>
+
+</body>
+</html>
