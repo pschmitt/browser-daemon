@@ -1247,6 +1247,17 @@
 </footer>
 
 <script>
+/* __CLUSTER_SECRET_PLACEHOLDER__ */
+
+function getAuthHeaders() {
+  const h = {};
+  if (typeof window !== 'undefined' && window.__CLUSTER_SECRET__) {
+    h['Authorization'] = 'Bearer ' + window.__CLUSTER_SECRET__;
+    h['X-Browser-Cluster-Secret'] = window.__CLUSTER_SECRET__;
+  }
+  return h;
+}
+
 let firstPageId = null;
 let firstPageNodeUrl = null;
 let currentOverview = null;
@@ -1264,7 +1275,14 @@ function updateHostInfo() {
   const wsUrl = `${proto}//${host}${port}/chromium`;
   document.getElementById('wsEndpoint').textContent = wsUrl;
   document.getElementById('mcpEndpoint').textContent = `playwright-mcp --cdp-endpoint=${wsUrl}`;
-  document.getElementById('apiEndpoint').textContent = `curl -X POST https://${host}${port}/api/sessions -d '{"profile":"work","persistent":true}'`;
+  const authHeader = (typeof window !== 'undefined' && window.__CLUSTER_SECRET__)
+    ? `-H "Authorization: Bearer ${window.__CLUSTER_SECRET__}" `
+    : '';
+  document.getElementById('apiEndpoint').textContent = `curl ${authHeader}-X POST https://${host}${port}/api/sessions -d '{"profile":"work","persistent":true}'`;
+  const profApiElem = document.getElementById('profileApiEndpoint');
+  if (profApiElem) {
+    profApiElem.textContent = `curl ${authHeader}-X POST https://${host}${port}/api/profiles -d '{"name":"hrworks"}'`;
+  }
 }
 
 function quickConnectHandoff() {
@@ -1390,7 +1408,7 @@ async function submitNewSession(e) {
     const url = isLocal ? '/api/sessions' : `/api/peers/${encodeURIComponent(node)}/sessions`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ profile, persistent, width, height })
     });
 
@@ -1415,7 +1433,7 @@ async function terminateSession(id, node) {
   try {
     const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
     const url = isLocal ? `/api/sessions/${encodeURIComponent(id)}` : `/api/peers/${encodeURIComponent(node)}/sessions/${encodeURIComponent(id)}`;
-    const res = await fetch(url, { method: 'DELETE' });
+    const res = await fetch(url, { method: 'DELETE', headers: getAuthHeaders() });
     if (res.ok) {
       refreshData();
     } else {
@@ -1433,7 +1451,7 @@ async function launchProfile(name, node) {
     const url = isLocal ? '/api/sessions' : `/api/peers/${encodeURIComponent(node)}/sessions`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ profile: name, persistent: true })
     });
     if (res.ok) {
@@ -1489,7 +1507,7 @@ async function submitNewProfile(e) {
     const url = isLocal ? '/api/profiles' : `/api/peers/${encodeURIComponent(node)}/profiles`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ name, clone_from: cloneFrom })
     });
 
@@ -1519,7 +1537,7 @@ async function renameProfile(oldName, node) {
       : `/api/peers/${encodeURIComponent(node)}/profiles/${encodeURIComponent(oldName)}`;
     const res = await fetch(url, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ name: newName.trim() })
     });
 
@@ -1545,7 +1563,7 @@ async function cloneProfile(sourceName, node) {
       : `/api/peers/${encodeURIComponent(node)}/profiles/${encodeURIComponent(sourceName)}/clone`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ target_name: targetName.trim() })
     });
 
@@ -1575,7 +1593,7 @@ async function deleteProfile(name, node, isActive) {
   }
 
   try {
-    const res = await fetch(url, { method: 'DELETE' });
+    const res = await fetch(url, { method: 'DELETE', headers: getAuthHeaders() });
     if (res.ok) {
       refreshData();
     } else {
@@ -1672,7 +1690,7 @@ async function submitAddPeer(e) {
   try {
     const res = await fetch('/api/peers', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ url })
     });
     if (res.ok) {
@@ -1694,7 +1712,7 @@ async function submitAddPeer(e) {
 async function removePeer(name) {
   if (!confirm(`Remove peer "${name}" from the mesh cluster?`)) return;
   try {
-    const res = await fetch(`/api/peers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const res = await fetch(`/api/peers/${encodeURIComponent(name)}`, { method: 'DELETE', headers: getAuthHeaders() });
     if (res.ok) {
       await refreshData();
       renderClusterModal();
@@ -2018,9 +2036,9 @@ async function fallbackLocalRefresh() {
     updateGauge(activeCount, maxCount);
     updateHistoryChart(activeCount, maxCount);
   }
-  const sessionsRes = await fetch('/api/sessions').catch(() => null);
-  const profilesRes = await fetch('/api/profiles').catch(() => null);
-  const listRes = await fetch('/json/list').catch(() => null);
+  const sessionsRes = await fetch('/api/sessions', { headers: getAuthHeaders() }).catch(() => null);
+  const profilesRes = await fetch('/api/profiles', { headers: getAuthHeaders() }).catch(() => null);
+  const listRes = await fetch('/json/list', { headers: getAuthHeaders() }).catch(() => null);
   const sessions = sessionsRes && sessionsRes.ok ? await sessionsRes.json() : [];
   const profiles = profilesRes && profilesRes.ok ? await profilesRes.json() : [];
   const targets = listRes && listRes.ok ? await listRes.json() : [];
@@ -2049,7 +2067,7 @@ async function fallbackLocalRefresh() {
 
 async function refreshData() {
   try {
-    const res = await fetch('/api/mesh/overview');
+    const res = await fetch('/api/mesh/overview', { headers: getAuthHeaders() });
     if (res.ok) {
       currentOverview = await res.json();
       renderMeshOverview(currentOverview);

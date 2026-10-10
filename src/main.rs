@@ -3,7 +3,7 @@ mod proxy;
 
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -58,6 +58,12 @@ pub struct Args {
 
     #[arg(long = "peer")]
     pub peers: Vec<String>,
+
+    #[arg(long, help = "Shared cluster secret for peer-to-peer authentication")]
+    pub cluster_secret: Option<String>,
+
+    #[arg(long, help = "Path to file containing shared cluster secret")]
+    pub cluster_secret_file: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -122,9 +128,43 @@ pub struct AppState {
     pub public_url: String,
     pub peers: Arc<RwLock<HashMap<String, String>>>,
     pub start_time: Instant,
+    pub cluster_secret: Option<String>,
 }
 
 impl AppState {
+    pub fn peer_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref sec) = self.cluster_secret {
+            builder
+                .bearer_auth(sec)
+                .header("X-Browser-Cluster-Secret", sec)
+        } else {
+            builder
+        }
+    }
+
+    pub fn check_auth(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+        if let Some(ref expected) = self.cluster_secret {
+            let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
+            let custom_header = headers.get("x-browser-cluster-secret").and_then(|h| h.to_str().ok());
+
+            let token = auth_header
+                .and_then(|h| h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer ")))
+                .or(custom_header);
+
+            if token != Some(expected.as_str()) {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({
+                        "error": "Unauthorized: invalid or missing cluster secret"
+                    })),
+                ));
+            }
+        }
+        Ok(())
+    }
     pub async fn spawn_session(
         &self,
         profile: Option<&str>,
@@ -417,10 +457,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let cluster_secret = if let Some(ref path) = args.cluster_secret_file {
+        match fs::read_to_string(path).await {
+            Ok(content) => {
+                let trimmed = content.trim().to_string();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to read cluster secret file {}: {}", path.display(), e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        args.cluster_secret.or_else(|| {
+            std::env::var("CLUSTER_SECRET")
+                .or_else(|_| std::env::var("BROWSER_CLUSTER_SECRET"))
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+    };
+
     info!(
         node = %node_name,
         public_url = %public_url,
         peers = ?peer_map.keys().collect::<Vec<_>>(),
+        has_cluster_secret = cluster_secret.is_some(),
         "Starting browser-daemon on {}",
         args.bind
     );
@@ -444,6 +509,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         public_url,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),
+        cluster_secret,
     };
 
     let app = Router::new()
@@ -542,13 +608,18 @@ async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
     Json(get_local_targets(&state).await)
 }
 
-async fn dashboard_page() -> impl IntoResponse {
+async fn dashboard_page(State(state): State<AppState>) -> impl IntoResponse {
+    let secret_injection = match state.cluster_secret {
+        Some(ref sec) => format!("window.__CLUSTER_SECRET__ = {:?};", sec),
+        None => "window.__CLUSTER_SECRET__ = null;".to_string(),
+    };
+    let html = DASHBOARD_HTML.replace("/* __CLUSTER_SECRET_PLACEHOLDER__ */", &secret_injection);
     (
         [(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         )],
-        Html(DASHBOARD_HTML),
+        Html(html),
     )
 }
 
@@ -723,14 +794,20 @@ async fn get_local_profiles(state: &AppState) -> Vec<ProfileInfo> {
     profiles
 }
 
-async fn api_list_sessions(State(state): State<AppState>) -> impl IntoResponse {
-    Json(get_local_sessions(&state).await)
+async fn api_list_sessions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    Ok(Json(get_local_sessions(&state).await))
 }
 
 async fn api_create_session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateSessionRequest>,
-) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let session = state
         .spawn_session(
             req.profile.as_deref(),
@@ -738,7 +815,8 @@ async fn api_create_session(
             req.width,
             req.height,
         )
-        .await?;
+        .await
+        .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
 
     let summary = session.to_summary(&state.http_client).await;
     Ok((StatusCode::CREATED, Json(summary)))
@@ -747,10 +825,15 @@ async fn api_create_session(
 async fn api_get_session(
     AxumPath(id): AxumPath<Uuid>,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, StatusCode> {
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let session = {
         let guard = state.sessions.read().await;
-        guard.get(&id).cloned().ok_or(StatusCode::NOT_FOUND)?
+        guard
+            .get(&id)
+            .cloned()
+            .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Session not found" }))))?
     };
 
     let summary = session.to_summary(&state.http_client).await;
@@ -770,28 +853,36 @@ async fn api_get_session(
 async fn api_delete_session(
     AxumPath(id): AxumPath<Uuid>,
     State(state): State<AppState>,
-) -> impl IntoResponse {
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     if state.terminate_session(&id).await {
-        (
+        Ok((
             StatusCode::OK,
             Json(serde_json::json!({ "status": "terminated", "id": id })),
-        )
+        ))
     } else {
-        (
+        Ok((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Session not found" })),
-        )
+        ))
     }
 }
 
-async fn api_list_profiles(State(state): State<AppState>) -> impl IntoResponse {
-    Json(get_local_profiles(&state).await)
+async fn api_list_profiles(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    Ok(Json(get_local_profiles(&state).await))
 }
 
 async fn api_create_profile(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateProfileRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let sanitized = sanitize_profile_name(&req.name);
     if sanitized.is_empty() {
         return Err((
@@ -863,7 +954,9 @@ async fn api_create_profile(
 async fn api_get_profile(
     AxumPath(name): AxumPath<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let sanitized = sanitize_profile_name(&name);
     if sanitized.is_empty() {
         return Err((
@@ -921,8 +1014,10 @@ async fn api_get_profile(
 async fn api_update_profile(
     AxumPath(name): AxumPath<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<UpdateProfileRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let old_sanitized = sanitize_profile_name(&name);
     if old_sanitized.is_empty() {
         return Err((
@@ -1034,8 +1129,10 @@ async fn api_update_profile(
 async fn api_clone_profile(
     AxumPath(name): AxumPath<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CloneProfileRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let source_sanitized = sanitize_profile_name(&name);
     let target_sanitized = sanitize_profile_name(&req.target_name);
 
@@ -1101,7 +1198,9 @@ async fn api_delete_profile(
     AxumPath(name): AxumPath<String>,
     Query(params): Query<DeleteProfileParams>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let sanitized = sanitize_profile_name(&name);
     if sanitized.is_empty() {
         return Err((
@@ -1160,7 +1259,11 @@ async fn api_delete_profile(
 // Peer-to-Peer Mesh Handlers & Proxy APIs
 // ---------------------------------------------------------------------------
 
-async fn api_mesh_node(State(state): State<AppState>) -> impl IntoResponse {
+async fn api_mesh_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let sessions_count = state.sessions.read().await.len();
     let profiles_count = match fs::read_dir(&state.config.profiles_dir).await {
         Ok(mut dir) => {
@@ -1175,7 +1278,7 @@ async fn api_mesh_node(State(state): State<AppState>) -> impl IntoResponse {
         Err(_) => 0,
     };
 
-    Json(NodeInfo {
+    Ok(Json(NodeInfo {
         name: state.node_name.clone(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1183,10 +1286,14 @@ async fn api_mesh_node(State(state): State<AppState>) -> impl IntoResponse {
         active_sessions: sessions_count,
         max_sessions: state.max_sessions,
         profiles_count,
-    })
+    }))
 }
 
-async fn api_mesh_overview(State(state): State<AppState>) -> impl IntoResponse {
+async fn api_mesh_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let local_sessions = get_local_sessions(&state).await;
     let local_profiles = get_local_profiles(&state).await;
     let local_targets = get_local_targets(&state).await;
@@ -1207,19 +1314,28 @@ async fn api_mesh_overview(State(state): State<AppState>) -> impl IntoResponse {
     };
 
     let client = state.http_client.clone();
+    let cluster_secret = state.cluster_secret.clone();
     let mut peer_futures = Vec::new();
 
     for (p_name, p_url) in peers {
         let c = client.clone();
+        let sec = cluster_secret.clone();
         peer_futures.push(tokio::spawn(async move {
+            let add_auth = |mut builder: reqwest::RequestBuilder| {
+                if let Some(ref s) = sec {
+                    builder = builder
+                        .bearer_auth(s)
+                        .header("X-Browser-Cluster-Secret", s);
+                }
+                builder
+            };
             let t0 = Instant::now();
             let node_url = format!("{}/api/mesh/node", p_url);
             let sessions_url = format!("{}/api/sessions", p_url);
             let profiles_url = format!("{}/api/profiles", p_url);
             let targets_url = format!("{}/json/list", p_url);
 
-            let node_res = c
-                .get(&node_url)
+            let node_res = add_auth(c.get(&node_url))
                 .timeout(std::time::Duration::from_millis(1800))
                 .send()
                 .await;
@@ -1240,8 +1356,7 @@ async fn api_mesh_overview(State(state): State<AppState>) -> impl IntoResponse {
                             Err(_) => (p_name.clone(), 0, 8, 0, 0),
                         };
 
-                    let p_sessions: Vec<SessionSummary> = match c
-                        .get(&sessions_url)
+                    let p_sessions: Vec<SessionSummary> = match add_auth(c.get(&sessions_url))
                         .timeout(std::time::Duration::from_millis(1800))
                         .send()
                         .await
@@ -1250,8 +1365,7 @@ async fn api_mesh_overview(State(state): State<AppState>) -> impl IntoResponse {
                         Err(_) => Vec::new(),
                     };
 
-                    let p_profiles: Vec<ProfileInfo> = match c
-                        .get(&profiles_url)
+                    let p_profiles: Vec<ProfileInfo> = match add_auth(c.get(&profiles_url))
                         .timeout(std::time::Duration::from_millis(1800))
                         .send()
                         .await
@@ -1260,8 +1374,7 @@ async fn api_mesh_overview(State(state): State<AppState>) -> impl IntoResponse {
                         Err(_) => Vec::new(),
                     };
 
-                    let p_targets: Vec<DevToolsTarget> = match c
-                        .get(&targets_url)
+                    let p_targets: Vec<DevToolsTarget> = match add_auth(c.get(&targets_url))
                         .timeout(std::time::Duration::from_millis(1800))
                         .send()
                         .await
@@ -1404,7 +1517,7 @@ async fn api_mesh_overview(State(state): State<AppState>) -> impl IntoResponse {
     let total_sessions = all_sessions.len();
     let total_profiles = all_profiles.len();
 
-    Json(MeshOverview {
+    Ok(Json(MeshOverview {
         local_node,
         peers: peer_states,
         sessions: all_sessions,
@@ -1415,7 +1528,7 @@ async fn api_mesh_overview(State(state): State<AppState>) -> impl IntoResponse {
         total_profiles,
         total_nodes,
         online_nodes,
-    })
+    }))
 }
 
 async fn get_peer_url(state: &AppState, peer: &str) -> Option<String> {
@@ -1456,7 +1569,11 @@ async fn proxy_response(res_result: Result<reqwest::Response, reqwest::Error>) -
     }
 }
 
-async fn api_list_peers(State(state): State<AppState>) -> impl IntoResponse {
+async fn api_list_peers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
     let peers_guard = state.peers.read().await;
     let peer_list: Vec<serde_json::Value> = peers_guard
         .iter()
@@ -1468,7 +1585,7 @@ async fn api_list_peers(State(state): State<AppState>) -> impl IntoResponse {
         })
         .collect();
 
-    Json(serde_json::json!({
+    Ok(Json(serde_json::json!({
         "local": {
             "name": state.node_name,
             "url": state.public_url,
@@ -1476,13 +1593,17 @@ async fn api_list_peers(State(state): State<AppState>) -> impl IntoResponse {
             "uptime_seconds": state.start_time.elapsed().as_secs(),
         },
         "peers": peer_list,
-    }))
+    })))
 }
 
 async fn api_add_peer(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<AddPeerRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let trimmed = req.url.trim().trim_end_matches('/').to_string();
     if trimmed.is_empty() {
         return (
@@ -1502,8 +1623,7 @@ async fn api_add_peer(
 
     let ping_url = format!("{}/api/mesh/node", trimmed);
     let detected_name = match state
-        .http_client
-        .get(&ping_url)
+        .peer_request(state.http_client.get(&ping_url))
         .timeout(std::time::Duration::from_secs(2))
         .send()
         .await
@@ -1536,10 +1656,10 @@ async fn api_add_peer(
     let my_url = state.public_url.clone();
     let my_name = state.node_name.clone();
     let peer_announce_url = format!("{}/api/peers", trimmed);
-    let client = state.http_client.clone();
+    let state_clone = state.clone();
     tokio::spawn(async move {
-        let _ = client
-            .post(&peer_announce_url)
+        let _ = state_clone
+            .peer_request(state_clone.http_client.post(&peer_announce_url))
             .json(&serde_json::json!({ "url": my_url, "name": my_name }))
             .send()
             .await;
@@ -1554,8 +1674,12 @@ async fn api_add_peer(
 
 async fn api_remove_peer(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(peer): AxumPath<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let mut guard = state.peers.write().await;
     let removed = guard.remove(&peer).is_some() || {
         let key_to_remove = guard.iter().find_map(|(k, v)| {
@@ -1585,9 +1709,13 @@ async fn api_remove_peer(
 
 async fn api_peer_create_session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(peer): AxumPath<String>,
     Json(req): Json<CreateSessionRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let peer_url = match get_peer_url(&state, &peer).await {
         Some(u) => u,
         None => {
@@ -1595,18 +1723,26 @@ async fn api_peer_create_session(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let url = format!("{}/api/sessions", peer_url);
-    let res = state.http_client.post(&url).json(&req).send().await;
+    let res = state
+        .peer_request(state.http_client.post(&url))
+        .json(&req)
+        .send()
+        .await;
     proxy_response(res).await
 }
 
 async fn api_peer_delete_session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath((peer, id)): AxumPath<(String, String)>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let peer_url = match get_peer_url(&state, &peer).await {
         Some(u) => u,
         None => {
@@ -1614,19 +1750,26 @@ async fn api_peer_delete_session(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let url = format!("{}/api/sessions/{}", peer_url, id);
-    let res = state.http_client.delete(&url).send().await;
+    let res = state
+        .peer_request(state.http_client.delete(&url))
+        .send()
+        .await;
     proxy_response(res).await
 }
 
 async fn api_peer_create_profile(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(peer): AxumPath<String>,
     Json(req): Json<CreateProfileRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let peer_url = match get_peer_url(&state, &peer).await {
         Some(u) => u,
         None => {
@@ -1634,19 +1777,27 @@ async fn api_peer_create_profile(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let url = format!("{}/api/profiles", peer_url);
-    let res = state.http_client.post(&url).json(&req).send().await;
+    let res = state
+        .peer_request(state.http_client.post(&url))
+        .json(&req)
+        .send()
+        .await;
     proxy_response(res).await
 }
 
 async fn api_peer_delete_profile(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath((peer, name)): AxumPath<(String, String)>,
     Query(params): Query<DeleteProfileParams>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let peer_url = match get_peer_url(&state, &peer).await {
         Some(u) => u,
         None => {
@@ -1654,22 +1805,29 @@ async fn api_peer_delete_profile(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let mut url = format!("{}/api/profiles/{}", peer_url, name);
     if let Some(f) = params.force {
         url.push_str(&format!("?force={}", f));
     }
-    let res = state.http_client.delete(&url).send().await;
+    let res = state
+        .peer_request(state.http_client.delete(&url))
+        .send()
+        .await;
     proxy_response(res).await
 }
 
 async fn api_peer_clone_profile(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath((peer, name)): AxumPath<(String, String)>,
     Json(req): Json<CloneProfileRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let peer_url = match get_peer_url(&state, &peer).await {
         Some(u) => u,
         None => {
@@ -1677,19 +1835,27 @@ async fn api_peer_clone_profile(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let url = format!("{}/api/profiles/{}/clone", peer_url, name);
-    let res = state.http_client.post(&url).json(&req).send().await;
+    let res = state
+        .peer_request(state.http_client.post(&url))
+        .json(&req)
+        .send()
+        .await;
     proxy_response(res).await
 }
 
 async fn api_peer_update_profile(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath((peer, name)): AxumPath<(String, String)>,
     Json(req): Json<UpdateProfileRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
     let peer_url = match get_peer_url(&state, &peer).await {
         Some(u) => u,
         None => {
@@ -1697,11 +1863,15 @@ async fn api_peer_update_profile(
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
             )
-                .into_response()
+                .into_response();
         }
     };
     let url = format!("{}/api/profiles/{}", peer_url, name);
-    let res = state.http_client.patch(&url).json(&req).send().await;
+    let res = state
+        .peer_request(state.http_client.patch(&url))
+        .json(&req)
+        .send()
+        .await;
     proxy_response(res).await
 }
 

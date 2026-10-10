@@ -94,6 +94,18 @@ in
       default = [ ];
       description = "List of peer browser-daemon base URLs for cluster meshing.";
     };
+
+    clusterSecret = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Shared cluster secret string for peer-to-peer authentication.";
+    };
+
+    clusterSecretFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "Path to file containing shared cluster secret for peer-to-peer authentication.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -157,6 +169,14 @@ in
             "--peer"
             p
           ]) cfg.peers
+          ++ lib.optionals (cfg.clusterSecretFile != null) [
+            "--cluster-secret-file"
+            (toString cfg.clusterSecretFile)
+          ]
+          ++ lib.optionals (cfg.clusterSecret != null) [
+            "--cluster-secret"
+            cfg.clusterSecret
+          ]
         );
         Restart = "always";
         RestartSec = 2;
