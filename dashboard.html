@@ -2,114 +2,144 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Browser Daemon — Dashboard</title>
 <style>
   :root {
-    --bg: #0b0d12;
-    --card: #131722;
-    --card-border: #212638;
-    --fg: #e8eaf2;
-    --muted: #8c95ae;
+    --bg: #090b10;
+    --card: #121520;
+    --card-hover: #171b29;
+    --card-border: #1f2538;
+    --card-border-hover: #7c6cf0;
+    --fg: #e9ecf5;
+    --muted: #8892ad;
     --accent: #7c6cf0;
-    --accent-hover: #9082f6;
+    --accent-hover: #9183f8;
     --accent-bg: rgba(124, 108, 240, 0.12);
+    --accent-glow: rgba(124, 108, 240, 0.28);
     --ok: #10b981;
     --ok-bg: rgba(16, 185, 129, 0.12);
     --warn: #f59e0b;
-    --btn: #1b2030;
-    --btn-hover: #262c42;
-    --code-bg: #07090d;
-    --line: #1e2333;
+    --btn: #1b2032;
+    --btn-hover: #262c44;
+    --code-bg: #07080d;
+    --line: #1c2234;
   }
   @media (prefers-color-scheme: light) {
     :root {
-      --bg: #f5f6fa;
+      --bg: #f4f6fb;
       --card: #ffffff;
-      --card-border: #e2e5ee;
-      --fg: #131722;
-      --muted: #647087;
+      --card-hover: #fafbff;
+      --card-border: #e1e5f0;
+      --card-border-hover: #6352e8;
+      --fg: #111422;
+      --muted: #626e88;
       --accent: #6352e8;
-      --accent-hover: #503fe0;
+      --accent-hover: #4f3ee2;
       --accent-bg: rgba(99, 82, 232, 0.08);
-      --btn: #eef0f7;
-      --btn-hover: #e2e5ee;
-      --code-bg: #f0f2f8;
-      --line: #e2e5ee;
+      --accent-glow: rgba(99, 82, 232, 0.2);
+      --btn: #edf0f8;
+      --btn-hover: #e2e6f2;
+      --code-bg: #f0f2f9;
+      --line: #e2e6f2;
     }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    overflow-x: hidden;
+    width: 100%;
+    max-width: 100%;
+  }
   body {
     background: var(--bg);
+    background-image: radial-gradient(ellipse 80% 50% at 50% -20%, var(--accent-bg), transparent);
     color: var(--fg);
     font: 14.5px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
   }
+
+  /* Header with strict overflow controls */
   header {
     background: var(--card);
     border-bottom: 1px solid var(--card-border);
-    padding: 14px 24px;
+    padding: 12px 20px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    gap: 12px;
     position: sticky;
     top: 0;
-    z-index: 10;
+    z-index: 20;
+    backdrop-filter: blur(12px);
   }
   .brand {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    min-width: 0;
+    flex-shrink: 1;
   }
   .brand-logo {
     width: 32px;
     height: 32px;
-    border-radius: 8px;
+    min-width: 32px;
+    border-radius: 9px;
     background: linear-gradient(135deg, var(--accent), #4f46e5);
     display: flex;
     align-items: center;
     justify-content: center;
     color: #fff;
+    box-shadow: 0 4px 12px var(--accent-bg);
   }
   .brand-logo svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
   .brand-title {
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 700;
     letter-spacing: -0.3px;
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .brand-badge {
     font-size: 11px;
     font-weight: 600;
-    padding: 2px 7px;
+    padding: 2px 8px;
     border-radius: 999px;
     background: var(--accent-bg);
     color: var(--accent);
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
   }
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    flex-shrink: 0;
   }
   .status-pill {
     display: flex;
     align-items: center;
-    gap: 7px;
-    font-size: 13px;
-    font-weight: 500;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 600;
     color: var(--ok);
     background: var(--ok-bg);
-    padding: 5px 12px;
+    padding: 4px 10px;
     border-radius: 999px;
+    white-space: nowrap;
   }
   .pulse-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--ok);
     box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
@@ -120,25 +150,29 @@
     70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
     100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
   }
+
   .btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     padding: 7px 14px;
     border-radius: 8px;
-    font-size: 13.5px;
+    font-size: 13px;
     font-weight: 600;
     text-decoration: none;
     border: 1px solid transparent;
     cursor: pointer;
     transition: all 0.15s ease;
+    white-space: nowrap;
   }
   .btn-accent {
     background: var(--accent);
     color: #fff;
+    box-shadow: 0 2px 8px var(--accent-bg);
   }
   .btn-accent:hover {
     background: var(--accent-hover);
+    box-shadow: 0 4px 12px var(--accent-glow);
   }
   .btn-ghost {
     background: var(--btn);
@@ -147,15 +181,16 @@
   }
   .btn-ghost:hover {
     background: var(--btn-hover);
+    border-color: var(--line);
   }
   .btn-sm {
     padding: 5px 10px;
-    font-size: 12.5px;
+    font-size: 12px;
     border-radius: 6px;
   }
   .btn svg {
-    width: 15px;
-    height: 15px;
+    width: 14px;
+    height: 14px;
     fill: none;
     stroke: currentColor;
     stroke-width: 2;
@@ -166,92 +201,258 @@
     max-width: 1180px;
     width: 100%;
     margin: 0 auto;
-    padding: 24px;
+    padding: 20px;
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 20px;
   }
 
-  .stats-grid {
+  /* Quick Connect Banner for active session */
+  .quick-connect-banner {
+    display: none;
+    background: linear-gradient(135deg, rgba(124, 108, 240, 0.2), rgba(79, 70, 229, 0.15));
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 14px 18px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    cursor: pointer;
+    box-shadow: 0 6px 20px -4px var(--accent-glow);
+    transition: all 0.2s ease;
+  }
+  .quick-connect-banner:hover {
+    transform: translateY(-1px);
+    background: linear-gradient(135deg, rgba(124, 108, 240, 0.28), rgba(79, 70, 229, 0.22));
+    box-shadow: 0 8px 26px -2px var(--accent-glow);
+  }
+  .quick-connect-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .quick-connect-icon {
+    width: 38px;
+    height: 38px;
+    min-width: 38px;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .quick-connect-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .quick-connect-text {
+    min-width: 0;
+  }
+  .quick-connect-title {
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .quick-connect-subtitle {
+    font-size: 12.5px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 600px;
+  }
+
+  /* Stats and Charts Top Grid */
+  .dashboard-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    grid-template-columns: repeat(12, 1fr);
     gap: 16px;
   }
+  .col-4 { grid-column: span 4; }
+  .col-8 { grid-column: span 8; }
+  .col-12 { grid-column: span 12; }
+
+  @media (max-width: 860px) {
+    .col-4, .col-8 { grid-column: span 12; }
+    .brand-badge { max-width: 110px; }
+    main { padding: 14px; gap: 16px; }
+  }
+  @media (max-width: 480px) {
+    header { padding: 10px 14px; }
+    .brand-badge { display: none; }
+  }
+
   .stat-card {
     background: var(--card);
     border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 16px 20px;
+    border-radius: 14px;
+    padding: 18px 20px;
     display: flex;
     flex-direction: column;
+    justify-content: space-between;
+    gap: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+  .stat-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: 8px;
   }
   .stat-label {
-    font-size: 12.5px;
-    font-weight: 500;
+    font-size: 12px;
+    font-weight: 600;
     color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.6px;
   }
-  .stat-val {
-    font-size: 26px;
-    font-weight: 700;
+  .stat-val-group {
     display: flex;
     align-items: baseline;
     gap: 6px;
   }
+  .stat-val {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    line-height: 1.1;
+  }
   .stat-val small {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 500;
     color: var(--muted);
   }
-  .stat-desc {
-    font-size: 12px;
+  .stat-badge {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--btn);
     color: var(--muted);
   }
-  .progress-bar {
-    width: 100%;
-    height: 6px;
-    background: var(--line);
-    border-radius: 999px;
-    overflow: hidden;
-    margin-top: 4px;
+
+  /* Capacity Donut / Circular Gauge Card */
+  .gauge-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
   }
-  .progress-fill {
-    height: 100%;
-    background: var(--accent);
-    border-radius: 999px;
-    transition: width 0.3s ease;
+  .gauge-visual {
+    position: relative;
+    width: 86px;
+    height: 86px;
+    flex-shrink: 0;
+  }
+  .gauge-svg {
+    transform: rotate(-90deg);
+    width: 86px;
+    height: 86px;
+  }
+  .gauge-bg {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 8;
+  }
+  .gauge-bar {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 8;
+    stroke-linecap: round;
+    stroke-dasharray: 226;
+    stroke-dashoffset: 226;
+    transition: stroke-dashoffset 0.6s ease;
+  }
+  .gauge-center {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    font-weight: 800;
+  }
+  .gauge-center small {
+    font-size: 10px;
+    color: var(--muted);
+    font-weight: 600;
   }
 
-  .card {
+  /* Activity Sparkline Chart */
+  .chart-card {
     background: var(--card);
     border: 1px solid var(--card-border);
-    border-radius: 12px;
-    overflow: hidden;
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
-  .card-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--card-border);
+  .chart-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
   }
+  .chart-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .chart-meta {
+    font-size: 11.5px;
+    color: var(--muted);
+    font-weight: 500;
+  }
+  .chart-svg-container {
+    width: 100%;
+    height: 90px;
+    position: relative;
+    overflow: hidden;
+  }
+  .chart-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  /* Standard Card layout */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .card-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
   .card-title {
-    font-size: 15.5px;
+    font-size: 15px;
     font-weight: 700;
     display: flex;
     align-items: center;
     gap: 8px;
   }
   .card-content {
-    padding: 20px;
+    padding: 18px;
   }
 
+  /* Endpoints list */
   .endpoints-list {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
   }
   .endpoint-row {
     display: flex;
@@ -261,17 +462,20 @@
     padding: 10px 14px;
     background: var(--code-bg);
     border: 1px solid var(--card-border);
-    border-radius: 8px;
+    border-radius: 9px;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 13px;
+    font-size: 12.5px;
+    min-width: 0;
   }
   .endpoint-label {
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--muted);
     font-family: system-ui, sans-serif;
     text-transform: uppercase;
-    min-width: 80px;
+    letter-spacing: 0.5px;
+    min-width: 90px;
+    flex-shrink: 0;
   }
   .endpoint-val {
     flex: 1;
@@ -279,85 +483,143 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fg);
+    min-width: 0;
   }
   .copy-btn {
     background: var(--btn);
     color: var(--muted);
     border: 1px solid var(--card-border);
     border-radius: 6px;
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 4px 10px;
+    font-size: 11.5px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
+    flex-shrink: 0;
   }
   .copy-btn:hover {
     color: var(--fg);
     background: var(--btn-hover);
+    border-color: var(--line);
   }
 
-  .tabs-table {
-    width: 100%;
-    border-collapse: collapse;
-    text-align: left;
+  /* Active Sessions / Tabs Interactive Cards Grid */
+  .sessions-cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+    padding: 18px;
   }
-  .tabs-table th {
-    padding: 10px 16px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border-bottom: 1px solid var(--card-border);
+  @media (max-width: 480px) {
+    .sessions-cards-grid {
+      grid-template-columns: 1fr;
+      padding: 12px;
+    }
   }
-  .tabs-table td {
-    padding: 14px 16px;
-    border-bottom: 1px solid var(--line);
-    font-size: 13.5px;
-    vertical-align: middle;
-  }
-  .tabs-table tr:last-child td {
-    border-bottom: none;
-  }
-  .tab-title-cell {
+
+  .session-card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 16px;
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    max-width: 440px;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative;
+    overflow: hidden;
   }
-  .tab-title {
-    font-weight: 600;
+  .session-card:hover {
+    background: var(--card-hover);
+    border-color: var(--card-border-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px -4px var(--accent-glow);
+  }
+  .session-card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .session-card-icon {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    border-radius: 8px;
+    background: var(--accent-bg);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .session-card-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .session-card-title-group {
+    min-width: 0;
+    flex: 1;
+  }
+  .session-card-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--fg);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    margin-bottom: 2px;
   }
-  .tab-url {
-    font-size: 12px;
+  .session-card-url {
+    font-size: 11.5px;
     color: var(--muted);
     font-family: ui-monospace, monospace;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .tab-actions {
+  .session-card-footer {
     display: flex;
     align-items: center;
-    gap: 8px;
-    justify-content: flex-end;
+    justify-content: space-between;
+    gap: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
   }
+  .session-card-badge {
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    color: var(--muted);
+    background: var(--code-bg);
+    padding: 3px 7px;
+    border-radius: 5px;
+    border: 1px solid var(--card-border);
+  }
+  .session-connect-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
+    transition: gap 0.15s;
+  }
+  .session-card:hover .session-connect-action {
+    color: var(--accent-hover);
+    gap: 8px;
+  }
+  .session-connect-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.2; }
 
+  /* Empty state */
   .empty-state {
-    padding: 48px 24px;
+    padding: 44px 20px;
     text-align: center;
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
   }
   .empty-icon {
-    width: 52px;
-    height: 52px;
-    border-radius: 16px;
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
     background: var(--accent-bg);
     color: var(--accent);
     display: flex;
@@ -365,20 +627,20 @@
     justify-content: center;
     margin-bottom: 4px;
   }
-  .empty-icon svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .empty-icon svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; }
   .empty-title {
-    font-size: 16px;
-    font-weight: 600;
+    font-size: 15.5px;
+    font-weight: 700;
   }
   .empty-desc {
-    font-size: 13.5px;
+    font-size: 13px;
     color: var(--muted);
-    max-width: 460px;
+    max-width: 440px;
     line-height: 1.5;
   }
 
   footer {
-    padding: 20px 24px;
+    padding: 18px 20px;
     border-top: 1px solid var(--card-border);
     text-align: center;
     font-size: 12px;
@@ -400,7 +662,7 @@
     </div>
     <div class="brand-title">
       Browser Daemon
-      <span class="brand-badge" id="hostBadge">Mesh</span>
+      <span class="brand-badge" id="hostBadge">browser</span>
     </div>
   </div>
   <div class="header-actions">
@@ -408,50 +670,101 @@
       <div class="pulse-dot"></div>
       <span id="daemonStatus">Online</span>
     </div>
-    <a href="/handoff/" class="btn btn-accent btn-sm">
+    <a href="/handoff/" class="btn btn-accent btn-sm" title="Launch Mobile Handoff Canvas">
       <svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
-      Mobile Handoff
+      Handoff
     </a>
   </div>
 </header>
 
 <main>
-  <div class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-label">Active Sessions</div>
-      <div class="stat-val">
-        <span id="activeSessions">0</span>
-        <small>/ <span id="maxSessions">8</span></small>
+  <!-- Interactive Quick Connect banner when sessions are active -->
+  <div id="quickConnectBanner" class="quick-connect-banner" onclick="quickConnectHandoff()">
+    <div class="quick-connect-left">
+      <div class="quick-connect-icon">
+        <svg viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" id="sessionProgress" style="width: 0%;"></div>
+      <div class="quick-connect-text">
+        <div class="quick-connect-title">
+          <span>Active Session Ready</span>
+          <span style="font-size:11px;font-weight:600;padding:2px 7px;background:var(--ok-bg);color:var(--ok);border-radius:999px;">Live</span>
+        </div>
+        <div class="quick-connect-subtitle" id="quickConnectSub">Click anywhere to connect and take over in Mobile Handoff</div>
       </div>
-      <div class="stat-desc">Multi-tenant Chrome instances</div>
     </div>
-
-    <div class="stat-card">
-      <div class="stat-label">Open Pages / Tabs</div>
-      <div class="stat-val">
-        <span id="activeTabs">0</span>
-      </div>
-      <div class="stat-desc">DevTools CDP targets available</div>
-    </div>
-
-    <div class="stat-card">
-      <div class="stat-label">Anti-Botguard State</div>
-      <div class="stat-val" style="font-size: 20px; color: var(--ok);">
-        Stealth Active
-      </div>
-      <div class="stat-desc">Xvfb virtual display (:98), webdriver false</div>
+    <div class="btn btn-accent btn-sm" style="flex-shrink:0;">
+      Take Over ↗
     </div>
   </div>
 
+  <!-- Top Dashboard Metrics & Charts Grid -->
+  <div class="dashboard-grid">
+    <!-- Capacity Gauge Card -->
+    <div class="stat-card col-4">
+      <div class="stat-card-header">
+        <span class="stat-label">Session Capacity</span>
+        <span class="stat-badge" id="capacityBadge">0 / 8 Active</span>
+      </div>
+      <div class="gauge-container">
+        <div class="stat-val-group">
+          <div class="stat-val" id="activeSessionsVal">0</div>
+          <small>/ <span id="maxSessionsVal">8</span> slots</small>
+        </div>
+        <div class="gauge-visual">
+          <svg class="gauge-svg" viewBox="0 0 86 86">
+            <circle class="gauge-bg" cx="43" cy="43" r="36" />
+            <circle class="gauge-bar" id="gaugeCircle" cx="43" cy="43" r="36" />
+          </svg>
+          <div class="gauge-center">
+            <span id="gaugePct">0%</span>
+            <small>LOAD</small>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;">
+        <span>Multi-tenant Chromium</span>
+        <span style="color:var(--ok);font-weight:600;">Stealth Active</span>
+      </div>
+    </div>
+
+    <!-- Real-time Activity History Graph -->
+    <div class="chart-card col-8">
+      <div class="chart-header">
+        <div class="chart-title">
+          <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          Session Activity (Live Timeline)
+        </div>
+        <div class="chart-meta">
+          <span id="chartPeakText">Peak: 0</span> &bull; <span id="pollIndicator">Live</span>
+        </div>
+      </div>
+      <div class="chart-svg-container">
+        <svg class="chart-svg" id="historySvg" viewBox="0 0 600 90" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.38"/>
+              <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.0"/>
+            </linearGradient>
+          </defs>
+          <path id="chartArea" fill="url(#chartGradient)" d="" />
+          <path id="chartLine" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="" />
+        </svg>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--muted);">
+        <span>Past 60 seconds</span>
+        <span>Display :98 (Xvfb) &bull; AutomationControlled disabled</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Endpoints Card -->
   <div class="card">
     <div class="card-header">
       <div class="card-title">
         <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
         Connection Endpoints
       </div>
+      <span style="font-size:11.5px;color:var(--muted);">CDP WebSocket Protocol</span>
     </div>
     <div class="card-content">
       <div class="endpoints-list">
@@ -474,11 +787,13 @@
     </div>
   </div>
 
+  <!-- Active Pages & Sessions Interactive Cards -->
   <div class="card">
     <div class="card-header">
       <div class="card-title">
         <svg style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
         Active Pages &amp; Tabs
+        <span id="tabCountBadge" style="font-size:11px;font-weight:700;padding:2px 7px;background:var(--accent-bg);color:var(--accent);border-radius:999px;">0</span>
       </div>
       <button class="btn btn-ghost btn-sm" onclick="refreshData()">
         <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -493,7 +808,7 @@
         <div class="empty-title">No active browser sessions</div>
         <div class="empty-desc">
           Chromium instances spin up on-demand whenever a client connects over WebSocket CDP.
-          Once an agent, MCP server, or hrworks worker initiates a connection, tabs will appear here.
+          Once an agent, MCP server, or hrworks worker initiates a connection, interactive cards will appear here.
         </div>
       </div>
     </div>
@@ -505,6 +820,11 @@
 </footer>
 
 <script>
+let firstPageId = null;
+const HISTORY_LEN = 30;
+const historyData = new Array(HISTORY_LEN).fill(0);
+let peakSessions = 0;
+
 function updateHostInfo() {
   const host = location.hostname;
   document.getElementById('hostBadge').textContent = host;
@@ -515,22 +835,94 @@ function updateHostInfo() {
   document.getElementById('mcpEndpoint').textContent = `playwright-mcp --cdp-endpoint=${wsUrl}`;
 }
 
+function quickConnectHandoff() {
+  if (firstPageId) {
+    location.href = `/handoff/?page=${encodeURIComponent(firstPageId)}`;
+  } else {
+    location.href = '/handoff/';
+  }
+}
+
+function updateGauge(active, max) {
+  const pct = max > 0 ? Math.min(100, Math.round((active / max) * 100)) : 0;
+  document.getElementById('activeSessionsVal').textContent = active;
+  document.getElementById('maxSessionsVal').textContent = max;
+  document.getElementById('capacityBadge').textContent = `${active} / ${max} Active`;
+  document.getElementById('gaugePct').textContent = `${pct}%`;
+
+  const circumference = 2 * Math.PI * 36; // 226.19
+  const offset = circumference - (pct / 100) * circumference;
+  document.getElementById('gaugeCircle').style.strokeDashoffset = offset;
+}
+
+function updateHistoryChart(currentActive, maxVal) {
+  historyData.push(currentActive);
+  if (historyData.length > HISTORY_LEN) {
+    historyData.shift();
+  }
+
+  peakSessions = Math.max(peakSessions, currentActive);
+  document.getElementById('chartPeakText').textContent = `Peak: ${peakSessions} sessions`;
+
+  const width = 600;
+  const height = 90;
+  const padBottom = 8;
+  const padTop = 10;
+  const chartHeight = height - padBottom - padTop;
+  const maxScale = Math.max(2, maxVal || 8);
+
+  const step = width / (HISTORY_LEN - 1);
+  const points = historyData.map((val, i) => {
+    const x = i * step;
+    const y = height - padBottom - (val / maxScale) * chartHeight;
+    return { x, y };
+  });
+
+  // Construct smooth SVG path
+  let pathD = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const cx = (prev.x + curr.x) / 2;
+    pathD += ` C ${cx} ${prev.y}, ${cx} ${curr.y}, ${curr.x} ${curr.y}`;
+  }
+
+  document.getElementById('chartLine').setAttribute('d', pathD);
+
+  const areaD = `${pathD} L ${width} ${height} L 0 ${height} Z`;
+  document.getElementById('chartArea').setAttribute('d', areaD);
+}
+
 async function refreshData() {
   try {
+    let activeCount = 0;
+    let maxCount = 8;
+
     const healthRes = await fetch('/health');
     if (healthRes.ok) {
       const health = await healthRes.json();
-      document.getElementById('activeSessions').textContent = health.active_sessions || 0;
-      document.getElementById('maxSessions').textContent = health.max_sessions || 8;
-      const pct = Math.min(100, Math.round(((health.active_sessions || 0) / (health.max_sessions || 8)) * 100));
-      document.getElementById('sessionProgress').style.width = pct + '%';
+      activeCount = health.active_sessions || 0;
+      maxCount = health.max_sessions || 8;
+      updateGauge(activeCount, maxCount);
+      updateHistoryChart(activeCount, maxCount);
     }
 
     const listRes = await fetch('/json/list');
     if (listRes.ok) {
       const targets = await listRes.json();
       const pages = targets.filter(t => t.type === 'page');
-      document.getElementById('activeTabs').textContent = pages.length;
+      document.getElementById('tabCountBadge').textContent = pages.length;
+
+      const banner = document.getElementById('quickConnectBanner');
+      if (pages.length > 0) {
+        firstPageId = pages[0].id;
+        banner.style.display = 'flex';
+        document.getElementById('quickConnectSub').textContent =
+          `Click to take over: "${pages[0].title || 'Active Tab'}" (${pages[0].url || 'blank'})`;
+      } else {
+        firstPageId = null;
+        banner.style.display = 'none';
+      }
 
       const container = document.getElementById('tabsContainer');
       if (pages.length === 0) {
@@ -542,46 +934,38 @@ async function refreshData() {
             <div class="empty-title">No active browser sessions</div>
             <div class="empty-desc">
               Chromium instances spin up on-demand whenever a client connects over WebSocket CDP.
-              Once an agent, MCP server, or hrworks worker initiates a connection, tabs will appear here.
+              Once an agent, MCP server, or hrworks worker initiates a connection, interactive cards will appear here.
             </div>
           </div>`;
       } else {
-        let html = `
-          <table class="tabs-table">
-            <thead>
-              <tr>
-                <th>Page Details</th>
-                <th>Target ID</th>
-                <th style="text-align: right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>`;
+        let html = `<div class="sessions-cards-grid">`;
         for (const p of pages) {
           const title = escapeHtml(p.title || '(untitled)');
           const url = escapeHtml(p.url || 'about:blank');
           const id = escapeHtml(p.id);
+          const handoffUrl = `/handoff/?page=${encodeURIComponent(p.id)}`;
+
           html += `
-            <tr>
-              <td>
-                <div class="tab-title-cell">
-                  <div class="tab-title">${title}</div>
-                  <div class="tab-url" title="${url}">${url}</div>
+            <div class="session-card" onclick="location.href='${handoffUrl}'" title="Click to connect in Mobile Handoff">
+              <div class="session-card-header">
+                <div class="session-card-icon">
+                  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
                 </div>
-              </td>
-              <td style="font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted);">
-                ${id.slice(0, 8)}...
-              </td>
-              <td>
-                <div class="tab-actions">
-                  <a href="/handoff/?page=${encodeURIComponent(p.id)}" class="btn btn-accent btn-sm">
-                    <svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
-                    Take Over
-                  </a>
+                <div class="session-card-title-group">
+                  <div class="session-card-title">${title}</div>
+                  <div class="session-card-url" title="${url}">${url}</div>
                 </div>
-              </td>
-            </tr>`;
+              </div>
+              <div class="session-card-footer">
+                <span class="session-card-badge">ID: ${id.slice(0, 8)}</span>
+                <span class="session-connect-action">
+                  Connect &amp; Take Over
+                  <svg viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                </span>
+              </div>
+            </div>`;
         }
-        html += `</tbody></table>`;
+        html += `</div>`;
         container.innerHTML = html;
       }
     }
@@ -606,7 +990,7 @@ function copyText(text, btn) {
 
 updateHostInfo();
 refreshData();
-setInterval(refreshData, 3000);
+setInterval(refreshData, 2500);
 </script>
 
 </body>
