@@ -27,6 +27,7 @@ use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
 
 static HANDOFF_HTML: &str = include_str!("../handoff.html");
 static DASHBOARD_HTML: &str = include_str!("../dashboard.html");
+static FAVICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#06b6d4"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="#090d16"/><rect x="2" y="2" width="28" height="28" rx="6" fill="none" stroke="url(#g)" stroke-width="1.5"/><circle cx="8" cy="8" r="1.5" fill="#ef4444"/><circle cx="12.5" cy="8" r="1.5" fill="#eab308"/><circle cx="17" cy="8" r="1.5" fill="#22c55e"/><line x1="2" y1="12" x2="30" y2="12" stroke="#1e293b" stroke-width="1.2"/><rect x="6" y="15" width="20" height="12" rx="3" fill="url(#g)" fill-opacity="0.15" stroke="url(#g)" stroke-width="1.2"/><circle cx="16" cy="21" r="3" fill="none" stroke="#38bdf8" stroke-width="1.2"/><line x1="13" y1="21" x2="19" y2="21" stroke="#38bdf8" stroke-width="1.2"/></svg>"##;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Native NixOS remote browser daemon")]
@@ -167,13 +168,22 @@ impl AppState {
         &self,
         headers: &HeaderMap,
     ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+        self.check_auth_opt(headers, None)
+    }
+
+    pub fn check_auth_opt(
+        &self,
+        headers: &HeaderMap,
+        query_token: Option<&str>,
+    ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
         if let Some(ref expected) = self.cluster_secret {
             let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
             let custom_header = headers.get("x-browser-cluster-secret").and_then(|h| h.to_str().ok());
 
             let token = auth_header
                 .and_then(|h| h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer ")))
-                .or(custom_header);
+                .or(custom_header)
+                .or(query_token);
 
             if token != Some(expected.as_str()) {
                 return Err((
@@ -600,6 +610,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/", get(dashboard_page))
         .route("/dashboard", get(|| async { Redirect::to("/") }))
+        .route("/favicon.ico", get(favicon_ico))
         .route("/health", get(health_check))
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
@@ -644,6 +655,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Peer-to-Peer Mesh APIs
         .route("/api/mesh/node", get(api_mesh_node))
         .route("/api/mesh/overview", get(api_mesh_overview))
+        .route("/api/ws/overview", get(handle_overview_ws))
         .route("/api/peers", get(api_list_peers).post(api_add_peer))
         .route("/api/peers/{peer}", delete(api_remove_peer))
         .route("/api/peers/{peer}/sessions", post(api_peer_create_session))
@@ -660,6 +672,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/peers/{peer}/recordings/{id}", get(api_peer_get_recording).delete(api_peer_delete_recording))
         .route("/api/peers/{peer}/recordings/{id}/frames", get(api_peer_get_recording_frames))
         .route("/api/peers/{peer}/recordings/vacuum", post(api_peer_vacuum_recordings))
+        .route(
+            "/api/peers/{peer}/json/new",
+            put(api_peer_json_new).post(api_peer_json_new).get(api_peer_json_new),
+        )
+        .route(
+            "/api/peers/{peer}/json/close/{id}",
+            put(api_peer_json_close)
+                .post(api_peer_json_close)
+                .delete(api_peer_json_close)
+                .get(api_peer_json_close),
+        )
+        .route(
+            "/api/peers/{peer}/json/activate/{id}",
+            put(api_peer_json_activate)
+                .post(api_peer_json_activate)
+                .get(api_peer_json_activate),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
@@ -718,6 +747,16 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
 
 async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
     Json(get_local_targets(&state).await)
+}
+
+async fn favicon_ico() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/svg+xml"),
+        )],
+        FAVICON_SVG,
+    )
 }
 
 async fn dashboard_page(State(state): State<AppState>) -> impl IntoResponse {
@@ -1570,14 +1609,10 @@ async fn api_mesh_node(
     }))
 }
 
-async fn api_mesh_overview(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    state.check_auth(&headers)?;
-    let local_sessions = get_local_sessions(&state).await;
-    let local_profiles = get_local_profiles(&state).await;
-    let local_targets = get_local_targets(&state).await;
+pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
+    let local_sessions = get_local_sessions(state).await;
+    let local_profiles = get_local_profiles(state).await;
+    let local_targets = get_local_targets(state).await;
     let local_recordings = recorder::list_recordings(&state.recorder_config).await;
     let local_storage_used_bytes: u64 = local_recordings.iter().map(|r| r.size_bytes).sum();
 
@@ -1853,7 +1888,7 @@ async fn api_mesh_overview(
     let total_profiles = all_profiles.len();
     let total_recordings = all_recordings.len();
 
-    Ok(Json(MeshOverview {
+    MeshOverview {
         local_node,
         peers: peer_states,
         sessions: all_sessions,
@@ -1868,7 +1903,77 @@ async fn api_mesh_overview(
         online_nodes,
         total_storage_bytes,
         max_storage_bytes,
-    }))
+    }
+}
+
+async fn api_mesh_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let overview = fetch_mesh_overview(&state).await;
+    Ok(Json(overview))
+}
+
+async fn handle_overview_ws(
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let token_opt = params.get("token").map(|s| s.as_str());
+    if let Err(e) = state.check_auth_opt(&headers, token_opt) {
+        return e.into_response();
+    }
+
+    ws.on_upgrade(move |mut socket| async move {
+        // Send initial overview immediately
+        let overview = fetch_mesh_overview(&state).await;
+        if let Ok(json_str) = serde_json::to_string(&overview) {
+            if socket.send(axum::extract::ws::Message::Text(json_str.into())).await.is_err() {
+                return;
+            }
+        }
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(2000));
+        interval.tick().await;
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let overview = fetch_mesh_overview(&state).await;
+                    if let Ok(json_str) = serde_json::to_string(&overview) {
+                        if socket.send(axum::extract::ws::Message::Text(json_str.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                msg = socket.recv() => {
+                    match msg {
+                        Some(Ok(axum::extract::ws::Message::Text(txt))) => {
+                            if txt.as_str() == "refresh" {
+                                let overview = fetch_mesh_overview(&state).await;
+                                if let Ok(json_str) = serde_json::to_string(&overview) {
+                                    let _ = socket.send(axum::extract::ws::Message::Text(json_str.into())).await;
+                                }
+                            } else if txt.as_str() == "ping" {
+                                let _ = socket.send(axum::extract::ws::Message::Text("pong".into())).await;
+                            }
+                        }
+                        Some(Ok(axum::extract::ws::Message::Ping(data))) => {
+                            if socket.send(axum::extract::ws::Message::Pong(data)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(Ok(axum::extract::ws::Message::Close(_))) | None | Some(Err(_)) => {
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    })
 }
 
 async fn get_peer_url(state: &AppState, peer: &str) -> Option<String> {
@@ -2483,6 +2588,88 @@ async fn api_peer_vacuum_recordings(
     };
     let url = format!("{}/api/recordings/vacuum", peer_url);
     let res = state.peer_request(state.http_client.post(&url)).send().await;
+    proxy_response(res).await
+}
+
+async fn api_peer_json_new(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(peer): AxumPath<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = match raw_query {
+        Some(q) if !q.is_empty() => format!("{}/json/new?{}", peer_url, q),
+        _ => format!("{}/json/new", peer_url),
+    };
+    let res = state
+        .peer_request(state.http_client.put(&url))
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
+async fn api_peer_json_close(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/json/close/{}", peer_url, id);
+    let res = state
+        .peer_request(state.http_client.put(&url))
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
+async fn api_peer_json_activate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/json/activate/{}", peer_url, id);
+    let res = state
+        .peer_request(state.http_client.put(&url))
+        .send()
+        .await;
     proxy_response(res).await
 }
 

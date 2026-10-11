@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>Browser Daemon — Dashboard</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='g' x1='0' y1='0' x2='32' y2='32' gradientUnits='userSpaceOnUse'><stop offset='0%' stop-color='%236366f1'/><stop offset='100%' stop-color='%2306b6d4'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='%23090d16'/><rect x='2' y='2' width='28' height='28' rx='6' fill='none' stroke='url(%23g)' stroke-width='1.5'/><circle cx='8' cy='8' r='1.5' fill='%23ef4444'/><circle cx='12.5' cy='8' r='1.5' fill='%23eab308'/><circle cx='17' cy='8' r='1.5' fill='%2322c55e'/><line x1='2' y1='12' x2='30' y2='12' stroke='%231e293b' stroke-width='1.2'/><rect x='6' y='15' width='20' height='12' rx='3' fill='url(%23g)' fill-opacity='0.15' stroke='url(%23g)' stroke-width='1.2'/><circle cx='16' cy='21' r='3' fill='none' stroke='%2338bdf8' stroke-width='1.2'/><line x1='13' y1='21' x2='19' y2='21' stroke='%2338bdf8' stroke-width='1.2"/></svg>">
 <style>
   :root {
     --bg: #090b10;
@@ -831,6 +832,17 @@
       max-height: 92vh;
       overflow-y: auto;
     }
+    .player-modal-card {
+      width: 100% !important;
+      max-width: 100% !important;
+      border-radius: 18px 18px 0 0;
+      max-height: 95vh;
+    }
+    .player-buttons-row {
+      flex-direction: column !important;
+      align-items: stretch !important;
+      gap: 10px !important;
+    }
     .cluster-node-card {
       flex-direction: column !important;
       align-items: stretch !important;
@@ -1100,6 +1112,108 @@
     flex-wrap: wrap;
     gap: 8px;
   }
+
+  /* Toast & Download Progress Notifications */
+  .toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 9999;
+    max-width: 380px;
+    width: calc(100% - 48px);
+    pointer-events: none;
+  }
+  .toast-item {
+    pointer-events: auto;
+    background: #0f141f;
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: var(--fg);
+    font-size: 13px;
+    animation: toastIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .toast-item.toast-success { border-left: 4px solid var(--ok); }
+  .toast-item.toast-info { border-left: 4px solid var(--accent); }
+  .toast-item.toast-warn { border-left: 4px solid var(--warn); }
+  .toast-item.toast-danger { border-left: 4px solid var(--danger); }
+  .toast-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-weight: 600;
+  }
+  .toast-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+  .toast-desc {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .toast-progress-wrap {
+    width: 100%;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+  .toast-progress-bar {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.15s ease-out;
+  }
+  .toast-action-btn {
+    margin-top: 4px;
+    align-self: flex-start;
+  }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(12px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  /* Node Quick Pills */
+  .node-pills-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+  .node-pill-btn {
+    background: var(--code-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 6px;
+    padding: 4px 9px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .node-pill-btn:hover {
+    color: var(--fg);
+    border-color: var(--accent);
+  }
+  .node-pill-btn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    box-shadow: 0 1px 4px var(--accent-glow);
+  }
 </style>
 </head>
 <body>
@@ -1144,6 +1258,9 @@
       </div>
     </div>
     <div class="mesh-bar-right">
+      <button class="btn btn-accent btn-xs" id="meshLaunchSessionBtn" onclick="openNewSessionModal(null, selectedNodeFilter !== 'all' ? selectedNodeFilter : null)">
+        + Launch on <span id="meshLaunchNodeLabel">Node</span>
+      </button>
       <button class="btn btn-ghost btn-xs" onclick="openClusterModal()" title="View and manage mesh cluster nodes">
         <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Cluster Nodes
@@ -1332,10 +1449,16 @@
         Active Pages &amp; Tabs
         <span id="tabCountBadge" class="badge badge-accent">0</span>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="refreshData()">
-        <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        Refresh
-      </button>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <button class="btn btn-accent btn-sm" onclick="openNewTabPrompt()" title="Open a new page/tab on any cluster node">
+          <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Tab
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="refreshData()">
+          <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Refresh
+        </button>
+      </div>
     </div>
     <div id="tabsContainer">
       <!-- Injected by JS -->
@@ -1397,7 +1520,8 @@
       <div class="modal-body">
         <div class="form-group">
           <label class="form-label" for="sessionNodeInput">Target Cluster Node</label>
-          <select id="sessionNodeInput" class="form-input">
+          <div id="sessionNodePills" class="node-pills-row"></div>
+          <select id="sessionNodeInput" class="form-input" onchange="onSessionNodeSelectChange(this.value)">
           </select>
           <span class="form-hint">Host where the browser instance will be started.</span>
         </div>
@@ -1416,6 +1540,12 @@
           <label class="form-checkbox-label">
             <input type="checkbox" id="sessionRecordInput" checked>
             <span><strong>Record Session</strong> — screencast frames and playback metadata</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="form-checkbox-label">
+            <input type="checkbox" id="sessionAutoHandoffInput" checked>
+            <span><strong>Take Over in Handoff immediately</strong> after launching</span>
           </label>
         </div>
         <div class="form-row">
@@ -1585,6 +1715,8 @@
   </div>
 </div>
 
+<div id="toastContainer" class="toast-container"></div>
+
 <footer>
   Browser Daemon &bull; Multi-Tenant Headless Chrome with Mobile Handoff &bull; Protected by Authelia
 </footer>
@@ -1704,22 +1836,230 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+/* Toast Notification System */
+function showToast(title, type = 'info', durationMs = 4500, action = null) {
+  const container = document.getElementById('toastContainer');
+  if (!container) return null;
+  const item = document.createElement('div');
+  item.className = `toast-item toast-${type}`;
+
+  let actionHtml = '';
+  if (action && action.url && action.text) {
+    actionHtml = `<a href="${escapeHtml(action.url)}" class="btn btn-accent btn-xs toast-action-btn" target="_blank">${escapeHtml(action.text)} ↗</a>`;
+  } else if (action && action.fn && action.text) {
+    actionHtml = `<button class="btn btn-accent btn-xs toast-action-btn" onclick="${action.fn}">${escapeHtml(action.text)}</button>`;
+  }
+
+  item.innerHTML = `
+    <div class="toast-header">
+      <div class="toast-title">
+        ${type === 'success' ? '✅' : type === 'warn' ? '⚠️' : type === 'danger' ? '❌' : 'ℹ️'}
+        ${escapeHtml(title)}
+      </div>
+      <button class="btn btn-ghost btn-xs" style="padding:0 4px;font-size:14px;line-height:1;" onclick="this.closest('.toast-item').remove()">&times;</button>
+    </div>
+    ${actionHtml}
+  `;
+  container.appendChild(item);
+
+  if (durationMs > 0) {
+    setTimeout(() => {
+      item.style.opacity = '0';
+      item.style.transform = 'translateY(12px) scale(0.96)';
+      setTimeout(() => item.remove(), 200);
+    }, durationMs);
+  }
+  return item;
+}
+
+function createProgressToast(id, title, initialDesc) {
+  const container = document.getElementById('toastContainer');
+  let item = document.getElementById(`toast-${id}`);
+  if (!item && container) {
+    item = document.createElement('div');
+    item.id = `toast-${id}`;
+    item.className = 'toast-item toast-info';
+    container.appendChild(item);
+  }
+
+  const render = (pct, desc, sub) => {
+    if (!item) return;
+    item.innerHTML = `
+      <div class="toast-header">
+        <div class="toast-title">
+          <div class="player-loading-spinner" style="width:14px;height:14px;border-width:2px;border-color:rgba(255,255,255,0.2);border-top-color:var(--accent);"></div>
+          ${escapeHtml(title)}
+        </div>
+        <span style="font-family:monospace;font-size:11.5px;color:var(--accent);font-weight:600;">${pct}%</span>
+      </div>
+      <div class="toast-desc">${escapeHtml(desc || '')}</div>
+      ${sub ? `<div style="font-size:11px;color:var(--muted);">${escapeHtml(sub)}</div>` : ''}
+      <div class="toast-progress-wrap">
+        <div class="toast-progress-bar" style="width:${pct}%;"></div>
+      </div>
+    `;
+  };
+
+  render(0, initialDesc, '');
+
+  return {
+    update(pct, desc, sub) {
+      render(pct, desc, sub);
+    },
+    done(doneTitle, doneDesc, action = null) {
+      if (!item) return;
+      item.className = 'toast-item toast-success';
+      let actionHtml = '';
+      if (action && action.url && action.text) {
+        actionHtml = `<a href="${escapeHtml(action.url)}" class="btn btn-accent btn-xs toast-action-btn" target="_blank">${escapeHtml(action.text)} ↗</a>`;
+      }
+      item.innerHTML = `
+        <div class="toast-header">
+          <div class="toast-title">✅ ${escapeHtml(doneTitle || title)}</div>
+          <button class="btn btn-ghost btn-xs" style="padding:0 4px;font-size:14px;line-height:1;" onclick="this.closest('.toast-item').remove()">&times;</button>
+        </div>
+        <div class="toast-desc">${escapeHtml(doneDesc || 'Completed successfully')}</div>
+        ${actionHtml}
+      `;
+      setTimeout(() => {
+        if (item) {
+          item.style.opacity = '0';
+          item.style.transform = 'translateY(12px) scale(0.96)';
+          setTimeout(() => item && item.remove(), 200);
+        }
+      }, 5000);
+    },
+    error(errTitle, errDesc) {
+      if (!item) return;
+      item.className = 'toast-item toast-danger';
+      item.innerHTML = `
+        <div class="toast-header">
+          <div class="toast-title">❌ ${escapeHtml(errTitle || 'Failed')}</div>
+          <button class="btn btn-ghost btn-xs" style="padding:0 4px;font-size:14px;line-height:1;" onclick="this.closest('.toast-item').remove()">&times;</button>
+        </div>
+        <div class="toast-desc" style="color:var(--danger);">${escapeHtml(errDesc || 'An error occurred')}</div>
+      `;
+      setTimeout(() => {
+        if (item) {
+          item.style.opacity = '0';
+          item.style.transform = 'translateY(12px) scale(0.96)';
+          setTimeout(() => item && item.remove(), 200);
+        }
+      }, 7000);
+    },
+    remove() {
+      if (item) item.remove();
+    }
+  };
+}
+
+/* WebSocket Real-time Overview Updates */
+let overviewWs = null;
+let wsReconnectTimer = null;
+
+function connectOverviewWs() {
+  if (overviewWs && (overviewWs.readyState === WebSocket.CONNECTING || overviewWs.readyState === WebSocket.OPEN)) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const port = location.port ? (':' + location.port) : '';
+  let wsUrl = `${proto}//${location.hostname}${port}/api/ws/overview`;
+  if (window.__CLUSTER_SECRET__) {
+    wsUrl += `?token=${encodeURIComponent(window.__CLUSTER_SECRET__)}`;
+  }
+
+  try {
+    overviewWs = new WebSocket(wsUrl);
+  } catch(e) {
+    console.warn('[WS] Failed to connect WebSocket:', e);
+    return;
+  }
+
+  overviewWs.onopen = () => {
+    console.log('[WS] Overview WebSocket connected');
+    updateLiveIndicator(true);
+  };
+
+  overviewWs.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data && data.local_node) {
+        currentOverview = data;
+        renderMeshOverview(data);
+      }
+    } catch(err) {
+      console.warn('[WS] Parse error:', err);
+    }
+  };
+
+  overviewWs.onclose = () => {
+    updateLiveIndicator(false);
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = setTimeout(connectOverviewWs, 3000);
+  };
+
+  overviewWs.onerror = () => {
+    overviewWs.close();
+  };
+}
+
+function updateLiveIndicator(isWs) {
+  const ind = document.getElementById('pollIndicator');
+  if (ind) {
+    if (isWs) {
+      ind.innerHTML = '<span style="color:var(--ok);font-weight:600;">● Live (WS)</span>';
+    } else {
+      ind.innerHTML = '<span style="color:var(--muted)">● Polling (HTTP)</span>';
+    }
+  }
+}
+
+/* Node Selection & Management */
+function renderSessionNodePills(selectedNode) {
+  const container = document.getElementById('sessionNodePills');
+  if (!container || !availableNodes || availableNodes.length === 0) return;
+  const activeNode = selectedNode || document.getElementById('sessionNodeInput')?.value || (currentOverview?.local_node?.name);
+  container.innerHTML = availableNodes.map(n => {
+    const isAct = n.name === activeNode ? 'active' : '';
+    const dot = n.status === 'online' ? '🟢' : '🔴';
+    return `<button type="button" class="node-pill-btn ${isAct}" onclick="onSessionNodePillClick('${escapeHtml(n.name)}')">${dot} ${escapeHtml(n.name)}${n.isLocal ? ' (local)' : ''}</button>`;
+  }).join('');
+}
+
+function onSessionNodePillClick(nodeName) {
+  const sel = document.getElementById('sessionNodeInput');
+  if (sel) {
+    sel.value = nodeName;
+    renderSessionNodePills(nodeName);
+  }
+}
+
+function onSessionNodeSelectChange(nodeName) {
+  renderSessionNodePills(nodeName);
+}
+
 function selectNodeFilter(node) {
   selectedNodeFilter = node;
   document.querySelectorAll('.node-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.node === node);
   });
+  const launchLabel = document.getElementById('meshLaunchNodeLabel');
+  if (launchLabel) {
+    launchLabel.textContent = node === 'all' ? (currentOverview?.local_node?.name || 'Node') : node;
+  }
   if (currentOverview) {
     renderMeshOverview(currentOverview);
   }
 }
 
-function openNewSessionModal(prefillProfile) {
+function openNewSessionModal(prefillProfile, targetNode) {
   const modal = document.getElementById('newSessionModal');
   const profInput = document.getElementById('sessionProfileInput');
-  if (prefillProfile) {
-    profInput.value = prefillProfile;
+  const nodeSel = document.getElementById('sessionNodeInput');
+  if (prefillProfile) profInput.value = prefillProfile;
+  const preferredNode = targetNode || (selectedNodeFilter !== 'all' ? selectedNodeFilter : (currentOverview?.local_node?.name || 'local'));
+  if (nodeSel && preferredNode) {
+    nodeSel.value = preferredNode;
   }
+  renderSessionNodePills(preferredNode);
   modal.classList.add('open');
   profInput.focus();
 }
@@ -1731,6 +2071,49 @@ function closeNewSessionModal() {
 function handleModalOverlayClick(e) {
   if (e.target.id === 'newSessionModal') {
     closeNewSessionModal();
+  }
+}
+
+async function openNewTabPrompt() {
+  const targetNode = selectedNodeFilter !== 'all' ? selectedNodeFilter : (currentOverview?.local_node?.name || 'local');
+  const url = prompt(`Enter URL for new tab on [${targetNode}]:`, 'https://duckduckgo.com');
+  if (url === null) return;
+  const targetUrl = url.trim() || 'https://duckduckgo.com';
+
+  const isLocal = !targetNode || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === targetNode);
+  const endpoint = isLocal
+    ? `/json/new?url=${encodeURIComponent(targetUrl)}`
+    : `/api/peers/${encodeURIComponent(targetNode)}/json/new?url=${encodeURIComponent(targetUrl)}`;
+
+  const pToast = createProgressToast('new-tab', `Opening Tab on ${targetNode}`, `Navigating to ${targetUrl}...`);
+  try {
+    const res = await fetch(endpoint, { method: 'PUT', headers: getAuthHeaders() });
+    if (!res.ok) {
+      const err = await res.text();
+      pToast.error('Failed to Open Tab', err);
+      alert(`Failed to open tab on ${targetNode}: ${err}`);
+      return;
+    }
+    const tabInfo = await res.json().catch(() => null);
+    pToast.done('Tab Opened', `Target ready on ${targetNode}`);
+    refreshData();
+    if (tabInfo && tabInfo.id) {
+      const nodeObj = availableNodes.find(n => n.name === targetNode);
+      const hostUrl = nodeObj ? nodeObj.url : location.origin;
+      const handoffUrl = `${hostUrl}/handoff/?page=${encodeURIComponent(tabInfo.id)}`;
+      showToast(`Tab open on ${targetNode}`, 'success', 6000, {
+        text: 'Take Over',
+        url: handoffUrl
+      });
+      setTimeout(() => {
+        if (confirm(`Tab created on ${targetNode}! Switch to Mobile Handoff now?`)) {
+          location.href = handoffUrl;
+        }
+      }, 100);
+    }
+  } catch(e) {
+    pToast.error('Failed to Open Tab', String(e));
+    alert(`Error: ${e}`);
   }
 }
 
@@ -1746,6 +2129,13 @@ async function submitNewSession(e) {
   const record = document.getElementById('sessionRecordInput')?.checked ?? true;
   const width = parseInt(document.getElementById('sessionWidthInput').value, 10) || 1920;
   const height = parseInt(document.getElementById('sessionHeightInput').value, 10) || 1080;
+  const autoHandoff = document.getElementById('sessionAutoHandoffInput')?.checked ?? true;
+
+  const targetNodeName = node || (currentOverview?.local_node?.name || 'local');
+  const targetNodeObj = availableNodes.find(n => n.name === targetNodeName);
+  const targetNodeUrl = targetNodeObj ? targetNodeObj.url : location.origin;
+
+  const pToast = createProgressToast('launch-session', `Launching Session on ${targetNodeName}`, 'Spawning Chromium process...');
 
   try {
     const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
@@ -1758,13 +2148,29 @@ async function submitNewSession(e) {
 
     if (!res.ok) {
       const err = await res.text();
-      alert(`Failed to launch session on ${node || 'local'}: ${err}`);
+      pToast.error('Launch Failed', `Error on ${targetNodeName}: ${err}`);
+      alert(`Failed to launch session on ${targetNodeName}: ${err}`);
     } else {
+      const sData = await res.json().catch(() => null);
       closeNewSessionModal();
       document.getElementById('sessionProfileInput').value = '';
       refreshData();
+
+      const sid = sData && sData.id ? sData.id : '';
+      const handoffUrl = sid ? `${targetNodeUrl}/handoff/?session=${encodeURIComponent(sid)}` : `${targetNodeUrl}/handoff/`;
+      pToast.done(`Session Launched on ${targetNodeName}`, `Session ID: ${sid ? sid.slice(0, 8) : 'active'}`, {
+        text: 'Take Over',
+        url: handoffUrl
+      });
+
+      if (autoHandoff) {
+        setTimeout(() => {
+          location.href = handoffUrl;
+        }, 400);
+      }
     }
   } catch (err) {
+    pToast.error('Launch Failed', String(err));
     alert(`Error: ${err}`);
   } finally {
     btn.disabled = false;
@@ -2016,6 +2422,8 @@ function renderClusterModal() {
           </div>
         </div>
         <div class="cluster-node-actions" style="display:flex;gap:6px;flex-shrink:0;">
+          <button class="btn btn-accent btn-xs" onclick="closeClusterModal(); openNewSessionModal(null, '${escapeHtml(n.name)}')" title="Launch new browser session on ${escapeHtml(n.name)}">+ Session</button>
+          <a href="${escapeHtml(n.url)}/handoff/" class="btn btn-ghost btn-xs" target="_blank" title="Open Handoff on this node">Handoff ↗</a>
           <a href="${escapeHtml(n.url)}/" class="btn btn-ghost btn-xs" target="_blank" title="Open this node's dashboard">Dashboard ↗</a>
           ${!n.isLocal ? `<button class="btn btn-danger btn-xs" onclick="removePeer('${escapeHtml(n.name)}')" title="Disconnect peer from mesh">Remove</button>` : ''}
         </div>
@@ -2115,6 +2523,12 @@ function renderMeshOverview(ov) {
     } else {
       sessionNodeSelect.value = ov.local_node.name;
     }
+    renderSessionNodePills(sessionNodeSelect.value);
+  }
+
+  const launchLabel = document.getElementById('meshLaunchNodeLabel');
+  if (launchLabel) {
+    launchLabel.textContent = selectedNodeFilter === 'all' ? (ov.local_node.name || 'Node') : selectedNodeFilter;
   }
 
   const profileNodeSelect = document.getElementById('profileNodeInput');
@@ -2462,7 +2876,9 @@ function renderMeshOverview(ov) {
         <div class="session-card" onclick="location.href='${handoffUrl}'" title="Click to connect in Mobile Handoff on ${escapeHtml(p.node_name)}">
           <div class="session-card-header">
             <div class="session-card-icon">
-              <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              ${host && host !== 'localhost' && !host.endsWith('.ts.brkn.lol') && !host.startsWith('about:')
+                ? `<img src="https://icons.duckduckgo.com/ip3/${escapeHtml(host)}.ico" style="width:20px;height:20px;border-radius:4px;object-fit:contain;" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"><svg viewBox="0 0 24 24" style="display:none;width:18px;height:18px;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`
+                : `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`}
             </div>
             <div class="session-card-title-group" style="min-width:0;flex:1;">
               <div class="session-card-title">${title}</div>
@@ -2526,6 +2942,12 @@ async function fallbackLocalRefresh() {
 }
 
 async function refreshData() {
+  if (overviewWs && overviewWs.readyState === WebSocket.OPEN) {
+    try {
+      overviewWs.send('refresh');
+      return;
+    } catch(e) {}
+  }
   try {
     const res = await fetch('/api/mesh/overview', { headers: getAuthHeaders() });
     if (res.ok) {
@@ -2731,11 +3153,14 @@ async function openPlayerModal(id, node) {
   ctx.fillStyle = '#090b10';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  const pToast = createProgressToast(`rec-${id}`, `Downloading Session ${id.slice(0, 8)}`, `Connecting to server...`);
+
   try {
     const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
     const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}/frames` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}/frames`;
     const res = await fetch(url, { headers: getAuthHeaders() });
     if (!res.ok) {
+      pToast.error('Download Failed', res.statusText);
       alert(`Failed to load recording frames: ${res.statusText}`);
       closePlayerModal();
       return;
@@ -2759,10 +3184,12 @@ async function openPlayerModal(id, node) {
           if (loadingText) loadingText.textContent = `Downloading session: ${mb} / ${totalMb} MB (${pct}%)`;
           if (loadingBar) loadingBar.style.width = pct + '%';
           if (loadingSub) loadingSub.textContent = `Loaded ${mb} MB of recording data`;
+          pToast.update(pct, `${mb} / ${totalMb} MB (${pct}%)`, `Streaming frames...`);
         } else {
           const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
           if (loadingText) loadingText.textContent = `Downloading session: ${mb} MB...`;
           if (loadingSub) loadingSub.textContent = `Streaming frames...`;
+          pToast.update(50, `${mb} MB downloaded`, `Streaming frames...`);
         }
       }
       text += decoder.decode();
@@ -2771,6 +3198,7 @@ async function openPlayerModal(id, node) {
     }
 
     if (loadingText) loadingText.textContent = 'Parsing frames...';
+    pToast.update(95, 'Parsing frames...', 'Preparing playback viewer');
     await new Promise(r => setTimeout(r, 20));
 
     const lines = text.trim().split('\n');
@@ -2781,6 +3209,7 @@ async function openPlayerModal(id, node) {
     }
 
     if (frames.length === 0) {
+      pToast.error('No Frames Found', 'The recording contains no frames.');
       alert('No frames found in this recording.');
       closePlayerModal();
       return;
@@ -2819,6 +3248,8 @@ async function openPlayerModal(id, node) {
     // Hide loading overlay
     if (loadingOverlay) loadingOverlay.style.display = 'none';
 
+    pToast.done('Session Downloaded', `${frames.length} frames ready for playback`);
+
     renderPlayerFrame(0);
 
     // Auto-play immediately if multiple frames!
@@ -2826,6 +3257,7 @@ async function openPlayerModal(id, node) {
       togglePlayPause();
     }
   } catch(e) {
+    pToast.error('Download Failed', String(e));
     alert(`Failed to load recording: ${e}`);
     closePlayerModal();
   }
@@ -2999,6 +3431,8 @@ async function exportRecordingWebM() {
     }
   }
 
+  const expToast = createProgressToast(`export-${activePlayer.id}`, `Exporting WebM Video`, `Preparing canvas stream...`);
+
   const chunks = [];
   mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
   mediaRecorder.onstop = () => {
@@ -3013,6 +3447,7 @@ async function exportRecordingWebM() {
     URL.revokeObjectURL(u);
     btn.disabled = false;
     btn.textContent = 'Export WebM';
+    expToast.done('WebM Video Ready', `Downloaded session-${activePlayer.id}.webm`);
   };
 
   mediaRecorder.start();
@@ -3024,7 +3459,9 @@ async function exportRecordingWebM() {
 
   for (let i = 0; i < total; i++) {
     renderPlayerFrame(i);
-    btn.textContent = `Exporting (${Math.round((i / total) * 100)}%)...`;
+    const pct = Math.round((i / total) * 100);
+    btn.textContent = `Exporting (${pct}%)...`;
+    expToast.update(pct, `Encoding frame ${i + 1} / ${total} (${pct}%)`, 'Rendering canvas stream to WebM video...');
     const frameImg = activePlayer.cachedImages.get(i);
     if (frameImg && !frameImg.complete) {
       await new Promise(r => { frameImg.onload = r; frameImg.onerror = r; setTimeout(r, 80); });
@@ -3068,7 +3505,8 @@ window.addEventListener('keydown', e => {
 
 updateHostInfo();
 refreshData();
-setInterval(refreshData, 2500);
+connectOverviewWs();
+setInterval(refreshData, 5000);
 </script>
 
 </body>

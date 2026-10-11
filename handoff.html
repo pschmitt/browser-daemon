@@ -7,7 +7,8 @@
 <meta name="theme-color" content="#0b0d12">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<title>Browser handoff</title>
+<title>Browser Handoff</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><defs><linearGradient id='h' x1='0' y1='0' x2='32' y2='32' gradientUnits='userSpaceOnUse'><stop offset='0%' stop-color='%2306b6d4'/><stop offset='100%' stop-color='%233b82f6'/></linearGradient></defs><rect width='32' height='32' rx='8' fill='%23090d16'/><rect x='7' y='3' width='18' height='26' rx='4' fill='%230f172a' stroke='url(%23h)' stroke-width='1.5'/><rect x='10' y='6' width='12' height='18' rx='2' fill='url(%23h)' fill-opacity='0.22'/><circle cx='16' cy='26.5' r='1.2' fill='%2338bdf8'/><path d='M4 12a14 14 0 0 1 0 8M28 12a14 14 0 0 0 0 8' fill='none' stroke='%2306b6d4' stroke-width='1.5' stroke-linecap='round'/></svg>">
 <style>
   :root { --bg: #0b0d12; --bar: #11141c; --fg: #e8eaf2; --muted: #98a0b8; --line: #262b38; --accent: #7c6cf0; --ok: #10b981; --bad: #e11d48; --btn: #1b2030; }
   @media (prefers-color-scheme: light) {
@@ -645,7 +646,7 @@ function normalizeUrl(input) {
   } else if (val.startsWith("localhost")) {
     return "http://" + val;
   }
-  return "https://www.google.com/search?q=" + encodeURIComponent(val);
+  return "https://duckduckgo.com/?q=" + encodeURIComponent(val);
 }
 
 E.urlInput.onfocus = () => {
@@ -725,10 +726,10 @@ E.urlBar.onsubmit = async (e) => {
 };
 
 /* ---------------------------------------------------------------- tabs & sessions */
-async function openNewTab(initialUrl = "https://www.google.com") {
+async function openNewTab(initialUrl = "https://duckduckgo.com") {
   const urlToOpen = prompt("Enter URL for new tab:", initialUrl);
   if (urlToOpen === null) return;
-  const targetUrl = normalizeUrl(urlToOpen || "https://www.google.com");
+  const targetUrl = normalizeUrl(urlToOpen || "https://duckduckgo.com");
   try {
     const qs = new URLSearchParams();
     qs.set("url", targetUrl);
@@ -808,10 +809,34 @@ function renderTabStrip(pages) {
       }
     };
 
-    const globe = document.createElement("span");
-    globe.innerHTML = `<svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
-    globe.style.display = "inline-flex";
-    item.appendChild(globe);
+    let iconHost = "";
+    if (p.url) {
+      try { iconHost = new URL(p.url, location.href).hostname; } catch {}
+    }
+
+    const iconWrap = document.createElement("span");
+    iconWrap.style.display = "inline-flex";
+    iconWrap.style.alignItems = "center";
+    iconWrap.style.justifyContent = "center";
+    iconWrap.style.width = "14px";
+    iconWrap.style.height = "14px";
+    iconWrap.style.flexShrink = "0";
+
+    if (iconHost && iconHost !== "localhost" && !iconHost.endsWith(".ts.brkn.lol")) {
+      const img = document.createElement("img");
+      img.src = `https://icons.duckduckgo.com/ip3/${iconHost}.ico`;
+      img.style.width = "14px";
+      img.style.height = "14px";
+      img.style.borderRadius = "2px";
+      img.style.objectFit = "contain";
+      img.onerror = () => {
+        iconWrap.innerHTML = `<svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+      };
+      iconWrap.appendChild(img);
+    } else {
+      iconWrap.innerHTML = `<svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+    }
+    item.appendChild(iconWrap);
 
     const title = document.createElement("span");
     title.className = "tab-strip-title";
@@ -861,9 +886,17 @@ function renderTabsModal(pages) {
     const info = document.createElement("div");
     info.className = "tab-info";
 
+    let iconHost = "";
+    if (p.url) {
+      try { iconHost = new URL(p.url, location.href).hostname; } catch {}
+    }
+    const iconImg = iconHost && iconHost !== "localhost" && !iconHost.endsWith(".ts.brkn.lol")
+      ? `<img src="https://icons.duckduckgo.com/ip3/${iconHost}.ico" style="width:16px;height:16px;border-radius:3px;vertical-align:middle;margin-right:6px;display:inline-block;" onerror="this.style.display='none'">`
+      : `<span style="margin-right:6px;display:inline-block;vertical-align:middle;"><svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>`;
+
     const title = document.createElement("div");
     title.className = "tab-title";
-    title.textContent = p.title || "(untitled)";
+    title.innerHTML = `${iconImg}<span>${(p.title || "(untitled)").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</span>`;
 
     const url = document.createElement("div");
     url.className = "tab-url";
