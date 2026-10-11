@@ -931,6 +931,175 @@
     color: var(--accent);
     text-decoration: none;
   }
+
+  /* Recording Playback Player Styles */
+  .player-modal-card {
+    max-width: 1040px;
+    width: 95%;
+    background: #0d111a;
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .player-viewport-wrap {
+    width: 100%;
+    position: relative;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 320px;
+    max-height: 65vh;
+    overflow: hidden;
+  }
+  .player-viewport-wrap canvas {
+    max-width: 100%;
+    max-height: 65vh;
+    object-fit: contain;
+    display: block;
+    cursor: pointer;
+  }
+  .player-loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(10, 13, 20, 0.94);
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    z-index: 10;
+  }
+  .player-loading-spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(255, 255, 255, 0.12);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  .player-loading-text {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .player-loading-bar-wrap {
+    width: 260px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .player-loading-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.15s;
+  }
+  .player-center-play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    background: rgba(13, 17, 26, 0.85);
+    backdrop-filter: blur(6px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .player-center-play svg {
+    width: 28px;
+    height: 28px;
+    fill: currentColor;
+    margin-left: 3px;
+  }
+  .player-viewport-wrap:hover .player-center-play,
+  .player-center-play.paused {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .player-center-play:hover {
+    transform: translate(-50%, -50%) scale(1.1);
+    background: var(--accent);
+  }
+  .player-omnibox {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: rgba(18, 22, 34, 0.95);
+    padding: 7px 14px;
+    border-bottom: 1px solid var(--card-border);
+    font-size: 12px;
+  }
+  .player-omnibox-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+  .player-omnibox-title {
+    font-weight: 700;
+    color: var(--fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .player-omnibox-url {
+    color: var(--muted);
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .player-omnibox-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .player-controls-wrap {
+    padding: 12px 16px 14px;
+    background: #0a0d14;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--card-border);
+  }
+  .player-scrubber-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .player-scrubber {
+    flex: 1;
+    accent-color: var(--accent);
+    cursor: pointer;
+    height: 6px;
+  }
+  .player-buttons-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 </style>
 </head>
 <body>
@@ -1330,54 +1499,86 @@
       </form>
     </div>
   </div>
+</div>
+
 <!-- Modal: Recording Playback Player -->
 <div id="playerModal" class="modal-overlay" onclick="handlePlayerModalOverlayClick(event)">
-  <div class="modal-card" style="max-width: 980px; width: 95%;">
+  <div class="player-modal-card">
     <div class="modal-header">
       <div class="card-title" style="min-width:0;flex:1;">
         <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
         <span id="playerModalTitle" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Session Playback</span>
+        <span class="badge badge-accent" id="playerNodeBadge" style="margin-left:6px;font-size:11px;">local</span>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;">
+      <div style="display:flex;align-items:center;gap:6px;">
+        <button class="btn btn-ghost btn-xs" id="playerLoopBtn" onclick="togglePlayerLoop()" title="Toggle loop playback">
+          🔁 Loop: <span id="playerLoopStatus">Off</span>
+        </button>
         <button class="btn btn-ghost btn-xs" id="exportWebmBtn" onclick="exportRecordingWebM()" title="Export session recording as WebM video">
           <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Export WebM
         </button>
-        <button class="btn btn-ghost btn-xs" onclick="closePlayerModal()">&times;</button>
+        <button class="btn btn-ghost btn-xs" onclick="togglePlayerFullscreen()" title="Toggle fullscreen" id="playerFullscreenBtn" style="font-size:14px;padding:2px 7px;">
+          ⛶
+        </button>
+        <button class="btn btn-ghost btn-xs" onclick="closePlayerModal()" title="Close player">&times;</button>
       </div>
     </div>
-    <div class="modal-body" style="padding:14px;background:#05070a;display:flex;flex-direction:column;align-items:center;position:relative;">
-      <!-- Page URL & Title overlay -->
-      <div id="playerUrlOverlay" style="position:absolute;top:18px;left:20px;right:20px;background:rgba(18,21,32,0.85);backdrop-filter:blur(8px);padding:6px 12px;border-radius:6px;border:1px solid var(--card-border);font-size:12px;display:flex;justify-content:space-between;align-items:center;z-index:2;pointer-events:none;">
-        <span id="playerPageTitle" style="font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%;">Loading frames...</span>
-        <span id="playerPageUrl" style="color:var(--muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:40%;"></span>
+
+    <!-- Omnibox URL / Title Bar -->
+    <div class="player-omnibox">
+      <div class="player-omnibox-left">
+        <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--accent);fill:none;stroke-width:2;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <span id="playerPageTitle" class="player-omnibox-title">Ready</span>
+        <span id="playerPageUrl" class="player-omnibox-url">about:blank</span>
+      </div>
+      <div class="player-omnibox-right">
+        <button class="btn btn-ghost btn-xs" id="playerCopyUrlBtn" onclick="copyPlayerUrl()" title="Copy current URL" style="font-size:11px;">Copy URL</button>
+        <span id="playerFrameOffset" style="font-family:ui-monospace, monospace;font-size:11px;color:var(--muted);">+0.0s</span>
+      </div>
+    </div>
+
+    <!-- Canvas Viewport with Loading & Play Overlay -->
+    <div class="player-viewport-wrap" id="playerViewportContainer">
+      <canvas id="playerCanvas" onclick="togglePlayPause()" title="Click to play / pause"></canvas>
+
+      <!-- Center Play/Pause Overlay Button -->
+      <div class="player-center-play paused" id="playerCenterPlayBtn" onclick="togglePlayPause()" title="Click to Play / Pause">
+        <svg viewBox="0 0 24 24" id="playerCenterPlayIcon"><polygon points="8 5 19 12 8 19 8 5"/></svg>
       </div>
 
-      <!-- Canvas Viewport -->
-      <div style="width:100%;max-height:560px;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:8px;background:#000;">
-        <canvas id="playerCanvas" style="max-width:100%;max-height:560px;object-fit:contain;display:block;"></canvas>
-      </div>
-
-      <!-- Scrubber & Controls -->
-      <div style="width:100%;margin-top:12px;display:flex;flex-direction:column;gap:8px;">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <input type="range" id="playerScrubber" min="0" max="0" value="0" style="flex:1;accent-color:var(--accent);cursor:pointer;" oninput="onScrubberInput(this.value)">
+      <!-- Loading State Overlay -->
+      <div class="player-loading-overlay" id="playerLoadingOverlay">
+        <div class="player-loading-spinner"></div>
+        <div class="player-loading-text" id="playerLoadingText">Downloading session recording...</div>
+        <div class="player-loading-bar-wrap">
+          <div class="player-loading-bar" id="playerLoadingBar"></div>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;color:#e9ecf5;font-size:12px;">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <button class="btn btn-accent btn-xs" id="playerPlayBtn" onclick="togglePlayPause()" style="min-width:60px;">Play</button>
-            <button class="btn btn-ghost btn-xs" onclick="stepFrame(-1)" title="Step back one frame">&laquo; Step</button>
-            <button class="btn btn-ghost btn-xs" onclick="stepFrame(1)" title="Step forward one frame">Step &raquo;</button>
-            <span id="playerTimeDisplay" style="font-family:monospace;font-size:12px;margin-left:6px;">00:00 / 00:00</span>
-            <span id="playerFrameDisplay" style="color:var(--muted);font-size:11px;">(0 / 0 frames)</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span style="color:var(--muted);font-size:11px;">Speed:</span>
-            <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(0.5, this)">0.5x</button>
-            <button class="btn btn-accent btn-xs speed-btn" onclick="setPlaySpeed(1, this)">1x</button>
-            <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(2, this)">2x</button>
-            <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(4, this)">4x</button>
-          </div>
+        <div style="font-size:11px;color:var(--muted);" id="playerLoadingSub">Connecting to recording stream...</div>
+      </div>
+    </div>
+
+    <!-- Scrubber & Playback Controls -->
+    <div class="player-controls-wrap">
+      <div class="player-scrubber-row">
+        <input type="range" id="playerScrubber" class="player-scrubber" min="0" max="0" value="0" oninput="onScrubberInput(this.value)">
+      </div>
+      <div class="player-buttons-row">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-accent btn-xs" id="playerPlayBtn" onclick="togglePlayPause()" style="min-width:68px;">Play</button>
+          <button class="btn btn-ghost btn-xs" onclick="jumpSeconds(-5)" title="Jump back 5 seconds">⏮ 5s</button>
+          <button class="btn btn-ghost btn-xs" onclick="stepFrame(-1)" title="Step back one frame">« Step</button>
+          <button class="btn btn-ghost btn-xs" onclick="stepFrame(1)" title="Step forward one frame">Step »</button>
+          <button class="btn btn-ghost btn-xs" onclick="jumpSeconds(5)" title="Jump forward 5 seconds">5s ⏭</button>
+          <span id="playerTimeDisplay" style="font-family:monospace;font-size:12px;margin-left:6px;font-weight:600;">00:00 / 00:00</span>
+          <span id="playerFrameDisplay" style="color:var(--muted);font-size:11.5px;">(0 / 0 frames)</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="color:var(--muted);font-size:11px;">Speed:</span>
+          <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(0.5, this)">0.5x</button>
+          <button class="btn btn-accent btn-xs speed-btn" onclick="setPlaySpeed(1, this)">1x</button>
+          <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(2, this)">2x</button>
+          <button class="btn btn-ghost btn-xs speed-btn" onclick="setPlaySpeed(4, this)">4x</button>
         </div>
       </div>
     </div>
@@ -2437,20 +2638,90 @@ function closePlayerModal() {
     if (activePlayer.timer) clearTimeout(activePlayer.timer);
     activePlayer = null;
   }
-  document.getElementById('playerModal').classList.remove('open');
+  const modal = document.getElementById('playerModal');
+  if (modal) modal.classList.remove('open');
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.().catch(() => {});
+  }
+}
+
+function togglePlayerFullscreen() {
+  const container = document.getElementById('playerViewportContainer');
+  if (!container) return;
+  if (!document.fullscreenElement) {
+    container.requestFullscreen?.().catch(() => {});
+  } else {
+    document.exitFullscreen?.().catch(() => {});
+  }
+}
+
+function togglePlayerLoop() {
+  if (!activePlayer) return;
+  activePlayer.isLooping = !activePlayer.isLooping;
+  const status = document.getElementById('playerLoopStatus');
+  const btn = document.getElementById('playerLoopBtn');
+  if (status) status.textContent = activePlayer.isLooping ? 'On' : 'Off';
+  if (btn) {
+    btn.classList.toggle('btn-accent', activePlayer.isLooping);
+    btn.classList.toggle('btn-ghost', !activePlayer.isLooping);
+  }
+}
+
+function copyPlayerUrl() {
+  const url = document.getElementById('playerPageUrl')?.textContent;
+  if (url && url !== 'about:blank') {
+    navigator.clipboard.writeText(url).then(() => {
+      const btn = document.getElementById('playerCopyUrlBtn');
+      if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copied';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      }
+    });
+  }
+}
+
+function jumpSeconds(deltaSec) {
+  if (!activePlayer || activePlayer.frames.length <= 1) return;
+  const currFrame = activePlayer.frames[activePlayer.currentIndex];
+  const targetTime = Math.max(0, currFrame.t + deltaSec * 1000);
+  let closestIdx = 0;
+  let minDiff = Infinity;
+  for (let i = 0; i < activePlayer.frames.length; i++) {
+    const diff = Math.abs(activePlayer.frames[i].t - targetTime);
+    if (diff < minDiff) {
+      minDiff = diff;
+      closestIdx = i;
+    }
+  }
+  renderPlayerFrame(closestIdx);
 }
 
 async function openPlayerModal(id, node) {
   const modal = document.getElementById('playerModal');
   const titleElem = document.getElementById('playerModalTitle');
-  titleElem.textContent = `Recording Playback — ${id.slice(0, 8)} [${node}]`;
+  const nodeBadge = document.getElementById('playerNodeBadge');
+  titleElem.textContent = `Recording Playback — ${id.slice(0, 8)}`;
+  if (nodeBadge) nodeBadge.textContent = node || 'local';
 
   document.getElementById('playerPageTitle').textContent = 'Loading frames...';
   document.getElementById('playerPageUrl').textContent = '';
+  document.getElementById('playerFrameOffset').textContent = '+0.0s';
   document.getElementById('playerScrubber').value = 0;
   document.getElementById('playerScrubber').max = 0;
   document.getElementById('playerPlayBtn').textContent = 'Play';
 
+  // Show loading overlay
+  const loadingOverlay = document.getElementById('playerLoadingOverlay');
+  const loadingText = document.getElementById('playerLoadingText');
+  const loadingBar = document.getElementById('playerLoadingBar');
+  const loadingSub = document.getElementById('playerLoadingSub');
+  if (loadingOverlay) loadingOverlay.style.display = 'flex';
+  if (loadingText) loadingText.textContent = 'Connecting to recording stream...';
+  if (loadingBar) loadingBar.style.width = '0%';
+  if (loadingSub) loadingSub.textContent = 'Fetching frames from server...';
+
+  // Open modal immediately so user sees the loading state
   modal.classList.add('open');
 
   const canvas = document.getElementById('playerCanvas');
@@ -2459,10 +2730,6 @@ async function openPlayerModal(id, node) {
   canvas.height = 800;
   ctx.fillStyle = '#090b10';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#8892ad';
-  ctx.font = '16px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillText('Loading recorded frames...', canvas.width / 2, canvas.height / 2);
 
   try {
     const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
@@ -2473,7 +2740,39 @@ async function openPlayerModal(id, node) {
       closePlayerModal();
       return;
     }
-    const text = await res.text();
+
+    const contentLength = +(res.headers.get('Content-Length') || 0);
+    let text = '';
+    if (res.body && typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let receivedBytes = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        receivedBytes += value.length;
+        text += decoder.decode(value, { stream: true });
+        if (contentLength > 0) {
+          const pct = Math.min(100, Math.round((receivedBytes / contentLength) * 100));
+          const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
+          const totalMb = (contentLength / (1024 * 1024)).toFixed(1);
+          if (loadingText) loadingText.textContent = `Downloading session: ${mb} / ${totalMb} MB (${pct}%)`;
+          if (loadingBar) loadingBar.style.width = pct + '%';
+          if (loadingSub) loadingSub.textContent = `Loaded ${mb} MB of recording data`;
+        } else {
+          const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
+          if (loadingText) loadingText.textContent = `Downloading session: ${mb} MB...`;
+          if (loadingSub) loadingSub.textContent = `Streaming frames...`;
+        }
+      }
+      text += decoder.decode();
+    } else {
+      text = await res.text();
+    }
+
+    if (loadingText) loadingText.textContent = 'Parsing frames...';
+    await new Promise(r => setTimeout(r, 20));
+
     const lines = text.trim().split('\n');
     const frames = [];
     for (const line of lines) {
@@ -2493,28 +2792,41 @@ async function openPlayerModal(id, node) {
       frames,
       currentIndex: 0,
       isPlaying: false,
+      isLooping: false,
       speed: 1,
       timer: null,
       cachedImages: new Map(),
     };
 
     const playBtn = document.getElementById('playerPlayBtn');
+    const centerPlayBtn = document.getElementById('playerCenterPlayBtn');
     if (frames.length <= 1) {
       document.getElementById('playerScrubber').max = 0;
       document.getElementById('playerFrameDisplay').textContent = `(Snapshot: 1 frame)`;
       playBtn.disabled = true;
       playBtn.textContent = 'Snapshot';
       playBtn.title = 'Single-frame recording (snapshot)';
+      if (centerPlayBtn) centerPlayBtn.style.display = 'none';
     } else {
       document.getElementById('playerScrubber').max = frames.length - 1;
       document.getElementById('playerFrameDisplay').textContent = `(1 / ${frames.length} frames)`;
       playBtn.disabled = false;
       playBtn.textContent = 'Play';
       playBtn.title = 'Play recording';
+      if (centerPlayBtn) centerPlayBtn.style.display = 'flex';
     }
+
+    // Hide loading overlay
+    if (loadingOverlay) loadingOverlay.style.display = 'none';
+
     renderPlayerFrame(0);
+
+    // Auto-play immediately if multiple frames!
+    if (frames.length > 1) {
+      togglePlayPause();
+    }
   } catch(e) {
-    alert(`Failed to parse recording frames: ${e}`);
+    alert(`Failed to load recording: ${e}`);
     closePlayerModal();
   }
 }
@@ -2533,6 +2845,7 @@ function renderPlayerFrame(idx) {
   const pad = n => String(n).padStart(2, '0');
   document.getElementById('playerTimeDisplay').textContent =
     `${pad(Math.floor(curSec / 60))}:${pad(curSec % 60)} / ${pad(Math.floor(maxSec / 60))}:${pad(maxSec % 60)}`;
+  document.getElementById('playerFrameOffset').textContent = `+${(frame.t / 1000).toFixed(1)}s`;
 
   if (frame.title) document.getElementById('playerPageTitle').textContent = frame.title;
   if (frame.url) document.getElementById('playerPageUrl').textContent = frame.url;
@@ -2567,8 +2880,8 @@ function renderPlayerFrame(idx) {
     };
   }
 
-  // Preload upcoming frames for stutter-free playback
-  for (let i = 1; i <= 10; i++) {
+  // Preload upcoming frames
+  for (let i = 1; i <= 15; i++) {
     const nextIdx = idx + i;
     if (nextIdx < totalFrames && !activePlayer.cachedImages.has(nextIdx)) {
       const nextFrame = activePlayer.frames[nextIdx];
@@ -2579,11 +2892,30 @@ function renderPlayerFrame(idx) {
   }
 }
 
+function updateCenterPlayButtonState() {
+  const centerBtn = document.getElementById('playerCenterPlayBtn');
+  const centerIcon = document.getElementById('playerCenterPlayIcon');
+  if (!centerBtn || !activePlayer) return;
+  if (activePlayer.isPlaying) {
+    centerBtn.classList.remove('paused');
+    if (centerIcon) centerIcon.innerHTML = '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>';
+  } else {
+    centerBtn.classList.add('paused');
+    if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+      if (centerIcon) centerIcon.innerHTML = '<path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" fill="none" stroke="currentColor" stroke-width="2"/>';
+    } else {
+      if (centerIcon) centerIcon.innerHTML = '<polygon points="8 5 19 12 8 19 8 5"/>';
+    }
+  }
+}
+
 function togglePlayPause() {
   if (!activePlayer || activePlayer.frames.length <= 1) return;
   activePlayer.isPlaying = !activePlayer.isPlaying;
   const playBtn = document.getElementById('playerPlayBtn');
   playBtn.textContent = activePlayer.isPlaying ? 'Pause' : 'Play';
+  updateCenterPlayButtonState();
+
   if (activePlayer.isPlaying) {
     if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
       activePlayer.currentIndex = 0;
@@ -2598,14 +2930,21 @@ function togglePlayPause() {
 function playNextFrame() {
   if (!activePlayer || !activePlayer.isPlaying) return;
   if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+    if (activePlayer.isLooping) {
+      activePlayer.currentIndex = 0;
+      renderPlayerFrame(0);
+      activePlayer.timer = setTimeout(playNextFrame, 150);
+      return;
+    }
     activePlayer.isPlaying = false;
     document.getElementById('playerPlayBtn').textContent = 'Replay';
+    updateCenterPlayButtonState();
     return;
   }
 
   const curr = activePlayer.frames[activePlayer.currentIndex];
   const next = activePlayer.frames[activePlayer.currentIndex + 1];
-  let delay = Math.max(30, Math.min(1200, (next.t - curr.t) / activePlayer.speed));
+  let delay = Math.max(25, Math.min(1200, (next.t - curr.t) / activePlayer.speed));
 
   activePlayer.timer = setTimeout(() => {
     if (!activePlayer || !activePlayer.isPlaying) return;
@@ -2642,7 +2981,7 @@ async function exportRecordingWebM() {
   if (!activePlayer || !activePlayer.frames || activePlayer.frames.length === 0) return;
   const btn = document.getElementById('exportWebmBtn');
   btn.disabled = true;
-  btn.textContent = 'Exporting...';
+  btn.textContent = 'Exporting (0%)...';
 
   const canvas = document.getElementById('playerCanvas');
   const stream = canvas.captureStream(25);
@@ -2681,9 +3020,11 @@ async function exportRecordingWebM() {
   const originalIndex = activePlayer.currentIndex;
   const wasPlaying = activePlayer.isPlaying;
   activePlayer.isPlaying = false;
+  const total = activePlayer.frames.length;
 
-  for (let i = 0; i < activePlayer.frames.length; i++) {
+  for (let i = 0; i < total; i++) {
     renderPlayerFrame(i);
+    btn.textContent = `Exporting (${Math.round((i / total) * 100)}%)...`;
     const frameImg = activePlayer.cachedImages.get(i);
     if (frameImg && !frameImg.complete) {
       await new Promise(r => { frameImg.onload = r; frameImg.onerror = r; setTimeout(r, 80); });
@@ -2708,12 +3049,17 @@ window.addEventListener('keydown', e => {
   if (e.key === ' ' || e.code === 'Space') {
     e.preventDefault();
     togglePlayPause();
-  } else if (e.key === 'ArrowRight') {
+  } else if (e.key === 'ArrowRight' || e.key === 'l' || e.key === 'L') {
     e.preventDefault();
-    stepFrame(1);
-  } else if (e.key === 'ArrowLeft') {
+    if (e.shiftKey) jumpSeconds(5);
+    else stepFrame(1);
+  } else if (e.key === 'ArrowLeft' || e.key === 'j' || e.key === 'J') {
     e.preventDefault();
-    stepFrame(-1);
+    if (e.shiftKey) jumpSeconds(-5);
+    else stepFrame(-1);
+  } else if (e.key === 'f' || e.key === 'F') {
+    e.preventDefault();
+    togglePlayerFullscreen();
   } else if (e.key === 'Escape') {
     e.preventDefault();
     closePlayerModal();
