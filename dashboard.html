@@ -313,6 +313,8 @@
     .col-3, .col-4, .col-5, .col-6, .col-8 { grid-column: span 12; }
     .brand-badge { max-width: 110px; }
     main { padding: 14px; gap: 16px; }
+    header { flex-wrap: wrap; gap: 10px; }
+    .header-nav { order: 3; width: 100%; justify-content: flex-start; }
   }
   @media (max-width: 480px) {
     header { padding: 10px 14px; }
@@ -623,55 +625,41 @@
     font-weight: 700;
   }
 
-  /* Mesh Bar & Node Tabs */
-  .mesh-bar {
+  /* Header Node Tabs & Cluster Status */
+  .header-nav {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 10px 16px;
-    background: var(--card);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    flex-wrap: wrap;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    flex-shrink: 1;
   }
-  .mesh-bar-left {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .mesh-cluster-icon {
-    font-size: 16px;
-  }
-  .mesh-cluster-label {
-    font-size: 13.5px;
-    font-weight: 700;
-    color: var(--fg);
-  }
+  .header-nav::-webkit-scrollbar { display: none; }
   .mesh-node-tabs {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     background: var(--btn);
     padding: 3px;
     border-radius: 8px;
     border: 1px solid var(--card-border);
-    flex-wrap: wrap;
+    white-space: nowrap;
   }
   .node-tab {
-    padding: 4px 10px;
+    padding: 3px 10px;
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     border-radius: 6px;
     border: none;
     background: transparent;
     color: var(--muted);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.15s ease;
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
+    height: 26px;
   }
   .node-tab:hover {
     color: var(--fg);
@@ -680,12 +668,41 @@
   .node-tab.active {
     color: #fff;
     background: var(--accent);
+    font-weight: 600;
     box-shadow: 0 1px 4px var(--accent-glow);
   }
-  .mesh-bar-right {
-    display: flex;
+  .node-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .node-dot.online { background: var(--ok); }
+  .node-dot.offline { background: var(--danger); }
+  .header-cluster-btn {
+    display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--card-border);
+    background: var(--btn);
+    color: var(--fg);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s ease;
+    height: 32px;
+  }
+  .header-cluster-btn:hover {
+    background: var(--btn-hover);
+    border-color: var(--card-hover-border);
+  }
+  .header-cluster-btn.badge-warn {
+    color: var(--warn);
+    background: var(--warn-bg);
+    border-color: var(--warn);
   }
 
   /* Endpoints list */
@@ -1587,11 +1604,20 @@
       <span class="brand-badge" id="hostBadge">browser</span>
     </div>
   </div>
-  <div class="header-actions">
-    <div class="status-pill">
-      <div class="pulse-dot"></div>
-      <span id="daemonStatus">Online</span>
+
+  <div class="header-nav">
+    <div class="mesh-node-tabs" id="meshNodeTabs">
+      <button class="node-tab active" data-node="all" onclick="selectNodeFilter('all')">
+        All
+      </button>
     </div>
+  </div>
+
+  <div class="header-actions">
+    <button class="header-cluster-btn" id="meshClusterStatus" onclick="openClusterModal()" title="View mesh cluster topology">
+      <span class="node-dot online" id="meshClusterDot"></span>
+      <span id="meshClusterStatusText">Nodes</span>
+    </button>
     <button class="btn btn-ghost btn-sm" onclick="refreshData()" title="Refresh dashboard data" style="width:32px;height:32px;padding:0;display:inline-flex;align-items:center;justify-content:center;">
       <svg viewBox="0 0 24 24" style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
     </button>
@@ -1611,24 +1637,6 @@
 </header>
 
 <main>
-  <!-- Cluster Mesh Status & Node Selector Bar -->
-  <div id="meshBar" class="mesh-bar">
-    <div class="mesh-bar-left">
-      <span class="mesh-cluster-icon">🌐</span>
-      <span id="meshClusterStatus" class="badge badge-ok">1 / 1 Nodes Online</span>
-      <div class="mesh-node-tabs" id="meshNodeTabs">
-        <button class="node-tab active" data-node="all" onclick="selectNodeFilter('all')">
-          All Nodes (<span id="meshTotalNodesCount">1</span>)
-        </button>
-      </div>
-    </div>
-    <div class="mesh-bar-right">
-      <button class="btn btn-ghost btn-xs" onclick="openClusterModal()" title="View and manage mesh cluster nodes">
-        <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        Cluster Nodes
-      </button>
-    </div>
-  </div>
 
   <!-- Interactive Quick Connect banner when sessions are active -->
   <div id="quickConnectBanner" class="quick-connect-banner" onclick="quickConnectHandoff()">
@@ -2829,14 +2837,14 @@ function renderMeshOverview(ov) {
   if (tabsContainer) {
     let tabsHtml = `
       <button class="node-tab ${selectedNodeFilter === 'all' ? 'active' : ''}" data-node="all" onclick="selectNodeFilter('all')">
-        All Nodes (${allNodes.length})
+        All
       </button>`;
     for (const n of allNodes) {
       const isAct = selectedNodeFilter === n.name ? 'active' : '';
-      const dot = n.status === 'online' ? '🟢' : '🔴';
+      const dotCls = n.status === 'online' ? 'node-dot online' : 'node-dot offline';
       tabsHtml += `
         <button class="node-tab ${isAct}" data-node="${escapeHtml(n.name)}" onclick="selectNodeFilter('${escapeHtml(n.name)}')">
-          ${dot} ${escapeHtml(n.name)}${n.isLocal ? ' (local)' : ''}
+          <span class="${dotCls}"></span>${escapeHtml(n.name)}
         </button>`;
     }
     tabsContainer.innerHTML = tabsHtml;
@@ -2846,9 +2854,18 @@ function renderMeshOverview(ov) {
   if (countElem) countElem.textContent = allNodes.length;
 
   const statusBadge = document.getElementById('meshClusterStatus');
+  const statusText = document.getElementById('meshClusterStatusText');
+  const statusDot = document.getElementById('meshClusterDot');
+  const allOnline = ov.online_nodes === ov.total_nodes;
+  if (statusText) {
+    statusText.textContent = `${ov.online_nodes}/${ov.total_nodes} Nodes`;
+  }
+  if (statusDot) {
+    statusDot.className = allOnline ? 'node-dot online' : 'node-dot offline';
+  }
   if (statusBadge) {
-    statusBadge.textContent = `${ov.online_nodes} / ${ov.total_nodes} Nodes Online`;
-    statusBadge.className = ov.online_nodes === ov.total_nodes ? 'badge badge-ok' : 'badge badge-accent';
+    statusBadge.className = allOnline ? 'header-cluster-btn' : 'header-cluster-btn badge-warn';
+    statusBadge.title = `${ov.online_nodes} of ${ov.total_nodes} cluster nodes online. Click to manage cluster.`;
   }
 
   const sessionNodeSelect = document.getElementById('sessionNodeInput');
@@ -3260,9 +3277,12 @@ async function fallbackLocalRefresh() {
   const sessionsRes = await fetch('/api/sessions', { headers: getAuthHeaders() }).catch(() => null);
   const profilesRes = await fetch('/api/profiles', { headers: getAuthHeaders() }).catch(() => null);
   const listRes = await fetch('/json/list', { headers: getAuthHeaders() }).catch(() => null);
+  const recRes = await fetch('/api/recordings', { headers: getAuthHeaders() }).catch(() => null);
   const sessions = sessionsRes && sessionsRes.ok ? await sessionsRes.json() : [];
   const profiles = profilesRes && profilesRes.ok ? await profilesRes.json() : [];
   const targets = listRes && listRes.ok ? await listRes.json() : [];
+  const recordings = recRes && recRes.ok ? await recRes.json() : [];
+  const usedStorage = recordings.reduce((acc, r) => acc + (r.size_bytes || 0), 0);
 
   renderMeshOverview({
     local_node: {
@@ -3273,16 +3293,23 @@ async function fallbackLocalRefresh() {
       active_sessions: sessions.length,
       max_sessions: maxCount,
       profiles_count: profiles.length,
+      recordings_count: recordings.length,
+      storage_used_bytes: usedStorage,
+      max_storage_bytes: 2048 * 1024 * 1024,
     },
     peers: [],
     sessions: sessions.map(s => ({ ...s, node_name: location.hostname.split('.')[0] || 'local', node_url: location.origin, is_local: true })),
     profiles: profiles.map(p => ({ ...p, node_name: location.hostname.split('.')[0] || 'local', node_url: location.origin, is_local: true })),
     targets: targets.map(t => ({ ...t, node_name: location.hostname.split('.')[0] || 'local', node_url: location.origin, is_local: true })),
+    recordings: recordings.map(r => ({ ...r, node_name: location.hostname.split('.')[0] || 'local', node_url: location.origin, is_local: true })),
     total_sessions: sessions.length,
     total_capacity: maxCount,
     total_profiles: profiles.length,
+    total_recordings: recordings.length,
     total_nodes: 1,
     online_nodes: 1,
+    total_storage_bytes: usedStorage,
+    max_storage_bytes: 2048 * 1024 * 1024,
   });
 }
 
@@ -3791,7 +3818,7 @@ async function openPlayerModal(id, node) {
   ctx.fillStyle = '#090b10';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Checking cache...`);
+  let pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Checking cache...`);
 
   // Check client-side local storage (IndexedDB) first for instant playback
   const cachedFrames = await getCachedRecording(id);
@@ -3815,7 +3842,7 @@ async function openPlayerModal(id, node) {
   const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
   const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}/frames` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}/frames`;
 
-  const pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Connecting in background...`);
+  pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Connecting in background...`);
   activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB' });
 
   const worker = getDownloadWorker();
