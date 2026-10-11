@@ -31,6 +31,10 @@ static FAVICON_ICO: &[u8] = include_bytes!("../favicon.ico");
 static FAVICON_SVG: &str = include_str!("../favicon.svg");
 static HANDOFF_ICO: &[u8] = include_bytes!("../handoff.ico");
 static HANDOFF_SVG: &str = include_str!("../handoff.svg");
+static MANIFEST_JSON: &str = include_str!("../manifest.webmanifest");
+static SW_JS: &str = include_str!("../sw.js");
+static ICON_192: &[u8] = include_bytes!("../icon-192.png");
+static ICON_512: &[u8] = include_bytes!("../icon-512.png");
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Native NixOS remote browser daemon")]
@@ -617,6 +621,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/favicon.svg", get(favicon_svg))
         .route("/handoff/favicon.ico", get(handoff_favicon_ico))
         .route("/handoff/favicon.svg", get(handoff_favicon_svg))
+        .route("/manifest.webmanifest", get(manifest_webmanifest))
+        .route("/manifest.json", get(manifest_webmanifest))
+        .route("/sw.js", get(service_worker_js))
+        .route("/icon-192.png", get(icon_192_png))
+        .route("/icon-512.png", get(icon_512_png))
         .route("/health", get(health_check))
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
@@ -792,6 +801,46 @@ async fn handoff_favicon_svg() -> impl IntoResponse {
             HeaderValue::from_static("image/svg+xml"),
         )],
         HANDOFF_SVG,
+    )
+}
+
+async fn manifest_webmanifest() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/manifest+json"),
+        )],
+        MANIFEST_JSON,
+    )
+}
+
+async fn service_worker_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/javascript"),
+        )],
+        SW_JS,
+    )
+}
+
+async fn icon_192_png() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/png"),
+        )],
+        ICON_192,
+    )
+}
+
+async fn icon_512_png() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/png"),
+        )],
+        ICON_512,
     )
 }
 
