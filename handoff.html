@@ -18,7 +18,26 @@
     font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   body { display: flex; flex-direction: column; height: 100dvh; padding-top: env(safe-area-inset-top); }
 
-  /* top bar */
+  /* tab strip */
+  #tabStrip { display: flex; align-items: center; gap: 4px; padding: 4px 6px 0; background: color-mix(in oklab, var(--bar) 75%, var(--bg)); border-bottom: 1px solid var(--line); flex: none; min-height: 38px; }
+  #tabsScroll { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
+  #tabsScroll::-webkit-scrollbar { display: none; }
+  .tab-strip-item { height: 33px; padding: 0 8px 0 10px; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; max-width: 200px; flex: none; text-decoration: none; user-select: none; }
+  .tab-strip-item:hover { background: color-mix(in oklab, var(--bar) 75%, var(--btn)); color: var(--fg); }
+  .tab-strip-item.active { background: var(--bar); color: var(--fg); font-weight: 600; border-color: var(--line); border-bottom: 1px solid var(--bar); margin-bottom: -1px; }
+  .tab-strip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .tab-strip-tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; background: var(--btn); color: var(--muted); flex: none; }
+  .tab-strip-close { width: 18px; height: 18px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; padding: 0; margin-left: 2px; flex: none; }
+  .tab-strip-close:hover { background: color-mix(in oklab, var(--bad) 25%, transparent); color: var(--bad); }
+  .tab-strip-add { width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none; margin-bottom: 3px; }
+  .tab-strip-add:hover { background: var(--btn); color: var(--fg); }
+  .tab-strip-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .tab-strip-drawer { height: 30px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; flex: none; margin-bottom: 3px; margin-left: auto; }
+  .tab-strip-drawer:hover { background: var(--btn); color: var(--fg); }
+  .tab-strip-drawer svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .tab-strip-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; background: var(--btn); color: var(--fg); font-size: 10.5px; font-weight: 700; }
+
+  /* top bar & omnibox */
   #bar { display: flex; align-items: center; gap: 2px; padding: 4px 6px; background: var(--bar); border-bottom: 1px solid var(--line); flex: none; }
   .ib { width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 12px;
     background: transparent; color: var(--fg); cursor: pointer; text-decoration: none; }
@@ -27,19 +46,17 @@
   .ib[disabled] { opacity: .35; }
   .ib.on { background: color-mix(in oklab, var(--accent) 22%, transparent); color: var(--accent); }
   .ib svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  #pill { flex: 1; min-width: 0; height: 36px; margin: 0 4px; padding: 0 12px; display: flex; align-items: center; gap: 8px;
-    border-radius: 999px; background: var(--btn); font-size: 13.5px; cursor: pointer; transition: background .15s, border-color .15s; }
-  #pill:hover:not(.editing) { background: color-mix(in oklab, var(--btn) 80%, var(--accent)); }
-  #pill.editing { background: var(--bar); border: 1px solid var(--accent); padding: 0 6px 0 10px; cursor: default; }
-  #pill span#host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #pill.editing span#host { display: none; }
-  #urlForm { display: none; flex: 1; min-width: 0; height: 100%; align-items: center; gap: 4px; margin: 0; }
-  #pill.editing #urlForm { display: flex; }
-  #urlInput { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--fg); font: 13.5px system-ui, -apple-system, sans-serif; outline: none; padding: 0; }
+
+  #urlBar { flex: 1; min-width: 0; height: 36px; margin: 0 4px; padding: 0 6px 0 12px; display: flex; align-items: center; gap: 8px;
+    border-radius: 999px; background: var(--btn); border: 1px solid transparent; transition: background .15s, border-color .15s, box-shadow .15s; }
+  #urlBar:hover { background: color-mix(in oklab, var(--btn) 85%, var(--accent)); }
+  #urlBar:focus-within { background: var(--bar); border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 25%, transparent); }
+  #urlInput { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--fg); font: 13.5px system-ui, -apple-system, sans-serif; outline: none; padding: 0; -webkit-user-select: text; user-select: text; }
+  #urlClear { width: 20px; height: 20px; flex: none; display: none; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: bold; padding: 0; }
+  #urlClear:hover { background: var(--line); color: var(--fg); }
   #urlGo { width: 26px; height: 26px; flex: none; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; padding: 0; }
+  #urlGo:hover { opacity: .9; }
   #urlGo svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-  #urlCancel { width: 24px; height: 24px; flex: none; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; font-weight: bold; padding: 0; }
-  #urlCancel:hover { background: var(--btn); color: var(--fg); }
   #dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--muted); }
   #dot.live { background: var(--ok); }
   #dot.bad { background: var(--bad); }
@@ -116,24 +133,27 @@
 </style>
 </head>
 <body>
+<div id="tabStrip">
+  <div id="tabsScroll"></div>
+  <button class="tab-strip-add" id="tabAddBtn" title="New Tab" aria-label="New Tab">
+    <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+  </button>
+  <button class="tab-strip-drawer" id="tabsDrawerBtn" title="Switch Tabs &amp; Sessions" aria-label="Tabs">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
+    <span class="tab-strip-badge" id="tabCountBadge">1</span>
+  </button>
+</div>
 <div id="bar">
   <a href="/" class="ib" id="dash" aria-label="Dashboard" title="Return to Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></a>
-  <button class="ib" id="back" aria-label="Back" disabled><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
-  <button class="ib" id="fwd" aria-label="Forward" disabled><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
-  <button class="ib" id="reload" aria-label="Reload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg></button>
-  <div id="pill" role="button" tabindex="0" title="Click to navigate to URL"><span id="dot" class="wait"></span><span id="host">connecting…</span>
-    <form id="urlForm" autocomplete="off">
-      <input id="urlInput" type="url" placeholder="Search or type URL…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-      <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
-      <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">✕</button>
-    </form>
-  </div>
-  <button class="ib" id="tabsBtn" aria-label="Tabs" title="Switch tabs & sessions">
-    <div style="position:relative;display:inline-flex;align-items:center;justify-content:center;">
-      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
-      <span id="tabCountBadge">1</span>
-    </div>
-  </button>
+  <button class="ib" id="back" aria-label="Back" disabled title="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
+  <button class="ib" id="fwd" aria-label="Forward" disabled title="Forward"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+  <button class="ib" id="reload" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg></button>
+  <form id="urlBar" autocomplete="off">
+    <span id="dot" class="wait" title="Connection status"></span>
+    <input id="urlInput" type="text" placeholder="Search Google or enter URL…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button type="button" id="urlClear" title="Clear URL" aria-label="Clear">✕</button>
+    <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
+  </form>
   <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
 </div>
@@ -174,18 +194,27 @@
 </div>
 <script>
 "use strict";
-// Phone-friendly live view of ONE page of the Browserless browser, over CDP:
-//   tap = click, drag = scroll, tapping a text field raises the phone's native
-//   keyboard (a hidden local input mirrors the remote field and forwards what you
-//   type), mobile layout makes the remote page fit the phone. Static, no dependencies.
+/* __CLUSTER_SECRET_PLACEHOLDER__ */
+function authHeaders(extra = {}) {
+  const h = { ...extra };
+  if (typeof window !== 'undefined' && window.__CLUSTER_SECRET__) {
+    h['Authorization'] = 'Bearer ' + window.__CLUSTER_SECRET__;
+    h['X-Browser-Cluster-Secret'] = window.__CLUSTER_SECRET__;
+  }
+  return h;
+}
+
 const params = new URLSearchParams(location.search);
 const pageId = params.get("page");
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const $ = (id) => document.getElementById(id);
-const E = { bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
-  dot: $("dot"), host: $("host"), pill: $("pill"), urlForm: $("urlForm"), urlInput: $("urlInput"), urlCancel: $("urlCancel"),
-  tabsBtn: $("tabsBtn"), tabCountBadge: $("tabCountBadge"), tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
-  kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn") };
+const E = {
+  tabStrip: $("tabStrip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
+  bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
+  dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"),
+  tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
+  kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn")
+};
 const ctx = E.view.getContext("2d", { alpha: false, desynchronized: true }) || E.view.getContext("2d");
 
 /* ---------------------------------------------------------------- CDP */
@@ -220,7 +249,6 @@ let refitting = false, manualKb = false, mirror = "", composing = false, resyncT
 
 function setState(kind, text) {
   E.dot.className = kind === "live" ? "live" : kind === "bad" ? "bad" : "wait";
-  if (text) E.host.textContent = text;
   const show = kind !== "live";
   E.overlay.classList.toggle("show", show);
   E.spin.hidden = kind === "bad";
@@ -243,6 +271,7 @@ async function connect() {
     await applyMetrics();
     setState("live");
     refreshInfo();
+    loadTabs();
   } catch (e) {
     setState("bad", "Could not connect (" + e.message + ")");
   }
@@ -332,14 +361,12 @@ async function refreshInfo() {
     const r = await cdp.call("Runtime.evaluate", { expression: "JSON.stringify({u: location.href, t: document.title})", returnByValue: true });
     const { u, t } = JSON.parse(r.result.value);
     currentUrl = u;
-    if (!E.pill.classList.contains("editing")) E.urlInput.value = u;
-    let host = u; try { host = new URL(u).host || u; } catch { /* keep raw */ }
-    E.host.textContent = host; E.host.title = t || u;
+    if (document.activeElement !== E.urlInput) E.urlInput.value = u;
     document.title = (t ? t + " · " : "") + "Browser handoff";
     const h = await cdp.call("Page.getNavigationHistory");
     E.back.disabled = h.currentIndex <= 0;
     E.fwd.disabled = h.currentIndex >= h.entries.length - 1;
-    updateTabBadge();
+    loadTabs();
   } catch { /* page navigating */ }
 }
 
@@ -545,81 +572,255 @@ function pressKey(key) {
   cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
 }
 
-/* ---------------------------------------------------------------- toolbar */
+/* ---------------------------------------------------------------- toolbar & omnibox */
 // Buttons must not take focus from the local input, or the keyboard would close.
-for (const b of document.querySelectorAll("#bar button:not(#urlGo):not(#urlCancel), #keys button")) b.addEventListener("pointerdown", (e) => e.preventDefault());
+for (const b of document.querySelectorAll("#bar button:not(#urlGo):not(#urlClear), #tabStrip button, #keys button")) {
+  b.addEventListener("pointerdown", (e) => e.preventDefault());
+}
 E.back.onclick = () => navigateHistory(-1);
 E.fwd.onclick = () => navigateHistory(1);
-E.reload.onclick = () => cdp.send("Page.reload");
+E.reload.onclick = () => cdp && cdp.send("Page.reload");
 
-function startUrlEditing() {
-  if (!cdp) return;
-  E.pill.classList.add("editing");
-  E.urlInput.value = currentUrl || "";
-  E.urlInput.focus();
+function normalizeUrl(input) {
+  let val = (input || "").trim();
+  if (!val) return "about:blank";
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(val)) return val;
+  if (val.includes(".") && !val.includes(" ")) {
+    return "https://" + val;
+  } else if (val.startsWith("localhost")) {
+    return "http://" + val;
+  }
+  return "https://www.google.com/search?q=" + encodeURIComponent(val);
+}
+
+E.urlInput.onfocus = () => {
   E.urlInput.select();
+  E.urlClear.style.display = E.urlInput.value ? "flex" : "none";
   if (manualKb) {
     manualKb = false;
     E.kbbtn.classList.remove("on");
     E.keys.classList.remove("show");
   }
-}
-
-function stopUrlEditing() {
-  E.pill.classList.remove("editing");
-  E.urlInput.blur();
-}
-
-E.pill.onclick = (e) => {
-  if (e.target.closest("#urlForm")) return;
-  startUrlEditing();
 };
 
-E.urlCancel.onclick = (e) => {
-  e.stopPropagation();
-  stopUrlEditing();
+E.urlInput.oninput = () => {
+  E.urlClear.style.display = E.urlInput.value ? "flex" : "none";
 };
 
-E.urlForm.onsubmit = (e) => {
+E.urlInput.onblur = () => {
+  setTimeout(() => { E.urlClear.style.display = "none"; }, 180);
+};
+
+E.urlClear.onclick = (e) => {
   e.preventDefault();
-  let val = E.urlInput.value.trim();
-  if (!val) {
-    stopUrlEditing();
-    return;
-  }
-  if (!/^https?:\/\//i.test(val) && !/^about:/i.test(val)) {
-    if (val.includes(".") && !val.includes(" ")) {
-      val = "https://" + val;
-    } else if (val.startsWith("localhost")) {
-      val = "http://" + val;
-    } else {
-      val = "https://www.google.com/search?q=" + encodeURIComponent(val);
-    }
-  }
-  cdp.send("Page.navigate", { url: val });
-  stopUrlEditing();
+  e.stopPropagation();
+  E.urlInput.value = "";
+  E.urlInput.focus();
+  E.urlClear.style.display = "none";
 };
 
 E.urlInput.onkeydown = (e) => {
   if (e.key === "Escape") {
     e.preventDefault();
-    stopUrlEditing();
+    E.urlInput.value = currentUrl || "";
+    E.urlInput.blur();
   }
 };
 
-document.addEventListener("pointerdown", (e) => {
-  if (E.pill.classList.contains("editing") && !e.target.closest("#pill")) {
-    stopUrlEditing();
+E.urlBar.onsubmit = (e) => {
+  e.preventDefault();
+  const val = E.urlInput.value.trim();
+  if (!val) return;
+  const dest = normalizeUrl(val);
+  if (cdp) {
+    cdp.send("Page.navigate", { url: dest });
   }
-});
+  E.urlInput.value = dest;
+  E.urlInput.blur();
+};
 
-/* ---------------------------------------------------------------- tabs & sessions switcher */
-async function updateTabBadge() {
+/* ---------------------------------------------------------------- tabs & sessions */
+async function openNewTab(initialUrl = "https://www.google.com") {
+  const urlToOpen = prompt("Enter URL for new tab:", initialUrl);
+  if (urlToOpen === null) return;
+  const targetUrl = normalizeUrl(urlToOpen || "https://www.google.com");
   try {
-    const list = await (await fetch("/json/list")).json();
+    const qs = new URLSearchParams();
+    qs.set("url", targetUrl);
+    if (pageId) qs.set("page", pageId);
+    const res = await fetch("/json/new?" + qs.toString(), {
+      method: "PUT",
+      headers: authHeaders()
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    const target = await res.json();
+    if (target && target.id) {
+      location.search = "?page=" + encodeURIComponent(target.id);
+      return;
+    }
+    throw new Error("Invalid response from /json/new");
+  } catch (err) {
+    alert("Failed to create new tab: " + err.message);
+  }
+}
+
+async function closeTab(id) {
+  const isCurrent = id === pageId;
+  if (isCurrent && !confirm("Close the current tab?")) return;
+  try {
+    const res = await fetch("/json/close/" + encodeURIComponent(id), {
+      method: "PUT",
+      headers: authHeaders()
+    });
+    if (!res.ok) throw new Error("Close request failed");
+    if (isCurrent) {
+      const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
+      const pages = list.filter((p) => p.type === "page" && p.id !== id);
+      if (pages.length > 0) {
+        location.search = "?page=" + encodeURIComponent(pages[0].id);
+      } else {
+        location.search = "";
+      }
+    } else {
+      loadTabs();
+    }
+  } catch (err) {
+    alert("Failed to close tab: " + err.message);
+  }
+}
+
+async function loadTabs() {
+  try {
+    const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
     const pages = list.filter((x) => x.type === "page");
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
+    renderTabStrip(pages);
+    renderTabsModal(pages);
   } catch { /* ignore */ }
+}
+
+function renderTabStrip(pages) {
+  if (!E.tabsScroll) return;
+  E.tabsScroll.innerHTML = "";
+  for (const p of pages) {
+    const isCurrent = p.id === pageId;
+    const item = document.createElement("a");
+    item.className = "tab-strip-item" + (isCurrent ? " active" : "");
+    item.href = "?page=" + encodeURIComponent(p.id);
+    item.onclick = (e) => {
+      e.preventDefault();
+      if (!isCurrent) location.search = "?page=" + encodeURIComponent(p.id);
+    };
+
+    const globe = document.createElement("span");
+    globe.innerHTML = `<svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+    globe.style.display = "inline-flex";
+    item.appendChild(globe);
+
+    const title = document.createElement("span");
+    title.className = "tab-strip-title";
+    let fallback = "New Tab";
+    if (p.url) {
+      try { fallback = new URL(p.url, location.href).hostname || p.url; } catch { fallback = p.url; }
+    }
+    title.textContent = p.title || fallback;
+    title.title = p.title ? (p.title + " (" + p.url + ")") : p.url;
+    item.appendChild(title);
+
+    if (p.profile) {
+      const tag = document.createElement("span");
+      tag.className = "tab-strip-tag";
+      tag.textContent = p.profile;
+      item.appendChild(tag);
+    }
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "tab-strip-close";
+    closeBtn.innerHTML = "✕";
+    closeBtn.title = "Close tab";
+    closeBtn.setAttribute("aria-label", "Close tab");
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      closeTab(p.id);
+    };
+    item.appendChild(closeBtn);
+
+    E.tabsScroll.appendChild(item);
+  }
+}
+
+function renderTabsModal(pages) {
+  if (!E.tabsModal.classList.contains("open")) return;
+  if (pages.length === 0) {
+    E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">No open tabs found.</div>`;
+    return;
+  }
+  E.tabsList.innerHTML = "";
+  for (const p of pages) {
+    const isCurrent = p.id === pageId;
+    const card = document.createElement("div");
+    card.className = "tab-card" + (isCurrent ? " active" : "");
+
+    const info = document.createElement("div");
+    info.className = "tab-info";
+
+    const title = document.createElement("div");
+    title.className = "tab-title";
+    title.textContent = p.title || "(untitled)";
+
+    const url = document.createElement("div");
+    url.className = "tab-url";
+    url.textContent = p.url || "about:blank";
+
+    const metaWrap = document.createElement("div");
+    metaWrap.className = "tab-meta";
+
+    if (isCurrent) {
+      const curTag = document.createElement("span");
+      curTag.className = "tab-tag current";
+      curTag.textContent = "Active";
+      metaWrap.appendChild(curTag);
+    }
+
+    if (p.profile) {
+      const profTag = document.createElement("span");
+      profTag.className = "tab-tag";
+      profTag.textContent = "Profile: " + p.profile;
+      metaWrap.appendChild(profTag);
+    } else if (p.sessionId) {
+      const sessTag = document.createElement("span");
+      sessTag.className = "tab-tag";
+      sessTag.textContent = "Session: " + p.sessionId.slice(0, 8);
+      metaWrap.appendChild(sessTag);
+    }
+
+    info.appendChild(title);
+    info.appendChild(url);
+    if (metaWrap.children.length > 0) info.appendChild(metaWrap);
+    card.appendChild(info);
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "tab-close";
+    closeBtn.title = "Close tab";
+    closeBtn.setAttribute("aria-label", "Close tab");
+    closeBtn.innerHTML = "✕";
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeTab(p.id);
+    };
+    card.appendChild(closeBtn);
+
+    card.onclick = () => {
+      closeTabsModal();
+      if (!isCurrent) location.search = "?page=" + encodeURIComponent(p.id);
+    };
+
+    E.tabsList.appendChild(card);
+  }
 }
 
 async function openTabsModal() {
@@ -628,136 +829,20 @@ async function openTabsModal() {
     E.kbbtn.classList.remove("on");
     E.keys.classList.remove("show");
   }
-  if (E.pill.classList.contains("editing")) stopUrlEditing();
   E.tabsModal.classList.add("open");
-  E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">Loading active tabs &amp; sessions…</div>`;
-
-  try {
-    const list = await (await fetch("/json/list")).json();
-    const pages = list.filter((x) => x.type === "page");
-    if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
-
-    if (pages.length === 0) {
-      E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">No open tabs found.</div>`;
-      return;
-    }
-
-    E.tabsList.innerHTML = "";
-    for (const p of pages) {
-      const isCurrent = p.id === pageId;
-      const card = document.createElement("div");
-      card.className = "tab-card" + (isCurrent ? " active" : "");
-
-      const info = document.createElement("div");
-      info.className = "tab-info";
-
-      const title = document.createElement("div");
-      title.className = "tab-title";
-      title.textContent = p.title || "(untitled)";
-
-      const url = document.createElement("div");
-      url.className = "tab-url";
-      url.textContent = p.url || "about:blank";
-
-      const metaWrap = document.createElement("div");
-      metaWrap.className = "tab-meta";
-
-      if (isCurrent) {
-        const curTag = document.createElement("span");
-        curTag.className = "tab-tag current";
-        curTag.textContent = "Active";
-        metaWrap.appendChild(curTag);
-      }
-
-      if (p.profile) {
-        const profTag = document.createElement("span");
-        profTag.className = "tab-tag";
-        profTag.textContent = "Profile: " + p.profile;
-        metaWrap.appendChild(profTag);
-      } else if (p.sessionId) {
-        const sessTag = document.createElement("span");
-        sessTag.className = "tab-tag";
-        sessTag.textContent = "Session: " + p.sessionId.slice(0, 8);
-        metaWrap.appendChild(sessTag);
-      }
-
-      info.appendChild(title);
-      info.appendChild(url);
-      if (metaWrap.children.length > 0) info.appendChild(metaWrap);
-
-      card.appendChild(info);
-
-      const closeBtn = document.createElement("button");
-      closeBtn.className = "tab-close";
-      closeBtn.title = "Close tab";
-      closeBtn.setAttribute("aria-label", "Close tab");
-      closeBtn.innerHTML = "✕";
-      closeBtn.onclick = async (e) => {
-        e.stopPropagation();
-        if (isCurrent && !confirm("Close the current tab?")) return;
-        try {
-          if (cdp) await cdp.call("Target.closeTarget", { targetId: p.id });
-        } catch { /* ignore */ }
-        if (isCurrent) {
-          location.search = "";
-        } else {
-          openTabsModal();
-        }
-      };
-      card.appendChild(closeBtn);
-
-      card.onclick = () => {
-        closeTabsModal();
-        if (!isCurrent) {
-          location.search = "?page=" + encodeURIComponent(p.id);
-        }
-      };
-
-      E.tabsList.appendChild(card);
-    }
-  } catch (err) {
-    E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--bad);font-size:13.5px;">Failed to load tabs: ${err.message}</div>`;
-  }
+  loadTabs();
 }
 
 function closeTabsModal() {
   E.tabsModal.classList.remove("open");
 }
 
-E.tabsBtn.onclick = () => openTabsModal();
+E.tabAddBtn.onclick = () => openNewTab();
+E.tabsDrawerBtn.onclick = () => openTabsModal();
+E.newTabBtn.onclick = () => openNewTab();
 E.closeTabsBtn.onclick = () => closeTabsModal();
 E.tabsModal.onclick = (e) => {
   if (e.target === E.tabsModal) closeTabsModal();
-};
-
-E.newTabBtn.onclick = async () => {
-  const urlToOpen = prompt("Enter URL for new tab:", "https://www.google.com");
-  if (!urlToOpen) return;
-  let targetUrl = urlToOpen.trim();
-  if (!/^https?:\/\//i.test(targetUrl) && !/^about:/i.test(targetUrl)) {
-    if (targetUrl.includes(".") && !targetUrl.includes(" ")) {
-      targetUrl = "https://" + targetUrl;
-    } else {
-      targetUrl = "https://www.google.com/search?q=" + encodeURIComponent(targetUrl);
-    }
-  }
-  try {
-    if (cdp) {
-      const res = await cdp.call("Target.createTarget", { url: targetUrl });
-      if (res && res.targetId) {
-        location.search = "?page=" + encodeURIComponent(res.targetId);
-        return;
-      }
-    }
-    const sess = await (await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ persistent: false })
-    })).json();
-    location.search = "";
-  } catch (e) {
-    alert("Failed to create new tab: " + e.message);
-  }
 };
 
 async function navigateHistory(d) {
@@ -810,9 +895,11 @@ window.addEventListener("keydown", (e) => {
 /* ---------------------------------------------------------------- page picker (no ?page=) */
 async function pickPage() {
   E.kbbtn.hidden = E.layout.hidden = E.reload.hidden = E.back.hidden = E.fwd.hidden = true;
+  if (E.tabStrip) E.tabStrip.hidden = true;
+  if (E.urlBar) E.urlBar.hidden = true;
   E.overlay.classList.remove("show");
   E.view.hidden = true;
-  const list = await (await fetch("/json/list")).json();
+  const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
   const box = document.createElement("div");
   box.id = "list";
   const pages = list.filter((x) => x.type === "page");
@@ -841,7 +928,7 @@ async function pickPage() {
     }
   }
   E.stage.appendChild(box);
-  E.dot.className = ""; E.host.textContent = "Pick the page the agent asked you to look at";
+  E.dot.className = "";
 }
 
 if (pageId) connect();

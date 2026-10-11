@@ -6,7 +6,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -604,6 +604,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
         .route("/json/list", get(json_list))
+        .route("/json/new", put(json_new).post(json_new).get(json_new))
+        .route(
+            "/json/close/{id}",
+            put(json_close)
+                .post(json_close)
+                .delete(json_close)
+                .get(json_close),
+        )
+        .route(
+            "/json/activate/{id}",
+            put(json_activate)
+                .post(json_activate)
+                .get(json_activate),
+        )
         .route("/handoff/", get(handoff_page))
         .route("/handoff", get(|| async { Redirect::to("/handoff/") }))
         .route("/chromium", get(handle_chromium_ws))
@@ -721,14 +735,157 @@ async fn dashboard_page(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-async fn handoff_page() -> impl IntoResponse {
+async fn handoff_page(State(state): State<AppState>) -> impl IntoResponse {
+    let secret_injection = match state.cluster_secret {
+        Some(ref sec) => format!("window.__CLUSTER_SECRET__ = {:?};", sec),
+        None => "window.__CLUSTER_SECRET__ = null;".to_string(),
+    };
+    let html = HANDOFF_HTML.replace("/* __CLUSTER_SECRET_PLACEHOLDER__ */", &secret_injection);
     (
         [(
             header::CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=utf-8"),
         )],
-        Html(HANDOFF_HTML),
+        Html(html),
     )
+}
+
+async fn json_new(
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let raw = raw_query.unwrap_or_default();
+    let mut target_url: Option<String> = None;
+    let mut session_id: Option<Uuid> = None;
+    let mut page: Option<String> = None;
+
+    if !raw.is_empty() {
+        for (k, v) in url::form_urlencoded::parse(raw.as_bytes()) {
+            match k.as_ref() {
+                "url" => target_url = Some(v.into_owned()),
+                "session_id" => session_id = Uuid::parse_str(&v).ok(),
+                "page" => page = Some(v.into_owned()),
+                _ => {}
+            }
+        }
+        if target_url.is_none() && !raw.starts_with("session_id=") && !raw.starts_with("page=") {
+            let decoded = url::form_urlencoded::parse(raw.as_bytes())
+                .next()
+                .map(|(k, _)| k.into_owned())
+                .unwrap_or_else(|| raw.clone());
+            target_url = Some(decoded);
+        }
+    }
+    let target_url = target_url.unwrap_or_else(|| "about:blank".to_string());
+
+    let session = {
+        let guard = state.sessions.read().await;
+        if let Some(sid) = session_id {
+            guard.get(&sid).cloned()
+        } else if let Some(ref pid) = page {
+            let mut found = None;
+            for s in guard.values() {
+                let list_url = format!("http://127.0.0.1:{}/json/list", s.port);
+                if let Ok(res) = state.http_client.get(&list_url).send().await {
+                    if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
+                        if targets.iter().any(|t| &t.id == pid) {
+                            found = Some(s.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            found.or_else(|| guard.values().next().cloned())
+        } else {
+            guard.values().next().cloned()
+        }
+    };
+
+    let session = match session {
+        Some(s) => s,
+        None => {
+            state
+                .spawn_session(None, false, None, None, Some(state.recorder_config.enabled))
+                .await
+                .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?
+        }
+    };
+
+    let mut dest_url = url::Url::parse(&format!("http://127.0.0.1:{}/json/new", session.port))
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+    dest_url.set_query(Some(&target_url));
+
+    let res = state
+        .http_client
+        .put(dest_url)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+        })?;
+
+    let mut target = res.json::<DevToolsTarget>().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
+
+    target.web_socket_debugger_url = Some(format!("/devtools/page/{}", target.id));
+    target.session_id = Some(session.id);
+    target.profile = session.profile.clone();
+
+    Ok(Json(target))
+}
+
+async fn json_close(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let sessions: Vec<ManagedSession> = {
+        let guard = state.sessions.read().await;
+        guard.values().cloned().collect()
+    };
+
+    for session in sessions {
+        let req_url = format!("http://127.0.0.1:{}/json/close/{}", session.port, id);
+        if let Ok(res) = state.http_client.put(&req_url).send().await {
+            if res.status().is_success() {
+                return (StatusCode::OK, "Target is closing").into_response();
+            }
+        }
+    }
+
+    (StatusCode::NOT_FOUND, "Target not found").into_response()
+}
+
+async fn json_activate(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let sessions: Vec<ManagedSession> = {
+        let guard = state.sessions.read().await;
+        guard.values().cloned().collect()
+    };
+
+    for session in sessions {
+        let req_url = format!("http://127.0.0.1:{}/json/activate/{}", session.port, id);
+        if let Ok(res) = state.http_client.put(&req_url).send().await {
+            if res.status().is_success() {
+                return (StatusCode::OK, "Target activated").into_response();
+            }
+        }
+    }
+
+    (StatusCode::NOT_FOUND, "Target not found").into_response()
 }
 
 async fn handle_chromium_ws(
