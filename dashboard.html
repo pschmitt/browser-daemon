@@ -3455,14 +3455,26 @@ function handleWorkerMessage(e) {
   const download = activeDownloadsMap.get(id);
 
   if (type === 'PROGRESS') {
+    const effectiveTotal = (totalBytes > 0) ? totalBytes : (download?.expectedBytes || 0);
     const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
-    const totalMb = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : '?';
-    const sub = `${mb} / ${totalMb} MB`;
+    let sub = '';
+    let displayPct = pct;
+
+    if (effectiveTotal > 0) {
+      const totalMb = (effectiveTotal / (1024 * 1024)).toFixed(1);
+      displayPct = Math.min(99, Math.round((receivedBytes / effectiveTotal) * 100));
+      sub = `${mb} / ${totalMb} MB`;
+    } else {
+      sub = `${mb} MB`;
+      displayPct = Math.min(95, Math.round(Math.log10(receivedBytes + 1) * 15));
+    }
+
     if (download) {
-      download.lastPct = pct;
+      download.lastPct = displayPct;
       download.lastSub = sub;
       if (download.pToast) {
-        download.pToast.update(pct, `${sub} (${pct}%)`, 'Downloading in background worker...');
+        const titleText = effectiveTotal > 0 ? `${sub} (${displayPct}%)` : `${sub} downloading...`;
+        download.pToast.update(displayPct, titleText, 'Downloading in background worker...');
       }
     }
 
@@ -3471,8 +3483,9 @@ function handleWorkerMessage(e) {
       const loadingText = document.getElementById('playerLoadingText');
       const loadingBar = document.getElementById('playerLoadingBar');
       const loadingSub = document.getElementById('playerLoadingSub');
-      if (loadingText) loadingText.textContent = `Downloading session: ${sub} (${pct}%)`;
-      if (loadingBar) loadingBar.style.width = pct + '%';
+      const titleText = effectiveTotal > 0 ? `Downloading session: ${sub} (${displayPct}%)` : `Downloading session: ${sub}`;
+      if (loadingText) loadingText.textContent = titleText;
+      if (loadingBar) loadingBar.style.width = displayPct + '%';
       if (loadingSub) loadingSub.textContent = `Streaming frames in background worker...`;
     }
   } else if (type === 'SUCCESS') {
@@ -3840,10 +3853,11 @@ async function openPlayerModal(id, node) {
 
   // 3. Start download in Web Worker (resilient to tab backgrounding / navigation)
   const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
-  const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}/frames` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}/frames`;
+  const recMeta = (currentOverview?.recordings || []).find(r => r.id === id);
+  const expectedBytes = (recMeta && recMeta.size_bytes > 0) ? recMeta.size_bytes : 0;
 
   pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Connecting in background...`);
-  activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB' });
+  activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB', expectedBytes });
 
   const worker = getDownloadWorker();
   if (worker) {
@@ -3851,14 +3865,15 @@ async function openPlayerModal(id, node) {
       action: 'DOWNLOAD',
       id,
       url,
-      headers: getAuthHeaders()
+      headers: getAuthHeaders(),
+      expectedBytes
     });
   } else {
-    fallbackDownloadFrames(id, node, url, pToast);
+    fallbackDownloadFrames(id, node, url, pToast, expectedBytes);
   }
 }
 
-async function fallbackDownloadFrames(id, node, url, pToast) {
+async function fallbackDownloadFrames(id, node, url, pToast, expectedBytes = 0) {
   try {
     const res = await fetch(url, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error(res.statusText);

@@ -1,5 +1,5 @@
 // Browser Daemon Service Worker for PWA App Shell
-const CACHE_NAME = 'browser-daemon-shell-v2';
+const CACHE_NAME = 'browser-daemon-shell-v3';
 const PRECACHE_ASSETS = [
   '/',
   '/manifest.webmanifest',

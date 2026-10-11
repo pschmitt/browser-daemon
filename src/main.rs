@@ -2459,14 +2459,23 @@ async fn api_get_recording_frames(
         ));
     }
     match fs::read(&frames_path).await {
-        Ok(data) => Ok((
-            StatusCode::OK,
-            [(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"),
-            )],
-            data,
-        )),
+        Ok(data) => {
+            let len = data.len();
+            Ok((
+                StatusCode::OK,
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("text/plain; charset=utf-8"),
+                    ),
+                    (
+                        header::CONTENT_LENGTH,
+                        HeaderValue::from_str(&len.to_string()).unwrap(),
+                    ),
+                ],
+                data,
+            ))
+        }
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("Failed to read frames: {}", e) })),
@@ -2624,12 +2633,19 @@ async fn api_peer_get_recording_frames(
         Ok(r) => {
             let status = StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let bytes = r.bytes().await.unwrap_or_default();
+            let len = bytes.len();
             (
                 status,
-                [(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/plain; charset=utf-8"),
-                )],
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("text/plain; charset=utf-8"),
+                    ),
+                    (
+                        header::CONTENT_LENGTH,
+                        HeaderValue::from_str(&len.to_string()).unwrap(),
+                    ),
+                ],
                 bytes,
             )
                 .into_response()

@@ -36,7 +36,7 @@ function saveFramesToDb(id, frames) {
 const activeTasks = new Map();
 
 self.addEventListener('message', async (e) => {
-  const { action, id, url, headers } = e.data || {};
+  const { action, id, url, headers, expectedBytes } = e.data || {};
 
   if (action === 'CANCEL') {
     const task = activeTasks.get(id);
@@ -57,7 +57,7 @@ self.addEventListener('message', async (e) => {
     activeTasks.set(id, { controller, startTime: Date.now() });
 
     try {
-      await downloadAndSave(id, url, headers, controller.signal);
+      await downloadAndSave(id, url, headers, controller.signal, expectedBytes || 0);
       activeTasks.delete(id);
     } catch (err) {
       activeTasks.delete(id);
@@ -68,7 +68,7 @@ self.addEventListener('message', async (e) => {
   }
 });
 
-async function downloadAndSave(id, url, headers, signal, maxRetries = 3) {
+async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxRetries = 3) {
   let attempt = 0;
   let lastError = null;
 
@@ -82,7 +82,8 @@ async function downloadAndSave(id, url, headers, signal, maxRetries = 3) {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       }
 
-      const contentLength = +(res.headers.get('Content-Length') || 0);
+      const headerContentLength = +(res.headers.get('Content-Length') || 0);
+      const contentLength = headerContentLength > 0 ? headerContentLength : (expectedBytes || 0);
       let text = '';
       let receivedBytes = 0;
       let lastProgressPost = 0;
