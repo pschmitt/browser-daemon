@@ -28,8 +28,18 @@
   .ib.on { background: color-mix(in oklab, var(--accent) 22%, transparent); color: var(--accent); }
   .ib svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   #pill { flex: 1; min-width: 0; height: 36px; margin: 0 4px; padding: 0 12px; display: flex; align-items: center; gap: 8px;
-    border-radius: 999px; background: var(--btn); font-size: 13.5px; }
+    border-radius: 999px; background: var(--btn); font-size: 13.5px; cursor: pointer; transition: background .15s, border-color .15s; }
+  #pill:hover:not(.editing) { background: color-mix(in oklab, var(--btn) 80%, var(--accent)); }
+  #pill.editing { background: var(--bar); border: 1px solid var(--accent); padding: 0 6px 0 10px; cursor: default; }
   #pill span#host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pill.editing span#host { display: none; }
+  #urlForm { display: none; flex: 1; min-width: 0; height: 100%; align-items: center; gap: 4px; margin: 0; }
+  #pill.editing #urlForm { display: flex; }
+  #urlInput { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--fg); font: 13.5px system-ui, -apple-system, sans-serif; outline: none; padding: 0; }
+  #urlGo { width: 26px; height: 26px; flex: none; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; padding: 0; }
+  #urlGo svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  #urlCancel { width: 24px; height: 24px; flex: none; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; font-size: 13px; font-weight: bold; padding: 0; }
+  #urlCancel:hover { background: var(--btn); color: var(--fg); }
   #dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--muted); }
   #dot.live { background: var(--ok); }
   #dot.bad { background: var(--bad); }
@@ -79,7 +89,13 @@
   <button class="ib" id="back" aria-label="Back" disabled><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
   <button class="ib" id="fwd" aria-label="Forward" disabled><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
   <button class="ib" id="reload" aria-label="Reload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg></button>
-  <div id="pill"><span id="dot" class="wait"></span><span id="host">connecting…</span></div>
+  <div id="pill" role="button" tabindex="0" title="Click to navigate to URL"><span id="dot" class="wait"></span><span id="host">connecting…</span>
+    <form id="urlForm" autocomplete="off">
+      <input id="urlInput" type="url" placeholder="Search or type URL…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
+      <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">✕</button>
+    </form>
+  </div>
   <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
 </div>
@@ -114,7 +130,7 @@ const pageId = params.get("page");
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const $ = (id) => document.getElementById(id);
 const E = { bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
-  dot: $("dot"), host: $("host"), kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn") };
+  dot: $("dot"), host: $("host"), pill: $("pill"), urlForm: $("urlForm"), urlInput: $("urlInput"), urlCancel: $("urlCancel"), kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn") };
 const ctx = E.view.getContext("2d", { alpha: false, desynchronized: true }) || E.view.getContext("2d");
 
 /* ---------------------------------------------------------------- CDP */
@@ -143,7 +159,7 @@ class Cdp {
 }
 
 /* ---------------------------------------------------------------- state */
-let cdp = null, meta = { deviceWidth: 1280, deviceHeight: 800 };
+let cdp = null, meta = { deviceWidth: 1280, deviceHeight: 800 }, currentUrl = "";
 let mobileLayout = (localStorage.getItem("handoff.mobile") ?? (matchMedia("(pointer: coarse)").matches ? "1" : "0")) === "1";
 let refitting = false, manualKb = false, mirror = "", composing = false, resyncTimer = null, probeSeq = 0;
 
@@ -260,6 +276,8 @@ async function refreshInfo() {
   try {
     const r = await cdp.call("Runtime.evaluate", { expression: "JSON.stringify({u: location.href, t: document.title})", returnByValue: true });
     const { u, t } = JSON.parse(r.result.value);
+    currentUrl = u;
+    if (!E.pill.classList.contains("editing")) E.urlInput.value = u;
     let host = u; try { host = new URL(u).host || u; } catch { /* keep raw */ }
     E.host.textContent = host; E.host.title = t || u;
     document.title = (t ? t + " · " : "") + "Browser handoff";
@@ -473,10 +491,72 @@ function pressKey(key) {
 
 /* ---------------------------------------------------------------- toolbar */
 // Buttons must not take focus from the local input, or the keyboard would close.
-for (const b of document.querySelectorAll("#bar button, #keys button")) b.addEventListener("pointerdown", (e) => e.preventDefault());
+for (const b of document.querySelectorAll("#bar button:not(#urlGo):not(#urlCancel), #keys button")) b.addEventListener("pointerdown", (e) => e.preventDefault());
 E.back.onclick = () => navigateHistory(-1);
 E.fwd.onclick = () => navigateHistory(1);
 E.reload.onclick = () => cdp.send("Page.reload");
+
+function startUrlEditing() {
+  if (!cdp) return;
+  E.pill.classList.add("editing");
+  E.urlInput.value = currentUrl || "";
+  E.urlInput.focus();
+  E.urlInput.select();
+  if (manualKb) {
+    manualKb = false;
+    E.kbbtn.classList.remove("on");
+    E.keys.classList.remove("show");
+  }
+}
+
+function stopUrlEditing() {
+  E.pill.classList.remove("editing");
+  E.urlInput.blur();
+}
+
+E.pill.onclick = (e) => {
+  if (e.target.closest("#urlForm")) return;
+  startUrlEditing();
+};
+
+E.urlCancel.onclick = (e) => {
+  e.stopPropagation();
+  stopUrlEditing();
+};
+
+E.urlForm.onsubmit = (e) => {
+  e.preventDefault();
+  let val = E.urlInput.value.trim();
+  if (!val) {
+    stopUrlEditing();
+    return;
+  }
+  if (!/^https?:\/\//i.test(val) && !/^about:/i.test(val)) {
+    if (val.includes(".") && !val.includes(" ")) {
+      val = "https://" + val;
+    } else if (val.startsWith("localhost")) {
+      val = "http://" + val;
+    } else {
+      val = "https://www.google.com/search?q=" + encodeURIComponent(val);
+    }
+  }
+  cdp.send("Page.navigate", { url: val });
+  stopUrlEditing();
+};
+
+E.urlInput.onkeydown = (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    stopUrlEditing();
+  }
+};
+
+document.addEventListener("pointerdown", (e) => {
+  if (E.pill.classList.contains("editing") && !e.target.closest("#pill")) {
+    stopUrlEditing();
+  }
+});
+
 async function navigateHistory(d) {
   const h = await cdp.call("Page.getNavigationHistory");
   const e = h.entries[h.currentIndex + d];
@@ -519,7 +599,7 @@ window.addEventListener("pagehide", () => cdp && cdp.close());   // also release
 
 // Desktop: type straight into the page.
 window.addEventListener("keydown", (e) => {
-  if (!cdp || document.activeElement === E.kb || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key.length === 1) { cdp.send("Input.insertText", { text: e.key }); e.preventDefault(); }
   else if (KEYS[e.key]) { pressKey(e.key); e.preventDefault(); }
 });
