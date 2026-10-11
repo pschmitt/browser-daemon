@@ -57,19 +57,24 @@
   #urlGo { width: 26px; height: 26px; flex: none; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; padding: 0; }
   #urlGo:hover { opacity: .9; }
   #urlGo svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  #urlCancel { display: none; background: transparent; border: 0; color: var(--accent); font-size: 13px; font-weight: 600; cursor: pointer; padding: 0 6px; flex: none; -webkit-tap-highlight-color: transparent; }
   #dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--muted); }
   #dot.live { background: var(--ok); }
   #dot.bad { background: var(--bad); }
   #dot.wait { background: #d97706; animation: pulse 1s infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
 
+  @media (max-width: 640px) {
+    #bar.url-focused .ib, #bar:has(#urlBar:focus-within) .ib { display: none !important; }
+    #bar.url-focused #urlCancel, #bar:has(#urlBar:focus-within) #urlCancel { display: inline-block !important; }
+    #bar.url-focused #urlBar, #bar:has(#urlBar:focus-within) #urlBar { margin: 0 !important; flex: 1 1 100% !important; width: 100% !important; }
+  }
+
   /* stage */
   #stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; }
-  canvas { flex: none; width: 100%; height: 100%; object-fit: contain; touch-action: none; display: block; background: #fff; }
-  /* Mobile layout: the picture is shown 1:1 and only ever clipped, never rescaled, so the
-     keyboard opening/closing (which resizes the stage) does not zoom the page in and out. */
-  #stage.fixed { align-items: flex-start; }
-  #stage.fixed canvas { width: auto; height: auto; }
+  canvas { flex: none; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; display: block; background: #fff; }
+  #stage.fixed { align-items: center; justify-content: center; }
+  #stage.fixed canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
   #ripple { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; pointer-events: none; opacity: 0;
     background: color-mix(in oklab, var(--accent) 45%, transparent); border: 2px solid var(--accent); }
   #ripple.go { animation: ripple .45s ease-out; }
@@ -153,6 +158,7 @@
     <input id="urlInput" type="text" placeholder="Search Google or enter URL…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
     <button type="button" id="urlClear" title="Clear URL" aria-label="Clear">✕</button>
     <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
+    <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
   </form>
   <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
@@ -211,7 +217,7 @@ const $ = (id) => document.getElementById(id);
 const E = {
   tabStrip: $("tabStrip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
-  dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"),
+  dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn")
 };
@@ -259,11 +265,16 @@ function setState(kind, text) {
 
 /* ---------------------------------------------------------------- connecting */
 async function connect() {
-  setState("wait");
+  setState("wait", "Connecting to the browser…");
   const scheme = testHost || location.protocol === "https:" ? "wss://" : "ws://";
   cdp = new Cdp(scheme + (testHost || location.host) + "/devtools/page/" + encodeURIComponent(pageId), {
     event: onEvent,
-    close: () => setState("bad", "The browser session ended"),
+    close: () => {
+      setState("bad", "The browser session ended");
+      if (document.visibilityState === "visible") {
+        setTimeout(autoReconnect, 1500);
+      }
+    },
   });
   try {
     await cdp.ready;
@@ -274,6 +285,9 @@ async function connect() {
     loadTabs();
   } catch (e) {
     setState("bad", "Could not connect (" + e.message + ")");
+    if (document.visibilityState === "visible") {
+      setTimeout(autoReconnect, 2500);
+    }
   }
 }
 
@@ -287,8 +301,13 @@ async function applyMetrics() {
   const maxW = Math.min(Math.round(w * screencastDpr), 1600);
   const maxH = Math.min(Math.round(h * screencastDpr), 1000);
 
-  if (mobileLayout) await cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(devicePixelRatio || 1, 2), mobile: true, screenWidth: w, screenHeight: h });
-  else await cdp.call("Emulation.clearDeviceMetricsOverride");
+  if (mobileLayout) {
+    await cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(devicePixelRatio || 1, 2), mobile: true, screenWidth: w, screenHeight: h });
+    await cdp.call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }).catch(() => {});
+  } else {
+    await cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
+    await cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
+  }
   await cdp.call("Page.stopScreencast").catch(() => {});
   // Quality 65 instead of 80: ~60% faster JPEG encode, ~50% bandwidth reduction, visually crisp
   await cdp.call("Page.startScreencast", { format: "jpeg", quality: 65, maxWidth: maxW, maxHeight: maxH, everyNthFrame: 1 });
@@ -297,8 +316,19 @@ async function applyMetrics() {
 
 function sizeCanvas() {
   E.stage.classList.toggle("fixed", mobileLayout);
-  E.view.style.width = mobileLayout ? meta.deviceWidth + "px" : "";
-  E.view.style.height = mobileLayout ? meta.deviceHeight + "px" : "";
+  if (mobileLayout && meta.deviceWidth > 0 && meta.deviceHeight > 0) {
+    const stageRect = E.stage.getBoundingClientRect();
+    if (stageRect.width > 0 && Math.abs(stageRect.width - meta.deviceWidth) < 25) {
+      E.view.style.width = meta.deviceWidth + "px";
+      E.view.style.height = meta.deviceHeight + "px";
+    } else {
+      E.view.style.width = "";
+      E.view.style.height = "";
+    }
+  } else {
+    E.view.style.width = "";
+    E.view.style.height = "";
+  }
 }
 
 function base64ToBlob(b64, mime = "image/jpeg") {
@@ -349,8 +379,18 @@ async function drawScreencastFrame(p) {
 function onEvent(method, p) {
   if (method === "Page.screencastFrame") {
     drawScreencastFrame(p);
-  } else if ((method === "Page.frameNavigated" && !p.frame.parentId) || method === "Page.loadEventFired" || method === "Page.navigatedWithinDocument") {
+  } else if (method === "Page.frameStartedLoading" || method === "Page.frameStartedNavigating") {
+    E.dot.className = "wait";
+  } else if (method === "Page.frameNavigated" && !p.frame.parentId) {
+    if (p.frame && p.frame.url && p.frame.url !== "about:blank") {
+      currentUrl = p.frame.url;
+      if (document.activeElement !== E.urlInput) E.urlInput.value = currentUrl;
+    }
     refreshInfo();
+  } else if (method === "Page.loadEventFired" || method === "Page.navigatedWithinDocument" || method === "Page.frameStoppedLoading") {
+    E.dot.className = "live";
+    refreshInfo();
+    if (mobileLayout) applyMetrics();
   } else if (method === "Inspector.detached" || method === "Target.targetCrashed") {
     setState("bad", "The page was closed");
   }
@@ -359,13 +399,17 @@ function onEvent(method, p) {
 async function refreshInfo() {
   try {
     const r = await cdp.call("Runtime.evaluate", { expression: "JSON.stringify({u: location.href, t: document.title})", returnByValue: true });
-    const { u, t } = JSON.parse(r.result.value);
-    currentUrl = u;
-    if (document.activeElement !== E.urlInput) E.urlInput.value = u;
-    document.title = (t ? t + " · " : "") + "Browser handoff";
+    if (r && r.result && r.result.value) {
+      const { u, t } = JSON.parse(r.result.value);
+      if (u && u !== "about:blank") currentUrl = u;
+      if (document.activeElement !== E.urlInput && currentUrl) E.urlInput.value = currentUrl;
+      document.title = (t ? t + " · " : "") + "Browser handoff";
+    }
     const h = await cdp.call("Page.getNavigationHistory");
-    E.back.disabled = h.currentIndex <= 0;
-    E.fwd.disabled = h.currentIndex >= h.entries.length - 1;
+    if (h && h.entries) {
+      E.back.disabled = h.currentIndex <= 0;
+      E.fwd.disabled = h.currentIndex >= h.entries.length - 1;
+    }
     loadTabs();
   } catch { /* page navigating */ }
 }
@@ -378,7 +422,13 @@ function toPage(e) {
   const ox = r.left + (r.width - dw) / 2, oy = r.top + (r.height - dh) / 2;
   const fx = (e.clientX - ox) / dw, fy = (e.clientY - oy) / dh;
   if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
-  return { x: fx * meta.deviceWidth, y: fy * meta.deviceHeight, scale: meta.deviceHeight / dh };
+  const psf = meta.pageScaleFactor || 1;
+  const offY = meta.offsetTop || 0;
+  return {
+    x: (fx * meta.deviceWidth) / psf,
+    y: (fy * meta.deviceHeight - offY) / psf,
+    scale: (meta.deviceHeight / dh) / psf
+  };
 }
 
 // Is the element at (x, y) of the remote page a text field (or a label for one)?
@@ -463,9 +513,14 @@ E.view.addEventListener("pointerup", (e) => {
   // resized the whole view each time. If the answer came in late, probeFocus() still raises it.
   if (editable) E.kb.focus({ preventScroll: true });
   tapFeedback(e.clientX, e.clientY);
-  cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y });
-  cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: p.x, y: p.y, button: "left", clickCount: 1 });
-  cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: p.x, y: p.y, button: "left", clickCount: 1 });
+  const px = Math.round(p.x), py = Math.round(p.y);
+  if (mobileLayout) {
+    cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: px, y: py }] });
+    cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  }
+  cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: px, y: py });
+  cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: px, y: py, button: "left", clickCount: 1 });
+  cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: px, y: py, button: "left", clickCount: 1 });
   setTimeout(probeFocus, 160);
 });
 E.view.addEventListener("pointercancel", () => { touch = null; flushWheel(); });
@@ -573,8 +628,8 @@ function pressKey(key) {
 }
 
 /* ---------------------------------------------------------------- toolbar & omnibox */
-// Buttons must not take focus from the local input, or the keyboard would close.
-for (const b of document.querySelectorAll("#bar button:not(#urlGo):not(#urlClear), #tabStrip button, #keys button")) {
+// Virtual keyboard buttons must not take focus from the local input, or the keyboard would close.
+for (const b of document.querySelectorAll("#keys button")) {
   b.addEventListener("pointerdown", (e) => e.preventDefault());
 }
 E.back.onclick = () => navigateHistory(-1);
@@ -594,6 +649,7 @@ function normalizeUrl(input) {
 }
 
 E.urlInput.onfocus = () => {
+  E.bar.classList.add("url-focused");
   E.urlInput.select();
   E.urlClear.style.display = E.urlInput.value ? "flex" : "none";
   if (manualKb) {
@@ -603,12 +659,30 @@ E.urlInput.onfocus = () => {
   }
 };
 
+function dismissUrlBar() {
+  E.bar.classList.remove("url-focused");
+  E.urlInput.value = currentUrl || "";
+  E.urlClear.style.display = "none";
+  E.urlInput.blur();
+}
+
+E.urlCancel.onclick = (e) => {
+  e.preventDefault();
+  dismissUrlBar();
+};
+
 E.urlInput.oninput = () => {
   E.urlClear.style.display = E.urlInput.value ? "flex" : "none";
 };
 
 E.urlInput.onblur = () => {
-  setTimeout(() => { E.urlClear.style.display = "none"; }, 180);
+  setTimeout(() => {
+    if (document.activeElement !== E.urlInput) {
+      E.bar.classList.remove("url-focused");
+      E.urlClear.style.display = "none";
+      if (!E.urlInput.value && currentUrl) E.urlInput.value = currentUrl;
+    }
+  }, 180);
 };
 
 E.urlClear.onclick = (e) => {
@@ -622,21 +696,32 @@ E.urlClear.onclick = (e) => {
 E.urlInput.onkeydown = (e) => {
   if (e.key === "Escape") {
     e.preventDefault();
-    E.urlInput.value = currentUrl || "";
-    E.urlInput.blur();
+    dismissUrlBar();
   }
 };
 
-E.urlBar.onsubmit = (e) => {
+E.urlBar.onsubmit = async (e) => {
   e.preventDefault();
   const val = E.urlInput.value.trim();
   if (!val) return;
   const dest = normalizeUrl(val);
-  if (cdp) {
-    cdp.send("Page.navigate", { url: dest });
-  }
   E.urlInput.value = dest;
+  E.bar.classList.remove("url-focused");
   E.urlInput.blur();
+  E.dot.className = "wait";
+
+  if (cdp) {
+    try {
+      const res = await cdp.call("Page.navigate", { url: dest });
+      if (res && res.errorText) {
+        alert("Navigation failed: " + res.errorText);
+        E.dot.className = "bad";
+      }
+    } catch (err) {
+      alert("Failed to navigate: " + err.message);
+      E.dot.className = "bad";
+    }
+  }
 };
 
 /* ---------------------------------------------------------------- tabs & sessions */
@@ -658,7 +743,9 @@ async function openNewTab(initialUrl = "https://www.google.com") {
     }
     const target = await res.json();
     if (target && target.id) {
-      location.search = "?page=" + encodeURIComponent(target.id);
+      const u = new URL(location.href);
+      u.searchParams.set("page", target.id);
+      location.href = u.toString();
       return;
     }
     throw new Error("Invalid response from /json/new");
@@ -679,11 +766,13 @@ async function closeTab(id) {
     if (isCurrent) {
       const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
       const pages = list.filter((p) => p.type === "page" && p.id !== id);
+      const u = new URL(location.href);
       if (pages.length > 0) {
-        location.search = "?page=" + encodeURIComponent(pages[0].id);
+        u.searchParams.set("page", pages[0].id);
       } else {
-        location.search = "";
+        u.searchParams.delete("page");
       }
+      location.href = u.toString();
     } else {
       loadTabs();
     }
@@ -709,10 +798,14 @@ function renderTabStrip(pages) {
     const isCurrent = p.id === pageId;
     const item = document.createElement("a");
     item.className = "tab-strip-item" + (isCurrent ? " active" : "");
-    item.href = "?page=" + encodeURIComponent(p.id);
+    const itemUrl = new URL(location.href);
+    itemUrl.searchParams.set("page", p.id);
+    item.href = itemUrl.toString();
     item.onclick = (e) => {
       e.preventDefault();
-      if (!isCurrent) location.search = "?page=" + encodeURIComponent(p.id);
+      if (!isCurrent) {
+        location.href = itemUrl.toString();
+      }
     };
 
     const globe = document.createElement("span");
@@ -816,7 +909,11 @@ function renderTabsModal(pages) {
 
     card.onclick = () => {
       closeTabsModal();
-      if (!isCurrent) location.search = "?page=" + encodeURIComponent(p.id);
+      if (!isCurrent) {
+        const u = new URL(location.href);
+        u.searchParams.set("page", p.id);
+        location.href = u.toString();
+      }
     };
 
     E.tabsList.appendChild(card);
@@ -884,6 +981,33 @@ new ResizeObserver(() => {
   fitTimer = setTimeout(() => applyMetrics().then(keepFocusVisible).catch(() => {}).finally(() => setTimeout(() => { refitting = false; }, 1500)), 250);
 }).observe(E.stage);
 window.addEventListener("pagehide", () => cdp && cdp.close());   // also releases the size override
+
+let reconnecting = false;
+async function autoReconnect() {
+  if (reconnecting || !pageId) return;
+  if (!cdp || !cdp.ws || cdp.ws.readyState === WebSocket.CLOSED || cdp.ws.readyState === WebSocket.CLOSING) {
+    reconnecting = true;
+    try {
+      await connect();
+    } catch {
+      // ignore, connect handles error state
+    } finally {
+      reconnecting = false;
+    }
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    autoReconnect();
+  }
+});
+window.addEventListener("pageshow", () => {
+  autoReconnect();
+});
+window.addEventListener("focus", () => {
+  autoReconnect();
+});
 
 // Desktop: type straight into the page.
 window.addEventListener("keydown", (e) => {

@@ -925,9 +925,14 @@ async fn handle_chromium_ws(
         let backend_ws_url = format!("ws://127.0.0.1:{}/{}", session.port, ws_path);
         info!(session_id = %session.id, url = %backend_ws_url, "Connecting client to Chromium DevTools");
 
+        let frame_tx = {
+            let recs = state.active_recordings.read().await;
+            recs.get(&session.id).map(|h| h.frame_tx.clone())
+        };
+
         match tokio_tungstenite::connect_async(&backend_ws_url).await {
             Ok((server_ws, _)) => {
-                bridge_websockets(socket, server_ws).await;
+                bridge_websockets(socket, server_ws, frame_tx, None, None).await;
             }
             Err(e) => {
                 error!(session_id = %session.id, error = %e, "Failed to connect to Chromium backend");
@@ -952,32 +957,37 @@ async fn handle_page_ws(
         guard.values().cloned().collect()
     };
 
-    let mut target_port: Option<u16> = None;
+    let mut target_info: Option<(u16, Uuid, Option<String>, Option<String>)> = None;
     for session in sessions {
         let url = format!("http://127.0.0.1:{}/json/list", session.port);
         if let Ok(res) = state.http_client.get(&url).send().await {
             if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
-                if targets.iter().any(|t| t.id == page_id) {
-                    target_port = Some(session.port);
+                if let Some(target) = targets.into_iter().find(|t| t.id == page_id) {
+                    target_info = Some((session.port, session.id, target.title, Some(target.url)));
                     break;
                 }
             }
         }
     }
 
-    let port = match target_port {
-        Some(p) => p,
+    let (port, session_id, initial_title, initial_url) = match target_info {
+        Some(info) => info,
         None => {
             warn!(page_id = %page_id, "Page not found across active sessions");
             return (StatusCode::NOT_FOUND, "Target page not found").into_response();
         }
     };
 
+    let frame_tx = {
+        let recs = state.active_recordings.read().await;
+        recs.get(&session_id).map(|h| h.frame_tx.clone())
+    };
+
     let backend_url = format!("ws://127.0.0.1:{}/devtools/page/{}", port, page_id);
     ws.on_upgrade(move |socket| async move {
         match tokio_tungstenite::connect_async(&backend_url).await {
             Ok((server_ws, _)) => {
-                bridge_websockets(socket, server_ws).await;
+                bridge_websockets(socket, server_ws, frame_tx, initial_url, initial_title).await;
             }
             Err(e) => {
                 error!(page_id = %page_id, error = %e, "Failed to bridge to target page");

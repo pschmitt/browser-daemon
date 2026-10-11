@@ -46,10 +46,18 @@ pub struct RecorderConfig {
     pub max_count: usize,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProxyRecordingFrame {
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub data: String, // base64 JPEG
+}
+
 #[derive(Clone)]
 pub struct SessionRecorderHandle {
     pub recording_id: Uuid,
     pub stop_flag: Arc<AtomicBool>,
+    pub frame_tx: tokio::sync::mpsc::UnboundedSender<ProxyRecordingFrame>,
 }
 
 impl SessionRecorderHandle {
@@ -68,6 +76,7 @@ pub fn start_recording(
     let recording_id = Uuid::new_v4();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_clone = stop_flag.clone();
+    let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel::<ProxyRecordingFrame>();
 
     tokio::spawn(async move {
         record_session_loop(
@@ -78,6 +87,7 @@ pub fn start_recording(
             node_name,
             config,
             stop_clone,
+            frame_rx,
         )
         .await;
     });
@@ -85,6 +95,62 @@ pub fn start_recording(
     SessionRecorderHandle {
         recording_id,
         stop_flag,
+        frame_tx,
+    }
+}
+
+async fn write_single_frame(
+    writer: &mut tokio::fs::File,
+    meta: &mut RecordingMeta,
+    meta_file: &Path,
+    rec_dir: &Path,
+    total_frames: &mut u64,
+    last_meta_flush: &mut Instant,
+    start_instant: Instant,
+    current_url: &mut Option<String>,
+    current_title: &mut Option<String>,
+    data: String,
+    url: Option<String>,
+    title: Option<String>,
+) {
+    if let Some(ref u) = url {
+        if !u.is_empty() && u != "about:blank" {
+            if meta.initial_url.is_none() {
+                meta.initial_url = Some(u.clone());
+            }
+            *current_url = Some(u.clone());
+        }
+    }
+    if let Some(ref t) = title {
+        if !t.is_empty() {
+            *current_title = Some(t.clone());
+        }
+    }
+
+    let elapsed_ms = start_instant.elapsed().as_millis() as u64;
+    let frame = RecordingFrame {
+        t: elapsed_ms,
+        url: current_url.clone(),
+        title: current_title.clone(),
+        data,
+    };
+
+    if let Ok(line) = serde_json::to_string(&frame) {
+        let _ = writer.write_all(line.as_bytes()).await;
+        let _ = writer.write_all(b"\n").await;
+        *total_frames += 1;
+    }
+
+    // Flush metadata every 4 seconds or every 30 frames
+    if last_meta_flush.elapsed() > Duration::from_secs(4) || *total_frames % 30 == 0 {
+        let _ = writer.flush().await;
+        meta.duration_seconds = start_instant.elapsed().as_secs();
+        meta.frame_count = *total_frames;
+        meta.size_bytes = compute_rec_dir_size(rec_dir).await;
+        meta.final_url = current_url.clone();
+        meta.title = current_title.clone();
+        let _ = write_meta(meta_file, meta).await;
+        *last_meta_flush = Instant::now();
     }
 }
 
@@ -96,6 +162,7 @@ async fn record_session_loop(
     node_name: String,
     config: RecorderConfig,
     stop_flag: Arc<AtomicBool>,
+    mut frame_rx: tokio::sync::mpsc::UnboundedReceiver<ProxyRecordingFrame>,
 ) {
     let rec_dir = config.recordings_dir.join(recording_id.to_string());
     if let Err(e) = fs::create_dir_all(&rec_dir).await {
@@ -162,19 +229,88 @@ async fn record_session_loop(
     let mut current_url: Option<String> = None;
     let mut current_title: Option<String> = None;
     let mut total_frames: u64 = 0;
-    let mut last_frame_time = Instant::now();
+    let mut last_proxy_frame = Instant::now() - Duration::from_secs(60);
+    let mut last_meta_flush = Instant::now();
 
     // Main recording loop
     while !stop_flag.load(Ordering::SeqCst) {
-        // Find an active page target on the session's DevTools port
+        // 1. Drain any proxy frames that arrived from handoff.html
+        while let Ok(pf) = frame_rx.try_recv() {
+            last_proxy_frame = Instant::now();
+            write_single_frame(
+                &mut frames_writer,
+                &mut meta,
+                &meta_file,
+                &rec_dir,
+                &mut total_frames,
+                &mut last_meta_flush,
+                start_instant,
+                &mut current_url,
+                &mut current_title,
+                pf.data,
+                pf.url,
+                pf.title,
+            )
+            .await;
+        }
+
+        // 2. If handoff.html is actively streaming (frames received in last 2 seconds),
+        // wait for more proxy frames without competing on background screencast!
+        if last_proxy_frame.elapsed() < Duration::from_secs(2) {
+            match tokio::time::timeout(Duration::from_millis(500), frame_rx.recv()).await {
+                Ok(Some(pf)) => {
+                    last_proxy_frame = Instant::now();
+                    write_single_frame(
+                        &mut frames_writer,
+                        &mut meta,
+                        &meta_file,
+                        &rec_dir,
+                        &mut total_frames,
+                        &mut last_meta_flush,
+                        start_instant,
+                        &mut current_url,
+                        &mut current_title,
+                        pf.data,
+                        pf.url,
+                        pf.title,
+                    )
+                    .await;
+                    continue;
+                }
+                Ok(None) => {
+                    // Channel closed (session terminating)
+                    break;
+                }
+                Err(_) => {
+                    continue;
+                }
+            }
+        }
+
+        // 3. Otherwise, use background CDP screencast loop for headless sessions
         let targets_url = format!("http://127.0.0.1:{}/json/list", port);
         let active_page_target = match http_client.get(&targets_url).send().await {
             Ok(res) => {
                 if let Ok(targets) = res.json::<Vec<serde_json::Value>>().await {
-                    targets.into_iter().find(|t| {
-                        t.get("type").and_then(|v| v.as_str()) == Some("page")
-                            && t.get("webSocketDebuggerUrl").is_some()
-                    })
+                    let mut page_targets: Vec<serde_json::Value> = targets
+                        .into_iter()
+                        .filter(|t| {
+                            t.get("type").and_then(|v| v.as_str()) == Some("page")
+                                && t.get("webSocketDebuggerUrl").is_some()
+                        })
+                        .collect();
+
+                    // Prioritize targets: non-about:blank first
+                    page_targets.sort_by_key(|t| {
+                        let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                        if url.is_empty() || url == "about:blank" || url.starts_with("chrome-extension://") {
+                            1
+                        } else {
+                            0
+                        }
+                    });
+
+                    page_targets.into_iter().next()
                 } else {
                     None
                 }
@@ -204,6 +340,11 @@ async fn record_session_loop(
         };
 
         let current_target_id = target_id.clone();
+        let current_target_is_blank = target
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map_or(true, |u| u == "about:blank" || u.is_empty());
+
         if let Some(u) = target.get("url").and_then(|v| v.as_str()) {
             if !u.is_empty() && u != "about:blank" {
                 if meta.initial_url.is_none() {
@@ -251,94 +392,136 @@ async fn record_session_loop(
         let _ = write.send(Message::Text(start_screencast.to_string().into())).await;
 
         let mut next_ack_id = 100u64;
+        let mut last_bg_frame_time = Instant::now();
 
         // Inner frame loop for this page
         while !stop_flag.load(Ordering::SeqCst) {
-            let msg_res = tokio::time::timeout(Duration::from_millis(600), read.next()).await;
-            match msg_res {
-                Ok(Some(Ok(Message::Text(text)))) => {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-                        let method = val.get("method").and_then(|v| v.as_str()).unwrap_or("");
-                        if method == "Page.screencastFrame" {
-                            if let Some(params) = val.get("params") {
-                                let ack_session_id = params.get("sessionId").and_then(|v| v.as_u64());
-                                let data = params.get("data").and_then(|v| v.as_str());
+            tokio::select! {
+                // If proxy frame arrives, handoff.html was connected!
+                proxy_frame = frame_rx.recv() => {
+                    match proxy_frame {
+                        Some(pf) => {
+                            last_proxy_frame = Instant::now();
+                            write_single_frame(
+                                &mut frames_writer,
+                                &mut meta,
+                                &meta_file,
+                                &rec_dir,
+                                &mut total_frames,
+                                &mut last_meta_flush,
+                                start_instant,
+                                &mut current_url,
+                                &mut current_title,
+                                pf.data,
+                                pf.url,
+                                pf.title,
+                            ).await;
+                            // Yield background connection to handoff
+                            break;
+                        }
+                        None => {
+                            break;
+                        }
+                    }
+                }
+                msg_res = tokio::time::timeout(Duration::from_millis(600), read.next()) => {
+                    match msg_res {
+                        Ok(Some(Ok(Message::Text(text)))) => {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                                let method = val.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                                if method == "Page.screencastFrame" {
+                                    if let Some(params) = val.get("params") {
+                                        let ack_session_id = params.get("sessionId").and_then(|v| v.as_u64());
+                                        let data = params.get("data").and_then(|v| v.as_str());
 
-                                if let (Some(frame_data), Some(ack_id)) = (data, ack_session_id) {
-                                    let elapsed_ms = start_instant.elapsed().as_millis() as u64;
-                                    let frame = RecordingFrame {
-                                        t: elapsed_ms,
-                                        url: current_url.clone(),
-                                        title: current_title.clone(),
-                                        data: frame_data.to_string(),
-                                    };
+                                        if let (Some(frame_data), Some(ack_id)) = (data, ack_session_id) {
+                                            write_single_frame(
+                                                &mut frames_writer,
+                                                &mut meta,
+                                                &meta_file,
+                                                &rec_dir,
+                                                &mut total_frames,
+                                                &mut last_meta_flush,
+                                                start_instant,
+                                                &mut current_url,
+                                                &mut current_title,
+                                                frame_data.to_string(),
+                                                None,
+                                                None,
+                                            ).await;
+                                            last_bg_frame_time = Instant::now();
 
-                                    if let Ok(line) = serde_json::to_string(&frame) {
-                                        let _ = frames_writer.write_all(line.as_bytes()).await;
-                                        let _ = frames_writer.write_all(b"\n").await;
-                                        total_frames += 1;
-                                        last_frame_time = Instant::now();
-                                    }
-
-                                    // Send frame ACK
-                                    next_ack_id += 1;
-                                    let ack_msg = serde_json::json!({
-                                        "id": next_ack_id,
-                                        "method": "Page.screencastFrameAck",
-                                        "params": {
-                                            "sessionId": ack_id
+                                            // Send frame ACK
+                                            next_ack_id += 1;
+                                            let ack_msg = serde_json::json!({
+                                                "id": next_ack_id,
+                                                "method": "Page.screencastFrameAck",
+                                                "params": {
+                                                    "sessionId": ack_id
+                                                }
+                                            });
+                                            let _ = write.send(Message::Text(ack_msg.to_string().into())).await;
                                         }
-                                    });
-                                    let _ = write.send(Message::Text(ack_msg.to_string().into())).await;
-                                }
-                            }
-                        } else if method == "Page.frameNavigated" {
-                            if let Some(frame) = val.pointer("/params/frame") {
-                                if frame.get("parentId").is_none() {
-                                    if let Some(u) = frame.get("url").and_then(|v| v.as_str()) {
-                                        if !u.is_empty() && u != "about:blank" {
-                                            current_url = Some(u.to_string());
-                                            if meta.initial_url.is_none() {
-                                                meta.initial_url = Some(u.to_string());
+                                    }
+                                } else if method == "Page.frameNavigated" {
+                                    if let Some(frame) = val.pointer("/params/frame") {
+                                        if frame.get("parentId").is_none() {
+                                            if let Some(u) = frame.get("url").and_then(|v| v.as_str()) {
+                                                if !u.is_empty() && u != "about:blank" {
+                                                    current_url = Some(u.to_string());
+                                                    if meta.initial_url.is_none() {
+                                                        meta.initial_url = Some(u.to_string());
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                }
-                Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
-                    // Page closed
-                    debug!(recording_id = %recording_id, "Page connection closed");
-                    break;
-                }
-                Ok(Some(Err(e))) => {
-                    debug!(recording_id = %recording_id, error = %e, "WebSocket error");
-                    break;
-                }
-                Err(_) => {
-                    // Timeout hit (no messages for 600ms) - normal when page is idle
-                    // Check if page target is still valid every ~3 seconds
-                    if last_frame_time.elapsed() > Duration::from_secs(3) {
-                        let check_url = format!("http://127.0.0.1:{}/json/list", port);
-                        if let Ok(res) = http_client.get(&check_url).send().await {
-                            if let Ok(targets) = res.json::<Vec<serde_json::Value>>().await {
-                                let still_exists = targets.iter().any(|t| {
-                                    t.get("id").and_then(|v| v.as_str()) == Some(current_target_id.as_str())
-                                });
-                                if !still_exists {
-                                    debug!(recording_id = %recording_id, "Target closed, looking for new target");
+                        Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                            // Page closed
+                            debug!(recording_id = %recording_id, "Page connection closed");
+                            break;
+                        }
+                        Ok(Some(Err(e))) => {
+                            debug!(recording_id = %recording_id, error = %e, "WebSocket error");
+                            break;
+                        }
+                        Err(_) => {
+                            // Timeout hit (no messages for 600ms)
+                            if last_bg_frame_time.elapsed() > Duration::from_secs(2) {
+                                let check_url = format!("http://127.0.0.1:{}/json/list", port);
+                                if let Ok(res) = http_client.get(&check_url).send().await {
+                                    if let Ok(targets) = res.json::<Vec<serde_json::Value>>().await {
+                                        let still_exists = targets.iter().any(|t| {
+                                            t.get("id").and_then(|v| v.as_str()) == Some(current_target_id.as_str())
+                                        });
+                                        let has_better_target = targets.iter().any(|t| {
+                                            t.get("type").and_then(|v| v.as_str()) == Some("page")
+                                                && t.get("id").and_then(|v| v.as_str()) != Some(current_target_id.as_str())
+                                                && t.get("url").and_then(|v| v.as_str()).map_or(false, |u| {
+                                                    u != "about:blank" && !u.is_empty() && !u.starts_with("chrome-extension://")
+                                                })
+                                        });
+                                        if !still_exists || (current_target_is_blank && has_better_target) {
+                                            debug!(recording_id = %recording_id, "Target closed or better target appeared, switching");
+                                            break;
+                                        }
+
+                                        // Re-issue startScreencast in case it was interrupted
+                                        let _ = write.send(Message::Text(start_screencast.to_string().into())).await;
+                                        last_bg_frame_time = Instant::now();
+                                    }
+                                } else {
+                                    // Port died
                                     break;
                                 }
                             }
-                        } else {
-                            // Port died
-                            break;
                         }
+                        _ => {}
                     }
                 }
-                _ => {}
             }
         }
     }

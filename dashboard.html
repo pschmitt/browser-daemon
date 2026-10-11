@@ -819,6 +819,36 @@
     overflow: hidden;
     animation: modalIn 0.15s ease-out;
   }
+  @media (max-width: 640px) {
+    .modal-overlay {
+      padding: 6px;
+      align-items: flex-end;
+    }
+    .modal-card {
+      width: 100% !important;
+      max-width: 100% !important;
+      border-radius: 18px 18px 0 0;
+      max-height: 92vh;
+      overflow-y: auto;
+    }
+    .cluster-node-card {
+      flex-direction: column !important;
+      align-items: stretch !important;
+      gap: 12px !important;
+    }
+    .cluster-node-actions {
+      display: flex !important;
+      justify-content: flex-end !important;
+    }
+    #addPeerForm {
+      flex-direction: column !important;
+      align-items: stretch !important;
+    }
+    #submitPeerBtn {
+      width: 100% !important;
+      height: 42px !important;
+    }
+  }
   @keyframes modalIn {
     from { opacity: 0; transform: scale(0.96); }
     to { opacity: 1; transform: scale(1); }
@@ -1279,7 +1309,7 @@
 
 <!-- Modal: Cluster Nodes -->
 <div id="clusterModal" class="modal-overlay" onclick="handleClusterModalOverlayClick(event)">
-  <div class="modal-card" style="max-width: 680px;">
+  <div class="modal-card" style="max-width: 680px; width: 100%;">
     <div class="modal-header">
       <div class="card-title">
         <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -1768,7 +1798,7 @@ function renderClusterModal() {
       : '';
 
     html += `
-      <div style="background:var(--card-hover);border:1px solid var(--card-border);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <div class="cluster-node-card" style="background:var(--card-hover);border:1px solid var(--card-border);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
         <div style="min-width:0;">
           <div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:14px;color:var(--fg);">
             ${escapeHtml(n.name)} ${localBadge}
@@ -1776,7 +1806,7 @@ function renderClusterModal() {
           <div style="font-size:12px;color:var(--muted);margin-top:2px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
             ${escapeHtml(n.url)}
           </div>
-          <div style="display:flex;gap:12px;font-size:12px;margin-top:6px;color:var(--muted);">
+          <div style="display:flex;gap:12px;font-size:12px;margin-top:6px;color:var(--muted);flex-wrap:wrap;">
             <span>${statusText}</span>
             <span>&bull;</span>
             <span><strong>${n.active_sessions}</strong> / ${n.max_sessions} sessions</span>
@@ -1784,7 +1814,7 @@ function renderClusterModal() {
             <span><strong>${n.profiles_count}</strong> profiles</span>
           </div>
         </div>
-        <div style="display:flex;gap:6px;flex-shrink:0;">
+        <div class="cluster-node-actions" style="display:flex;gap:6px;flex-shrink:0;">
           <a href="${escapeHtml(n.url)}/" class="btn btn-ghost btn-xs" target="_blank" title="Open this node's dashboard">Dashboard ↗</a>
           ${!n.isLocal ? `<button class="btn btn-danger btn-xs" onclick="removePeer('${escapeHtml(n.name)}')" title="Disconnect peer from mesh">Remove</button>` : ''}
         </div>
@@ -2468,8 +2498,20 @@ async function openPlayerModal(id, node) {
       cachedImages: new Map(),
     };
 
-    document.getElementById('playerScrubber').max = frames.length - 1;
-    document.getElementById('playerFrameDisplay').textContent = `(1 / ${frames.length} frames)`;
+    const playBtn = document.getElementById('playerPlayBtn');
+    if (frames.length <= 1) {
+      document.getElementById('playerScrubber').max = 0;
+      document.getElementById('playerFrameDisplay').textContent = `(Snapshot: 1 frame)`;
+      playBtn.disabled = true;
+      playBtn.textContent = 'Snapshot';
+      playBtn.title = 'Single-frame recording (snapshot)';
+    } else {
+      document.getElementById('playerScrubber').max = frames.length - 1;
+      document.getElementById('playerFrameDisplay').textContent = `(1 / ${frames.length} frames)`;
+      playBtn.disabled = false;
+      playBtn.textContent = 'Play';
+      playBtn.title = 'Play recording';
+    }
     renderPlayerFrame(0);
   } catch(e) {
     alert(`Failed to parse recording frames: ${e}`);
@@ -2524,15 +2566,28 @@ function renderPlayerFrame(idx) {
       }
     };
   }
+
+  // Preload upcoming frames for stutter-free playback
+  for (let i = 1; i <= 10; i++) {
+    const nextIdx = idx + i;
+    if (nextIdx < totalFrames && !activePlayer.cachedImages.has(nextIdx)) {
+      const nextFrame = activePlayer.frames[nextIdx];
+      const preloadImg = new Image();
+      preloadImg.src = 'data:image/jpeg;base64,' + nextFrame.data;
+      activePlayer.cachedImages.set(nextIdx, preloadImg);
+    }
+  }
 }
 
 function togglePlayPause() {
-  if (!activePlayer) return;
+  if (!activePlayer || activePlayer.frames.length <= 1) return;
   activePlayer.isPlaying = !activePlayer.isPlaying;
-  document.getElementById('playerPlayBtn').textContent = activePlayer.isPlaying ? 'Pause' : 'Play';
+  const playBtn = document.getElementById('playerPlayBtn');
+  playBtn.textContent = activePlayer.isPlaying ? 'Pause' : 'Play';
   if (activePlayer.isPlaying) {
     if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
       activePlayer.currentIndex = 0;
+      renderPlayerFrame(0);
     }
     playNextFrame();
   } else if (activePlayer.timer) {
@@ -2544,14 +2599,13 @@ function playNextFrame() {
   if (!activePlayer || !activePlayer.isPlaying) return;
   if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
     activePlayer.isPlaying = false;
-    document.getElementById('playerPlayBtn').textContent = 'Play';
+    document.getElementById('playerPlayBtn').textContent = 'Replay';
     return;
   }
 
   const curr = activePlayer.frames[activePlayer.currentIndex];
   const next = activePlayer.frames[activePlayer.currentIndex + 1];
-  let delay = Math.max(16, (next.t - curr.t) / activePlayer.speed);
-  if (delay > 2000) delay = 1000;
+  let delay = Math.max(30, Math.min(1200, (next.t - curr.t) / activePlayer.speed));
 
   activePlayer.timer = setTimeout(() => {
     if (!activePlayer || !activePlayer.isPlaying) return;
@@ -2630,6 +2684,10 @@ async function exportRecordingWebM() {
 
   for (let i = 0; i < activePlayer.frames.length; i++) {
     renderPlayerFrame(i);
+    const frameImg = activePlayer.cachedImages.get(i);
+    if (frameImg && !frameImg.complete) {
+      await new Promise(r => { frameImg.onload = r; frameImg.onerror = r; setTimeout(r, 80); });
+    }
     await new Promise(r => setTimeout(r, 40));
   }
 
