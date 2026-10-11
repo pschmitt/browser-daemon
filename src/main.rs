@@ -2,6 +2,7 @@ mod browser;
 mod proxy;
 mod recorder;
 
+use axum::body::Bytes;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -17,11 +18,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::browser::{ActiveBrowser, BrowserConfig};
+use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine};
 use crate::proxy::bridge_websockets;
 use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
 
@@ -45,6 +47,9 @@ pub struct Args {
 
     #[arg(long, default_value = "chromium")]
     pub chromium: PathBuf,
+
+    #[arg(long)]
+    pub firefox: Option<PathBuf>,
 
     #[arg(long)]
     pub display: Option<String>,
@@ -90,11 +95,15 @@ pub struct Args {
 
     #[arg(long, default_value_t = 100)]
     pub recording_max_count: usize,
+
+    #[arg(long, help = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N)")]
+    pub max_session_memory_mb: Option<u64>,
 }
 
 #[derive(Clone)]
 pub struct ManagedSession {
     pub id: Uuid,
+    pub engine: BrowserEngine,
     pub port: u16,
     pub ws_path: String,
     pub profile: Option<String>,
@@ -106,7 +115,9 @@ pub struct ManagedSession {
 
 impl ManagedSession {
     pub async fn to_summary(&self, http_client: &reqwest::Client, is_recording: bool) -> SessionSummary {
-        let tabs_count = {
+        let tabs_count = if self.engine == BrowserEngine::Firefox {
+            1
+        } else {
             let url = format!("http://127.0.0.1:{}/json/list", self.port);
             if let Ok(res) = http_client.get(&url).send().await {
                 if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
@@ -121,6 +132,7 @@ impl ManagedSession {
 
         SessionSummary {
             id: self.id,
+            engine: self.engine,
             port: self.port,
             ws_path: self.ws_path.clone(),
             profile: self.profile.clone(),
@@ -136,6 +148,8 @@ impl ManagedSession {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub id: Uuid,
+    #[serde(default)]
+    pub engine: BrowserEngine,
     pub port: u16,
     pub ws_path: String,
     pub profile: Option<String>,
@@ -206,22 +220,33 @@ impl AppState {
     }
     pub async fn spawn_session(
         &self,
+        engine: BrowserEngine,
         profile: Option<&str>,
         persistent: bool,
         width: Option<u32>,
         height: Option<u32>,
         record: Option<bool>,
+        max_memory_mb: Option<u64>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
-        // If a profile was given, check if an existing session is already running it
+        if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Firefox engine is not configured on this host",
+            ));
+        }
+
+        // If a profile was given, check if an existing session is already running it with the same engine
         if let Some(prof_name) = profile {
             let sanitized = sanitize_profile_name(prof_name);
             if !sanitized.is_empty() {
                 let sessions = self.sessions.read().await;
                 for session in sessions.values() {
-                    if let Some(ref p) = session.profile {
-                        if p == &sanitized {
-                            info!(session_id = %session.id, profile = %sanitized, "Attaching to existing profile session");
-                            return Ok(session.clone());
+                    if session.engine == engine {
+                        if let Some(ref p) = session.profile {
+                            if p == &sanitized {
+                                info!(session_id = %session.id, engine = %engine, profile = %sanitized, "Attaching to existing profile session");
+                                return Ok(session.clone());
+                            }
                         }
                     }
                 }
@@ -237,10 +262,10 @@ impl AppState {
             ));
         }
 
-        let browser = match ActiveBrowser::spawn(&self.config, profile, width, height).await {
+        let browser = match ActiveBrowser::spawn(&self.config, engine, profile, width, height, max_memory_mb).await {
             Ok(b) => b,
             Err(e) => {
-                error!(error = %e, "Failed to spawn Chromium instance");
+                error!(error = %e, engine = %engine, "Failed to spawn browser process");
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Failed to spawn browser process",
@@ -250,6 +275,7 @@ impl AppState {
 
         let session = ManagedSession {
             id: browser.id,
+            engine: browser.engine,
             port: browser.port,
             ws_path: browser.ws_path.clone(),
             profile: browser.profile_name.clone(),
@@ -264,7 +290,7 @@ impl AppState {
             guard.insert(session.id, session.clone());
         }
 
-        if record.unwrap_or(self.recorder_config.enabled) {
+        if engine == BrowserEngine::Chromium && record.unwrap_or(self.recorder_config.enabled) {
             let handle = recorder::start_recording(
                 session.id,
                 session.port,
@@ -302,6 +328,7 @@ impl AppState {
 
 #[derive(Deserialize, Debug)]
 pub struct LaunchParams {
+    pub engine: Option<BrowserEngine>,
     pub session_id: Option<Uuid>,
     pub profile: Option<String>,
     #[serde(default)]
@@ -309,16 +336,20 @@ pub struct LaunchParams {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub record: Option<bool>,
+    pub max_memory_mb: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreateSessionRequest {
+    #[serde(default)]
+    pub engine: BrowserEngine,
     pub profile: Option<String>,
     #[serde(default = "default_true")]
     pub persistent: bool,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub record: Option<bool>,
+    pub max_memory_mb: Option<u64>,
 }
 
 fn default_true() -> bool {
@@ -363,6 +394,22 @@ pub struct CloneProfileRequest {
 }
 
 #[derive(Deserialize, Debug, Default)]
+pub struct ImportProfileParams {
+    pub overwrite: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct TransferProfileRequest {
+    pub target_node: String,
+    #[serde(default)]
+    pub target_name: Option<String>,
+    #[serde(default)]
+    pub delete_source: bool,
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+#[derive(Deserialize, Debug, Default)]
 pub struct DeleteProfileParams {
     pub force: Option<bool>,
 }
@@ -397,6 +444,8 @@ pub struct NodeInfo {
     pub recordings_count: usize,
     pub storage_used_bytes: u64,
     pub max_storage_bytes: u64,
+    #[serde(default)]
+    pub supported_engines: Vec<BrowserEngine>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -413,6 +462,8 @@ pub struct PeerState {
     #[serde(default)]
     pub storage_used_bytes: u64,
     pub uptime_seconds: u64,
+    #[serde(default)]
+    pub supported_engines: Vec<BrowserEngine>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -573,10 +624,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Arc::new(BrowserConfig {
         chromium_bin: args.chromium,
+        firefox_bin: args.firefox,
         display: args.display,
         profiles_dir: args.profile_dir,
         default_width: args.default_width,
         default_height: args.default_height,
+        max_session_memory_mb: args.max_session_memory_mb,
     });
 
     let recorder_config = Arc::new(RecorderConfig {
@@ -624,6 +677,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/handoff/favicon.svg", get(handoff_favicon_svg))
         .route("/manifest.webmanifest", get(manifest_webmanifest))
         .route("/manifest.json", get(manifest_webmanifest))
+        .route("/site.webmanifest", get(manifest_webmanifest))
         .route("/sw.js", get(service_worker_js))
         .route("/icon-192.png", get(icon_192_png))
         .route("/icon-512.png", get(icon_512_png))
@@ -649,6 +703,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/handoff/", get(handoff_page))
         .route("/handoff", get(|| async { Redirect::to("/handoff/") }))
         .route("/chromium", get(handle_chromium_ws))
+        .route("/firefox", get(handle_firefox_ws))
         .route("/devtools/page/{page_id}", get(handle_page_ws))
         // REST Management APIs for sessions and profiles
         .route("/api/sessions", get(api_list_sessions).post(api_create_session))
@@ -664,6 +719,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .delete(api_delete_profile),
         )
         .route("/api/profiles/{name}/clone", post(api_clone_profile))
+        .route("/api/profiles/{name}/export", get(api_export_profile))
+        .route("/api/profiles/{name}/import", post(api_import_profile))
+        .route("/api/profiles/{name}/transfer", post(api_transfer_profile))
         // Recording APIs
         .route("/api/recordings", get(api_list_recordings))
         .route("/api/recordings/{id}", get(api_get_recording).delete(api_delete_recording))
@@ -685,6 +743,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .put(api_peer_update_profile),
         )
         .route("/api/peers/{peer}/profiles/{name}/clone", post(api_peer_clone_profile))
+        .route("/api/peers/{peer}/profiles/{name}/export", get(api_peer_export_profile))
+        .route("/api/peers/{peer}/profiles/{name}/import", post(api_peer_import_profile))
+        .route("/api/peers/{peer}/profiles/{name}/transfer", post(api_peer_transfer_profile))
         .route("/api/peers/{peer}/recordings", get(api_peer_list_recordings))
         .route("/api/peers/{peer}/recordings/{id}", get(api_peer_get_recording).delete(api_peer_delete_recording))
         .route("/api/peers/{peer}/recordings/{id}/frames", get(api_peer_get_recording_frames))
@@ -716,12 +777,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     let sessions = state.sessions.read().await;
+    let mut supported_engines = vec!["chromium"];
+    if state.config.firefox_bin.is_some() {
+        supported_engines.push("firefox");
+    }
     Json(serde_json::json!({
         "status": "ok",
         "node": state.node_name,
         "active_sessions": sessions.len(),
         "max_sessions": state.max_sessions,
         "peers_count": state.peers.read().await.len(),
+        "supported_engines": supported_engines,
     }))
 }
 
@@ -745,6 +811,9 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
     let mut all_targets = Vec::new();
 
     for session in sessions {
+        if session.engine == BrowserEngine::Firefox {
+            continue;
+        }
         let url = format!("http://127.0.0.1:{}/json/list", session.port);
         if let Ok(res) = state.http_client.get(&url).send().await {
             if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
@@ -941,7 +1010,7 @@ async fn json_new(
         Some(s) => s,
         None => {
             state
-                .spawn_session(None, false, None, None, Some(state.recorder_config.enabled))
+                .spawn_session(BrowserEngine::Chromium, None, false, None, None, Some(state.recorder_config.enabled), None)
                 .await
                 .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?
         }
@@ -992,6 +1061,9 @@ async fn json_close(
     };
 
     for session in sessions {
+        if session.engine == BrowserEngine::Firefox {
+            continue;
+        }
         let req_url = format!("http://127.0.0.1:{}/json/close/{}", session.port, id);
         if let Ok(res) = state.http_client.put(&req_url).send().await {
             if res.status().is_success() {
@@ -1013,6 +1085,9 @@ async fn json_activate(
     };
 
     for session in sessions {
+        if session.engine == BrowserEngine::Firefox {
+            continue;
+        }
         let req_url = format!("http://127.0.0.1:{}/json/activate/{}", session.port, id);
         if let Ok(res) = state.http_client.put(&req_url).send().await {
             if res.status().is_success() {
@@ -1041,11 +1116,13 @@ async fn handle_chromium_ws(
         let persistent = params.persistent.unwrap_or(false);
         match state
             .spawn_session(
+                params.engine.unwrap_or(BrowserEngine::Chromium),
                 params.profile.as_deref(),
                 persistent,
                 params.width,
                 params.height,
                 params.record,
+                params.max_memory_mb,
             )
             .await
         {
@@ -1072,6 +1149,70 @@ async fn handle_chromium_ws(
             }
             Err(e) => {
                 error!(session_id = %session.id, error = %e, "Failed to connect to Chromium backend");
+            }
+        }
+
+        let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if !session.persistent && remaining == 0 {
+            info!(session_id = %session.id, "Auto-terminating non-persistent session");
+            state.terminate_session(&session.id).await;
+        }
+    })
+}
+
+async fn handle_firefox_ws(
+    ws: WebSocketUpgrade,
+    Query(params): Query<LaunchParams>,
+    State(state): State<AppState>,
+) -> Response {
+    if state.config.firefox_bin.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "Firefox engine is not configured on this host",
+        )
+            .into_response();
+    }
+
+    let session = if let Some(sid) = params.session_id {
+        let guard = state.sessions.read().await;
+        match guard.get(&sid).cloned() {
+            Some(s) => s,
+            None => {
+                return (StatusCode::NOT_FOUND, "Requested session ID not found").into_response();
+            }
+        }
+    } else {
+        let persistent = params.persistent.unwrap_or(false);
+        match state
+            .spawn_session(
+                BrowserEngine::Firefox,
+                params.profile.as_deref(),
+                persistent,
+                params.width,
+                params.height,
+                Some(false),
+                params.max_memory_mb,
+            )
+            .await
+        {
+            Ok(s) => s,
+            Err((status, msg)) => return (status, msg).into_response(),
+        }
+    };
+
+    ws.on_upgrade(move |socket| async move {
+        session.client_count.fetch_add(1, Ordering::SeqCst);
+
+        let ws_path = session.ws_path.trim_start_matches('/');
+        let backend_ws_url = format!("ws://127.0.0.1:{}/{}", session.port, ws_path);
+        info!(session_id = %session.id, url = %backend_ws_url, "Connecting client to Firefox WebDriver BiDi");
+
+        match tokio_tungstenite::connect_async(&backend_ws_url).await {
+            Ok((server_ws, _)) => {
+                bridge_websockets(socket, server_ws, None, None, None).await;
+            }
+            Err(e) => {
+                error!(session_id = %session.id, error = %e, "Failed to connect to Firefox backend");
             }
         }
 
@@ -1214,11 +1355,13 @@ async fn api_create_session(
     state.check_auth(&headers)?;
     let session = state
         .spawn_session(
+            req.engine,
             req.profile.as_deref(),
             req.persistent,
             req.width,
             req.height,
             req.record,
+            req.max_memory_mb,
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
@@ -1665,6 +1808,315 @@ async fn api_delete_profile(
     ))
 }
 
+async fn export_profile_archive(
+    state: &AppState,
+    name: &str,
+) -> Result<Vec<u8>, (StatusCode, Json<serde_json::Value>)> {
+    let sanitized = sanitize_profile_name(name);
+    if sanitized.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid profile name" })),
+        ));
+    }
+    let dir = state.config.profiles_dir.join(&sanitized);
+    if !dir.exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Profile '{}' not found", sanitized) })),
+        ));
+    }
+    {
+        let guard = state.sessions.read().await;
+        if let Some(s) = guard.values().find(|s| s.profile.as_deref() == Some(&sanitized)) {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("Cannot export active profile (in use by session {})", s.id)
+                })),
+            ));
+        }
+    }
+
+    let output = tokio::process::Command::new("tar")
+        .arg("-czf")
+        .arg("-")
+        .arg("-C")
+        .arg(&dir)
+        .arg(".")
+        .output()
+        .await
+        .map_err(|e| {
+            error!(profile = %sanitized, error = %e, "Failed to run tar command for profile export");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to archive profile: {}", e) })),
+            )
+        })?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        error!(profile = %sanitized, error = %err, "tar export failed");
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("tar command failed: {}", err) })),
+        ));
+    }
+
+    Ok(output.stdout)
+}
+
+async fn api_export_profile(
+    AxumPath(name): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let sanitized = sanitize_profile_name(&name);
+    let bytes = export_profile_archive(&state, &sanitized).await?;
+    let cd_value = format!("attachment; filename=\"{}.tar.gz\"", sanitized);
+    let cd_header = HeaderValue::from_str(&cd_value)
+        .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("application/gzip")),
+            (header::CONTENT_DISPOSITION, cd_header),
+        ],
+        bytes,
+    ))
+}
+
+async fn api_import_profile(
+    AxumPath(name): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<ImportProfileParams>,
+    body: Bytes,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let sanitized = sanitize_profile_name(&name);
+    if sanitized.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid profile name" })),
+        ));
+    }
+    if body.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Empty archive body" })),
+        ));
+    }
+
+    let target_dir = state.config.profiles_dir.join(&sanitized);
+    let overwrite = params.overwrite.unwrap_or(false);
+
+    if target_dir.exists() {
+        if !overwrite {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({ "error": format!("Profile '{}' already exists on target", sanitized) })),
+            ));
+        }
+        let guard = state.sessions.read().await;
+        if let Some(s) = guard.values().find(|s| s.profile.as_deref() == Some(&sanitized)) {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("Cannot overwrite active profile (in use by session {})", s.id)
+                })),
+            ));
+        }
+        drop(guard);
+        if let Err(e) = fs::remove_dir_all(&target_dir).await {
+            error!(profile = %sanitized, error = %e, "Failed to remove existing profile directory for overwrite");
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to overwrite existing profile" })),
+            ));
+        }
+    }
+
+    if let Err(e) = fs::create_dir_all(&target_dir).await {
+        error!(profile = %sanitized, error = %e, "Failed to create profile directory");
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Failed to create profile directory" })),
+        ));
+    }
+
+    let mut child = tokio::process::Command::new("tar")
+        .arg("-xzf")
+        .arg("-")
+        .arg("-C")
+        .arg(&target_dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            error!(error = %e, "Failed to spawn tar process for import");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to spawn tar: {}", e) })),
+            )
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(&body).await {
+            error!(error = %e, "Failed to write archive stream to tar stdin");
+            let _ = fs::remove_dir_all(&target_dir).await;
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to write to tar: {}", e) })),
+            ));
+        }
+    }
+
+    let output = child.wait_with_output().await.map_err(|e| {
+        error!(error = %e, "Failed to wait on tar process");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("tar extraction error: {}", e) })),
+        )
+    })?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        error!(profile = %sanitized, error = %err, "tar extraction failed");
+        let _ = fs::remove_dir_all(&target_dir).await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": format!("tar extraction failed: {}", err) })),
+        ));
+    }
+
+    let meta = target_dir.metadata().ok();
+    let size_bytes = compute_dir_size(target_dir).await;
+    let created_at_secs = meta
+        .as_ref()
+        .and_then(|m| m.created().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    let modified_at_secs = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+
+    info!(profile = %sanitized, size_bytes = %size_bytes, "Profile imported successfully");
+    Ok((
+        StatusCode::CREATED,
+        Json(ProfileInfo {
+            name: sanitized,
+            size_bytes,
+            is_active: false,
+            session_id: None,
+            created_at_secs,
+            modified_at_secs,
+        }),
+    ))
+}
+
+async fn api_transfer_profile(
+    AxumPath(name): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<TransferProfileRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let source_sanitized = sanitize_profile_name(&name);
+    if source_sanitized.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Invalid profile name" })),
+        ));
+    }
+
+    let target_node = req.target_node.trim();
+    if target_node.is_empty() || target_node == state.node_name {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Target node must be a different node in the cluster" })),
+        ));
+    }
+
+    let target_name = req
+        .target_name
+        .as_deref()
+        .map(sanitize_profile_name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| source_sanitized.clone());
+
+    let target_peer_url = match get_peer_url(&state, target_node).await {
+        Some(u) => u,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Target node '{}' not found in mesh", target_node) })),
+            ));
+        }
+    };
+
+    // 1. Export local profile to bytes
+    let archive_bytes = export_profile_archive(&state, &source_sanitized).await?;
+
+    // 2. Upload to target node's /api/profiles/{target_name}/import
+    let mut import_url = format!("{}/api/profiles/{}/import", target_peer_url, target_name);
+    if req.overwrite {
+        import_url.push_str("?overwrite=true");
+    }
+
+    let upload_res = state
+        .peer_request(state.http_client.post(&import_url))
+        .header(header::CONTENT_TYPE, "application/gzip")
+        .body(archive_bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to upload profile archive to target node");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": format!("Failed to send profile to target node: {}", e) })),
+            )
+        })?;
+
+    if !upload_res.status().is_success() {
+        let status = StatusCode::from_u16(upload_res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        let error_json = upload_res.json::<serde_json::Value>().await.unwrap_or_else(|_| {
+            serde_json::json!({ "error": "Target node rejected profile import" })
+        });
+        return Err((status, Json(error_json)));
+    }
+
+    // 3. If delete_source was requested, remove local directory
+    if req.delete_source {
+        let source_dir = state.config.profiles_dir.join(&source_sanitized);
+        if let Err(e) = fs::remove_dir_all(&source_dir).await {
+            warn!(profile = %source_sanitized, error = %e, "Profile transferred, but failed to delete source directory");
+        } else {
+            info!(profile = %source_sanitized, "Source profile deleted after transfer");
+        }
+    }
+
+    info!(
+        source = %source_sanitized,
+        target_node = %target_node,
+        target_name = %target_name,
+        "Profile transferred successfully"
+    );
+
+    Ok(Json(serde_json::json!({
+        "status": "transferred",
+        "source_node": state.node_name,
+        "target_node": target_node,
+        "source_name": source_sanitized,
+        "target_name": target_name,
+        "deleted_source": req.delete_source,
+    })))
+}
+
 // ---------------------------------------------------------------------------
 // Peer-to-Peer Mesh Handlers & Proxy APIs
 // ---------------------------------------------------------------------------
@@ -1691,6 +2143,10 @@ async fn api_mesh_node(
     let recordings_count = local_recordings.len();
     let storage_used_bytes: u64 = local_recordings.iter().map(|r| r.size_bytes).sum();
     let max_storage_bytes = state.recorder_config.max_storage_bytes;
+    let mut supported_engines = vec![BrowserEngine::Chromium];
+    if state.config.firefox_bin.is_some() {
+        supported_engines.push(BrowserEngine::Firefox);
+    }
 
     Ok(Json(NodeInfo {
         name: state.node_name.clone(),
@@ -1703,6 +2159,7 @@ async fn api_mesh_node(
         recordings_count,
         storage_used_bytes,
         max_storage_bytes,
+        supported_engines,
     }))
 }
 
@@ -1712,6 +2169,10 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     let local_targets = get_local_targets(state).await;
     let local_recordings = recorder::list_recordings(&state.recorder_config).await;
     let local_storage_used_bytes: u64 = local_recordings.iter().map(|r| r.size_bytes).sum();
+    let mut local_supported_engines = vec![BrowserEngine::Chromium];
+    if state.config.firefox_bin.is_some() {
+        local_supported_engines.push(BrowserEngine::Firefox);
+    }
 
     let local_node = NodeInfo {
         name: state.node_name.clone(),
@@ -1724,6 +2185,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         recordings_count: local_recordings.len(),
         storage_used_bytes: local_storage_used_bytes,
         max_storage_bytes: state.recorder_config.max_storage_bytes,
+        supported_engines: local_supported_engines,
     };
 
     let peers: Vec<(String, String)> = {
@@ -1763,7 +2225,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
             match node_res {
                 Ok(res) if res.status().is_success() => {
                     let node_info: Result<NodeInfo, _> = res.json().await;
-                    let (node_name, active_sessions, max_sessions, profiles_count, uptime_seconds, recordings_count, storage_used_bytes, max_storage_bytes) =
+                    let (node_name, active_sessions, max_sessions, profiles_count, uptime_seconds, recordings_count, storage_used_bytes, max_storage_bytes, supported_engines) =
                         match node_info {
                             Ok(info) => (
                                 info.name,
@@ -1774,8 +2236,9 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                                 info.recordings_count,
                                 info.storage_used_bytes,
                                 info.max_storage_bytes,
+                                info.supported_engines,
                             ),
-                            Err(_) => (p_name.clone(), 0, 8, 0, 0, 0, 0, 0),
+                            Err(_) => (p_name.clone(), 0, 8, 0, 0, 0, 0, 0, vec![BrowserEngine::Chromium]),
                         };
 
                     let p_sessions: Vec<SessionSummary> = match add_auth(c.get(&sessions_url))
@@ -1826,6 +2289,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             recordings_count,
                             storage_used_bytes,
                             uptime_seconds,
+                            supported_engines,
                             error: None,
                         },
                         node_name,
@@ -1849,6 +2313,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         recordings_count: 0,
                         storage_used_bytes: 0,
                         uptime_seconds: 0,
+                        supported_engines: vec![BrowserEngine::Chromium],
                         error: Some(format!("HTTP {}", res.status())),
                     },
                     p_name,
@@ -1871,6 +2336,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         recordings_count: 0,
                         storage_used_bytes: 0,
                         uptime_seconds: 0,
+                        supported_engines: vec![BrowserEngine::Chromium],
                         error: Some(err.to_string()),
                     },
                     p_name,
@@ -2092,16 +2558,20 @@ async fn proxy_response(res_result: Result<reqwest::Response, reqwest::Error>) -
         Ok(res) => {
             let status =
                 StatusCode::from_u16(res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let bytes = res.bytes().await.unwrap_or_default();
-            (
-                status,
-                [(
+            let mut headers = HeaderMap::new();
+            if let Some(ct) = res.headers().get(header::CONTENT_TYPE) {
+                headers.insert(header::CONTENT_TYPE, ct.clone());
+            } else {
+                headers.insert(
                     header::CONTENT_TYPE,
                     HeaderValue::from_static("application/json"),
-                )],
-                bytes,
-            )
-                .into_response()
+                );
+            }
+            if let Some(cd) = res.headers().get(header::CONTENT_DISPOSITION) {
+                headers.insert(header::CONTENT_DISPOSITION, cd.clone());
+            }
+            let bytes = res.bytes().await.unwrap_or_default();
+            (status, headers, bytes).into_response()
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -2417,6 +2887,93 @@ async fn api_peer_update_profile(
     proxy_response(res).await
 }
 
+async fn api_peer_export_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, name)): AxumPath<(String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/api/profiles/{}/export", peer_url, name);
+    let res = state
+        .peer_request(state.http_client.get(&url))
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
+async fn api_peer_import_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, name)): AxumPath<(String, String)>,
+    Query(params): Query<ImportProfileParams>,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let mut url = format!("{}/api/profiles/{}/import", peer_url, name);
+    if let Some(true) = params.overwrite {
+        url.push_str("?overwrite=true");
+    }
+    let res = state
+        .peer_request(state.http_client.post(&url))
+        .header(header::CONTENT_TYPE, "application/gzip")
+        .body(body)
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
+async fn api_peer_transfer_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, name)): AxumPath<(String, String)>,
+    Json(req): Json<TransferProfileRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let url = format!("{}/api/profiles/{}/transfer", peer_url, name);
+    let res = state
+        .peer_request(state.http_client.post(&url))
+        .json(&req)
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
 // ---------------------------------------------------------------------------
 // Recording & Auto-Vacuum APIs
 // ---------------------------------------------------------------------------
@@ -2521,6 +3078,13 @@ async fn api_session_start_record(
             Json(serde_json::json!({ "error": "Session not found" })),
         ))?
     };
+
+    if session.engine == BrowserEngine::Firefox {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Recording is not supported for Firefox sessions (requires Chromium CDP screencast)" })),
+        ));
+    }
 
     if state.active_recordings.read().await.contains_key(&id) {
         return Ok(Json(serde_json::json!({ "status": "already_recording", "session_id": id })));

@@ -23,6 +23,12 @@ in
       description = "Chromium package to spawn for sessions.";
     };
 
+    firefoxPackage = lib.mkOption {
+      type = lib.types.nullOr lib.types.package;
+      default = pkgs.firefox;
+      description = "Firefox package to spawn for sessions. Set to null to disable Firefox engine.";
+    };
+
     xvfbPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.xorg-server;
@@ -136,6 +142,30 @@ in
       default = 100;
       description = "Maximum number of recordings kept before auto-vacuum.";
     };
+
+    sessionMemoryMaxMB = lib.mkOption {
+      type = lib.types.nullOr lib.types.ints.positive;
+      default = null;
+      description = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N).";
+    };
+
+    memoryMax = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Global systemd MemoryMax limit for browser-daemon service (e.g. '4G').";
+    };
+
+    memoryHigh = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Global systemd MemoryHigh threshold for browser-daemon service (e.g. '3.5G').";
+    };
+
+    cpuQuota = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Global systemd CPUQuota limit for browser-daemon service (e.g. '200%').";
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -170,6 +200,10 @@ in
       wantedBy = [ "multi-user.target" ];
       wants = [ "browser-daemon-xvfb.service" ];
       after = [ "browser-daemon-xvfb.service" ];
+      path = [
+        pkgs.gnutar
+        pkgs.gzip
+      ];
       serviceConfig = {
         ExecStart = lib.concatStringsSep " " (
           [
@@ -218,6 +252,14 @@ in
           ++ lib.optionals cfg.recordSessions [
             "--record-sessions"
           ]
+          ++ lib.optionals (cfg.firefoxPackage != null) [
+            "--firefox"
+            (lib.getExe cfg.firefoxPackage)
+          ]
+          ++ lib.optionals (cfg.sessionMemoryMaxMB != null) [
+            "--max-session-memory-mb"
+            (toString cfg.sessionMemoryMaxMB)
+          ]
         );
         Restart = "always";
         RestartSec = 2;
@@ -225,6 +267,9 @@ in
         Group = cfg.group;
         StateDirectory = "browser-daemon";
         WorkingDirectory = cfg.dataDir;
+        MemoryMax = lib.mkIf (cfg.memoryMax != null) cfg.memoryMax;
+        MemoryHigh = lib.mkIf (cfg.memoryHigh != null) cfg.memoryHigh;
+        CPUQuota = lib.mkIf (cfg.cpuQuota != null) cfg.cpuQuota;
       };
     };
   };

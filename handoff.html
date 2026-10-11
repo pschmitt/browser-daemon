@@ -135,8 +135,8 @@
     cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; flex: none; }
   .tab-close:hover { background: var(--line); color: var(--bad); }
   .btn-xs { padding: 6px 12px; border-radius: 999px; border: 0; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
-  .btn-close { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--btn); color: var(--fg); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
-  .btn-close:hover { background: var(--line); }
+  .btn-close { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.15); color: #ef4444; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; }
+  .btn-close:hover { background: #ef4444; color: #fff; border-color: #ef4444; }
 </style>
 </head>
 <body>
@@ -179,7 +179,8 @@
   <div id="keys">
     <button data-key="Tab">Tab</button>
     <button data-key="Escape">Esc</button>
-    <button id="paste">Paste</button>
+    <button id="copy" title="Copy selection from remote browser">Copy</button>
+    <button id="paste" title="Paste clipboard text to remote browser">Paste</button>
     <button data-key="Enter" class="primary">Enter</button>
   </div>
 </div>
@@ -994,9 +995,73 @@ E.kbbtn.onclick = () => {
   else { E.kb.blur(); E.keys.classList.remove("show"); }
 };
 document.querySelectorAll("#keys button[data-key]").forEach((b) => b.addEventListener("click", () => { pressKey(b.dataset.key); setTimeout(probeFocus, 300); }));
-$("paste").addEventListener("click", async () => {
-  try { const t = await navigator.clipboard.readText(); if (t) cdp.send("Input.insertText", { text: t }); } catch { /* clipboard not allowed */ }
-});
+async function copyRemoteSelection() {
+  if (!cdp) return '';
+  try {
+    const res = await cdp.call("Runtime.evaluate", {
+      expression: `(() => {
+        let sel = window.getSelection()?.toString() || '';
+        if (!sel && document.activeElement) {
+          let el = document.activeElement;
+          if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            try {
+              sel = el.value.substring(el.selectionStart, el.selectionEnd);
+            } catch(e) {}
+          }
+        }
+        return sel;
+      })()`,
+      returnByValue: true
+    });
+    const text = res?.result?.value;
+    if (text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      }
+      return text;
+    }
+  } catch(e) {
+    console.warn("copyRemoteSelection failed:", e);
+  }
+  return '';
+}
+
+async function pasteToRemote() {
+  if (!cdp) return;
+  try {
+    let t = '';
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        t = await navigator.clipboard.readText();
+      } catch(e) {}
+    }
+    if (!t) {
+      t = prompt("Paste text into browser session:");
+    }
+    if (t) {
+      cdp.send("Input.insertText", { text: t });
+    }
+  } catch(e) {
+    console.warn("pasteToRemote failed:", e);
+  }
+}
+
+const copyBtn = $("copy");
+if (copyBtn) {
+  copyBtn.addEventListener("click", async () => {
+    const text = await copyRemoteSelection();
+    const oldText = copyBtn.textContent;
+    copyBtn.textContent = text ? "Copied!" : "No selection";
+    setTimeout(() => { copyBtn.textContent = oldText; }, 1200);
+  });
+}
+
+const pasteBtn = $("paste");
+if (pasteBtn) {
+  pasteBtn.addEventListener("click", async () => {
+    await pasteToRemote();
+  });
+}
 E.retry.onclick = () => connect();
 
 // Re-fit the remote page when the screen really changes (rotation, native keyboard, browser bars).
@@ -1043,11 +1108,39 @@ window.addEventListener("focus", () => {
   autoReconnect();
 });
 
-// Desktop: type straight into the page.
+// Desktop: type straight into the page and handle copy/paste shortcuts.
 window.addEventListener("keydown", (e) => {
-  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+    e.preventDefault();
+    copyRemoteSelection();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+    e.preventDefault();
+    pasteToRemote();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key.length === 1) { cdp.send("Input.insertText", { text: e.key }); e.preventDefault(); }
   else if (KEYS[e.key]) { pressKey(e.key); e.preventDefault(); }
+});
+
+window.addEventListener("copy", (e) => {
+  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
+  e.preventDefault();
+  copyRemoteSelection();
+});
+
+window.addEventListener("paste", (e) => {
+  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
+  e.preventDefault();
+  const text = e.clipboardData?.getData("text");
+  if (text) {
+    cdp.send("Input.insertText", { text });
+  } else {
+    pasteToRemote();
+  }
 });
 
 /* ---------------------------------------------------------------- page picker (no ?page=) */

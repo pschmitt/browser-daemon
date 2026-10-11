@@ -24,6 +24,8 @@ pub struct RecordingMeta {
     pub initial_url: Option<String>,
     pub final_url: Option<String>,
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favicon_url: Option<String>,
     pub status: String, // "recording", "completed", "interrupted"
 }
 
@@ -118,6 +120,15 @@ async fn write_single_frame(
             if meta.initial_url.is_none() {
                 meta.initial_url = Some(u.clone());
             }
+            if meta.favicon_url.is_none() {
+                if let Ok(parsed) = url::Url::parse(u) {
+                    if let Some(host) = parsed.host_str() {
+                        if !host.is_empty() && host != "localhost" && !host.starts_with("127.") {
+                            meta.favicon_url = Some(format!("{}://{}/favicon.ico", parsed.scheme(), host));
+                        }
+                    }
+                }
+            }
             *current_url = Some(u.clone());
         }
     }
@@ -191,6 +202,7 @@ async fn record_session_loop(
         initial_url: None,
         final_url: None,
         title: None,
+        favicon_url: None,
         status: "recording".to_string(),
     };
 
@@ -349,6 +361,15 @@ async fn record_session_loop(
             if !u.is_empty() && u != "about:blank" {
                 if meta.initial_url.is_none() {
                     meta.initial_url = Some(u.to_string());
+                }
+                if meta.favicon_url.is_none() {
+                    if let Ok(parsed) = url::Url::parse(u) {
+                        if let Some(host) = parsed.host_str() {
+                            if !host.is_empty() && host != "localhost" && !host.starts_with("127.") {
+                                meta.favicon_url = Some(format!("{}://{}/favicon.ico", parsed.scheme(), host));
+                            }
+                        }
+                    }
                 }
                 current_url = Some(u.to_string());
             }

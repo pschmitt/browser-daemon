@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::fs;
@@ -5,17 +6,44 @@ use tokio::process::{Child, Command};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BrowserEngine {
+    #[serde(alias = "Chromium", alias = "CHROMIUM")]
+    Chromium,
+    #[serde(alias = "Firefox", alias = "FIREFOX")]
+    Firefox,
+}
+
+impl Default for BrowserEngine {
+    fn default() -> Self {
+        BrowserEngine::Chromium
+    }
+}
+
+impl std::fmt::Display for BrowserEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BrowserEngine::Chromium => write!(f, "chromium"),
+            BrowserEngine::Firefox => write!(f, "firefox"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct BrowserConfig {
     pub chromium_bin: PathBuf,
+    pub firefox_bin: Option<PathBuf>,
     pub display: Option<String>,
     pub profiles_dir: PathBuf,
     pub default_width: u32,
     pub default_height: u32,
+    pub max_session_memory_mb: Option<u64>,
 }
 
 pub struct ActiveBrowser {
     pub id: Uuid,
+    pub engine: BrowserEngine,
     pub port: u16,
     pub ws_path: String,
     pub child: Child,
@@ -27,9 +55,11 @@ pub struct ActiveBrowser {
 impl ActiveBrowser {
     pub async fn spawn(
         config: &BrowserConfig,
+        engine: BrowserEngine,
         profile: Option<&str>,
         width: Option<u32>,
         height: Option<u32>,
+        max_memory_mb: Option<u64>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = Uuid::new_v4();
         let width = width.unwrap_or(config.default_width);
@@ -41,76 +71,152 @@ impl ActiveBrowser {
                     .chars()
                     .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
                     .collect();
-                let dir = config.profiles_dir.join(&sanitized);
+                let dir = if engine == BrowserEngine::Firefox {
+                    config.profiles_dir.join(format!("firefox_{}", sanitized))
+                } else {
+                    config.profiles_dir.join(&sanitized)
+                };
                 fs::create_dir_all(&dir).await?;
                 (dir, None, Some(sanitized))
             }
             _ => {
                 let temp = tempfile::Builder::new()
-                    .prefix(&format!("browserd-{}-", id))
+                    .prefix(&format!("browserd-{}-{}-", engine, id))
                     .tempdir()?;
                 let path = temp.path().to_path_buf();
                 (path, Some(temp), None)
             }
         };
 
-        info!(
-            session_id = %id,
-            profile = ?profile_name,
-            dir = %user_data_dir.display(),
-            "Launching Chromium"
-        );
+        match engine {
+            BrowserEngine::Chromium => {
+                info!(
+                    session_id = %id,
+                    engine = "chromium",
+                    profile = ?profile_name,
+                    dir = %user_data_dir.display(),
+                    "Launching Chromium"
+                );
 
-        let mut cmd = Command::new(&config.chromium_bin);
-        cmd.arg("--remote-debugging-port=0")
-            .arg(format!("--user-data-dir={}", user_data_dir.display()))
-            .arg("--disable-blink-features=AutomationControlled")
-            .arg(format!("--window-size={},{}", width, height))
-            .arg("--no-first-run")
-            .arg("--no-default-browser-check")
-            .arg("--disable-sync")
-            .arg("--disable-background-networking")
-            .arg("--disable-default-apps")
-            .arg("--disable-component-update")
-            .arg("--disable-breakpad")
-            .arg("--disable-dev-shm-usage")
-            .arg("--disable-gpu")
-            .arg("--disable-background-timer-throttling")
-            .arg("--disable-backgrounding-occluded-windows")
-            .arg("--disable-renderer-backgrounding")
-            .arg("--force-color-profile=srgb")
-            .arg("--password-store=basic")
-            .arg("about:blank")
-            .kill_on_drop(true);
+                let mut cmd = Command::new(&config.chromium_bin);
+                cmd.arg("--remote-debugging-port=0")
+                    .arg(format!("--user-data-dir={}", user_data_dir.display()))
+                    .arg("--disable-blink-features=AutomationControlled")
+                    .arg(format!("--window-size={},{}", width, height))
+                    .arg("--no-first-run")
+                    .arg("--no-default-browser-check")
+                    .arg("--disable-sync")
+                    .arg("--disable-background-networking")
+                    .arg("--disable-default-apps")
+                    .arg("--disable-component-update")
+                    .arg("--disable-breakpad")
+                    .arg("--disable-dev-shm-usage")
+                    .arg("--disable-gpu")
+                    .arg("--disable-background-timer-throttling")
+                    .arg("--disable-backgrounding-occluded-windows")
+                    .arg("--disable-renderer-backgrounding")
+                    .arg("--force-color-profile=srgb")
+                    .arg("--password-store=basic")
+                    .arg("about:blank")
+                    .kill_on_drop(true);
 
-        if let Some(ref display) = config.display {
-            cmd.env("DISPLAY", display);
-        }
+                let effective_mem = max_memory_mb.or(config.max_session_memory_mb);
+                if let Some(mem_mb) = effective_mem {
+                    cmd.arg(format!("--js-flags=--max-old-space-size={}", mem_mb));
+                }
 
-        let child = cmd.spawn()?;
-        let (port, ws_path) = match wait_for_devtools_port(&user_data_dir).await {
-            Ok(res) => res,
-            Err(e) => {
-                error!(session_id = %id, error = %e, "Chromium failed to initialize DevTools port");
-                return Err(e);
+                if let Some(ref display) = config.display {
+                    cmd.env("DISPLAY", display);
+                }
+
+                let child = cmd.spawn()?;
+                let (port, ws_path) = match wait_for_devtools_port(&user_data_dir).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        error!(session_id = %id, error = %e, "Chromium failed to initialize DevTools port");
+                        return Err(e);
+                    }
+                };
+
+                info!(session_id = %id, port = port, ws_path = %ws_path, "Chromium ready");
+
+                Ok(Self {
+                    id,
+                    engine,
+                    port,
+                    ws_path,
+                    child,
+                    _temp_dir: temp_dir,
+                    profile_name,
+                    created_at: Instant::now(),
+                })
             }
-        };
+            BrowserEngine::Firefox => {
+                let firefox_bin = config
+                    .firefox_bin
+                    .as_ref()
+                    .ok_or("Firefox binary not configured on this host")?;
 
-        info!(session_id = %id, port = port, ws_path = %ws_path, "Chromium ready");
+                info!(
+                    session_id = %id,
+                    engine = "firefox",
+                    profile = ?profile_name,
+                    dir = %user_data_dir.display(),
+                    "Launching Firefox"
+                );
 
-        Ok(Self {
-            id,
-            port,
-            ws_path,
-            child,
-            _temp_dir: temp_dir,
-            profile_name,
-            created_at: Instant::now(),
-        })
+                fs::create_dir_all(&user_data_dir).await?;
+
+                let mut cmd = Command::new(firefox_bin);
+                cmd.arg("--headless")
+                    .arg("--new-instance")
+                    .arg("--no-remote")
+                    .arg(format!("--window-size={},{}", width, height))
+                    .arg("--profile")
+                    .arg(&user_data_dir)
+                    .arg("--remote-debugging-port=0")
+                    .arg("about:blank")
+                    .stderr(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::null())
+                    .kill_on_drop(true);
+
+                if let Some(ref display) = config.display {
+                    cmd.env("DISPLAY", display);
+                }
+
+                let mut child = cmd.spawn()?;
+                let stderr = child
+                    .stderr
+                    .take()
+                    .ok_or("Failed to capture Firefox stderr")?;
+
+                let port = match wait_for_firefox_bidi(stderr, Duration::from_secs(15)).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!(session_id = %id, error = %e, "Firefox failed to initialize WebDriver BiDi");
+                        let _ = child.start_kill();
+                        return Err(e);
+                    }
+                };
+
+                info!(session_id = %id, port = port, ws_path = "session", "Firefox ready");
+
+                Ok(Self {
+                    id,
+                    engine,
+                    port,
+                    ws_path: "session".to_string(),
+                    child,
+                    _temp_dir: temp_dir,
+                    profile_name,
+                    created_at: Instant::now(),
+                })
+            }
+        }
     }
 
     pub async fn terminate(&mut self) {
-        info!(session_id = %self.id, "Terminating Chromium instance");
+        info!(session_id = %self.id, engine = %self.engine, "Terminating browser instance");
         if let Err(e) = self.child.start_kill() {
             warn!(session_id = %self.id, error = %e, "Failed to send kill to child process");
         }
@@ -146,4 +252,38 @@ async fn wait_for_devtools_port(
         user_data_dir.display()
     )
     .into())
+}
+
+async fn wait_for_firefox_bidi(
+    stderr: tokio::process::ChildStderr,
+    timeout_duration: Duration,
+) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio::io::AsyncBufReadExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let mut reader = tokio::io::BufReader::new(stderr).lines();
+        let mut tx = Some(tx);
+        while let Ok(Some(line)) = reader.next_line().await {
+            if tx.is_some() {
+                if let Some(pos) = line.find("WebDriver BiDi listening on ws://127.0.0.1:") {
+                    let rest = &line[pos + "WebDriver BiDi listening on ws://127.0.0.1:".len()..];
+                    let port_str = rest.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
+                    if let Ok(port) = port_str.parse::<u16>() {
+                        if port > 0 {
+                            if let Some(c) = tx.take() {
+                                let _ = c.send(port);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    match tokio::time::timeout(timeout_duration, rx).await {
+        Ok(Ok(port)) => Ok(port),
+        Ok(Err(_)) => Err("Firefox process closed stderr without advertising BiDi port".into()),
+        Err(_) => Err("Timed out waiting for Firefox WebDriver BiDi port on stderr".into()),
+    }
 }

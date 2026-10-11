@@ -625,6 +625,59 @@
     font-weight: 700;
   }
 
+  /* Dropdown Overflow Menus */
+  .dropdown {
+    position: relative;
+    display: inline-block;
+  }
+  .dropdown-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);
+    min-width: 170px;
+    z-index: 120;
+    display: none;
+    flex-direction: column;
+    padding: 5px;
+    backdrop-filter: blur(12px);
+  }
+  .dropdown.open .dropdown-menu {
+    display: flex;
+  }
+  .dropdown-item {
+    background: none;
+    border: none;
+    padding: 7px 10px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg);
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+    width: 100%;
+    text-decoration: none;
+    box-sizing: border-box;
+  }
+  .dropdown-item:hover {
+    background: var(--btn-hover);
+    color: #fff;
+  }
+  .dropdown-item.danger {
+    color: var(--danger);
+  }
+  .dropdown-item.danger:hover {
+    background: var(--danger-bg);
+  }
+
   /* Header Node Tabs & Cluster Status */
   .header-nav {
     display: flex;
@@ -985,6 +1038,28 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+  .btn-close-modal {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
+    border-radius: 6px;
+    border: 1px solid rgba(239, 68, 68, 0.3) !important;
+    background: rgba(239, 68, 68, 0.12) !important;
+    color: #ef4444 !important;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .btn-close-modal:hover {
+    background: #ef4444 !important;
+    color: #ffffff !important;
+    border-color: #ef4444 !important;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
   }
   .modal-body {
     padding: 20px;
@@ -1827,6 +1902,11 @@
           <button class="copy-btn" onclick="copyText(document.getElementById('wsEndpoint').textContent, this)">Copy</button>
         </div>
         <div class="endpoint-row">
+          <span class="endpoint-label">Firefox BiDi WS</span>
+          <span class="endpoint-val" id="firefoxWsEndpoint">wss://.../firefox</span>
+          <button class="copy-btn" onclick="copyText(document.getElementById('firefoxWsEndpoint').textContent, this)">Copy</button>
+        </div>
+        <div class="endpoint-row">
           <span class="endpoint-label">Playwright MCP</span>
           <span class="endpoint-val" id="mcpEndpoint">playwright-mcp --cdp-endpoint=wss://.../chromium</span>
           <button class="copy-btn" onclick="copyText(document.getElementById('mcpEndpoint').textContent, this)">Copy</button>
@@ -1859,7 +1939,7 @@
         <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Launch New Browser Session
       </div>
-      <button class="btn btn-ghost btn-xs" onclick="closeNewSessionModal()">&times;</button>
+      <button class="btn btn-close-modal" onclick="closeNewSessionModal()">&times;</button>
     </div>
     <form id="newSessionForm" onsubmit="submitNewSession(event)">
       <div class="modal-body">
@@ -1869,6 +1949,20 @@
           <select id="sessionNodeInput" class="form-input" onchange="onSessionNodeSelectChange(this.value)">
           </select>
           <span class="form-hint">Host where the browser instance will be started.</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Browser Engine</label>
+          <div class="engine-pills-row" style="display:flex;gap:10px;margin-bottom:6px;">
+            <label class="engine-pill active" id="enginePillChromium" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--card-bg);font-size:13px;">
+              <input type="radio" name="sessionEngine" value="chromium" checked onchange="onEngineChange('chromium')" style="accent-color:var(--accent);">
+              <span>Chromium</span>
+            </label>
+            <label class="engine-pill" id="enginePillFirefox" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--card-bg);font-size:13px;">
+              <input type="radio" name="sessionEngine" value="firefox" onchange="onEngineChange('firefox')" style="accent-color:#ff7138;">
+              <span>Firefox</span>
+            </label>
+          </div>
+          <span class="form-hint" id="engineHint">Chromium supports CDP, screencasting, and mobile handoff takeover.</span>
         </div>
         <div class="form-group">
           <label class="form-label" for="sessionProfileInput">Profile Name</label>
@@ -1903,10 +1997,26 @@
             <input type="number" id="sessionHeightInput" class="form-input" value="1080" min="240" max="2160">
           </div>
         </div>
+        <div class="form-group" style="margin-top:-6px;margin-bottom:12px;">
+          <label class="form-label" style="margin-bottom:6px;">Display Presets</label>
+          <div class="preset-pills-row" style="display:flex;flex-wrap:wrap;gap:6px;">
+            <button type="button" class="btn btn-ghost btn-xs preset-btn" onclick="applyScreenPreset(1920, 1080)">1080p Desktop</button>
+            <button type="button" class="btn btn-ghost btn-xs preset-btn" onclick="applyScreenPreset(1280, 720)">720p Laptop</button>
+            <button type="button" class="btn btn-ghost btn-xs preset-btn" onclick="applyScreenPreset(390, 844)">iPhone</button>
+            <button type="button" class="btn btn-ghost btn-xs preset-btn" onclick="applyScreenPreset(412, 915)">Android</button>
+            <button type="button" class="btn btn-ghost btn-xs preset-btn" onclick="applyScreenPreset(820, 1180)">iPad</button>
+            <button type="button" class="btn btn-ghost btn-xs preset-btn" onclick="applyScreenPreset(3840, 2160)">4K UHD</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="sessionMemInput">Per-Session Memory Limit (MB, optional)</label>
+          <input type="number" id="sessionMemInput" class="form-input" placeholder="e.g. 1024 (leave blank for system default)" min="128" max="65536">
+          <span class="form-hint">Enforces V8 heap memory ceiling (--js-flags=--max-old-space-size) for this session.</span>
+        </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-ghost btn-sm" onclick="closeNewSessionModal()">Cancel</button>
-        <button type="submit" class="btn btn-accent btn-sm" id="submitSessionBtn">Launch Session</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="closeNewSessionModal()"><svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Cancel</button>
+        <button type="submit" class="btn btn-accent btn-sm" id="submitSessionBtn"><svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg> Launch Session</button>
       </div>
     </form>
   </div>
@@ -1920,7 +2030,7 @@
         <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
         Create Persistent Profile
       </div>
-      <button class="btn btn-ghost btn-xs" onclick="closeNewProfileModal()">&times;</button>
+      <button class="btn btn-close-modal" onclick="closeNewProfileModal()">&times;</button>
     </div>
     <form id="newProfileForm" onsubmit="submitNewProfile(event)">
       <div class="modal-body">
@@ -1944,8 +2054,8 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button type="button" class="btn btn-ghost btn-sm" onclick="closeNewProfileModal()">Cancel</button>
-        <button type="submit" class="btn btn-accent btn-sm" id="submitProfileBtn">Create Profile</button>
+        <button type="button" class="btn btn-danger btn-sm" onclick="closeNewProfileModal()"><svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Cancel</button>
+        <button type="submit" class="btn btn-accent btn-sm" id="submitProfileBtn"><svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Create Profile</button>
       </div>
     </form>
   </div>
@@ -1959,7 +2069,7 @@
         <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Browser Mesh Cluster Nodes
       </div>
-      <button class="btn btn-ghost btn-xs" onclick="closeClusterModal()">&times;</button>
+      <button class="btn btn-close-modal" onclick="closeClusterModal()">&times;</button>
     </div>
     <div class="modal-body">
       <div id="clusterNodesList" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px;">
@@ -1970,7 +2080,7 @@
           <label class="form-label" for="addPeerUrlInput">Add Peer by Mesh URL</label>
           <input type="url" id="addPeerUrlInput" class="form-input" placeholder="https://browser.rofl-13.ts.brkn.lol" required autocomplete="off">
         </div>
-        <button type="submit" class="btn btn-accent btn-sm" id="submitPeerBtn" style="height:38px;">+ Add Peer</button>
+        <button type="submit" class="btn btn-accent btn-sm" id="submitPeerBtn" style="height:38px;"><svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg> Add Peer</button>
       </form>
     </div>
   </div>
@@ -1990,7 +2100,7 @@
           <svg viewBox="0 0 24 24" style="width:13px;height:13px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
           Export WebM
         </button>
-        <button class="btn btn-ghost btn-xs" onclick="closePlayerModal()" title="Close player (Esc)" style="width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:18px;line-height:1;">&times;</button>
+        <button class="btn btn-close-modal" onclick="closePlayerModal()" title="Close player (Esc)">&times;</button>
       </div>
     </div>
 
@@ -2064,6 +2174,83 @@
   </div>
 </div>
 
+<!-- Modal: Metadata Inspector -->
+<div id="metadataModal" class="modal-overlay" onclick="if(event.target===this)closeMetadataModal()">
+  <div class="modal-card" style="max-width: 660px; width: 100%;">
+    <div class="modal-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <span id="metadataModalTitle">Entity Metadata</span>
+      </div>
+      <button class="btn btn-close-modal" onclick="closeMetadataModal()">&times;</button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:14px;">
+      <div id="metadataSummaryGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;font-size:12.5px;"></div>
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <span style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;">Raw Properties</span>
+          <button class="btn btn-ghost btn-xs" id="copyMetadataJsonBtn" onclick="copyMetadataJson(this)">Copy JSON</button>
+        </div>
+        <pre id="metadataRawJson" style="background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:12px;font-family:monospace;font-size:12px;color:var(--fg);overflow-x:auto;max-height:280px;white-space:pre-wrap;word-break:break-all;"></pre>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-danger btn-sm" onclick="closeMetadataModal()"><svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Transfer Profile Across Nodes -->
+<div id="transferProfileModal" class="modal-overlay" onclick="if(event.target===this)closeTransferProfileModal()">
+  <div class="modal-card">
+    <div class="modal-header">
+      <div class="card-title">
+        <svg style="width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:2" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        Transfer Profile Across Nodes
+      </div>
+      <button class="btn btn-close-modal" onclick="closeTransferProfileModal()">&times;</button>
+    </div>
+    <form id="transferProfileForm" onsubmit="submitTransferProfile(event)">
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">Source Profile & Node</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input type="text" id="transferProfileSourceName" class="form-input" readonly style="flex:1;background:var(--btn);opacity:0.9;">
+            <span id="transferProfileSourceBadge"></span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="transferProfileTargetNode">Target Cluster Node</label>
+          <select id="transferProfileTargetNode" class="form-input" required>
+          </select>
+          <span class="form-hint">Destination host in the mesh to migrate the profile data to.</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="transferProfileTargetName">Target Profile Name (Optional)</label>
+          <input type="text" id="transferProfileTargetName" class="form-input" placeholder="Leave empty to keep the same profile name">
+          <span class="form-hint">Specify a new name if you want to rename it upon migration.</span>
+        </div>
+        <div class="form-group">
+          <label class="form-checkbox-label">
+            <input type="checkbox" id="transferProfileDeleteSource" checked>
+            <span><strong>Delete from source node</strong> after successful transfer (Move vs Copy)</span>
+          </label>
+        </div>
+        <div class="form-group">
+          <label class="form-checkbox-label">
+            <input type="checkbox" id="transferProfileOverwrite">
+            <span><strong>Overwrite target</strong> if a profile with this name already exists</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-danger btn-sm" onclick="closeTransferProfileModal()"><svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Cancel</button>
+        <button type="submit" class="btn btn-accent btn-sm" id="submitTransferProfileBtn"><svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> Migrate Profile</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div id="toastContainer" class="toast-container"></div>
 
 <footer>
@@ -2091,6 +2278,220 @@ const HISTORY_LEN = 30;
 const historyData = new Array(HISTORY_LEN).fill(0);
 let peakSessions = 0;
 
+const NODE_COLORS = {
+  'fnuc': { fg: '#34d399', bg: 'rgba(52, 211, 153, 0.15)', border: 'rgba(52, 211, 153, 0.35)' },
+  'rofl-13': { fg: '#c084fc', bg: 'rgba(192, 132, 252, 0.15)', border: 'rgba(192, 132, 252, 0.35)' },
+  'rofl-14': { fg: '#fbbf24', bg: 'rgba(251, 191, 36, 0.15)', border: 'rgba(251, 191, 36, 0.35)' },
+  'rofl-10': { fg: '#38bdf8', bg: 'rgba(56, 189, 248, 0.15)', border: 'rgba(56, 189, 248, 0.35)' },
+};
+const FALLBACK_PALETTE = [
+  { fg: '#f472b6', bg: 'rgba(244, 114, 182, 0.15)', border: 'rgba(244, 114, 182, 0.35)' },
+  { fg: '#a3e635', bg: 'rgba(163, 230, 53, 0.15)', border: 'rgba(163, 230, 53, 0.35)' },
+  { fg: '#2dd4bf', bg: 'rgba(45, 212, 191, 0.15)', border: 'rgba(45, 212, 191, 0.35)' },
+  { fg: '#fb7185', bg: 'rgba(251, 113, 133, 0.15)', border: 'rgba(251, 113, 133, 0.35)' },
+];
+
+function getNodeStyle(nodeName) {
+  if (!nodeName) return { fg: 'var(--muted)', bg: 'var(--btn)', border: 'var(--line)' };
+  const lower = nodeName.toLowerCase();
+  if (NODE_COLORS[lower]) return NODE_COLORS[lower];
+  let hash = 0;
+  for (let i = 0; i < lower.length; i++) hash = (hash << 5) - hash + lower.charCodeAt(i);
+  const idx = Math.abs(hash) % FALLBACK_PALETTE.length;
+  return FALLBACK_PALETTE[idx];
+}
+
+function getNodeBadge(nodeName, title = '') {
+  const safeName = escapeHtml(nodeName || 'local');
+  const style = getNodeStyle(nodeName);
+  const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+  return `<span class="badge" style="background:${style.bg};color:${style.fg};border:1px solid ${style.border};font-weight:700;"${titleAttr}>${safeName}</span>`;
+}
+
+function getFaviconHtml(faviconUrl, pageUrl, size = 16) {
+  let host = '';
+  try {
+    if (pageUrl) host = new URL(pageUrl).hostname;
+  } catch(_) {}
+  const iconSrc = faviconUrl || (host && host !== 'localhost' && !host.endsWith('.ts.brkn.lol') && !host.startsWith('about:') ? `https://icons.duckduckgo.com/ip3/${escapeHtml(host)}.ico` : null);
+  if (iconSrc) {
+    return `<img src="${escapeHtml(iconSrc)}" style="width:${size}px;height:${size}px;border-radius:3px;object-fit:contain;vertical-align:middle;flex-shrink:0;" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='inline-block';"><svg viewBox="0 0 24 24" style="display:none;width:${size}px;height:${size}px;fill:none;stroke:currentColor;stroke-width:2;vertical-align:middle;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+  }
+  return `<svg viewBox="0 0 24 24" style="width:${size}px;height:${size}px;fill:none;stroke:currentColor;stroke-width:2;vertical-align:middle;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`;
+}
+
+function toggleDropdown(btn) {
+  const dropdown = btn.closest('.dropdown');
+  if (!dropdown) return;
+  const wasOpen = dropdown.classList.contains('open');
+  document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+  if (!wasOpen) dropdown.classList.add('open');
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.dropdown')) {
+    document.querySelectorAll('.dropdown.open').forEach(d => d.classList.remove('open'));
+  }
+});
+
+function openSessionMetadata(id) {
+  const session = (currentOverview?.sessions || []).find(s => s.id === id);
+  if (!session) return;
+  document.getElementById('metadataModalTitle').textContent = `Session Metadata — ${id.slice(0, 8)}`;
+  const grid = document.getElementById('metadataSummaryGrid');
+  grid.innerHTML = `
+    <div><span style="color:var(--muted)">Session ID:</span> <code>${escapeHtml(session.id)}</code></div>
+    <div><span style="color:var(--muted)">Node:</span> ${getNodeBadge(session.node_name)}</div>
+    <div><span style="color:var(--muted)">Engine:</span> <strong>${escapeHtml(session.engine || 'chromium')}</strong></div>
+    <div><span style="color:var(--muted)">Profile:</span> <strong>${escapeHtml(session.profile || '(ephemeral)')}</strong></div>
+    <div><span style="color:var(--muted)">Mode:</span> ${session.persistent ? 'Persistent' : 'Ephemeral'}</div>
+    <div><span style="color:var(--muted)">Uptime:</span> ${formatUptime(session.uptime_seconds)}</div>
+    <div><span style="color:var(--muted)">Clients:</span> ${session.client_count} connected</div>
+    <div><span style="color:var(--muted)">Tabs:</span> ${session.tabs_count}</div>
+  `;
+  const rawPre = document.getElementById('metadataRawJson');
+  rawPre.textContent = JSON.stringify(session, null, 2);
+  document.getElementById('metadataModal').classList.add('open');
+}
+
+function openRecordingMetadata(id) {
+  const rec = (currentOverview?.recordings || []).find(r => r.id === id);
+  if (!rec) return;
+  document.getElementById('metadataModalTitle').textContent = `Recording Metadata — ${id.slice(0, 8)}`;
+  const grid = document.getElementById('metadataSummaryGrid');
+  grid.innerHTML = `
+    <div><span style="color:var(--muted)">Recording ID:</span> <code>${escapeHtml(rec.id)}</code></div>
+    <div><span style="color:var(--muted)">Node:</span> ${getNodeBadge(rec.node_name)}</div>
+    <div><span style="color:var(--muted)">Profile:</span> <strong>${escapeHtml(rec.profile || '(ephemeral)')}</strong></div>
+    <div><span style="color:var(--muted)">Title:</span> <strong>${escapeHtml(rec.title || '-')}</strong></div>
+    <div><span style="color:var(--muted)">Status:</span> ${escapeHtml(rec.status)}</div>
+    <div><span style="color:var(--muted)">Duration:</span> ${formatUptime(rec.duration_seconds)}</div>
+    <div><span style="color:var(--muted)">Frames:</span> ${rec.frame_count}</div>
+    <div><span style="color:var(--muted)">Size:</span> ${formatBytes(rec.size_bytes)}</div>
+    <div><span style="color:var(--muted)">Started:</span> ${new Date(rec.started_at_secs * 1000).toLocaleString()}</div>
+    <div><span style="color:var(--muted)">Favicon:</span> ${rec.favicon_url ? `<a href="${escapeHtml(rec.favicon_url)}" target="_blank" style="color:var(--accent);">URL ↗</a>` : 'none'}</div>
+  `;
+  const rawPre = document.getElementById('metadataRawJson');
+  rawPre.textContent = JSON.stringify(rec, null, 2);
+  document.getElementById('metadataModal').classList.add('open');
+}
+
+function openProfileMetadata(name, node) {
+  const prof = (currentOverview?.profiles || []).find(p => p.name === name && p.node_name === node);
+  if (!prof) return;
+  document.getElementById('metadataModalTitle').textContent = `Profile Metadata — ${name}`;
+  const grid = document.getElementById('metadataSummaryGrid');
+  grid.innerHTML = `
+    <div><span style="color:var(--muted)">Profile Name:</span> <strong>${escapeHtml(prof.name)}</strong></div>
+    <div><span style="color:var(--muted)">Node:</span> ${getNodeBadge(prof.node_name)}</div>
+    <div><span style="color:var(--muted)">Size on Disk:</span> ${formatBytes(prof.size_bytes)}</div>
+    <div><span style="color:var(--muted)">Status:</span> ${prof.is_active ? 'Active' : 'Stored'}</div>
+    ${prof.session_id ? `<div><span style="color:var(--muted)">Session:</span> <code>${escapeHtml(prof.session_id)}</code></div>` : ''}
+    ${prof.created_at_secs ? `<div><span style="color:var(--muted)">Created:</span> ${new Date(prof.created_at_secs * 1000).toLocaleString()}</div>` : ''}
+    ${prof.modified_at_secs ? `<div><span style="color:var(--muted)">Modified:</span> ${new Date(prof.modified_at_secs * 1000).toLocaleString()}</div>` : ''}
+  `;
+  const rawPre = document.getElementById('metadataRawJson');
+  rawPre.textContent = JSON.stringify(prof, null, 2);
+  document.getElementById('metadataModal').classList.add('open');
+}
+
+function closeMetadataModal() {
+  document.getElementById('metadataModal').classList.remove('open');
+}
+
+function copyMetadataJson(btn) {
+  const json = document.getElementById('metadataRawJson').textContent;
+  copyText(json, btn);
+}
+
+function openTransferProfileModal(profileName, sourceNode) {
+  const modal = document.getElementById('transferProfileModal');
+  document.getElementById('transferProfileSourceName').value = profileName;
+  document.getElementById('transferProfileSourceBadge').innerHTML = getNodeBadge(sourceNode);
+  document.getElementById('transferProfileTargetName').value = '';
+  document.getElementById('transferProfileDeleteSource').checked = true;
+  document.getElementById('transferProfileOverwrite').checked = false;
+
+  const targetSelect = document.getElementById('transferProfileTargetNode');
+  targetSelect.innerHTML = '';
+
+  const nodes = currentOverview?.nodes || [];
+  for (const n of nodes) {
+    if (n.name !== sourceNode && n.status === 'online') {
+      const opt = document.createElement('option');
+      opt.value = n.name;
+      opt.textContent = `${n.name} (${n.url})`;
+      targetSelect.appendChild(opt);
+    }
+  }
+
+  if (targetSelect.options.length === 0) {
+    alert('No other online nodes available in the mesh cluster to transfer to.');
+    return;
+  }
+
+  modal.dataset.sourceNode = sourceNode;
+  modal.classList.add('open');
+}
+
+function closeTransferProfileModal() {
+  document.getElementById('transferProfileModal').classList.remove('open');
+}
+
+async function submitTransferProfile(e) {
+  e.preventDefault();
+  const modal = document.getElementById('transferProfileModal');
+  const sourceNode = modal.dataset.sourceNode;
+  const profileName = document.getElementById('transferProfileSourceName').value.trim();
+  const targetNode = document.getElementById('transferProfileTargetNode').value;
+  const targetName = document.getElementById('transferProfileTargetName').value.trim() || null;
+  const deleteSource = document.getElementById('transferProfileDeleteSource').checked;
+  const overwrite = document.getElementById('transferProfileOverwrite').checked;
+
+  const btn = document.getElementById('submitTransferProfileBtn');
+  btn.disabled = true;
+  btn.textContent = 'Transferring...';
+
+  const isSourceLocal = !sourceNode || (currentOverview?.local_node?.name === sourceNode);
+  const url = isSourceLocal
+    ? `/api/profiles/${encodeURIComponent(profileName)}/transfer`
+    : `/api/peers/${encodeURIComponent(sourceNode)}/profiles/${encodeURIComponent(profileName)}/transfer`;
+
+  const pToast = createProgressToast(`transfer-${profileName}`, `Transfer: ${profileName}`, `Migrating to ${targetNode}...`);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target_node: targetNode,
+        target_name: targetName,
+        delete_source: deleteSource,
+        overwrite: overwrite
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText);
+    }
+    pToast.done('Transfer Complete', `Profile ${profileName} moved to ${targetNode}`);
+    closeTransferProfileModal();
+    refreshData();
+  } catch (err) {
+    pToast.error('Transfer Failed', String(err.message || err));
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg> Migrate Profile`;
+  }
+}
+
+function exportProfileArchive(profileName, sourceNode) {
+  const isSourceLocal = !sourceNode || (currentOverview?.local_node?.name === sourceNode);
+  const url = isSourceLocal
+    ? `/api/profiles/${encodeURIComponent(profileName)}/export`
+    : `/api/peers/${encodeURIComponent(sourceNode)}/profiles/${encodeURIComponent(profileName)}/export`;
+  window.open(url, '_blank');
+}
+
 function updateHostInfo() {
   const host = location.hostname;
   document.getElementById('hostBadge').textContent = host;
@@ -2098,6 +2499,9 @@ function updateHostInfo() {
   const port = location.port ? (':' + location.port) : '';
   const wsUrl = `${proto}//${host}${port}/chromium`;
   document.getElementById('wsEndpoint').textContent = wsUrl;
+  const firefoxWsUrl = `${proto}//${host}${port}/firefox`;
+  const ffEndpoint = document.getElementById('firefoxWsEndpoint');
+  if (ffEndpoint) ffEndpoint.textContent = firefoxWsUrl;
   document.getElementById('mcpEndpoint').textContent = `playwright-mcp --cdp-endpoint=${wsUrl}`;
   const authHeader = (typeof window !== 'undefined' && window.__CLUSTER_SECRET__)
     ? `-H "Authorization: Bearer ${window.__CLUSTER_SECRET__}" `
@@ -2399,6 +2803,40 @@ function selectNodeFilter(node) {
   }
 }
 
+function onEngineChange(engine) {
+  const pillCr = document.getElementById('enginePillChromium');
+  const pillFf = document.getElementById('enginePillFirefox');
+  const hint = document.getElementById('engineHint');
+  const recInput = document.getElementById('sessionRecordInput');
+  const handoffInput = document.getElementById('sessionAutoHandoffInput');
+
+  if (engine === 'firefox') {
+    if (pillCr) pillCr.classList.remove('active');
+    if (pillFf) pillFf.classList.add('active');
+    if (hint) hint.textContent = 'Firefox speaks WebDriver BiDi on /firefox. Handoff & recording require Chromium.';
+    if (recInput) {
+      recInput.checked = false;
+      recInput.disabled = true;
+    }
+    if (handoffInput) {
+      handoffInput.checked = false;
+      handoffInput.disabled = true;
+    }
+  } else {
+    if (pillCr) pillCr.classList.add('active');
+    if (pillFf) pillFf.classList.remove('active');
+    if (hint) hint.textContent = 'Chromium supports CDP, screencasting, and mobile handoff takeover.';
+    if (recInput) {
+      recInput.disabled = false;
+      recInput.checked = true;
+    }
+    if (handoffInput) {
+      handoffInput.disabled = false;
+      handoffInput.checked = true;
+    }
+  }
+}
+
 function openNewSessionModal(prefillProfile, targetNode) {
   const modal = document.getElementById('newSessionModal');
   const profInput = document.getElementById('sessionProfileInput');
@@ -2409,8 +2847,18 @@ function openNewSessionModal(prefillProfile, targetNode) {
     nodeSel.value = preferredNode;
   }
   renderSessionNodePills(preferredNode);
+  const crRadio = document.querySelector('input[name="sessionEngine"][value="chromium"]');
+  if (crRadio) crRadio.checked = true;
+  onEngineChange('chromium');
   modal.classList.add('open');
   profInput.focus();
+}
+
+function applyScreenPreset(w, h) {
+  const wInput = document.getElementById('sessionWidthInput');
+  const hInput = document.getElementById('sessionHeightInput');
+  if (wInput) wInput.value = w;
+  if (hInput) hInput.value = h;
 }
 
 function closeNewSessionModal() {
@@ -2472,27 +2920,35 @@ async function submitNewSession(e) {
   btn.disabled = true;
   btn.textContent = 'Launching...';
 
+  const engine = document.querySelector('input[name="sessionEngine"]:checked')?.value || 'chromium';
+  const isFirefox = engine === 'firefox';
   const node = document.getElementById('sessionNodeInput')?.value;
   const profile = document.getElementById('sessionProfileInput').value.trim() || null;
   const persistent = document.getElementById('sessionPersistentInput').checked;
-  const record = document.getElementById('sessionRecordInput')?.checked ?? true;
+  const record = isFirefox ? false : (document.getElementById('sessionRecordInput')?.checked ?? true);
   const width = parseInt(document.getElementById('sessionWidthInput').value, 10) || 1920;
   const height = parseInt(document.getElementById('sessionHeightInput').value, 10) || 1080;
-  const autoHandoff = document.getElementById('sessionAutoHandoffInput')?.checked ?? true;
+  const autoHandoff = isFirefox ? false : (document.getElementById('sessionAutoHandoffInput')?.checked ?? true);
 
   const targetNodeName = node || (currentOverview?.local_node?.name || 'local');
   const targetNodeObj = availableNodes.find(n => n.name === targetNodeName);
   const targetNodeUrl = targetNodeObj ? targetNodeObj.url : location.origin;
 
-  const pToast = createProgressToast('launch-session', `Launching Session on ${targetNodeName}`, 'Spawning Chromium process...');
+  const pToast = createProgressToast('launch-session', `Launching ${isFirefox ? 'Firefox' : 'Chromium'} on ${targetNodeName}`, `Spawning ${isFirefox ? 'Firefox' : 'Chromium'} process...`);
 
   try {
     const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
     const url = isLocal ? '/api/sessions' : `/api/peers/${encodeURIComponent(node)}/sessions`;
+    const memVal = parseInt(document.getElementById('sessionMemInput')?.value, 10);
+    const payload = { engine, profile, persistent, width, height, record };
+    if (!isNaN(memVal) && memVal > 0) {
+      payload.max_memory_mb = memVal;
+    }
+
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ profile, persistent, width, height, record })
+      body: JSON.stringify(payload)
     });
 
     if (!res.ok) {
@@ -2506,16 +2962,24 @@ async function submitNewSession(e) {
       refreshData();
 
       const sid = sData && sData.id ? sData.id : '';
-      const handoffUrl = sid ? `${targetNodeUrl}/handoff/?session=${encodeURIComponent(sid)}` : `${targetNodeUrl}/handoff/`;
-      pToast.done(`Session Launched on ${targetNodeName}`, `Session ID: ${sid ? sid.slice(0, 8) : 'active'}`, {
-        text: 'Take Over',
-        url: handoffUrl
-      });
+      if (isFirefox) {
+        const wsUrl = `wss://${targetNodeUrl.replace(/^https?:\/\//, '')}/firefox?session_id=${sid}`;
+        pToast.done(`Firefox Ready on ${targetNodeName}`, `Session ${sid ? sid.slice(0, 8) : 'active'} (BiDi WS /firefox)`, {
+          text: 'Copy WS',
+          url: wsUrl
+        });
+      } else {
+        const handoffUrl = sid ? `${targetNodeUrl}/handoff/?session=${encodeURIComponent(sid)}` : `${targetNodeUrl}/handoff/`;
+        pToast.done(`Session Launched on ${targetNodeName}`, `Session ID: ${sid ? sid.slice(0, 8) : 'active'}`, {
+          text: 'Take Over',
+          url: handoffUrl
+        });
 
-      if (autoHandoff) {
-        setTimeout(() => {
-          location.href = handoffUrl;
-        }, 400);
+        if (autoHandoff) {
+          setTimeout(() => {
+            location.href = handoffUrl;
+          }, 400);
+        }
       }
     }
   } catch (err) {
@@ -2523,7 +2987,7 @@ async function submitNewSession(e) {
     alert(`Error: ${err}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Launch Session';
+    btn.innerHTML = `<svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg> Launch Session`;
   }
 }
 
@@ -2621,7 +3085,7 @@ async function submitNewProfile(e) {
     alert(`Error: ${err}`);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Create Profile';
+    btn.innerHTML = `<svg style="width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2.2;" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Create Profile`;
   }
 }
 
@@ -2984,6 +3448,7 @@ function renderMeshOverview(ov) {
   // Render Sessions Table
   document.getElementById('sessionCountBadge').textContent = filteredSessions.length;
   const sContainer = document.getElementById('sessionsContainer');
+  const prevScrollSessions = sContainer.querySelector('.table-responsive')?.scrollLeft ?? 0;
   if (filteredSessions.length === 0) {
     sContainer.innerHTML = `
       <div class="empty-state">
@@ -3002,6 +3467,7 @@ function renderMeshOverview(ov) {
           <thead>
             <tr>
               <th>Session ID</th>
+              <th>Engine</th>
               <th>Node</th>
               <th>Profile</th>
               <th>Mode</th>
@@ -3014,24 +3480,36 @@ function renderMeshOverview(ov) {
           <tbody>`;
     for (const s of filteredSessions) {
       const sid = escapeHtml(s.id);
-      const nodeBadge = `<span class="badge badge-node" title="${escapeHtml(s.node_url)}">${escapeHtml(s.node_name)}</span>`;
+      const engine = s.engine || 'chromium';
+      const isFirefox = engine === 'firefox';
+      const engineBadge = isFirefox
+        ? `<span class="badge" style="background:rgba(255,113,56,0.15);color:#ff7138;border:1px solid rgba(255,113,56,0.35);font-weight:600;">Firefox</span>`
+        : `<span class="badge" style="background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.35);font-weight:600;">Chromium</span>`;
+      const nodeBadge = getNodeBadge(s.node_name, s.node_url);
       const prof = s.profile ? escapeHtml(s.profile) : '<em style="color:var(--muted);">ephemeral</em>';
       const modeBadge = s.persistent
         ? `<span class="badge badge-ok">Persistent</span>`
         : `<span class="badge badge-muted">Ephemeral</span>`;
       const uptime = formatUptime(s.uptime_seconds);
-      const wsUrl = `wss://${s.node_url.replace(/^https?:\/\//, '')}/chromium?session_id=${sid}`;
+      const wsPath = isFirefox ? 'firefox' : 'chromium';
+      const wsUrl = `wss://${s.node_url.replace(/^https?:\/\//, '')}/${wsPath}?session_id=${sid}`;
       const handoffUrl = `${s.node_url}/handoff/`;
       const recBadge = s.is_recording
         ? ` <span class="badge badge-danger pulse" style="font-size:10px;padding:2px 6px;" title="Recording screencast">REC</span>`
         : '';
-      const recBtn = s.is_recording
-        ? `<button class="btn btn-ghost btn-xs" onclick="stopRecording('${sid}', '${escapeHtml(s.node_name)}')" title="Stop session recording">Stop Rec</button>`
-        : `<button class="btn btn-ghost btn-xs" onclick="startRecording('${sid}', '${escapeHtml(s.node_name)}')" title="Start recording session">Record</button>`;
+      const recBtn = isFirefox
+        ? ''
+        : (s.is_recording
+            ? `<button class="btn btn-ghost btn-xs" onclick="stopRecording('${sid}', '${escapeHtml(s.node_name)}')" title="Stop session recording"><svg style="width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Stop Rec</button>`
+            : `<button class="btn btn-ghost btn-xs" onclick="startRecording('${sid}', '${escapeHtml(s.node_name)}')" title="Start recording session"><svg style="width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg> Record</button>`);
+      const handoffBtn = isFirefox
+        ? `<button class="btn btn-ghost btn-xs" disabled title="Handoff requires CDP (Chromium-only)" style="opacity:0.4;cursor:not-allowed;">Handoff</button>`
+        : `<a href="${handoffUrl}" class="btn btn-accent btn-xs" title="Open Mobile Handoff on ${escapeHtml(s.node_name)}"><svg style="width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg> Handoff</a>`;
 
       html += `
         <tr>
-          <td data-label="Session"><span class="badge badge-accent" title="${sid}">${sid.slice(0, 8)}</span></td>
+          <td data-label="Session"><span class="badge badge-accent" style="cursor:pointer;" onclick="openSessionMetadata('${sid}')" title="Inspect metadata: ${sid}">${sid.slice(0, 8)}</span></td>
+          <td data-label="Engine">${engineBadge}</td>
           <td data-label="Node">${nodeBadge}</td>
           <td data-label="Profile"><strong>${prof}</strong>${recBadge}</td>
           <td data-label="Mode">${modeBadge}</td>
@@ -3039,23 +3517,44 @@ function renderMeshOverview(ov) {
           <td data-label="Clients"><span class="badge badge-muted">${s.client_count} conn</span></td>
           <td data-label="Tabs"><span class="badge badge-muted">${s.tabs_count} tabs</span></td>
           <td data-label="Actions" class="table-actions" style="text-align:right;">
-            <div style="display:inline-flex;gap:6px;">
+            <div style="display:inline-flex;gap:6px;align-items:center;">
               ${recBtn}
-              <button class="btn btn-ghost btn-xs" onclick="copyText('${wsUrl}', this)" title="Copy WebSocket CDP URL">Copy WS</button>
-              <a href="${handoffUrl}" class="btn btn-accent btn-xs" title="Open Mobile Handoff on ${escapeHtml(s.node_name)}">Handoff</a>
-              <button class="btn btn-danger btn-xs" onclick="terminateSession('${sid}', '${escapeHtml(s.node_name)}')" title="Terminate browser process on ${escapeHtml(s.node_name)}">Terminate</button>
+              ${handoffBtn}
+              <div class="dropdown">
+                <button class="btn btn-ghost btn-xs" style="padding:2px 7px;font-size:14px;line-height:1;" onclick="toggleDropdown(this)" title="More actions">⋮</button>
+                <div class="dropdown-menu">
+                  <button class="dropdown-item" onclick="openSessionMetadata('${sid}')">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    Session Metadata
+                  </button>
+                  <button class="dropdown-item" onclick="copyText('${wsUrl}', this)">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    Copy WebSocket URL
+                  </button>
+                  <div style="height:1px;background:var(--line);margin:4px 0;"></div>
+                  <button class="dropdown-item danger" onclick="terminateSession('${sid}', '${escapeHtml(s.node_name)}')">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    Terminate Session
+                  </button>
+                </div>
+              </div>
             </div>
           </td>
         </tr>`;
     }
     html += `</tbody></table></div>`;
     sContainer.innerHTML = html;
+    if (prevScrollSessions > 0) {
+      const el = sContainer.querySelector('.table-responsive');
+      if (el) el.scrollLeft = prevScrollSessions;
+    }
   }
 
   // Render Stored Profiles Table
   currentProfilesList = filteredProfiles;
   document.getElementById('profileCountBadge').textContent = filteredProfiles.length;
   const pContainer = document.getElementById('profilesContainer');
+  const prevScrollProfiles = pContainer.querySelector('.table-responsive')?.scrollLeft ?? 0;
   if (filteredProfiles.length === 0) {
     pContainer.innerHTML = `
       <div class="empty-state">
@@ -3084,47 +3583,72 @@ function renderMeshOverview(ov) {
     for (const p of filteredProfiles) {
       const name = escapeHtml(p.name);
       const nodeName = escapeHtml(p.node_name);
-      const nodeBadge = `<span class="badge badge-node">${nodeName}</span>`;
+      const nodeBadge = getNodeBadge(p.node_name);
       const size = formatBytes(p.size_bytes);
       const statusBadge = p.is_active
         ? `<span class="badge badge-ok">Active (${p.session_id ? escapeHtml(p.session_id).slice(0, 8) : 'Running'})</span>`
         : `<span class="badge badge-muted">Stored</span>`;
 
       const launchBtn = p.is_active
-        ? `<a href="${p.node_url}/handoff/" class="btn btn-accent btn-xs" title="Take over session in Handoff on ${nodeName}">Take Over</a>`
-        : `<button class="btn btn-accent btn-xs" onclick="launchProfile('${name}', '${nodeName}')" title="Launch browser session on ${nodeName}">Launch</button>`;
-
-      const cloneBtn = `<button class="btn btn-ghost btn-xs" onclick="cloneProfile('${name}', '${nodeName}')" title="Duplicate profile on ${nodeName}">Clone</button>`;
-
-      const renameBtn = p.is_active
-        ? `<button class="btn btn-ghost btn-xs" disabled style="opacity:0.4;cursor:not-allowed;" title="Cannot rename active profile">Rename</button>`
-        : `<button class="btn btn-ghost btn-xs" onclick="renameProfile('${name}', '${nodeName}')" title="Rename profile on ${nodeName}">Rename</button>`;
-
-      const deleteBtn = `<button class="btn btn-danger btn-xs" onclick="deleteProfile('${name}', '${nodeName}', ${p.is_active})" title="${p.is_active ? 'Force terminate session & delete' : 'Delete profile'}">Delete</button>`;
+        ? `<a href="${p.node_url}/handoff/" class="btn btn-accent btn-xs" title="Take over session in Handoff on ${nodeName}"><svg style="width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg> Take Over</a>`
+        : `<button class="btn btn-accent btn-xs" onclick="launchProfile('${name}', '${nodeName}')" title="Launch browser session on ${nodeName}"><svg style="width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg> Launch</button>`;
 
       html += `
         <tr>
-          <td data-label="Profile"><strong>${name}</strong></td>
+          <td data-label="Profile"><strong style="cursor:pointer;" onclick="openProfileMetadata('${name}', '${nodeName}')" title="Inspect profile metadata">${name}</strong></td>
           <td data-label="Node">${nodeBadge}</td>
           <td data-label="Disk Usage">${size}</td>
           <td data-label="Status">${statusBadge}</td>
           <td data-label="Actions" class="table-actions" style="text-align:right;">
-            <div style="display:inline-flex;gap:6px;">
+            <div style="display:inline-flex;gap:6px;align-items:center;">
               ${launchBtn}
-              ${cloneBtn}
-              ${renameBtn}
-              ${deleteBtn}
+              <div class="dropdown">
+                <button class="btn btn-ghost btn-xs" style="padding:2px 7px;font-size:14px;line-height:1;" onclick="toggleDropdown(this)" title="More actions">⋮</button>
+                <div class="dropdown-menu">
+                  <button class="dropdown-item" onclick="openProfileMetadata('${name}', '${nodeName}')">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    Inspect Metadata
+                  </button>
+                  <button class="dropdown-item" onclick="cloneProfile('${name}', '${nodeName}')">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    Clone Profile
+                  </button>
+                  ${!p.is_active ? `
+                  <button class="dropdown-item" onclick="renameProfile('${name}', '${nodeName}')">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                    Rename Profile
+                  </button>` : ''}
+                  <button class="dropdown-item" onclick="openTransferProfileModal('${name}', '${nodeName}')">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                    Transfer to Node...
+                  </button>
+                  <button class="dropdown-item" onclick="exportProfileArchive('${name}', '${nodeName}')">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Export (.tar.gz)
+                  </button>
+                  <div style="height:1px;background:var(--line);margin:4px 0;"></div>
+                  <button class="dropdown-item danger" onclick="deleteProfile('${name}', '${nodeName}', ${p.is_active})">
+                    <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                    Delete Profile
+                  </button>
+                </div>
+              </div>
             </div>
           </td>
         </tr>`;
     }
     html += `</tbody></table></div>`;
     pContainer.innerHTML = html;
+    if (prevScrollProfiles > 0) {
+      const el = pContainer.querySelector('.table-responsive');
+      if (el) el.scrollLeft = prevScrollProfiles;
+    }
   }
 
   // Render Session Recordings Table
   document.getElementById('recordingCountBadge').textContent = filteredRecordings.length;
   const rContainer = document.getElementById('recordingsContainer');
+  const prevScrollRecordings = rContainer.querySelector('.table-responsive')?.scrollLeft ?? 0;
   if (filteredRecordings.length === 0) {
     rContainer.innerHTML = `
       <div class="empty-state">
@@ -3142,23 +3666,27 @@ function renderMeshOverview(ov) {
         <table class="data-table">
           <thead>
             <tr>
+              <th style="width:44px;text-align:center;">Play</th>
               <th>Recording</th>
               <th>Node</th>
-              <th>Profile / Target</th>
+              <th>Target / Site</th>
               <th>Started</th>
               <th>Duration</th>
               <th>Frames</th>
               <th>Size</th>
               <th>Status</th>
-              <th style="text-align:right;">Actions</th>
+              <th style="width:40px;text-align:right;"></th>
             </tr>
           </thead>
           <tbody>`;
     for (const r of filteredRecordings) {
       const recId = escapeHtml(r.id);
       const nodeName = escapeHtml(r.node_name);
-      const nodeBadge = `<span class="badge badge-node">${nodeName}</span>`;
-      const prof = r.profile ? escapeHtml(r.profile) : (r.title ? escapeHtml(r.title) : '<em style="color:var(--muted);">ephemeral</em>');
+      const nodeBadge = getNodeBadge(r.node_name);
+      const pageUrl = r.final_url || r.initial_url || '';
+      const faviconHtml = getFaviconHtml(r.favicon_url, pageUrl);
+      const displayTitle = r.title || (pageUrl ? pageUrl : (r.profile ? `Profile: ${r.profile}` : 'ephemeral'));
+      const displaySub = r.profile ? `profile: ${r.profile}` : (pageUrl ? pageUrl : '');
       const started = new Date(r.started_at_secs * 1000).toLocaleString();
       const dur = formatUptime(r.duration_seconds);
       const frames = `${r.frame_count} frames`;
@@ -3170,28 +3698,70 @@ function renderMeshOverview(ov) {
       const cachedBadge = isCachedLocally
         ? ` <span class="badge badge-ok" style="font-size:10px;padding:2px 5px;" title="Cached in browser storage for instant offline playback">⚡ Cached</span>`
         : '';
+      const isLocal = !r.node_name || (ov && ov.local_node && ov.local_node.name === r.node_name);
+      const framesUrl = isLocal
+        ? `/api/recordings/${encodeURIComponent(r.id)}/frames`
+        : `/api/peers/${encodeURIComponent(r.node_name)}/recordings/${encodeURIComponent(r.id)}/frames`;
 
       html += `
         <tr>
-          <td data-label="Recording"><span class="badge badge-accent" title="${recId}">${recId.slice(0, 8)}</span>${cachedBadge}</td>
+          <td data-label="Play" style="text-align:center;width:44px;padding:6px 4px;">
+            <button class="btn btn-accent btn-xs" style="border-radius:50%;width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;" onclick="openPlayerModal('${recId}', '${nodeName}')" title="Play back session recording">
+              <svg style="width:12px;height:12px;fill:currentColor;margin-left:2px;" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            </button>
+          </td>
+          <td data-label="Recording"><span class="badge badge-accent" style="cursor:pointer;" onclick="openRecordingMetadata('${recId}')" title="Inspect metadata: ${recId}">${recId.slice(0, 8)}</span>${cachedBadge}</td>
           <td data-label="Node">${nodeBadge}</td>
-          <td data-label="Profile / Target"><strong>${prof}</strong></td>
+          <td data-label="Target" style="max-width:240px;">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+              ${faviconHtml}
+              <div style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                <strong style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${escapeHtml(displayTitle)}">${escapeHtml(displayTitle)}</strong>
+                ${displaySub ? `<span style="font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block;" title="${escapeHtml(displaySub)}">${escapeHtml(displaySub)}</span>` : ''}
+              </div>
+            </div>
+          </td>
           <td data-label="Started" style="font-size:12px;color:var(--muted);">${started}</td>
           <td data-label="Duration">${dur}</td>
           <td data-label="Frames"><span class="badge badge-muted">${frames}</span></td>
           <td data-label="Size">${size}</td>
           <td data-label="Status">${statusBadge}</td>
-          <td data-label="Actions" class="table-actions" style="text-align:right;">
-            <div style="display:inline-flex;gap:6px;">
-              <button class="btn btn-accent btn-xs" onclick="openPlayerModal('${recId}', '${nodeName}')" title="Play back session recording">Play</button>
-              <button class="btn btn-ghost btn-xs" onclick="exportWebMFromRecording('${recId}', '${nodeName}')" title="Download recording as WebM">Export</button>
-              <button class="btn btn-danger btn-xs" onclick="deleteRecording('${recId}', '${nodeName}')" title="Delete recording from disk">Delete</button>
+          <td data-label="Actions" style="text-align:right;width:40px;">
+            <div class="dropdown">
+              <button class="btn btn-ghost btn-xs" style="padding:2px 7px;font-size:14px;line-height:1;" onclick="toggleDropdown(this)" title="Actions menu">⋮</button>
+              <div class="dropdown-menu">
+                <button class="dropdown-item" onclick="openPlayerModal('${recId}', '${nodeName}')">
+                  <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                  Play Recording
+                </button>
+                <button class="dropdown-item" onclick="openRecordingMetadata('${recId}')">
+                  <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                  Inspect Metadata
+                </button>
+                <button class="dropdown-item" onclick="exportWebMFromRecording('${recId}', '${nodeName}')">
+                  <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Export WebM
+                </button>
+                <button class="dropdown-item" onclick="copyText('${framesUrl}', this)">
+                  <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  Copy Stream URL
+                </button>
+                <div style="height:1px;background:var(--line);margin:4px 0;"></div>
+                <button class="dropdown-item danger" onclick="deleteRecording('${recId}', '${nodeName}')">
+                  <svg style="width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  Delete Recording
+                </button>
+              </div>
             </div>
           </td>
         </tr>`;
     }
     html += `</tbody></table></div>`;
     rContainer.innerHTML = html;
+    if (prevScrollRecordings > 0) {
+      const el = rContainer.querySelector('.table-responsive');
+      if (el) el.scrollLeft = prevScrollRecordings;
+    }
   }
 
   // Render Targets & Quick Connect Banner
@@ -3853,6 +4423,11 @@ async function openPlayerModal(id, node) {
 
   // 3. Start download in Web Worker (resilient to tab backgrounding / navigation)
   const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+  const url = isLocal
+    ? `/api/recordings/${encodeURIComponent(id)}/frames`
+    : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}/frames`;
+  activePlayerModalId = id;
+  activePlayerModalNode = node;
   const recMeta = (currentOverview?.recordings || []).find(r => r.id === id);
   const expectedBytes = (recMeta && recMeta.size_bytes > 0) ? recMeta.size_bytes : 0;
 
@@ -4229,20 +4804,41 @@ if (playerCanvasEl) {
 
 // PWA Installation & Service Worker Registration
 let deferredInstallPrompt = null;
+const isStandalone = (typeof matchMedia === 'function' && matchMedia('(display-mode: standalone)').matches) || (window.navigator && window.navigator.standalone === true);
+
+function checkPwaInstallState() {
+  const installBtn = document.getElementById('pwaInstallBtn');
+  if (!installBtn) return;
+  if (isStandalone) {
+    installBtn.style.display = 'none';
+  } else {
+    installBtn.style.display = 'inline-flex';
+  }
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
-  const installBtn = document.getElementById('pwaInstallBtn');
-  if (installBtn) installBtn.style.display = 'inline-flex';
+  checkPwaInstallState();
 });
 
 async function triggerPwaInstall() {
-  if (!deferredInstallPrompt) return;
-  deferredInstallPrompt.prompt();
-  const { outcome } = await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt = null;
-  const installBtn = document.getElementById('pwaInstallBtn');
-  if (installBtn) installBtn.style.display = 'none';
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    const installBtn = document.getElementById('pwaInstallBtn');
+    if (installBtn && outcome === 'accepted') installBtn.style.display = 'none';
+    return;
+  }
+
+  const isIos = /iphone|ipad|ipod/.test(window.navigator.userAgent.toLowerCase());
+  if (isIos) {
+    alert('To install Browser Daemon on iOS / iPadOS:\n\n1. Tap the Share button in Safari (square with arrow pointing up)\n2. Scroll down and tap "Add to Home Screen"\n3. Tap "Add" in the top right');
+    return;
+  }
+
+  alert('To install Browser Daemon as an App:\n\nClick the install icon (⊕) in your browser address bar, or open your browser menu (⋮) and select "Install Browser Daemon" or "Add to Home Screen".');
 }
 
 window.addEventListener('appinstalled', () => {
@@ -4250,6 +4846,8 @@ window.addEventListener('appinstalled', () => {
   const installBtn = document.getElementById('pwaInstallBtn');
   if (installBtn) installBtn.style.display = 'none';
 });
+
+checkPwaInstallState();
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
