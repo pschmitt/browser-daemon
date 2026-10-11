@@ -81,6 +81,38 @@
   #list h1 { font-size: 17px; margin: 4px 2px 12px; }
   #list button { display: block; width: 100%; text-align: left; margin-bottom: 8px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--bar); color: var(--fg); font-size: 15px; }
   #list small { display: block; margin-top: 2px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* tabs modal */
+  #tabCountBadge { position: absolute; font-size: 10px; font-weight: 700; color: currentColor; line-height: 1; pointer-events: none; }
+  .tabs-modal-overlay { position: fixed; inset: 0; z-index: 50; display: none; align-items: flex-end; justify-content: center;
+    background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(4px); }
+  .tabs-modal-overlay.open { display: flex; }
+  @media (min-width: 640px) {
+    .tabs-modal-overlay { align-items: center; }
+  }
+  .tabs-modal-card { width: 100%; max-width: 580px; max-height: 85vh; background: var(--bar); border: 1px solid var(--line);
+    border-radius: 20px 20px 0 0; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+  @media (min-width: 640px) {
+    .tabs-modal-card { border-radius: 18px; }
+  }
+  .tabs-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); flex: none; }
+  .tabs-list { overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .tab-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line);
+    background: var(--bg); cursor: pointer; transition: border-color .15s, background .15s; }
+  .tab-card:hover { border-color: var(--accent); background: color-mix(in oklab, var(--bg) 80%, var(--btn)); }
+  .tab-card.active { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, var(--bg)); }
+  .tab-info { flex: 1; min-width: 0; }
+  .tab-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab-url { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+  .tab-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .tab-tag { font-size: 10.5px; font-weight: 600; text-transform: uppercase; padding: 2px 6px; border-radius: 6px; background: var(--btn); color: var(--muted); }
+  .tab-tag.current { background: var(--accent); color: #fff; }
+  .tab-close { width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; color: var(--muted);
+    cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; flex: none; }
+  .tab-close:hover { background: var(--line); color: var(--bad); }
+  .btn-xs { padding: 6px 12px; border-radius: 999px; border: 0; background: var(--accent); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .btn-close { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--btn); color: var(--fg); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+  .btn-close:hover { background: var(--line); }
 </style>
 </head>
 <body>
@@ -96,6 +128,12 @@
       <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">✕</button>
     </form>
   </div>
+  <button class="ib" id="tabsBtn" aria-label="Tabs" title="Switch tabs & sessions">
+    <div style="position:relative;display:inline-flex;align-items:center;justify-content:center;">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
+      <span id="tabCountBadge">1</span>
+    </div>
+  </button>
   <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
 </div>
@@ -119,6 +157,21 @@
 </div>
 <div id="bottom"></div>
 <input id="kb" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-hidden="true" tabindex="-1">
+<div id="tabsModal" class="tabs-modal-overlay">
+  <div class="tabs-modal-card">
+    <div class="tabs-modal-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:var(--accent);fill:none;stroke-width:2;"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
+        <span style="font-weight:700;font-size:16px;">Tabs &amp; Sessions</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button class="btn-xs" id="newTabBtn" title="Open new tab in this browser">+ New Tab</button>
+        <button class="btn-close" id="closeTabsBtn" title="Close">✕</button>
+      </div>
+    </div>
+    <div id="tabsList" class="tabs-list"></div>
+  </div>
+</div>
 <script>
 "use strict";
 // Phone-friendly live view of ONE page of the Browserless browser, over CDP:
@@ -130,7 +183,9 @@ const pageId = params.get("page");
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const $ = (id) => document.getElementById(id);
 const E = { bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
-  dot: $("dot"), host: $("host"), pill: $("pill"), urlForm: $("urlForm"), urlInput: $("urlInput"), urlCancel: $("urlCancel"), kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn") };
+  dot: $("dot"), host: $("host"), pill: $("pill"), urlForm: $("urlForm"), urlInput: $("urlInput"), urlCancel: $("urlCancel"),
+  tabsBtn: $("tabsBtn"), tabCountBadge: $("tabCountBadge"), tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
+  kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn") };
 const ctx = E.view.getContext("2d", { alpha: false, desynchronized: true }) || E.view.getContext("2d");
 
 /* ---------------------------------------------------------------- CDP */
@@ -284,6 +339,7 @@ async function refreshInfo() {
     const h = await cdp.call("Page.getNavigationHistory");
     E.back.disabled = h.currentIndex <= 0;
     E.fwd.disabled = h.currentIndex >= h.entries.length - 1;
+    updateTabBadge();
   } catch { /* page navigating */ }
 }
 
@@ -556,6 +612,153 @@ document.addEventListener("pointerdown", (e) => {
     stopUrlEditing();
   }
 });
+
+/* ---------------------------------------------------------------- tabs & sessions switcher */
+async function updateTabBadge() {
+  try {
+    const list = await (await fetch("/json/list")).json();
+    const pages = list.filter((x) => x.type === "page");
+    if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
+  } catch { /* ignore */ }
+}
+
+async function openTabsModal() {
+  if (manualKb) {
+    manualKb = false;
+    E.kbbtn.classList.remove("on");
+    E.keys.classList.remove("show");
+  }
+  if (E.pill.classList.contains("editing")) stopUrlEditing();
+  E.tabsModal.classList.add("open");
+  E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">Loading active tabs &amp; sessions…</div>`;
+
+  try {
+    const list = await (await fetch("/json/list")).json();
+    const pages = list.filter((x) => x.type === "page");
+    if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
+
+    if (pages.length === 0) {
+      E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">No open tabs found.</div>`;
+      return;
+    }
+
+    E.tabsList.innerHTML = "";
+    for (const p of pages) {
+      const isCurrent = p.id === pageId;
+      const card = document.createElement("div");
+      card.className = "tab-card" + (isCurrent ? " active" : "");
+
+      const info = document.createElement("div");
+      info.className = "tab-info";
+
+      const title = document.createElement("div");
+      title.className = "tab-title";
+      title.textContent = p.title || "(untitled)";
+
+      const url = document.createElement("div");
+      url.className = "tab-url";
+      url.textContent = p.url || "about:blank";
+
+      const metaWrap = document.createElement("div");
+      metaWrap.className = "tab-meta";
+
+      if (isCurrent) {
+        const curTag = document.createElement("span");
+        curTag.className = "tab-tag current";
+        curTag.textContent = "Active";
+        metaWrap.appendChild(curTag);
+      }
+
+      if (p.profile) {
+        const profTag = document.createElement("span");
+        profTag.className = "tab-tag";
+        profTag.textContent = "Profile: " + p.profile;
+        metaWrap.appendChild(profTag);
+      } else if (p.sessionId) {
+        const sessTag = document.createElement("span");
+        sessTag.className = "tab-tag";
+        sessTag.textContent = "Session: " + p.sessionId.slice(0, 8);
+        metaWrap.appendChild(sessTag);
+      }
+
+      info.appendChild(title);
+      info.appendChild(url);
+      if (metaWrap.children.length > 0) info.appendChild(metaWrap);
+
+      card.appendChild(info);
+
+      const closeBtn = document.createElement("button");
+      closeBtn.className = "tab-close";
+      closeBtn.title = "Close tab";
+      closeBtn.setAttribute("aria-label", "Close tab");
+      closeBtn.innerHTML = "✕";
+      closeBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (isCurrent && !confirm("Close the current tab?")) return;
+        try {
+          if (cdp) await cdp.call("Target.closeTarget", { targetId: p.id });
+        } catch { /* ignore */ }
+        if (isCurrent) {
+          location.search = "";
+        } else {
+          openTabsModal();
+        }
+      };
+      card.appendChild(closeBtn);
+
+      card.onclick = () => {
+        closeTabsModal();
+        if (!isCurrent) {
+          location.search = "?page=" + encodeURIComponent(p.id);
+        }
+      };
+
+      E.tabsList.appendChild(card);
+    }
+  } catch (err) {
+    E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--bad);font-size:13.5px;">Failed to load tabs: ${err.message}</div>`;
+  }
+}
+
+function closeTabsModal() {
+  E.tabsModal.classList.remove("open");
+}
+
+E.tabsBtn.onclick = () => openTabsModal();
+E.closeTabsBtn.onclick = () => closeTabsModal();
+E.tabsModal.onclick = (e) => {
+  if (e.target === E.tabsModal) closeTabsModal();
+};
+
+E.newTabBtn.onclick = async () => {
+  const urlToOpen = prompt("Enter URL for new tab:", "https://www.google.com");
+  if (!urlToOpen) return;
+  let targetUrl = urlToOpen.trim();
+  if (!/^https?:\/\//i.test(targetUrl) && !/^about:/i.test(targetUrl)) {
+    if (targetUrl.includes(".") && !targetUrl.includes(" ")) {
+      targetUrl = "https://" + targetUrl;
+    } else {
+      targetUrl = "https://www.google.com/search?q=" + encodeURIComponent(targetUrl);
+    }
+  }
+  try {
+    if (cdp) {
+      const res = await cdp.call("Target.createTarget", { url: targetUrl });
+      if (res && res.targetId) {
+        location.search = "?page=" + encodeURIComponent(res.targetId);
+        return;
+      }
+    }
+    const sess = await (await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ persistent: false })
+    })).json();
+    location.search = "";
+  } catch (e) {
+    alert("Failed to create new tab: " + e.message);
+  }
+};
 
 async function navigateHistory(d) {
   const h = await cdp.call("Page.getNavigationHistory");

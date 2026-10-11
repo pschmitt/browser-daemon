@@ -361,6 +361,10 @@ pub struct DevToolsTarget {
     pub devtools_frontend_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_socket_debugger_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -687,6 +691,8 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
                 for mut target in targets {
                     target.web_socket_debugger_url =
                         Some(format!("/devtools/page/{}", target.id));
+                    target.session_id = Some(session.id);
+                    target.profile = session.profile.clone();
                     all_targets.push(target);
                 }
             }
