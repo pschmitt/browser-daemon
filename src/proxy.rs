@@ -53,8 +53,11 @@ pub async fn bridge_websockets(
                 let s = text.as_str();
                 if s.contains("\"Page.screencastFrame\"") {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
-                        if val.get("method").and_then(|v| v.as_str()) == Some("Page.screencastFrame") {
-                            if let Some(data) = val.pointer("/params/data").and_then(|v| v.as_str()) {
+                        if val.get("method").and_then(|v| v.as_str())
+                            == Some("Page.screencastFrame")
+                        {
+                            if let Some(data) = val.pointer("/params/data").and_then(|v| v.as_str())
+                            {
                                 let _ = tx.send(ProxyRecordingFrame {
                                     url: current_url.clone(),
                                     title: current_title.clone(),
@@ -65,7 +68,8 @@ pub async fn bridge_websockets(
                     }
                 } else if s.contains("\"Page.frameNavigated\"") {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(s) {
-                        if let Some(url) = val.pointer("/params/frame/url").and_then(|v| v.as_str()) {
+                        if let Some(url) = val.pointer("/params/frame/url").and_then(|v| v.as_str())
+                        {
                             if !url.is_empty() && url != "about:blank" {
                                 current_url = Some(url.to_string());
                             }

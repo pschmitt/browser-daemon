@@ -1,3 +1,4 @@
+mod bidi;
 mod browser;
 mod proxy;
 mod recorder;
@@ -23,6 +24,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::bidi::BidiHub;
 use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine};
 use crate::proxy::bridge_websockets;
 use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
@@ -96,7 +98,10 @@ pub struct Args {
     #[arg(long, default_value_t = 100)]
     pub recording_max_count: usize,
 
-    #[arg(long, help = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N)")]
+    #[arg(
+        long,
+        help = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N)"
+    )]
     pub max_session_memory_mb: Option<u64>,
 }
 
@@ -111,12 +116,24 @@ pub struct ManagedSession {
     pub created_at: Instant,
     pub client_count: Arc<AtomicUsize>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
+    pub bidi: Option<Arc<BidiHub>>,
 }
 
 impl ManagedSession {
-    pub async fn to_summary(&self, http_client: &reqwest::Client, is_recording: bool) -> SessionSummary {
-        let tabs_count = if self.engine == BrowserEngine::Firefox {
-            1
+    pub async fn to_summary(
+        &self,
+        http_client: &reqwest::Client,
+        is_recording: bool,
+    ) -> SessionSummary {
+        let tabs_count = if let Some(ref hub) = self.bidi {
+            hub.call(
+                "browsingContext.getTree",
+                serde_json::json!({ "maxDepth": 0 }),
+            )
+            .await
+            .ok()
+            .and_then(|t| t["contexts"].as_array().map(Vec::len))
+            .unwrap_or(0)
         } else {
             let url = format!("http://127.0.0.1:{}/json/list", self.port);
             if let Ok(res) = http_client.get(&url).send().await {
@@ -199,11 +216,18 @@ impl AppState {
         query_token: Option<&str>,
     ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
         if let Some(ref expected) = self.cluster_secret {
-            let auth_header = headers.get(header::AUTHORIZATION).and_then(|h| h.to_str().ok());
-            let custom_header = headers.get("x-browser-cluster-secret").and_then(|h| h.to_str().ok());
+            let auth_header = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|h| h.to_str().ok());
+            let custom_header = headers
+                .get("x-browser-cluster-secret")
+                .and_then(|h| h.to_str().ok());
 
             let token = auth_header
-                .and_then(|h| h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer ")))
+                .and_then(|h| {
+                    h.strip_prefix("Bearer ")
+                        .or_else(|| h.strip_prefix("bearer "))
+                })
                 .or(custom_header)
                 .or(query_token);
 
@@ -255,23 +279,30 @@ impl AppState {
 
         let active_count = self.sessions.read().await.len();
         if active_count >= self.max_sessions {
-            warn!(active = active_count, max = self.max_sessions, "Session limit reached");
+            warn!(
+                active = active_count,
+                max = self.max_sessions,
+                "Session limit reached"
+            );
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Session limit reached. Try again later.",
             ));
         }
 
-        let browser = match ActiveBrowser::spawn(&self.config, engine, profile, width, height, max_memory_mb).await {
-            Ok(b) => b,
-            Err(e) => {
-                error!(error = %e, engine = %engine, "Failed to spawn browser process");
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed to spawn browser process",
-                ));
-            }
-        };
+        let browser =
+            match ActiveBrowser::spawn(&self.config, engine, profile, width, height, max_memory_mb)
+                .await
+            {
+                Ok(b) => b,
+                Err(e) => {
+                    error!(error = %e, engine = %engine, "Failed to spawn browser process");
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to spawn browser process",
+                    ));
+                }
+            };
 
         let session = ManagedSession {
             id: browser.id,
@@ -282,6 +313,7 @@ impl AppState {
             persistent,
             created_at: browser.created_at,
             client_count: Arc::new(AtomicUsize::new(0)),
+            bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
 
@@ -290,18 +322,31 @@ impl AppState {
             guard.insert(session.id, session.clone());
         }
 
-        if engine == BrowserEngine::Chromium && record.unwrap_or(self.recorder_config.enabled) {
-            let handle = recorder::start_recording(
-                session.id,
-                session.port,
-                session.profile.clone(),
-                self.node_name.clone(),
-                (*self.recorder_config).clone(),
-            );
-            self.active_recordings.write().await.insert(session.id, handle);
+        if record.unwrap_or(self.recorder_config.enabled) {
+            self.start_recording(&session).await;
         }
 
         Ok(session)
+    }
+
+    pub async fn start_recording(&self, session: &ManagedSession) -> Uuid {
+        let handle = recorder::start_recording(
+            session.id,
+            session.port,
+            session.profile.clone(),
+            self.node_name.clone(),
+            (*self.recorder_config).clone(),
+        );
+        // Firefox has no screencast: feed the recorder with BiDi screenshots instead.
+        if let Some(ref hub) = session.bidi {
+            spawn_bidi_frame_feeder(hub.clone(), handle.clone());
+        }
+        let rec_id = handle.recording_id;
+        self.active_recordings
+            .write()
+            .await
+            .insert(session.id, handle);
+        rec_id
     }
 
     pub async fn terminate_session(&self, id: &Uuid) -> bool {
@@ -337,6 +382,8 @@ pub struct LaunchParams {
     pub height: Option<u32>,
     pub record: Option<bool>,
     pub max_memory_mb: Option<u64>,
+    /// Attach without counting as a client (handoff page).
+    pub observer: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -350,6 +397,53 @@ pub struct CreateSessionRequest {
     pub height: Option<u32>,
     pub record: Option<bool>,
     pub max_memory_mb: Option<u64>,
+}
+
+fn spawn_bidi_frame_feeder(hub: Arc<BidiHub>, handle: SessionRecorderHandle) {
+    tokio::spawn(async move {
+        let mut last = String::new();
+        while !handle.stop_flag.load(Ordering::SeqCst) && !hub.is_closed() {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let Some(ctx) = hub.active_context().await else {
+                continue;
+            };
+            let Ok(data) = hub.screenshot_jpeg(&ctx).await else {
+                continue;
+            };
+            if data == last {
+                continue;
+            }
+            let info = hub
+                .call(
+                    "script.evaluate",
+                    serde_json::json!({
+                        "expression": "JSON.stringify([location.href, document.title])",
+                        "target": { "context": ctx },
+                        "awaitPromise": false
+                    }),
+                )
+                .await
+                .ok()
+                .and_then(|r| {
+                    r.pointer("/result/value")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .and_then(|s| serde_json::from_str::<(String, String)>(&s).ok());
+            let (url, title) = match info {
+                Some((u, t)) => (Some(u), Some(t)),
+                None => (None, None),
+            };
+            last = data.clone();
+            if handle
+                .frame_tx
+                .send(recorder::ProxyRecordingFrame { url, title, data })
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 }
 
 fn default_true() -> bool {
@@ -430,6 +524,8 @@ pub struct DevToolsTarget {
     pub session_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<BrowserEngine>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -532,7 +628,9 @@ fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> {
     let trimmed = url_str.trim().trim_end_matches('/');
     if let Ok(parsed) = url::Url::parse(trimmed) {
         if let Some(host) = parsed.host_str() {
-            if host.starts_with(&format!("browser.{}.", self_node)) || host == format!("browser.{}", self_node) {
+            if host.starts_with(&format!("browser.{}.", self_node))
+                || host == format!("browser.{}", self_node)
+            {
                 return None;
             }
             if let Some(rest) = host.strip_prefix("browser.") {
@@ -570,9 +668,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_else(|_| "node".to_string())
     });
 
-    let public_url = args.public_url.unwrap_or_else(|| {
-        format!("https://browser.{}.ts.brkn.lol", node_name)
-    });
+    let public_url = args
+        .public_url
+        .unwrap_or_else(|| format!("https://browser.{}.ts.brkn.lol", node_name));
 
     let mut peer_map = HashMap::new();
     for p in args.peers {
@@ -600,7 +698,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Err(e) => {
-                eprintln!("Failed to read cluster secret file {}: {}", path.display(), e);
+                eprintln!(
+                    "Failed to read cluster secret file {}: {}",
+                    path.display(),
+                    e
+                );
                 std::process::exit(1);
             }
         }
@@ -696,9 +798,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/json/activate/{id}",
-            put(json_activate)
-                .post(json_activate)
-                .get(json_activate),
+            put(json_activate).post(json_activate).get(json_activate),
         )
         .route("/handoff/", get(handoff_page))
         .route("/handoff", get(|| async { Redirect::to("/handoff/") }))
@@ -706,11 +806,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/firefox", get(handle_firefox_ws))
         .route("/devtools/page/{page_id}", get(handle_page_ws))
         // REST Management APIs for sessions and profiles
-        .route("/api/sessions", get(api_list_sessions).post(api_create_session))
-        .route("/api/sessions/{id}", get(api_get_session).delete(api_delete_session))
+        .route(
+            "/api/sessions",
+            get(api_list_sessions).post(api_create_session),
+        )
+        .route(
+            "/api/sessions/{id}",
+            get(api_get_session).delete(api_delete_session),
+        )
         .route("/api/sessions/{id}/record", post(api_session_start_record))
-        .route("/api/sessions/{id}/stop-record", post(api_session_stop_record))
-        .route("/api/profiles", get(api_list_profiles).post(api_create_profile))
+        .route(
+            "/api/sessions/{id}/stop-record",
+            post(api_session_stop_record),
+        )
+        .route(
+            "/api/profiles",
+            get(api_list_profiles).post(api_create_profile),
+        )
         .route(
             "/api/profiles/{name}",
             get(api_get_profile)
@@ -724,7 +836,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/profiles/{name}/transfer", post(api_transfer_profile))
         // Recording APIs
         .route("/api/recordings", get(api_list_recordings))
-        .route("/api/recordings/{id}", get(api_get_recording).delete(api_delete_recording))
+        .route(
+            "/api/recordings/{id}",
+            get(api_get_recording).delete(api_delete_recording),
+        )
         .route("/api/recordings/{id}/frames", get(api_get_recording_frames))
         .route("/api/recordings/vacuum", post(api_vacuum_recordings))
         // Peer-to-Peer Mesh APIs
@@ -734,7 +849,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/peers", get(api_list_peers).post(api_add_peer))
         .route("/api/peers/{peer}", delete(api_remove_peer))
         .route("/api/peers/{peer}/sessions", post(api_peer_create_session))
-        .route("/api/peers/{peer}/sessions/{id}", delete(api_peer_delete_session))
+        .route(
+            "/api/peers/{peer}/sessions/{id}",
+            delete(api_peer_delete_session),
+        )
         .route("/api/peers/{peer}/profiles", post(api_peer_create_profile))
         .route(
             "/api/peers/{peer}/profiles/{name}",
@@ -742,17 +860,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .patch(api_peer_update_profile)
                 .put(api_peer_update_profile),
         )
-        .route("/api/peers/{peer}/profiles/{name}/clone", post(api_peer_clone_profile))
-        .route("/api/peers/{peer}/profiles/{name}/export", get(api_peer_export_profile))
-        .route("/api/peers/{peer}/profiles/{name}/import", post(api_peer_import_profile))
-        .route("/api/peers/{peer}/profiles/{name}/transfer", post(api_peer_transfer_profile))
-        .route("/api/peers/{peer}/recordings", get(api_peer_list_recordings))
-        .route("/api/peers/{peer}/recordings/{id}", get(api_peer_get_recording).delete(api_peer_delete_recording))
-        .route("/api/peers/{peer}/recordings/{id}/frames", get(api_peer_get_recording_frames))
-        .route("/api/peers/{peer}/recordings/vacuum", post(api_peer_vacuum_recordings))
+        .route(
+            "/api/peers/{peer}/profiles/{name}/clone",
+            post(api_peer_clone_profile),
+        )
+        .route(
+            "/api/peers/{peer}/profiles/{name}/export",
+            get(api_peer_export_profile),
+        )
+        .route(
+            "/api/peers/{peer}/profiles/{name}/import",
+            post(api_peer_import_profile),
+        )
+        .route(
+            "/api/peers/{peer}/profiles/{name}/transfer",
+            post(api_peer_transfer_profile),
+        )
+        .route(
+            "/api/peers/{peer}/recordings",
+            get(api_peer_list_recordings),
+        )
+        .route(
+            "/api/peers/{peer}/recordings/{id}",
+            get(api_peer_get_recording).delete(api_peer_delete_recording),
+        )
+        .route(
+            "/api/peers/{peer}/recordings/{id}/frames",
+            get(api_peer_get_recording_frames),
+        )
+        .route(
+            "/api/peers/{peer}/recordings/vacuum",
+            post(api_peer_vacuum_recordings),
+        )
         .route(
             "/api/peers/{peer}/json/new",
-            put(api_peer_json_new).post(api_peer_json_new).get(api_peer_json_new),
+            put(api_peer_json_new)
+                .post(api_peer_json_new)
+                .get(api_peer_json_new),
         )
         .route(
             "/api/peers/{peer}/json/close/{id}",
@@ -811,17 +955,20 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
     let mut all_targets = Vec::new();
 
     for session in sessions {
-        if session.engine == BrowserEngine::Firefox {
+        if let Some(ref hub) = session.bidi {
+            for ctx in hub.contexts().await {
+                all_targets.push(firefox_target(&session, ctx));
+            }
             continue;
         }
         let url = format!("http://127.0.0.1:{}/json/list", session.port);
         if let Ok(res) = state.http_client.get(&url).send().await {
             if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
                 for mut target in targets {
-                    target.web_socket_debugger_url =
-                        Some(format!("/devtools/page/{}", target.id));
+                    target.web_socket_debugger_url = Some(format!("/devtools/page/{}", target.id));
                     target.session_id = Some(session.id);
                     target.profile = session.profile.clone();
+                    target.engine = Some(BrowserEngine::Chromium);
                     all_targets.push(target);
                 }
             }
@@ -829,6 +976,33 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
     }
 
     all_targets
+}
+
+fn firefox_target(session: &ManagedSession, ctx: bidi::BidiContext) -> DevToolsTarget {
+    DevToolsTarget {
+        id: ctx.id,
+        title: ctx.title,
+        target_type: "page".to_string(),
+        url: ctx.url,
+        devtools_frontend_url: None,
+        web_socket_debugger_url: Some(format!("/firefox?session_id={}", session.id)),
+        session_id: Some(session.id),
+        profile: session.profile.clone(),
+        engine: Some(BrowserEngine::Firefox),
+    }
+}
+
+/// Find the Firefox session owning a BiDi browsing context.
+async fn find_firefox_context(state: &AppState, context: &str) -> Option<ManagedSession> {
+    let sessions: Vec<ManagedSession> = state.sessions.read().await.values().cloned().collect();
+    for session in sessions {
+        if let Some(ref hub) = session.bidi {
+            if hub.contexts().await.iter().any(|c| c.id == context) {
+                return Some(session);
+            }
+        }
+    }
+    None
 }
 
 async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
@@ -897,20 +1071,14 @@ async fn service_worker_js() -> impl IntoResponse {
 
 async fn icon_192_png() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/png"),
-        )],
+        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
         ICON_192,
     )
 }
 
 async fn icon_512_png() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/png"),
-        )],
+        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
         ICON_512,
     )
 }
@@ -990,6 +1158,13 @@ async fn json_new(
         } else if let Some(ref pid) = page {
             let mut found = None;
             for s in guard.values() {
+                if let Some(ref hub) = s.bidi {
+                    if hub.contexts().await.iter().any(|c| &c.id == pid) {
+                        found = Some(s.clone());
+                        break;
+                    }
+                    continue;
+                }
                 let list_url = format!("http://127.0.0.1:{}/json/list", s.port);
                 if let Ok(res) = state.http_client.get(&list_url).send().await {
                     if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
@@ -1008,13 +1183,29 @@ async fn json_new(
 
     let session = match session {
         Some(s) => s,
-        None => {
-            state
-                .spawn_session(BrowserEngine::Chromium, None, false, None, None, Some(state.recorder_config.enabled), None)
-                .await
-                .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?
-        }
+        None => state
+            .spawn_session(
+                BrowserEngine::Chromium,
+                None,
+                false,
+                None,
+                None,
+                Some(state.recorder_config.enabled),
+                None,
+            )
+            .await
+            .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
     };
+
+    if let Some(ref hub) = session.bidi {
+        let ctx = hub.create_tab(&target_url).await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
+        return Ok(Json(firefox_target(&session, ctx)));
+    }
 
     let mut dest_url = url::Url::parse(&format!("http://127.0.0.1:{}/json/new", session.port))
         .map_err(|e| {
@@ -1025,17 +1216,12 @@ async fn json_new(
         })?;
     dest_url.set_query(Some(&target_url));
 
-    let res = state
-        .http_client
-        .put(dest_url)
-        .send()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-        })?;
+    let res = state.http_client.put(dest_url).send().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+    })?;
 
     let mut target = res.json::<DevToolsTarget>().await.map_err(|e| {
         (
@@ -1047,6 +1233,7 @@ async fn json_new(
     target.web_socket_debugger_url = Some(format!("/devtools/page/{}", target.id));
     target.session_id = Some(session.id);
     target.profile = session.profile.clone();
+    target.engine = Some(BrowserEngine::Chromium);
 
     Ok(Json(target))
 }
@@ -1059,6 +1246,15 @@ async fn json_close(
         let guard = state.sessions.read().await;
         guard.values().cloned().collect()
     };
+
+    if let Some(session) = find_firefox_context(&state, &id).await {
+        if let Some(ref hub) = session.bidi {
+            return match hub.close_tab(&id).await {
+                Ok(()) => (StatusCode::OK, "Target is closing").into_response(),
+                Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+            };
+        }
+    }
 
     for session in sessions {
         if session.engine == BrowserEngine::Firefox {
@@ -1083,6 +1279,15 @@ async fn json_activate(
         let guard = state.sessions.read().await;
         guard.values().cloned().collect()
     };
+
+    if let Some(session) = find_firefox_context(&state, &id).await {
+        if let Some(ref hub) = session.bidi {
+            return match hub.activate_tab(&id).await {
+                Ok(()) => (StatusCode::OK, "Target activated").into_response(),
+                Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+            };
+        }
+    }
 
     for session in sessions {
         if session.engine == BrowserEngine::Firefox {
@@ -1190,7 +1395,7 @@ async fn handle_firefox_ws(
                 persistent,
                 params.width,
                 params.height,
-                Some(false),
+                params.record,
                 params.max_memory_mb,
             )
             .await
@@ -1200,26 +1405,26 @@ async fn handle_firefox_ws(
         }
     };
 
+    let Some(hub) = session.bidi.clone() else {
+        return (StatusCode::BAD_REQUEST, "Not a Firefox session").into_response();
+    };
+    // The handoff page attaches as an observer: it must not keep sessions alive.
+    let counted = !params.observer.unwrap_or(false);
+
     ws.on_upgrade(move |socket| async move {
-        session.client_count.fetch_add(1, Ordering::SeqCst);
-
-        let ws_path = session.ws_path.trim_start_matches('/');
-        let backend_ws_url = format!("ws://127.0.0.1:{}/{}", session.port, ws_path);
-        info!(session_id = %session.id, url = %backend_ws_url, "Connecting client to Firefox WebDriver BiDi");
-
-        match tokio_tungstenite::connect_async(&backend_ws_url).await {
-            Ok((server_ws, _)) => {
-                bridge_websockets(socket, server_ws, None, None, None).await;
-            }
-            Err(e) => {
-                error!(session_id = %session.id, error = %e, "Failed to connect to Firefox backend");
-            }
+        if counted {
+            session.client_count.fetch_add(1, Ordering::SeqCst);
         }
+        info!(session_id = %session.id, observer = !counted, "Client attached to Firefox WebDriver BiDi");
 
-        let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
-        if !session.persistent && remaining == 0 {
-            info!(session_id = %session.id, "Auto-terminating non-persistent session");
-            state.terminate_session(&session.id).await;
+        hub.serve_client(socket).await;
+
+        if counted {
+            let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
+            if !session.persistent && remaining == 0 {
+                info!(session_id = %session.id, "Auto-terminating non-persistent session");
+                state.terminate_session(&session.id).await;
+            }
         }
     })
 }
@@ -1236,6 +1441,9 @@ async fn handle_page_ws(
 
     let mut target_info: Option<(u16, Uuid, Option<String>, Option<String>)> = None;
     for session in sessions {
+        if session.bidi.is_some() {
+            continue;
+        }
         let url = format!("http://127.0.0.1:{}/json/list", session.port);
         if let Ok(res) = state.http_client.get(&url).send().await {
             if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
@@ -1366,7 +1574,11 @@ async fn api_create_session(
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
 
-    let is_rec = state.active_recordings.read().await.contains_key(&session.id);
+    let is_rec = state
+        .active_recordings
+        .read()
+        .await
+        .contains_key(&session.id);
     let summary = session.to_summary(&state.http_client, is_rec).await;
     Ok((StatusCode::CREATED, Json(summary)))
 }
@@ -1379,13 +1591,17 @@ async fn api_get_session(
     state.check_auth(&headers)?;
     let session = {
         let guard = state.sessions.read().await;
-        guard
-            .get(&id)
-            .cloned()
-            .ok_or((StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Session not found" }))))?
+        guard.get(&id).cloned().ok_or((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
+        ))?
     };
 
-    let is_rec = state.active_recordings.read().await.contains_key(&session.id);
+    let is_rec = state
+        .active_recordings
+        .read()
+        .await
+        .contains_key(&session.id);
     let summary = session.to_summary(&state.http_client, is_rec).await;
     let url = format!("http://127.0.0.1:{}/json/list", session.port);
     let targets = if let Ok(res) = state.http_client.get(&url).send().await {
@@ -1455,7 +1671,9 @@ async fn api_create_profile(
         if !source_dir.exists() {
             return Err((
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Source profile '{}' to clone not found", source_sanitized) })),
+                Json(
+                    serde_json::json!({ "error": format!("Source profile '{}' to clone not found", source_sanitized) }),
+                ),
             ));
         }
 
@@ -1614,7 +1832,9 @@ async fn api_update_profile(
             .map(|d| d.as_secs());
         let is_active = {
             let guard = state.sessions.read().await;
-            guard.values().any(|s| s.profile.as_deref() == Some(&old_sanitized))
+            guard
+                .values()
+                .any(|s| s.profile.as_deref() == Some(&old_sanitized))
         };
         return Ok(Json(ProfileInfo {
             name: old_sanitized,
@@ -1629,7 +1849,10 @@ async fn api_update_profile(
     // Check if active
     {
         let guard = state.sessions.read().await;
-        if let Some(s) = guard.values().find(|s| s.profile.as_deref() == Some(&old_sanitized)) {
+        if let Some(s) = guard
+            .values()
+            .find(|s| s.profile.as_deref() == Some(&old_sanitized))
+        {
             return Err((
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({
@@ -1700,7 +1923,9 @@ async fn api_clone_profile(
     if !source_dir.exists() {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Source profile '{}' not found", source_sanitized) })),
+            Json(
+                serde_json::json!({ "error": format!("Source profile '{}' not found", source_sanitized) }),
+            ),
         ));
     }
 
@@ -1708,7 +1933,9 @@ async fn api_clone_profile(
     if target_dir.exists() {
         return Err((
             StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": format!("Target profile '{}' already exists", target_sanitized) })),
+            Json(
+                serde_json::json!({ "error": format!("Target profile '{}' already exists", target_sanitized) }),
+            ),
         ));
     }
 
@@ -1828,7 +2055,10 @@ async fn export_profile_archive(
     }
     {
         let guard = state.sessions.read().await;
-        if let Some(s) = guard.values().find(|s| s.profile.as_deref() == Some(&sanitized)) {
+        if let Some(s) = guard
+            .values()
+            .find(|s| s.profile.as_deref() == Some(&sanitized))
+        {
             return Err((
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({
@@ -1875,12 +2105,15 @@ async fn api_export_profile(
     let sanitized = sanitize_profile_name(&name);
     let bytes = export_profile_archive(&state, &sanitized).await?;
     let cd_value = format!("attachment; filename=\"{}.tar.gz\"", sanitized);
-    let cd_header = HeaderValue::from_str(&cd_value)
-        .unwrap_or_else(|_| HeaderValue::from_static("attachment"));
+    let cd_header =
+        HeaderValue::from_str(&cd_value).unwrap_or_else(|_| HeaderValue::from_static("attachment"));
 
     Ok((
         [
-            (header::CONTENT_TYPE, HeaderValue::from_static("application/gzip")),
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/gzip"),
+            ),
             (header::CONTENT_DISPOSITION, cd_header),
         ],
         bytes,
@@ -1916,11 +2149,16 @@ async fn api_import_profile(
         if !overwrite {
             return Err((
                 StatusCode::CONFLICT,
-                Json(serde_json::json!({ "error": format!("Profile '{}' already exists on target", sanitized) })),
+                Json(
+                    serde_json::json!({ "error": format!("Profile '{}' already exists on target", sanitized) }),
+                ),
             ));
         }
         let guard = state.sessions.read().await;
-        if let Some(s) = guard.values().find(|s| s.profile.as_deref() == Some(&sanitized)) {
+        if let Some(s) = guard
+            .values()
+            .find(|s| s.profile.as_deref() == Some(&sanitized))
+        {
             return Err((
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({
@@ -2038,7 +2276,9 @@ async fn api_transfer_profile(
     if target_node.is_empty() || target_node == state.node_name {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Target node must be a different node in the cluster" })),
+            Json(
+                serde_json::json!({ "error": "Target node must be a different node in the cluster" }),
+            ),
         ));
     }
 
@@ -2054,7 +2294,9 @@ async fn api_transfer_profile(
         None => {
             return Err((
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Target node '{}' not found in mesh", target_node) })),
+                Json(
+                    serde_json::json!({ "error": format!("Target node '{}' not found in mesh", target_node) }),
+                ),
             ));
         }
     };
@@ -2083,10 +2325,11 @@ async fn api_transfer_profile(
         })?;
 
     if !upload_res.status().is_success() {
-        let status = StatusCode::from_u16(upload_res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-        let error_json = upload_res.json::<serde_json::Value>().await.unwrap_or_else(|_| {
-            serde_json::json!({ "error": "Target node rejected profile import" })
-        });
+        let status =
+            StatusCode::from_u16(upload_res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+        let error_json = upload_res.json::<serde_json::Value>().await.unwrap_or_else(
+            |_| serde_json::json!({ "error": "Target node rejected profile import" }),
+        );
         return Err((status, Json(error_json)));
     }
 
@@ -2203,9 +2446,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         peer_futures.push(tokio::spawn(async move {
             let add_auth = |mut builder: reqwest::RequestBuilder| {
                 if let Some(ref s) = sec {
-                    builder = builder
-                        .bearer_auth(s)
-                        .header("X-Browser-Cluster-Secret", s);
+                    builder = builder.bearer_auth(s).header("X-Browser-Cluster-Secret", s);
                 }
                 builder
             };
@@ -2225,21 +2466,40 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
             match node_res {
                 Ok(res) if res.status().is_success() => {
                     let node_info: Result<NodeInfo, _> = res.json().await;
-                    let (node_name, active_sessions, max_sessions, profiles_count, uptime_seconds, recordings_count, storage_used_bytes, max_storage_bytes, supported_engines) =
-                        match node_info {
-                            Ok(info) => (
-                                info.name,
-                                info.active_sessions,
-                                info.max_sessions,
-                                info.profiles_count,
-                                info.uptime_seconds,
-                                info.recordings_count,
-                                info.storage_used_bytes,
-                                info.max_storage_bytes,
-                                info.supported_engines,
-                            ),
-                            Err(_) => (p_name.clone(), 0, 8, 0, 0, 0, 0, 0, vec![BrowserEngine::Chromium]),
-                        };
+                    let (
+                        node_name,
+                        active_sessions,
+                        max_sessions,
+                        profiles_count,
+                        uptime_seconds,
+                        recordings_count,
+                        storage_used_bytes,
+                        max_storage_bytes,
+                        supported_engines,
+                    ) = match node_info {
+                        Ok(info) => (
+                            info.name,
+                            info.active_sessions,
+                            info.max_sessions,
+                            info.profiles_count,
+                            info.uptime_seconds,
+                            info.recordings_count,
+                            info.storage_used_bytes,
+                            info.max_storage_bytes,
+                            info.supported_engines,
+                        ),
+                        Err(_) => (
+                            p_name.clone(),
+                            0,
+                            8,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            vec![BrowserEngine::Chromium],
+                        ),
+                    };
 
                     let p_sessions: Vec<SessionSummary> = match add_auth(c.get(&sessions_url))
                         .timeout(std::time::Duration::from_millis(1800))
@@ -2400,7 +2660,17 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     let mut max_storage_bytes = local_node.max_storage_bytes;
 
     for task in peer_futures {
-        if let Ok((p_state, node_name, node_url, p_sessions, p_profiles, p_targets, p_recordings, p_max_storage)) = task.await {
+        if let Ok((
+            p_state,
+            node_name,
+            node_url,
+            p_sessions,
+            p_profiles,
+            p_targets,
+            p_recordings,
+            p_max_storage,
+        )) = task.await
+        {
             if p_state.status == "online" {
                 online_nodes += 1;
                 total_capacity += p_state.max_sessions;
@@ -2444,7 +2714,11 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         }
     }
 
-    all_recordings.sort_by(|a, b| b.recording.started_at_secs.cmp(&a.recording.started_at_secs));
+    all_recordings.sort_by(|a, b| {
+        b.recording
+            .started_at_secs
+            .cmp(&a.recording.started_at_secs)
+    });
 
     let total_nodes = 1 + peer_states.len();
     let total_sessions = all_sessions.len();
@@ -2906,10 +3180,7 @@ async fn api_peer_export_profile(
         }
     };
     let url = format!("{}/api/profiles/{}/export", peer_url, name);
-    let res = state
-        .peer_request(state.http_client.get(&url))
-        .send()
-        .await;
+    let res = state.peer_request(state.http_client.get(&url)).send().await;
     proxy_response(res).await
 }
 
@@ -3008,7 +3279,11 @@ async fn api_get_recording_frames(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     state.check_auth(&headers)?;
-    let frames_path = state.recorder_config.recordings_dir.join(id.to_string()).join("frames.jsonl");
+    let frames_path = state
+        .recorder_config
+        .recordings_dir
+        .join(id.to_string())
+        .join("frames.jsonl");
     if !frames_path.exists() {
         return Err((
             StatusCode::NOT_FOUND,
@@ -3079,26 +3354,13 @@ async fn api_session_start_record(
         ))?
     };
 
-    if session.engine == BrowserEngine::Firefox {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Recording is not supported for Firefox sessions (requires Chromium CDP screencast)" })),
+    if state.active_recordings.read().await.contains_key(&id) {
+        return Ok(Json(
+            serde_json::json!({ "status": "already_recording", "session_id": id }),
         ));
     }
 
-    if state.active_recordings.read().await.contains_key(&id) {
-        return Ok(Json(serde_json::json!({ "status": "already_recording", "session_id": id })));
-    }
-
-    let handle = recorder::start_recording(
-        session.id,
-        session.port,
-        session.profile.clone(),
-        state.node_name.clone(),
-        (*state.recorder_config).clone(),
-    );
-    let rec_id = handle.recording_id;
-    state.active_recordings.write().await.insert(session.id, handle);
+    let rec_id = state.start_recording(&session).await;
     Ok(Json(serde_json::json!({
         "status": "recording_started",
         "session_id": id,
@@ -3195,7 +3457,8 @@ async fn api_peer_get_recording_frames(
     let res = state.peer_request(state.http_client.get(&url)).send().await;
     match res {
         Ok(r) => {
-            let status = StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
             let bytes = r.bytes().await.unwrap_or_default();
             let len = bytes.len();
             (
@@ -3241,7 +3504,10 @@ async fn api_peer_delete_recording(
         }
     };
     let url = format!("{}/api/recordings/{}", peer_url, id);
-    let res = state.peer_request(state.http_client.delete(&url)).send().await;
+    let res = state
+        .peer_request(state.http_client.delete(&url))
+        .send()
+        .await;
     proxy_response(res).await
 }
 
@@ -3264,7 +3530,10 @@ async fn api_peer_vacuum_recordings(
         }
     };
     let url = format!("{}/api/recordings/vacuum", peer_url);
-    let res = state.peer_request(state.http_client.post(&url)).send().await;
+    let res = state
+        .peer_request(state.http_client.post(&url))
+        .send()
+        .await;
     proxy_response(res).await
 }
 
@@ -3291,10 +3560,7 @@ async fn api_peer_json_new(
         Some(q) if !q.is_empty() => format!("{}/json/new?{}", peer_url, q),
         _ => format!("{}/json/new", peer_url),
     };
-    let res = state
-        .peer_request(state.http_client.put(&url))
-        .send()
-        .await;
+    let res = state.peer_request(state.http_client.put(&url)).send().await;
     proxy_response(res).await
 }
 
@@ -3317,10 +3583,7 @@ async fn api_peer_json_close(
         }
     };
     let url = format!("{}/json/close/{}", peer_url, id);
-    let res = state
-        .peer_request(state.http_client.put(&url))
-        .send()
-        .await;
+    let res = state.peer_request(state.http_client.put(&url)).send().await;
     proxy_response(res).await
 }
 
@@ -3343,10 +3606,7 @@ async fn api_peer_json_activate(
         }
     };
     let url = format!("{}/json/activate/{}", peer_url, id);
-    let res = state
-        .peer_request(state.http_client.put(&url))
-        .send()
-        .await;
+    let res = state.peer_request(state.http_client.put(&url)).send().await;
     proxy_response(res).await
 }
 

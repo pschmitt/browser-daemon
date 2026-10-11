@@ -226,7 +226,10 @@ const E = {
 };
 const ctx = E.view.getContext("2d", { alpha: false, desynchronized: true }) || E.view.getContext("2d");
 
-/* ---------------------------------------------------------------- CDP */
+/* ---------------------------------------------------------------- drivers */
+// The UI talks to a driver; CdpDriver serves Chromium, BidiDriver serves Firefox.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 class Cdp {
   constructor(url, handlers) {
     this.handlers = handlers; this.id = 0; this.pending = new Map(); this.ws = new WebSocket(url);
@@ -251,8 +254,226 @@ class Cdp {
   close() { try { this.ws.close(); } catch { /* already closed */ } }
 }
 
+const CDP_KEYS = { Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27] };
+
+class CdpDriver {
+  constructor(url, h) {
+    this.h = h;
+    this.cdp = new Cdp(url, { event: (m, p) => this.onEvent(m, p), close: () => h.close(this) });
+    this.ready = this.cdp.ready;
+  }
+  isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
+  close() { this.cdp.close(); }
+  async start() { await this.cdp.call("Page.enable"); }
+  async applyMetrics({ w, h, dpr, mobile }) {
+    // Cap the screencast scale factor (4K JPEG encoding on CPU is slow).
+    const scale = Math.min(dpr, 1.25);
+    if (mobile) {
+      await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(dpr, 2), mobile: true, screenWidth: w, screenHeight: h });
+      await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }).catch(() => {});
+    } else {
+      await this.cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
+      await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
+    }
+    await this.cdp.call("Page.stopScreencast").catch(() => {});
+    await this.cdp.call("Page.startScreencast", {
+      format: "jpeg", quality: 65, everyNthFrame: 1,
+      maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
+    });
+  }
+  onEvent(method, p) {
+    const h = this.h;
+    if (method === "Page.screencastFrame") {
+      // ACK after drawing: keeps 1:1 pacing instead of queueing frames.
+      h.frame(p.data, p.metadata).finally(() => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId }));
+    } else if (method === "Page.frameStartedLoading" || method === "Page.frameStartedNavigating") {
+      h.loading();
+    } else if (method === "Page.frameNavigated" && !p.frame.parentId) {
+      h.navigated(p.frame.url);
+    } else if (method === "Page.loadEventFired" || method === "Page.navigatedWithinDocument" || method === "Page.frameStoppedLoading") {
+      h.loaded();
+    } else if (method === "Page.javascriptDialogOpening") {
+      h.dialog({ type: p.type, message: p.message, defaultValue: p.defaultPrompt })
+        .then(({ accept, text }) => this.cdp.send("Page.handleJavaScriptDialog", { accept, promptText: text }));
+    } else if (method === "Inspector.detached" || method === "Target.targetCrashed") {
+      h.gone("The page was closed");
+    }
+  }
+  async evaluate(expression) {
+    const r = await this.cdp.call("Runtime.evaluate", { expression, returnByValue: true });
+    return r && r.result ? r.result.value : undefined;
+  }
+  click(x, y, touch) {
+    if (touch) {
+      this.cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+      this.cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    }
+    this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    this.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+    this.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+  }
+  wheel(x, y, dx, dy) { this.cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy }); }
+  insertText(text) { this.cdp.send("Input.insertText", { text }); }
+  pressKey(key) {
+    const [vk, text] = CDP_KEYS[key];
+    this.cdp.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, text });
+    this.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+  }
+  async navigate(url) {
+    const res = await this.cdp.call("Page.navigate", { url });
+    if (res && res.errorText) throw new Error(res.errorText);
+  }
+  reload() { this.cdp.send("Page.reload"); }
+  async history(delta) {
+    const h = await this.cdp.call("Page.getNavigationHistory");
+    const e = h.entries[h.currentIndex + delta];
+    if (e) this.cdp.send("Page.navigateToHistoryEntry", { entryId: e.id });
+  }
+  async historyState() {
+    const h = await this.cdp.call("Page.getNavigationHistory");
+    return h && h.entries ? { back: h.currentIndex > 0, fwd: h.currentIndex < h.entries.length - 1 } : null;
+  }
+}
+
+// WebDriver key codes for the special keys the UI sends.
+const BIDI_KEYS = { Enter: "", Tab: "", Backspace: "", Escape: "" };
+const BIDI_EVENTS = [
+  "browsingContext.navigationStarted", "browsingContext.load", "browsingContext.domContentLoaded",
+  "browsingContext.fragmentNavigated", "browsingContext.historyUpdated", "browsingContext.contextDestroyed",
+  "browsingContext.userPromptOpened",
+];
+
+// Firefox has no screencast: poll JPEG screenshots, faster right after input or changes.
+class BidiDriver {
+  constructor(url, context, h) {
+    this.h = h; this.ctx = context; this.id = 0; this.pending = new Map();
+    this.vp = { w: 1280, h: 800 }; this.lastFrame = ""; this.interval = 60; this.lastMeasure = 0;
+    this.ws = new WebSocket(url);
+    this.ws.onmessage = (ev) => this.onMessage(JSON.parse(ev.data));
+    this.ws.onclose = () => { for (const p of this.pending.values()) p.rej(new Error("closed")); this.pending.clear(); h.close(this); };
+    this.ready = new Promise((res, rej) => { this.ws.onopen = res; this.ws.onerror = () => rej(new Error("connection failed")); })
+      .then(() => this.rpc("session.new", { capabilities: {} }));
+  }
+  isOpen() { return this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING; }
+  close() { try { this.ws.close(); } catch { /* already closed */ } }
+  rpc(method, params = {}) {
+    return new Promise((res, rej) => {
+      if (this.ws.readyState !== 1) return rej(new Error("closed"));
+      const id = ++this.id; this.pending.set(id, { res, rej });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+  send(method, params) { this.rpc(method, params).catch(() => {}); }
+  onMessage(m) {
+    if (m.type === "event") return this.onEvent(m.method, m.params || {});
+    const p = this.pending.get(m.id); if (!p) return; this.pending.delete(m.id);
+    m.type === "success" ? p.res(m.result) : p.rej(new Error(m.message || m.error || "error"));
+  }
+  onEvent(method, p) {
+    if (p.context && p.context !== this.ctx) return;
+    const h = this.h;
+    this.kick();
+    if (method === "browsingContext.navigationStarted") h.loading();
+    else if (method === "browsingContext.contextDestroyed") h.gone("The tab was closed");
+    else if (method === "browsingContext.userPromptOpened") {
+      h.dialog({ type: p.type, message: p.message, defaultValue: p.defaultValue })
+        .then(({ accept, text }) => this.send("browsingContext.handleUserPrompt", { context: this.ctx, accept, userText: text }));
+    } else {
+      if (p.url) h.navigated(p.url);
+      if (method !== "browsingContext.domContentLoaded") { this.measure(); h.loaded(); }
+    }
+  }
+  async start() {
+    await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [this.ctx] });
+    await this.rpc("browsingContext.activate", { context: this.ctx }).catch(() => {});
+    await this.measure();
+    this.loop();
+  }
+  async measure() {
+    try {
+      const [w, h] = await this.evaluate("[innerWidth, innerHeight]");
+      if (w > 0 && h > 0) this.vp = { w, h };
+      this.lastMeasure = performance.now();
+    } catch { /* navigating */ }
+  }
+  kick() { this.interval = 60; }
+  async loop() {
+    while (this.ws.readyState === WebSocket.OPEN) {
+      if (document.visibilityState !== "visible") { await sleep(400); continue; }
+      const t0 = performance.now();
+      try {
+        if (t0 - this.lastMeasure > 2000) await this.measure();
+        const r = await this.rpc("browsingContext.captureScreenshot", {
+          context: this.ctx, origin: "viewport", format: { type: "image/jpeg", quality: 0.65 },
+        });
+        if (r.data !== this.lastFrame) {
+          this.lastFrame = r.data;
+          this.interval = 60;
+          await this.h.frame(r.data, { deviceWidth: this.vp.w, deviceHeight: this.vp.h, pageScaleFactor: 1, offsetTop: 0 });
+        } else {
+          this.interval = Math.min(this.interval * 1.5, 400);   // idle page: back off
+        }
+      } catch { await sleep(300); }
+      const wait = this.interval - (performance.now() - t0);
+      if (wait > 0) await sleep(wait);
+    }
+  }
+  async applyMetrics({ w, h, dpr, mobile }) {
+    await this.rpc("browsingContext.setViewport", mobile
+      ? { context: this.ctx, viewport: { width: w, height: h }, devicePixelRatio: Math.min(dpr, 2) }
+      : { context: this.ctx, viewport: null, devicePixelRatio: null });
+    await this.measure();
+    this.kick();
+  }
+  async evaluate(expression) {
+    const r = await this.rpc("script.evaluate", {
+      expression: `JSON.stringify(${expression})`, target: { context: this.ctx }, awaitPromise: false, userActivation: true,
+    });
+    if (r.type === "exception") throw new Error(r.exceptionDetails?.text || "exception");
+    return r.result && r.result.type === "string" ? JSON.parse(r.result.value) : undefined;
+  }
+  actions(actions) { this.kick(); this.send("input.performActions", { context: this.ctx, actions }); }
+  click(x, y, touch) {
+    x = Math.round(x); y = Math.round(y);
+    this.actions([{ type: "pointer", id: touch ? "touch" : "mouse", parameters: { pointerType: touch ? "touch" : "mouse" }, actions: [
+      { type: "pointerMove", x, y }, { type: "pointerDown", button: 0 }, { type: "pointerUp", button: 0 },
+    ] }]);
+  }
+  wheel(x, y, dx, dy) {
+    this.actions([{ type: "wheel", id: "wheel", actions: [
+      { type: "scroll", x: Math.round(x), y: Math.round(y), deltaX: Math.round(dx), deltaY: Math.round(dy) },
+    ] }]);
+  }
+  insertText(text) {
+    // Real key events for typing; long pastes go through execCommand (one input event).
+    const chars = [...text];
+    if (chars.length <= 32) {
+      this.actions([{ type: "key", id: "kbd", actions: chars.flatMap((c) => [{ type: "keyDown", value: c }, { type: "keyUp", value: c }]) }]);
+      return;
+    }
+    this.evaluate(`(() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+      return document.execCommand("insertText", false, ${JSON.stringify(text)}); })()`)
+      .then((ok) => { if (!ok) this.actions([{ type: "key", id: "kbd", actions: chars.flatMap((c) => [{ type: "keyDown", value: c }, { type: "keyUp", value: c }]) }]); })
+      .catch(() => {});
+  }
+  pressKey(key) {
+    const v = BIDI_KEYS[key];
+    this.actions([{ type: "key", id: "kbd", actions: [{ type: "keyDown", value: v }, { type: "keyUp", value: v }] }]);
+  }
+  async navigate(url) { this.kick(); await this.rpc("browsingContext.navigate", { context: this.ctx, url, wait: "none" }); }
+  // History restores from the back/forward cache fire no load event: re-read the URL.
+  resyncSoon() { for (const ms of [400, 1500]) setTimeout(() => this.h.loaded(), ms); }
+  reload() { this.kick(); this.send("browsingContext.reload", { context: this.ctx, wait: "none" }); }
+  async history(delta) {
+    this.kick();
+    await this.rpc("browsingContext.traverseHistory", { context: this.ctx, delta }).catch(() => {});
+    this.resyncSoon();
+  }
+  async historyState() { return null; }   // BiDi exposes no history list: keep both buttons enabled
+}
+
 /* ---------------------------------------------------------------- state */
-let cdp = null, meta = { deviceWidth: 1280, deviceHeight: 800 }, currentUrl = "";
+let drv = null, target = null, meta = { deviceWidth: 1280, deviceHeight: 800 }, currentUrl = "";
 let mobileLayout = (localStorage.getItem("handoff.mobile") ?? (matchMedia("(pointer: coarse)").matches ? "1" : "0")) === "1";
 let refitting = false, manualKb = false, mirror = "", composing = false, resyncTimer = null, probeSeq = 0;
 
@@ -267,53 +488,77 @@ function setState(kind, text) {
 }
 
 /* ---------------------------------------------------------------- connecting */
+async function fetchTargets() {
+  const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
+  return list.filter((x) => x.type === "page");
+}
+
+const handlers = {
+  frame: (data, m) => drawFrame(data, m),
+  loading: () => { E.dot.className = "wait"; },
+  navigated: (url) => {
+    if (url && url !== "about:blank") {
+      currentUrl = url;
+      if (document.activeElement !== E.urlInput) E.urlInput.value = currentUrl;
+    }
+    refreshInfo();
+  },
+  loaded: () => {
+    E.dot.className = "live";
+    refreshInfo();
+    if (mobileLayout && target && target.engine !== "firefox") applyMetrics();
+  },
+  dialog: async ({ type, message, defaultValue }) => {
+    if (type === "prompt") {
+      const text = window.prompt(message, defaultValue || "");
+      return { accept: text !== null, text: text ?? undefined };
+    }
+    if (type === "alert") { window.alert(message); return { accept: true }; }
+    return { accept: window.confirm(message || "Leave this page?") };
+  },
+  gone: (why) => setState("bad", why),
+  close: (d) => {
+    if (d !== drv) return;   // a replaced driver shutting down
+    setState("bad", "The browser session ended");
+    if (document.visibilityState === "visible") setTimeout(autoReconnect, 1500);
+  },
+};
+
+let connecting = false;
 async function connect() {
+  if (connecting) return;
+  connecting = true;
+  if (drv) drv.close();
   setState("wait", "Connecting to the browser…");
-  const scheme = testHost || location.protocol === "https:" ? "wss://" : "ws://";
-  cdp = new Cdp(scheme + (testHost || location.host) + "/devtools/page/" + encodeURIComponent(pageId), {
-    event: onEvent,
-    close: () => {
-      setState("bad", "The browser session ended");
-      if (document.visibilityState === "visible") {
-        setTimeout(autoReconnect, 1500);
-      }
-    },
-  });
   try {
-    await cdp.ready;
-    await cdp.call("Page.enable");
+    target = (await fetchTargets()).find((t) => t.id === pageId) || null;
+    if (!target) { setState("bad", "This tab no longer exists"); return; }
+    const scheme = testHost || location.protocol === "https:" ? "wss://" : "ws://";
+    const host = testHost || location.host;
+    drv = target.engine === "firefox"
+      ? new BidiDriver(`${scheme}${host}/firefox?session_id=${encodeURIComponent(target.sessionId)}&observer=true`, pageId, handlers)
+      : new CdpDriver(`${scheme}${host}/devtools/page/${encodeURIComponent(pageId)}`, handlers);
+    document.body.dataset.engine = target.engine || "chromium";
+    await drv.ready;
+    await drv.start();
     await applyMetrics();
     setState("live");
     refreshInfo();
     loadTabs();
   } catch (e) {
     setState("bad", "Could not connect (" + e.message + ")");
-    if (document.visibilityState === "visible") {
-      setTimeout(autoReconnect, 2500);
-    }
+    if (document.visibilityState === "visible") setTimeout(autoReconnect, 2500);
+  } finally {
+    connecting = false;
   }
 }
 
 // The remote page gets the size of this screen (like a real phone) or its own desktop size.
 async function applyMetrics() {
-  if (!cdp) return;
+  if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
-  // Cap screencast scale factor to 1.25 max (prevents software compressing 4K images on CPU)
-  const screencastDpr = Math.min(devicePixelRatio || 1, 1.25);
-  const maxW = Math.min(Math.round(w * screencastDpr), 1600);
-  const maxH = Math.min(Math.round(h * screencastDpr), 1000);
-
-  if (mobileLayout) {
-    await cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(devicePixelRatio || 1, 2), mobile: true, screenWidth: w, screenHeight: h });
-    await cdp.call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }).catch(() => {});
-  } else {
-    await cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
-    await cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
-  }
-  await cdp.call("Page.stopScreencast").catch(() => {});
-  // Quality 65 instead of 80: ~60% faster JPEG encode, ~50% bandwidth reduction, visually crisp
-  await cdp.call("Page.startScreencast", { format: "jpeg", quality: 65, maxWidth: maxW, maxHeight: maxH, everyNthFrame: 1 });
+  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mobile: mobileLayout });
   E.layout.classList.toggle("on", mobileLayout);
 }
 
@@ -344,75 +589,38 @@ function base64ToBlob(b64, mime = "image/jpeg") {
 
 let lastBitmap = null;
 
-async function drawScreencastFrame(p) {
+async function drawFrame(data, frameMeta) {
   try {
-    meta = p.metadata;
-    // Fast path: off-main-thread ImageBitmap decoding
+    meta = frameMeta;
+    let img;
     if (typeof createImageBitmap === "function") {
-      const blob = base64ToBlob(p.data);
-      const bitmap = await createImageBitmap(blob);
-      if (refitting && Math.abs(meta.deviceWidth - fitSize.w) < 8 && Math.abs(meta.deviceHeight - fitSize.h) < 8) refitting = false;
-      if (E.view.width !== bitmap.width || E.view.height !== bitmap.height) { E.view.width = bitmap.width; E.view.height = bitmap.height; }
-      sizeCanvas();
-      ctx.drawImage(bitmap, 0, 0);
-      if (lastBitmap) lastBitmap.close();
-      lastBitmap = bitmap;
+      img = await createImageBitmap(base64ToBlob(data));   // decoded off the main thread
     } else {
-      // Fallback path
-      await new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => {
-          if (refitting && Math.abs(meta.deviceWidth - fitSize.w) < 8 && Math.abs(meta.deviceHeight - fitSize.h) < 8) refitting = false;
-          if (E.view.width !== img.width || E.view.height !== img.height) { E.view.width = img.width; E.view.height = img.height; }
-          sizeCanvas();
-          ctx.drawImage(img, 0, 0);
-          resolve();
-        };
-        img.src = "data:image/jpeg;base64," + p.data;
+      img = await new Promise((resolve, reject) => {
+        const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = "data:image/jpeg;base64," + data;
       });
     }
-  } catch (err) {
-    // Ignore frame decode errors
-  } finally {
-    // Frame ACK sent AFTER render completes to maintain true 1:1 pacing and prevent buffer bloat
-    cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId });
-  }
-}
-
-function onEvent(method, p) {
-  if (method === "Page.screencastFrame") {
-    drawScreencastFrame(p);
-  } else if (method === "Page.frameStartedLoading" || method === "Page.frameStartedNavigating") {
-    E.dot.className = "wait";
-  } else if (method === "Page.frameNavigated" && !p.frame.parentId) {
-    if (p.frame && p.frame.url && p.frame.url !== "about:blank") {
-      currentUrl = p.frame.url;
-      if (document.activeElement !== E.urlInput) E.urlInput.value = currentUrl;
-    }
-    refreshInfo();
-  } else if (method === "Page.loadEventFired" || method === "Page.navigatedWithinDocument" || method === "Page.frameStoppedLoading") {
-    E.dot.className = "live";
-    refreshInfo();
-    if (mobileLayout) applyMetrics();
-  } else if (method === "Inspector.detached" || method === "Target.targetCrashed") {
-    setState("bad", "The page was closed");
-  }
+    if (refitting && Math.abs(meta.deviceWidth - fitSize.w) < 8 && Math.abs(meta.deviceHeight - fitSize.h) < 8) refitting = false;
+    if (E.view.width !== img.width || E.view.height !== img.height) { E.view.width = img.width; E.view.height = img.height; }
+    sizeCanvas();
+    ctx.drawImage(img, 0, 0);
+    if (lastBitmap) lastBitmap.close();
+    lastBitmap = img.close ? img : null;
+  } catch { /* ignore frame decode errors */ }
 }
 
 async function refreshInfo() {
+  if (!drv) return;
   try {
-    const r = await cdp.call("Runtime.evaluate", { expression: "JSON.stringify({u: location.href, t: document.title})", returnByValue: true });
-    if (r && r.result && r.result.value) {
-      const { u, t } = JSON.parse(r.result.value);
-      if (u && u !== "about:blank") currentUrl = u;
+    const info = await drv.evaluate("({ u: location.href, t: document.title })");
+    if (info) {
+      if (info.u && info.u !== "about:blank") currentUrl = info.u;
       if (document.activeElement !== E.urlInput && currentUrl) E.urlInput.value = currentUrl;
-      document.title = (t ? t + " · " : "") + "Browser handoff";
+      document.title = (info.t ? info.t + " · " : "") + "Browser handoff";
     }
-    const h = await cdp.call("Page.getNavigationHistory");
-    if (h && h.entries) {
-      E.back.disabled = h.currentIndex <= 0;
-      E.fwd.disabled = h.currentIndex >= h.entries.length - 1;
-    }
+    const h = await drv.historyState();
+    E.back.disabled = h ? !h.back : false;
+    E.fwd.disabled = h ? !h.fwd : false;
     loadTabs();
   } catch { /* page navigating */ }
 }
@@ -459,7 +667,7 @@ let pendingWheel = null;
 let wheelRaf = false;
 
 function queueWheel(x, y, dx, dy) {
-  if (!cdp) return;
+  if (!drv) return;
   if (!pendingWheel) {
     pendingWheel = { x, y, dx: 0, dy: 0 };
   }
@@ -475,11 +683,11 @@ function queueWheel(x, y, dx, dy) {
 
 function flushWheel() {
   wheelRaf = false;
-  if (!pendingWheel || !cdp) return;
+  if (!pendingWheel || !drv) return;
   const { x, y, dx, dy } = pendingWheel;
   pendingWheel = null;
   if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
-    cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy });
+    drv.wheel(x, y, dx, dy);
   }
 }
 
@@ -490,8 +698,7 @@ E.view.addEventListener("pointerdown", (e) => {
   const t = touch = { x: e.clientX, y: e.clientY, lastY: e.clientY, moved: false, t: performance.now(), editable: false };
   // Is there a text field under the finger? Asked now, so the answer is in by the time the finger lifts.
   const p = toPage(e);
-  if (p && cdp) cdp.call("Runtime.evaluate", { expression: hitExpr(p.x, p.y), returnByValue: true })
-    .then((r) => { t.editable = r.result.value === true; }).catch(() => {});
+  if (p && drv) drv.evaluate(hitExpr(p.x, p.y)).then((v) => { t.editable = v === true; }).catch(() => {});
 });
 E.view.addEventListener("pointermove", (e) => {
   if (!touch || !e.isPrimary) return;
@@ -517,13 +724,7 @@ E.view.addEventListener("pointerup", (e) => {
   if (editable) E.kb.focus({ preventScroll: true });
   tapFeedback(e.clientX, e.clientY);
   const px = Math.round(p.x), py = Math.round(p.y);
-  if (mobileLayout) {
-    cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: px, y: py }] });
-    cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  }
-  cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: px, y: py });
-  cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: px, y: py, button: "left", clickCount: 1 });
-  cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: px, y: py, button: "left", clickCount: 1 });
+  drv.click(px, py, mobileLayout);
   setTimeout(probeFocus, 160);
 });
 E.view.addEventListener("pointercancel", () => { touch = null; flushWheel(); });
@@ -569,7 +770,7 @@ const PROBE = `(() => {
 async function probeFocus() {
   const my = ++probeSeq;
   let info;
-  try { info = (await cdp.call("Runtime.evaluate", { expression: PROBE, returnByValue: true })).result.value; } catch { return; }
+  try { info = await drv.evaluate(PROBE); } catch { return; }
   if (my !== probeSeq) return;
   if (info && info.editable && !info.ro) {
     showKeyboard(info);
@@ -602,7 +803,7 @@ E.kb.addEventListener("input", () => {
   while (p < max && mirror[p] === now[p]) p++;
   for (let i = mirror.length - p; i > 0; i--) pressKey("Backspace");
   const added = now.slice(p);
-  if (added) cdp.send("Input.insertText", { text: added });
+  if (added) drv.insertText(added);
   mirror = now;
   clearTimeout(resyncTimer);
   if (!composing) resyncTimer = setTimeout(resync, 350);
@@ -612,7 +813,7 @@ E.kb.addEventListener("compositionend", () => { composing = false; clearTimeout(
 // The remote field may reformat or limit input (maxlength, masks): follow it.
 async function resync() {
   try {
-    const info = (await cdp.call("Runtime.evaluate", { expression: PROBE, returnByValue: true })).result.value;
+    const info = await drv.evaluate(PROBE);
     if (info && info.editable && info.value !== E.kb.value && !composing) { E.kb.value = info.value; mirror = info.value; }
   } catch { /* ignore */ }
 }
@@ -623,12 +824,8 @@ E.kb.addEventListener("keydown", (e) => {
 });
 E.kb.addEventListener("blur", () => { if (!manualKb) E.keys.classList.remove("show"); });
 
-const KEYS = { Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27] };
-function pressKey(key) {
-  const [vk, text] = KEYS[key];
-  cdp.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, text });
-  cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
-}
+const KEYS = CDP_KEYS;
+function pressKey(key) { if (drv) drv.pressKey(key); }
 
 /* ---------------------------------------------------------------- toolbar & omnibox */
 // Virtual keyboard buttons must not take focus from the local input, or the keyboard would close.
@@ -637,7 +834,7 @@ for (const b of document.querySelectorAll("#keys button")) {
 }
 E.back.onclick = () => navigateHistory(-1);
 E.fwd.onclick = () => navigateHistory(1);
-E.reload.onclick = () => cdp && cdp.send("Page.reload");
+E.reload.onclick = () => drv && drv.reload();
 
 function normalizeUrl(input) {
   let val = (input || "").trim();
@@ -713,13 +910,9 @@ E.urlBar.onsubmit = async (e) => {
   E.urlInput.blur();
   E.dot.className = "wait";
 
-  if (cdp) {
+  if (drv) {
     try {
-      const res = await cdp.call("Page.navigate", { url: dest });
-      if (res && res.errorText) {
-        alert("Navigation failed: " + res.errorText);
-        E.dot.className = "bad";
-      }
+      await drv.navigate(dest);
     } catch (err) {
       alert("Failed to navigate: " + err.message);
       E.dot.className = "bad";
@@ -978,9 +1171,7 @@ E.tabsModal.onclick = (e) => {
 };
 
 async function navigateHistory(d) {
-  const h = await cdp.call("Page.getNavigationHistory");
-  const e = h.entries[h.currentIndex + d];
-  if (e) cdp.send("Page.navigateToHistoryEntry", { entryId: e.id });
+  if (drv) await drv.history(d).catch(() => {});
 }
 E.layout.onclick = async () => {
   mobileLayout = !mobileLayout;
@@ -996,10 +1187,9 @@ E.kbbtn.onclick = () => {
 };
 document.querySelectorAll("#keys button[data-key]").forEach((b) => b.addEventListener("click", () => { pressKey(b.dataset.key); setTimeout(probeFocus, 300); }));
 async function copyRemoteSelection() {
-  if (!cdp) return '';
+  if (!drv) return '';
   try {
-    const res = await cdp.call("Runtime.evaluate", {
-      expression: `(() => {
+    const text = await drv.evaluate(`(() => {
         let sel = window.getSelection()?.toString() || '';
         if (!sel && document.activeElement) {
           let el = document.activeElement;
@@ -1010,10 +1200,7 @@ async function copyRemoteSelection() {
           }
         }
         return sel;
-      })()`,
-      returnByValue: true
-    });
-    const text = res?.result?.value;
+      })()`);
     if (text) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);
@@ -1027,7 +1214,7 @@ async function copyRemoteSelection() {
 }
 
 async function pasteToRemote() {
-  if (!cdp) return;
+  if (!drv) return;
   try {
     let t = '';
     if (navigator.clipboard && navigator.clipboard.readText) {
@@ -1039,7 +1226,7 @@ async function pasteToRemote() {
       t = prompt("Paste text into browser session:");
     }
     if (t) {
-      cdp.send("Input.insertText", { text: t });
+      drv.insertText(t);
     }
   } catch(e) {
     console.warn("pasteToRemote failed:", e);
@@ -1067,24 +1254,24 @@ E.retry.onclick = () => connect();
 // Re-fit the remote page when the screen really changes (rotation, native keyboard, browser bars).
 function keepFocusVisible() {
   if (!E.keys.classList.contains("show")) return;
-  cdp.send("Runtime.evaluate", { expression: `(() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; if (a && a !== document.body) a.scrollIntoView({ block: "nearest", inline: "nearest" }); })()` });
+  drv.evaluate(`(() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement; if (a && a !== document.body) a.scrollIntoView({ block: "nearest", inline: "nearest" }); })()`).catch(() => {});
 }
 var fitTimer = null, fitSize = { w: 0, h: 0 };
 new ResizeObserver(() => {
   const r = E.stage.getBoundingClientRect();
   if (Math.abs(r.width - fitSize.w) < 10 && Math.abs(r.height - fitSize.h) < 30) return;
   fitSize = { w: r.width, h: r.height };
-  if (!cdp || !mobileLayout) return;
+  if (!drv || !mobileLayout) return;
   refitting = true;                        // until the first frame of the new size arrives
   clearTimeout(fitTimer);
   fitTimer = setTimeout(() => applyMetrics().then(keepFocusVisible).catch(() => {}).finally(() => setTimeout(() => { refitting = false; }, 1500)), 250);
 }).observe(E.stage);
-window.addEventListener("pagehide", () => cdp && cdp.close());   // also releases the size override
+window.addEventListener("pagehide", () => drv && drv.close());   // also releases the size override
 
 let reconnecting = false;
 async function autoReconnect() {
-  if (reconnecting || !pageId) return;
-  if (!cdp || !cdp.ws || cdp.ws.readyState === WebSocket.CLOSED || cdp.ws.readyState === WebSocket.CLOSING) {
+  if (reconnecting || connecting || !pageId) return;
+  if (!drv || !drv.isOpen()) {
     reconnecting = true;
     try {
       await connect();
@@ -1110,7 +1297,7 @@ window.addEventListener("focus", () => {
 
 // Desktop: type straight into the page and handle copy/paste shortcuts.
 window.addEventListener("keydown", (e) => {
-  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
+  if (!drv || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
   if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
     e.preventDefault();
     copyRemoteSelection();
@@ -1122,22 +1309,22 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.key.length === 1) { cdp.send("Input.insertText", { text: e.key }); e.preventDefault(); }
+  if (e.key.length === 1) { drv.insertText(e.key); e.preventDefault(); }
   else if (KEYS[e.key]) { pressKey(e.key); e.preventDefault(); }
 });
 
 window.addEventListener("copy", (e) => {
-  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
+  if (!drv || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
   e.preventDefault();
   copyRemoteSelection();
 });
 
 window.addEventListener("paste", (e) => {
-  if (!cdp || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
+  if (!drv || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
   e.preventDefault();
   const text = e.clipboardData?.getData("text");
   if (text) {
-    cdp.send("Input.insertText", { text });
+    drv.insertText(text);
   } else {
     pasteToRemote();
   }
@@ -1182,8 +1369,26 @@ async function pickPage() {
   E.dot.className = "";
 }
 
-if (pageId) connect();
-else pickPage().catch((e) => setState("bad", String(e)));
+// ?session=<id> (dashboard launch): open that session's first tab.
+async function boot() {
+  const sessionId = params.get("session");
+  if (!pageId && sessionId) {
+    for (let i = 0; i < 20; i++) {
+      const page = (await fetchTargets().catch(() => [])).find((t) => t.sessionId === sessionId);
+      if (page) {
+        const u = new URL(location.href);
+        u.searchParams.delete("session");
+        u.searchParams.set("page", page.id);
+        location.replace(u.toString());
+        return;
+      }
+      await sleep(500);
+    }
+  }
+  if (pageId) connect();
+  else pickPage().catch((e) => setState("bad", String(e)));
+}
+boot();
 </script>
 </body>
 </html>

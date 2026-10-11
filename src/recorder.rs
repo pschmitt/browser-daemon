@@ -124,7 +124,8 @@ async fn write_single_frame(
                 if let Ok(parsed) = url::Url::parse(u) {
                     if let Some(host) = parsed.host_str() {
                         if !host.is_empty() && host != "localhost" && !host.starts_with("127.") {
-                            meta.favicon_url = Some(format!("{}://{}/favicon.ico", parsed.scheme(), host));
+                            meta.favicon_url =
+                                Some(format!("{}://{}/favicon.ico", parsed.scheme(), host));
                         }
                     }
                 }
@@ -315,7 +316,10 @@ async fn record_session_loop(
                     // Prioritize targets: non-about:blank first
                     page_targets.sort_by_key(|t| {
                         let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                        if url.is_empty() || url == "about:blank" || url.starts_with("chrome-extension://") {
+                        if url.is_empty()
+                            || url == "about:blank"
+                            || url.starts_with("chrome-extension://")
+                        {
                             1
                         } else {
                             0
@@ -342,7 +346,11 @@ async fn record_session_loop(
             }
         };
 
-        let target_id = target.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let target_id = target
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
         let ws_url = match target.get("webSocketDebuggerUrl").and_then(|v| v.as_str()) {
             Some(u) => u.to_string(),
             None => {
@@ -365,8 +373,10 @@ async fn record_session_loop(
                 if meta.favicon_url.is_none() {
                     if let Ok(parsed) = url::Url::parse(u) {
                         if let Some(host) = parsed.host_str() {
-                            if !host.is_empty() && host != "localhost" && !host.starts_with("127.") {
-                                meta.favicon_url = Some(format!("{}://{}/favicon.ico", parsed.scheme(), host));
+                            if !host.is_empty() && host != "localhost" && !host.starts_with("127.")
+                            {
+                                meta.favicon_url =
+                                    Some(format!("{}://{}/favicon.ico", parsed.scheme(), host));
                             }
                         }
                     }
@@ -397,7 +407,9 @@ async fn record_session_loop(
             "id": 1,
             "method": "Page.enable"
         });
-        let _ = write.send(Message::Text(enable_cmd.to_string().into())).await;
+        let _ = write
+            .send(Message::Text(enable_cmd.to_string().into()))
+            .await;
 
         let start_screencast = serde_json::json!({
             "id": 2,
@@ -410,7 +422,9 @@ async fn record_session_loop(
                 "everyNthFrame": 1
             }
         });
-        let _ = write.send(Message::Text(start_screencast.to_string().into())).await;
+        let _ = write
+            .send(Message::Text(start_screencast.to_string().into()))
+            .await;
 
         let mut next_ack_id = 100u64;
         let mut last_bg_frame_time = Instant::now();
@@ -680,7 +694,8 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
                     if let Ok(meta) = serde_json::from_str::<RecordingMeta>(&content) {
                         let size = compute_rec_dir_size(&rec_path).await;
                         current_total_bytes += size;
-                        let is_active = meta.status == "recording" && now.saturating_sub(meta.started_at_secs) < 86400;
+                        let is_active = meta.status == "recording"
+                            && now.saturating_sub(meta.started_at_secs) < 86400;
                         items.push(RecItem {
                             _id: meta.id,
                             path: rec_path,

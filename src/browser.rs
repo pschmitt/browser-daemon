@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::process::{Child, Command};
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+use crate::bidi::BidiHub;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +50,8 @@ pub struct ActiveBrowser {
     pub port: u16,
     pub ws_path: String,
     pub child: Child,
+    /// Shared WebDriver BiDi session (Firefox only).
+    pub bidi: Option<Arc<BidiHub>>,
     _temp_dir: Option<tempfile::TempDir>,
     pub profile_name: Option<String>,
     pub created_at: Instant,
@@ -146,6 +151,7 @@ impl ActiveBrowser {
                     port,
                     ws_path,
                     child,
+                    bidi: None,
                     _temp_dir: temp_dir,
                     profile_name,
                     created_at: Instant::now(),
@@ -167,15 +173,23 @@ impl ActiveBrowser {
 
                 fs::create_dir_all(&user_data_dir).await?;
 
+                // Headful on the virtual display, like Chromium; headless only without one.
                 let mut cmd = Command::new(firefox_bin);
-                cmd.arg("--headless")
-                    .arg("--new-instance")
+                if config.display.is_none() {
+                    cmd.arg("--headless");
+                }
+                cmd.arg("--new-instance")
                     .arg("--no-remote")
                     .arg(format!("--window-size={},{}", width, height))
+                    .arg("--width")
+                    .arg(width.to_string())
+                    .arg("--height")
+                    .arg(height.to_string())
                     .arg("--profile")
                     .arg(&user_data_dir)
                     .arg("--remote-debugging-port=0")
                     .arg("about:blank")
+                    .env("MOZ_ENABLE_WAYLAND", "0")
                     .stderr(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::null())
                     .kill_on_drop(true);
@@ -199,6 +213,15 @@ impl ActiveBrowser {
                     }
                 };
 
+                let hub = match BidiHub::connect(port).await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        error!(session_id = %id, error = %e, "Failed to open Firefox BiDi session");
+                        let _ = child.start_kill();
+                        return Err(e);
+                    }
+                };
+
                 info!(session_id = %id, port = port, ws_path = "session", "Firefox ready");
 
                 Ok(Self {
@@ -207,6 +230,7 @@ impl ActiveBrowser {
                     port,
                     ws_path: "session".to_string(),
                     child,
+                    bidi: Some(hub),
                     _temp_dir: temp_dir,
                     profile_name,
                     created_at: Instant::now(),
@@ -268,7 +292,10 @@ async fn wait_for_firefox_bidi(
             if tx.is_some() {
                 if let Some(pos) = line.find("WebDriver BiDi listening on ws://127.0.0.1:") {
                     let rest = &line[pos + "WebDriver BiDi listening on ws://127.0.0.1:".len()..];
-                    let port_str = rest.split(|c: char| !c.is_ascii_digit()).next().unwrap_or("");
+                    let port_str = rest
+                        .split(|c: char| !c.is_ascii_digit())
+                        .next()
+                        .unwrap_or("");
                     if let Ok(port) = port_str.parse::<u16>() {
                         if port > 0 {
                             if let Some(c) = tx.take() {
