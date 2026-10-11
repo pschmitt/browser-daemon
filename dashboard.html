@@ -3149,10 +3149,14 @@ function renderMeshOverview(ov) {
       const statusBadge = r.status === 'recording'
         ? `<span class="badge badge-danger pulse">Recording</span>`
         : `<span class="badge badge-ok">Completed</span>`;
+      const isCachedLocally = cachedRecordingsSet.has(r.id);
+      const cachedBadge = isCachedLocally
+        ? ` <span class="badge badge-ok" style="font-size:10px;padding:2px 5px;" title="Cached in browser storage for instant offline playback">⚡ Cached</span>`
+        : '';
 
       html += `
         <tr>
-          <td data-label="Recording"><span class="badge badge-accent" title="${recId}">${recId.slice(0, 8)}</span></td>
+          <td data-label="Recording"><span class="badge badge-accent" title="${recId}">${recId.slice(0, 8)}</span>${cachedBadge}</td>
           <td data-label="Node">${nodeBadge}</td>
           <td data-label="Profile / Target"><strong>${prof}</strong></td>
           <td data-label="Started" style="font-size:12px;color:var(--muted);">${started}</td>
@@ -3318,8 +3322,172 @@ function copyText(text, btn) {
 }
 
 // ---------------------------------------------------------------------------
-// Recording Management & Playback Player
+// Recording Management, Playback Player & Client Local Storage (IndexedDB)
 // ---------------------------------------------------------------------------
+
+const REC_DB_NAME = 'BrowserDaemonRecordings';
+const REC_DB_VERSION = 1;
+const REC_STORE_NAME = 'recordings';
+let cachedRecordingsSet = new Set();
+
+function openRecordingsDb() {
+  return new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') {
+      resolve(null);
+      return;
+    }
+    const req = indexedDB.open(REC_DB_NAME, REC_DB_VERSION);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(REC_STORE_NAME)) {
+        db.createObjectStore(REC_STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function getCachedRecording(id) {
+  try {
+    const db = await openRecordingsDb();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      const tx = db.transaction(REC_STORE_NAME, 'readonly');
+      const store = tx.objectStore(REC_STORE_NAME);
+      const req = store.get(id);
+      req.onsuccess = () => resolve(req.result ? req.result.frames : null);
+      req.onerror = () => resolve(null);
+    });
+  } catch(e) {
+    return null;
+  }
+}
+
+async function setCachedRecording(id, frames) {
+  try {
+    const db = await openRecordingsDb();
+    if (!db) return;
+    return new Promise((resolve) => {
+      const tx = db.transaction(REC_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(REC_STORE_NAME);
+      store.put({ id, frames, cachedAt: Date.now() });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  } catch(e) {}
+}
+
+async function deleteCachedRecording(id) {
+  try {
+    const db = await openRecordingsDb();
+    if (!db) return;
+    const tx = db.transaction(REC_STORE_NAME, 'readwrite');
+    const store = tx.objectStore(REC_STORE_NAME);
+    store.delete(id);
+  } catch(e) {}
+}
+
+async function syncCachedRecordingsSet() {
+  try {
+    const db = await openRecordingsDb();
+    if (!db) return;
+    const tx = db.transaction(REC_STORE_NAME, 'readonly');
+    const store = tx.objectStore(REC_STORE_NAME);
+    const req = store.getAllKeys();
+    req.onsuccess = () => {
+      cachedRecordingsSet = new Set(req.result);
+      if (currentOverview) renderMeshOverview(currentOverview);
+    };
+  } catch(e) {}
+}
+
+// Web Worker Background Download Manager for Recordings
+let recDownloadWorker = null;
+const activeDownloadsMap = new Map(); // id -> { pToast, node, lastPct, lastSub }
+let activePlayerModalId = null;
+let activePlayerModalNode = null;
+
+function getDownloadWorker() {
+  if (!recDownloadWorker && typeof Worker !== 'undefined') {
+    try {
+      recDownloadWorker = new Worker('/download-worker.js');
+      recDownloadWorker.onmessage = handleWorkerMessage;
+      recDownloadWorker.onerror = (err) => {
+        console.warn('Download worker error:', err);
+      };
+    } catch (err) {
+      console.warn('Could not initialize download worker:', err);
+    }
+  }
+  return recDownloadWorker;
+}
+
+function handleWorkerMessage(e) {
+  const { type, id, pct, receivedBytes, totalBytes, frameCount, error, attempt } = e.data || {};
+  const download = activeDownloadsMap.get(id);
+
+  if (type === 'PROGRESS') {
+    const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
+    const totalMb = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : '?';
+    const sub = `${mb} / ${totalMb} MB`;
+    if (download) {
+      download.lastPct = pct;
+      download.lastSub = sub;
+      if (download.pToast) {
+        download.pToast.update(pct, `${sub} (${pct}%)`, 'Downloading in background worker...');
+      }
+    }
+
+    const modal = document.getElementById('playerModal');
+    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
+      const loadingText = document.getElementById('playerLoadingText');
+      const loadingBar = document.getElementById('playerLoadingBar');
+      const loadingSub = document.getElementById('playerLoadingSub');
+      if (loadingText) loadingText.textContent = `Downloading session: ${sub} (${pct}%)`;
+      if (loadingBar) loadingBar.style.width = pct + '%';
+      if (loadingSub) loadingSub.textContent = `Streaming frames in background worker...`;
+    }
+  } else if (type === 'SUCCESS') {
+    cachedRecordingsSet.add(id);
+    if (download && download.pToast) {
+      download.pToast.done('Session Downloaded', `${frameCount} frames saved locally`);
+    }
+    activeDownloadsMap.delete(id);
+
+    if (currentOverview) renderMeshOverview(currentOverview);
+
+    const modal = document.getElementById('playerModal');
+    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
+      getCachedRecording(id).then(frames => {
+        if (frames && frames.length > 0) {
+          const nodeBadge = document.getElementById('playerNodeBadge');
+          if (nodeBadge) nodeBadge.textContent = `${activePlayerModalNode || 'local'} • cached`;
+          initPlayerWithFrames(id, activePlayerModalNode, frames, true);
+        }
+      });
+    }
+  } else if (type === 'RETRY') {
+    if (download && download.pToast) {
+      download.pToast.update(download.lastPct || 10, `Reconnecting (attempt ${attempt})...`, 'Resuming after network hiccup');
+    }
+    const modal = document.getElementById('playerModal');
+    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
+      const loadingSub = document.getElementById('playerLoadingSub');
+      if (loadingSub) loadingSub.textContent = `Reconnecting stream (attempt ${attempt})...`;
+    }
+  } else if (type === 'ERROR') {
+    if (download && download.pToast) {
+      download.pToast.error('Download Failed', error);
+    }
+    activeDownloadsMap.delete(id);
+    const modal = document.getElementById('playerModal');
+    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
+      alert(`Download failed: ${error}`);
+      closePlayerModal();
+    }
+  }
+}
 
 async function startRecording(sid, node) {
   const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
@@ -3353,6 +3521,11 @@ async function stopRecording(sid, node) {
 
 async function deleteRecording(id, node) {
   if (!confirm(`Are you sure you want to delete recording ${id.slice(0, 8)} on node ${node}?`)) return;
+  const worker = getDownloadWorker();
+  if (worker) worker.postMessage({ action: 'CANCEL', id });
+  activeDownloadsMap.delete(id);
+  deleteCachedRecording(id);
+  cachedRecordingsSet.delete(id);
   const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
   const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}`;
   try {
@@ -3416,6 +3589,8 @@ function handlePlayerModalOverlayClick(e) {
 }
 
 function closePlayerModal() {
+  activePlayerModalId = null;
+  activePlayerModalNode = null;
   if (activePlayer) {
     activePlayer.isPlaying = false;
     if (activePlayer.timer) clearTimeout(activePlayer.timer);
@@ -3536,6 +3711,53 @@ function jumpSeconds(deltaSec) {
   renderPlayerFrame(closestIdx);
 }
 
+function initPlayerWithFrames(id, node, frames, isCached) {
+  activePlayer = {
+    id,
+    node,
+    frames,
+    currentIndex: 0,
+    isPlaying: false,
+    isLooping: false,
+    speed: 1,
+    timer: null,
+    cachedImages: new Map(),
+  };
+
+  const centerPlayBtn = document.getElementById('playerCenterPlayBtn');
+  if (frames.length <= 1) {
+    document.getElementById('playerScrubber').max = 0;
+    document.getElementById('playerFrameDisplay').textContent = `(Snapshot: 1 frame)`;
+    updatePlayPauseButton();
+    if (centerPlayBtn) centerPlayBtn.style.display = 'none';
+  } else {
+    document.getElementById('playerScrubber').max = frames.length - 1;
+    document.getElementById('playerFrameDisplay').textContent = `(1 / ${frames.length} frames)`;
+    updatePlayPauseButton();
+    if (centerPlayBtn) centerPlayBtn.style.display = 'flex';
+  }
+
+  // Reset speed control to 1x and loop to off
+  const speedBtn = document.getElementById('playerSpeedCycleBtn');
+  if (speedBtn) speedBtn.textContent = '1x';
+  const loopBtn = document.getElementById('playerLoopBtn');
+  if (loopBtn) {
+    loopBtn.classList.remove('btn-accent', 'active');
+    loopBtn.title = 'Toggle loop (Shift+L)';
+  }
+
+  // Hide loading overlay
+  const loadingOverlay = document.getElementById('playerLoadingOverlay');
+  if (loadingOverlay) loadingOverlay.style.display = 'none';
+
+  renderPlayerFrame(0);
+
+  // Auto-play immediately if multiple frames!
+  if (frames.length > 1) {
+    togglePlayPause();
+  }
+}
+
 async function openPlayerModal(id, node) {
   const modal = document.getElementById('playerModal');
   const titleElem = document.getElementById('playerModalTitle');
@@ -3569,115 +3791,69 @@ async function openPlayerModal(id, node) {
   ctx.fillStyle = '#090b10';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  const pToast = createProgressToast(`rec-${id}`, `Downloading Session ${id.slice(0, 8)}`, `Connecting to server...`);
+  const pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Checking cache...`);
 
+  // Check client-side local storage (IndexedDB) first for instant playback
+  const cachedFrames = await getCachedRecording(id);
+  if (cachedFrames && cachedFrames.length > 0) {
+    if (nodeBadge) nodeBadge.textContent = `${node || 'local'} • cached`;
+    pToast.done('Loaded from Cache', `Loaded ${cachedFrames.length} frames instantly from browser storage`);
+    initPlayerWithFrames(id, node, cachedFrames, true);
+    return;
+  }
+
+  // 2. Check if already downloading in background worker
+  if (activeDownloadsMap.has(id)) {
+    const d = activeDownloadsMap.get(id);
+    if (loadingText && d.lastSub) loadingText.textContent = `Downloading session: ${d.lastSub} (${d.lastPct || 0}%)`;
+    if (loadingBar && d.lastPct) loadingBar.style.width = (d.lastPct || 0) + '%';
+    if (loadingSub) loadingSub.textContent = 'Resuming progress from background download...';
+    return;
+  }
+
+  // 3. Start download in Web Worker (resilient to tab backgrounding / navigation)
+  const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
+  const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}/frames` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}/frames`;
+
+  const pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Connecting in background...`);
+  activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB' });
+
+  const worker = getDownloadWorker();
+  if (worker) {
+    worker.postMessage({
+      action: 'DOWNLOAD',
+      id,
+      url,
+      headers: getAuthHeaders()
+    });
+  } else {
+    fallbackDownloadFrames(id, node, url, pToast);
+  }
+}
+
+async function fallbackDownloadFrames(id, node, url, pToast) {
   try {
-    const isLocal = !node || (currentOverview && currentOverview.local_node && currentOverview.local_node.name === node);
-    const url = isLocal ? `/api/recordings/${encodeURIComponent(id)}/frames` : `/api/peers/${encodeURIComponent(node)}/recordings/${encodeURIComponent(id)}/frames`;
     const res = await fetch(url, { headers: getAuthHeaders() });
-    if (!res.ok) {
-      pToast.error('Download Failed', res.statusText);
-      alert(`Failed to load recording frames: ${res.statusText}`);
-      closePlayerModal();
-      return;
-    }
-
-    const contentLength = +(res.headers.get('Content-Length') || 0);
-    let text = '';
-    if (res.body && typeof res.body.getReader === 'function') {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let receivedBytes = 0;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        receivedBytes += value.length;
-        text += decoder.decode(value, { stream: true });
-        if (contentLength > 0) {
-          const pct = Math.min(100, Math.round((receivedBytes / contentLength) * 100));
-          const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
-          const totalMb = (contentLength / (1024 * 1024)).toFixed(1);
-          if (loadingText) loadingText.textContent = `Downloading session: ${mb} / ${totalMb} MB (${pct}%)`;
-          if (loadingBar) loadingBar.style.width = pct + '%';
-          if (loadingSub) loadingSub.textContent = `Loaded ${mb} MB of recording data`;
-          pToast.update(pct, `${mb} / ${totalMb} MB (${pct}%)`, `Streaming frames...`);
-        } else {
-          const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
-          if (loadingText) loadingText.textContent = `Downloading session: ${mb} MB...`;
-          if (loadingSub) loadingSub.textContent = `Streaming frames...`;
-          pToast.update(50, `${mb} MB downloaded`, `Streaming frames...`);
-        }
-      }
-      text += decoder.decode();
-    } else {
-      text = await res.text();
-    }
-
-    if (loadingText) loadingText.textContent = 'Parsing frames...';
-    pToast.update(95, 'Parsing frames...', 'Preparing playback viewer');
-    await new Promise(r => setTimeout(r, 20));
-
+    if (!res.ok) throw new Error(res.statusText);
+    const text = await res.text();
     const lines = text.trim().split('\n');
     const frames = [];
     for (const line of lines) {
       if (!line.trim()) continue;
-      try { frames.push(JSON.parse(line)); } catch(e) {}
+      try { frames.push(JSON.parse(line)); } catch(_) {}
     }
-
-    if (frames.length === 0) {
-      pToast.error('No Frames Found', 'The recording contains no frames.');
-      alert('No frames found in this recording.');
-      closePlayerModal();
-      return;
-    }
-
-    activePlayer = {
-      id,
-      node,
-      frames,
-      currentIndex: 0,
-      isPlaying: false,
-      isLooping: false,
-      speed: 1,
-      timer: null,
-      cachedImages: new Map(),
-    };
-
-    const centerPlayBtn = document.getElementById('playerCenterPlayBtn');
-    if (frames.length <= 1) {
-      document.getElementById('playerScrubber').max = 0;
-      document.getElementById('playerFrameDisplay').textContent = `(Snapshot: 1 frame)`;
-      updatePlayPauseButton();
-      if (centerPlayBtn) centerPlayBtn.style.display = 'none';
-    } else {
-      document.getElementById('playerScrubber').max = frames.length - 1;
-      document.getElementById('playerFrameDisplay').textContent = `(1 / ${frames.length} frames)`;
-      updatePlayPauseButton();
-      if (centerPlayBtn) centerPlayBtn.style.display = 'flex';
-    }
-
-    // Reset speed control to 1x and loop to off
-    const speedBtn = document.getElementById('playerSpeedCycleBtn');
-    if (speedBtn) speedBtn.textContent = '1x';
-    const loopBtn = document.getElementById('playerLoopBtn');
-    if (loopBtn) {
-      loopBtn.classList.remove('btn-accent', 'active');
-      loopBtn.title = 'Toggle loop (Shift+L)';
-    }
-
-    // Hide loading overlay
-    if (loadingOverlay) loadingOverlay.style.display = 'none';
-
-    pToast.done('Session Downloaded', `${frames.length} frames ready for playback`);
-
-    renderPlayerFrame(0);
-
-    // Auto-play immediately if multiple frames!
-    if (frames.length > 1) {
-      togglePlayPause();
+    if (frames.length === 0) throw new Error('No frames found');
+    setCachedRecording(id, frames).catch(() => {});
+    cachedRecordingsSet.add(id);
+    activeDownloadsMap.delete(id);
+    pToast.done('Session Downloaded', `${frames.length} frames ready`);
+    const modal = document.getElementById('playerModal');
+    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
+      initPlayerWithFrames(id, node, frames, false);
     }
   } catch(e) {
     pToast.error('Download Failed', String(e));
+    activeDownloadsMap.delete(id);
     alert(`Failed to load recording: ${e}`);
     closePlayerModal();
   }
@@ -4041,6 +4217,23 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// Tab Visibility Handler: Seamlessly resume and sync active recording upon returning to tab
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    const modal = document.getElementById('playerModal');
+    if (modal && modal.classList.contains('open') && activePlayerModalId && (!activePlayer || !activePlayer.frames || activePlayer.frames.length === 0)) {
+      getCachedRecording(activePlayerModalId).then(frames => {
+        if (frames && frames.length > 0) {
+          const nodeBadge = document.getElementById('playerNodeBadge');
+          if (nodeBadge) nodeBadge.textContent = `${activePlayerModalNode || 'local'} • cached`;
+          initPlayerWithFrames(activePlayerModalId, activePlayerModalNode, frames, true);
+        }
+      });
+    }
+  }
+});
+
+syncCachedRecordingsSet();
 updateHostInfo();
 refreshData();
 connectOverviewWs();

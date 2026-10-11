@@ -35,6 +35,7 @@ static MANIFEST_JSON: &str = include_str!("../manifest.webmanifest");
 static SW_JS: &str = include_str!("../sw.js");
 static ICON_192: &[u8] = include_bytes!("../icon-192.png");
 static ICON_512: &[u8] = include_bytes!("../icon-512.png");
+static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Native NixOS remote browser daemon")]
@@ -626,6 +627,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/sw.js", get(service_worker_js))
         .route("/icon-192.png", get(icon_192_png))
         .route("/icon-512.png", get(icon_512_png))
+        .route("/download-worker.js", get(download_worker_js))
         .route("/health", get(health_check))
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
@@ -841,6 +843,16 @@ async fn icon_512_png() -> impl IntoResponse {
             HeaderValue::from_static("image/png"),
         )],
         ICON_512,
+    )
+}
+
+async fn download_worker_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/javascript"),
+        )],
+        DOWNLOAD_WORKER_JS,
     )
 }
 
