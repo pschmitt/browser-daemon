@@ -27,7 +27,10 @@ use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
 
 static HANDOFF_HTML: &str = include_str!("../handoff.html");
 static DASHBOARD_HTML: &str = include_str!("../dashboard.html");
-static FAVICON_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#06b6d4"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="#090d16"/><rect x="2" y="2" width="28" height="28" rx="6" fill="none" stroke="url(#g)" stroke-width="1.5"/><circle cx="8" cy="8" r="1.5" fill="#ef4444"/><circle cx="12.5" cy="8" r="1.5" fill="#eab308"/><circle cx="17" cy="8" r="1.5" fill="#22c55e"/><line x1="2" y1="12" x2="30" y2="12" stroke="#1e293b" stroke-width="1.2"/><rect x="6" y="15" width="20" height="12" rx="3" fill="url(#g)" fill-opacity="0.15" stroke="url(#g)" stroke-width="1.2"/><circle cx="16" cy="21" r="3" fill="none" stroke="#38bdf8" stroke-width="1.2"/><line x1="13" y1="21" x2="19" y2="21" stroke="#38bdf8" stroke-width="1.2"/></svg>"##;
+static FAVICON_ICO: &[u8] = include_bytes!("../favicon.ico");
+static FAVICON_SVG: &str = include_str!("../favicon.svg");
+static HANDOFF_ICO: &[u8] = include_bytes!("../handoff.ico");
+static HANDOFF_SVG: &str = include_str!("../handoff.svg");
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Native NixOS remote browser daemon")]
@@ -611,6 +614,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/", get(dashboard_page))
         .route("/dashboard", get(|| async { Redirect::to("/") }))
         .route("/favicon.ico", get(favicon_ico))
+        .route("/favicon.svg", get(favicon_svg))
+        .route("/handoff/favicon.ico", get(handoff_favicon_ico))
+        .route("/handoff/favicon.svg", get(handoff_favicon_svg))
         .route("/health", get(health_check))
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
@@ -753,9 +759,39 @@ async fn favicon_ico() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
+            HeaderValue::from_static("image/x-icon"),
+        )],
+        FAVICON_ICO,
+    )
+}
+
+async fn favicon_svg() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
             HeaderValue::from_static("image/svg+xml"),
         )],
         FAVICON_SVG,
+    )
+}
+
+async fn handoff_favicon_ico() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/x-icon"),
+        )],
+        HANDOFF_ICO,
+    )
+}
+
+async fn handoff_favicon_svg() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/svg+xml"),
+        )],
+        HANDOFF_SVG,
     )
 }
 
