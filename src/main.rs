@@ -742,6 +742,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_count: args.recording_max_count,
     });
     let active_recordings = Arc::new(RwLock::new(HashMap::new()));
+    let orphaned = recorder::mark_orphaned_recordings(&recorder_config).await;
+    if orphaned > 0 {
+        info!(
+            count = orphaned,
+            "Marked recordings of a previous run as interrupted"
+        );
+    }
 
     // Run initial auto-vacuum and background periodic vacuum every 10 mins
     let vac_cfg = (*recorder_config).clone();
@@ -852,6 +859,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/peers/{peer}/sessions/{id}",
             delete(api_peer_delete_session),
+        )
+        .route(
+            "/api/peers/{peer}/sessions/{id}/{action}",
+            post(api_peer_session_action),
         )
         .route("/api/peers/{peer}/profiles", post(api_peer_create_profile))
         .route(
@@ -3042,6 +3053,33 @@ async fn api_peer_delete_session(
     let url = format!("{}/api/sessions/{}", peer_url, id);
     let res = state
         .peer_request(state.http_client.delete(&url))
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
+/// Proxy `record` / `stop-record` to the peer owning the session.
+async fn api_peer_session_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id, action)): AxumPath<(String, String, String)>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    if action != "record" && action != "stop-record" {
+        return (StatusCode::NOT_FOUND, "Unknown session action").into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+        )
+            .into_response();
+    };
+    let url = format!("{}/api/sessions/{}/{}", peer_url, id, action);
+    let res = state
+        .peer_request(state.http_client.post(&url))
         .send()
         .await;
     proxy_response(res).await

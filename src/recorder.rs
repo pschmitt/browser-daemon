@@ -642,6 +642,27 @@ pub async fn list_recordings(config: &RecorderConfig) -> Vec<RecordingMeta> {
     list
 }
 
+/// Recordings still marked "recording" at startup belong to a previous
+/// daemon process that died mid-recording.
+pub async fn mark_orphaned_recordings(config: &RecorderConfig) -> usize {
+    let mut count = 0;
+    for mut meta in list_recordings(config).await {
+        if meta.status != "recording" {
+            continue;
+        }
+        meta.status = "interrupted".to_string();
+        meta.ended_at_secs = Some(meta.started_at_secs + meta.duration_seconds);
+        let meta_file = config
+            .recordings_dir
+            .join(meta.id.to_string())
+            .join("meta.json");
+        if write_meta(&meta_file, &meta).await.is_ok() {
+            count += 1;
+        }
+    }
+    count
+}
+
 pub async fn get_recording(config: &RecorderConfig, id: Uuid) -> Option<RecordingMeta> {
     let meta_file = config.recordings_dir.join(id.to_string()).join("meta.json");
     if let Ok(content) = fs::read_to_string(&meta_file).await {
