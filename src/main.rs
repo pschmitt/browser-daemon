@@ -3939,10 +3939,14 @@ async fn copy_dir_all(src: PathBuf, dst: PathBuf) -> std::io::Result<()> {
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
 }
 
+/// Profile names become directory names: keep e-mail-like names
+/// (`google-p@example.com`) but never `..` or a hidden directory.
 fn sanitize_profile_name(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-        .collect()
+    let kept: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '@'))
+        .collect();
+    kept.trim_start_matches('.').to_string()
 }
 
 async fn compute_dir_size(path: PathBuf) -> u64 {
@@ -3966,4 +3970,22 @@ async fn compute_dir_size(path: PathBuf) -> u64 {
     })
     .await
     .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_names_allow_email_but_not_traversal() {
+        assert_eq!(
+            sanitize_profile_name("google-p@pschmitt.dev"),
+            "google-p@pschmitt.dev"
+        );
+        assert_eq!(sanitize_profile_name("hrworks"), "hrworks");
+        assert_eq!(sanitize_profile_name(".."), "");
+        assert_eq!(sanitize_profile_name("../etc"), "etc");
+        assert_eq!(sanitize_profile_name(".hidden"), "hidden");
+        assert_eq!(sanitize_profile_name("a/b c"), "abc");
+    }
 }
