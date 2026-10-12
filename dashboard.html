@@ -61,7 +61,7 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .btn:hover { background: var(--hover); border-color: var(--line-strong); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; pointer-events: none; }
-.btn.primary, .btn.primary .i { color: var(--accent-fg); -webkit-text-fill-color: var(--accent-fg); }
+.btn.primary, .btn.primary .label, .btn.primary .lbl, .btn.primary .i { color: #fff !important; -webkit-text-fill-color: #fff !important; }
 .btn.primary { background: var(--accent); border-color: transparent; }
 .btn.primary:hover { background: color-mix(in oklab, var(--accent) 88%, #fff); }
 .btn.danger { background: var(--bad); border-color: transparent; color: #fff; }
@@ -142,7 +142,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .spark { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 44px; pointer-events: none; }
 .stat-action { position: absolute; top: 8px; right: 8px; }
 
-.toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
 .views { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .views::-webkit-scrollbar { display: none; }
 .views button {
@@ -154,7 +154,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .views button.on::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
 .views .count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--hover); font-size: 11.5px; display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
 .views button.on .count { background: var(--accent-soft); color: var(--accent); }
-.view-actions { display: flex; gap: 8px; flex: none; }
+.view-actions { display: flex; align-items: center; gap: 8px; flex: none; }
 .view[hidden] { display: none !important; }
 
 /* ------------------------------------------------------------ session cards */
@@ -201,7 +201,9 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .row .num { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; white-space: nowrap; }
 .row .acts { display: flex; justify-content: flex-end; gap: 6px; }
 .profiles .list-head, .profiles .row { grid-template-columns: minmax(0, 2.2fr) 110px 90px 120px 190px; }
-.recordings .list-head, .recordings .row { grid-template-columns: 40px minmax(0, 2.4fr) 110px 130px 80px 80px 44px; }
+.recordings .list-head, .recordings .row { grid-template-columns: 24px 40px minmax(0, 2.4fr) 110px 130px 80px 80px 44px; }
+.recording-select { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.recordings .row.selected { background: color-mix(in oklab, var(--accent-soft) 60%, transparent); }
 .avatar { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 13px; text-transform: uppercase; }
 .play-btn { width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); transition: background .15s, color .15s, transform .1s; }
 .play-btn:hover { background: var(--accent); color: var(--accent-fg); transform: scale(1.05); }
@@ -379,7 +381,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 /* ------------------------------------------------------------ responsive */
 @media (max-width: 980px) {
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .recordings .list-head, .recordings .row { grid-template-columns: 40px minmax(0, 1fr) 110px 80px 44px; }
+  .recordings .list-head, .recordings .row { grid-template-columns: 24px 40px minmax(0, 1fr) 110px 80px 44px; }
   .recordings .c-started, .recordings .c-size { display: none; }
 }
 @media (max-width: 760px) {
@@ -400,15 +402,18 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   .views button > .i { display: none; }
   .view-actions .btn { width: 34px; padding: 0; }
   .view-actions .btn .lbl { display: none; }
+  .view-actions.recording-actions { width: 100%; flex-wrap: wrap; }
+  .view-actions.recording-actions .btn { width: auto; padding: 0 10px; }
+  .view-actions.recording-actions .btn .lbl { display: inline; }
   .list-head { display: none; }
   .profiles .row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main acts" "meta meta"; padding: 10px 12px; row-gap: 6px; }
   .profiles .row .main { grid-area: main; }
   .profiles .row .acts { grid-area: acts; }
   .profiles .row .c-node, .profiles .row .c-size, .profiles .row .c-mod { display: none; }
   .profiles .row .mobile-meta { display: flex !important; grid-area: meta; padding-left: 45px; }
-  .recordings .row { grid-template-columns: 40px minmax(0, 1fr) 44px; padding: 10px 12px; row-gap: 4px; }
+  .recordings .row { grid-template-columns: 24px 40px minmax(0, 1fr) 44px; padding: 10px 12px; row-gap: 4px; }
   .recordings .row .c-node, .recordings .row .c-dur { display: none; }
-  .recordings .row .mobile-meta { display: flex !important; grid-column: 2 / 4; }
+  .recordings .row .mobile-meta { display: flex !important; grid-column: 3 / 5; }
   .row2 { grid-template-columns: 1fr; }
   .modal { padding: 0; align-items: flex-end; }
   .sheet { max-width: none; border-radius: 18px 18px 0 0; max-height: 92vh; padding-bottom: env(safe-area-inset-bottom); }
@@ -483,7 +488,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <svg class="i sm np-caret"><use href="#i-caret"/></svg>
   </button>
   <div class="top-actions">
-    <button class="btn primary" data-act="new-session" title="Launch a new browser session"><svg class="i"><use href="#i-plus"/></svg><span class="label">New session</span></button>
+    <button class="btn primary" id="newSessionAction" data-act="new-session" title="Launch a new browser session"><svg class="i"><use href="#i-plus"/></svg><span class="label">New session</span></button>
     <button class="btn icon ghost" data-act="app-menu" title="More" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button>
   </div>
 </header>
@@ -1023,6 +1028,7 @@ function pagesOf(session) {
 
 /* ================================================================ render */
 let view = 'sessions';
+const selectedRecordings = new Set();
 
 function render() {
   if (!ov) return;
@@ -1239,6 +1245,8 @@ const visibleRecordings = () => [...byKey.recordings.values()].filter((r) => inF
 function renderRecordings() {
   const sec = $('view-recordings');
   const list = visibleRecordings().sort((a, b) => b.started_at_secs - a.started_at_secs);
+  for (const key of selectedRecordings) if (!byKey.recordings.has(key)) selectedRecordings.delete(key);
+  renderViewActions(list);
   if (!list.length) {
     setStatic(sec, emptyState('film', `No recordings${onNode()}`,
       'Sessions with recording enabled save a replayable screencast here. Old recordings are vacuumed automatically.'));
@@ -1246,20 +1254,48 @@ function renderRecordings() {
   }
   if (sec._static !== undefined || !sec.querySelector('.list')) {
     clearStatic(sec);
-    sec.innerHTML = `<div class="list"><div class="list-head"><span></span><span>Recording</span><span>Node</span><span class="c-started">Started</span><span class="c-dur">Length</span><span class="c-size">Size</span><span></span></div><div class="rows"></div></div>`;
+    sec.innerHTML = `<div class="list"><div class="list-head"><span></span><span></span><span>Recording</span><span>Node</span><span class="c-started">Started</span><span class="c-dur">Length</span><span class="c-size">Size</span><span></span></div><div class="rows"></div></div>`;
   }
   reconcile(sec.querySelector('.rows'), list, keyOf.recording, recordingRow);
 }
 
+function renderViewActions(recordings = visibleRecordings()) {
+  const actions = $('viewActions');
+  actions.classList.toggle('recording-actions', view === 'recordings');
+  if (view === 'profiles') {
+    const html = `<button class="btn sm" data-act="new-profile" title="New profile">${icon('plus', 'sm')}<span class="lbl">New profile</span></button>`;
+    if (actions.innerHTML !== html) actions.innerHTML = html;
+    return;
+  }
+  if (view === 'sessions') {
+    const html = `<button class="btn sm" data-act="new-tab-any" title="Open a URL">${icon('globe', 'sm')}<span class="lbl">Open URL</span></button>`;
+    if (actions.innerHTML !== html) actions.innerHTML = html;
+    return;
+  }
+  if (view !== 'recordings') { if (actions.innerHTML) actions.innerHTML = ''; return; }
+
+  const keys = recordings.map(keyOf.recording);
+  const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean);
+  const visibleSelected = recordings.filter((r) => selectedRecordings.has(keyOf.recording(r)));
+  const allSelected = keys.length > 0 && visibleSelected.length === keys.length;
+  const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
+  const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected</span>` : ''}
+    <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
+    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('bolt', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
+  if (actions.innerHTML !== html) actions.innerHTML = html;
+}
+
 function recordingRow(r) {
   const key = esc(keyOf.recording(r));
+  const selected = selectedRecordings.has(keyOf.recording(r));
   const url = r.final_url || r.initial_url || '';
   const title = r.title || shortUrl(url) || (r.profile ? `Profile ${r.profile}` : 'Untitled session');
   const sub = [shortUrl(url), r.profile && `profile ${r.profile}`].filter(Boolean).join(' · ') || `${r.frame_count} frames`;
   const live = isLive(r);
   const cached = cachedRecordingsSet.has(r.id) ? `<span class="cached" title="Cached in this browser">${icon('bolt', 'sm')}</span>` : '';
   return `
-  <div class="row" data-key="${key}">
+  <div class="row ${selected ? 'selected' : ''}" data-key="${key}">
+    <div><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
     <div class="main"><span class="site-fav">${favicon(url, r.favicon_url)}</span>
       <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${cached}</b><span>${esc(sub)}</span></div></div>
@@ -1278,14 +1314,24 @@ function setView(v) {
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   for (const name of ['sessions', 'profiles', 'recordings']) $('view-' + name).hidden = name !== v;
   document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
-  $('viewActions').innerHTML = v === 'profiles'
-    ? `<button class="btn sm" data-act="new-profile" title="New profile">${icon('plus', 'sm')}<span class="lbl">New profile</span></button>`
-    : v === 'sessions' ? `<button class="btn sm" data-act="new-tab-any" title="Open a URL">${icon('globe', 'sm')}<span class="lbl">Open URL</span></button>` : '';
+  renderViewActions();
 }
 
 /* ================================================================ actions */
 const ACT = {
   'filter': (el) => { filter = el.dataset.node; render(); },
+  'select-all-recordings': () => {
+    const list = visibleRecordings();
+    const allSelected = list.length > 0 && list.every((r) => selectedRecordings.has(keyOf.recording(r)));
+    for (const r of list) {
+      if (allSelected) selectedRecordings.delete(keyOf.recording(r));
+      else selectedRecordings.add(keyOf.recording(r));
+    }
+    renderRecordings();
+  },
+  'clear-recording-selection': () => { selectedRecordings.clear(); renderRecordings(); },
+  'delete-selected-recordings': () => deleteSelectedRecordings(),
+  'uncache-selected-recordings': () => uncacheSelectedRecordings(),
   'view': (el) => {
     setView(el.dataset.view);
     if (el.classList.contains('stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1364,10 +1410,18 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
+  if (el.matches('input[type="checkbox"][data-act="select-recording"]')) return;
   const fn = ACT[el.dataset.act];
   if (!fn) return;
   e.preventDefault();
   fn(el, e);
+});
+document.addEventListener('change', (e) => {
+  const input = e.target.closest('input[type="checkbox"][data-act="select-recording"]');
+  if (!input) return;
+  if (input.checked) selectedRecordings.add(input.dataset.key);
+  else selectedRecordings.delete(input.dataset.key);
+  renderRecordings();
 });
 
 function copyText(text, btn) {
@@ -1947,6 +2001,47 @@ async function deleteRecording(id, node) {
   deleteCachedRecording(id);
   cachedRecordingsSet.delete(id);
   act('Deleting recording', () => request('DELETE', api(node, `/recordings/${encodeURIComponent(id)}`)), 'Recording deleted');
+}
+
+async function deleteSelectedRecordings() {
+  const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean);
+  if (!selected.length) return;
+  const nodesText = [...new Set(selected.map((r) => r.node_name))].join(', ');
+  const ok = await ask({
+    title: `Delete ${selected.length} recordings?`,
+    text: `They will be removed from ${nodesText} and from this browser's cache.`,
+    ok: `Delete ${selected.length}`,
+    danger: true,
+  });
+  if (!ok) return;
+
+  const worker = getDownloadWorker();
+  for (const r of selected) {
+    if (worker) worker.postMessage({ action: 'CANCEL', id: r.id });
+    activeDownloadsMap.delete(r.id);
+  }
+  const results = await Promise.allSettled(selected.map((r) => request('DELETE', api(r.node_name, `/recordings/${encodeURIComponent(r.id)}`))));
+  let deleted = 0;
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].status !== 'fulfilled') continue;
+    const r = selected[i];
+    deleted++;
+    selectedRecordings.delete(keyOf.recording(r));
+    cachedRecordingsSet.delete(r.id);
+    await deleteCachedRecording(r.id);
+  }
+  const failed = selected.length - deleted;
+  showToast(failed ? `Deleted ${deleted}; ${failed} failed` : `Deleted ${deleted} recordings`, failed ? 'warn' : 'success', 6000);
+  await refreshData(true);
+}
+
+async function uncacheSelectedRecordings() {
+  const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter((r) => r && cachedRecordingsSet.has(r.id));
+  if (!selected.length) return;
+  await Promise.all(selected.map((r) => deleteCachedRecording(r.id)));
+  for (const r of selected) cachedRecordingsSet.delete(r.id);
+  showToast(`Removed ${selected.length} recordings from this browser cache`, 'success');
+  renderRecordings();
 }
 
 let activePlayer = null;
