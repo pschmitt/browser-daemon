@@ -46,6 +46,7 @@
   .ib:hover { background: var(--btn); }
   .ib:active { background: var(--btn); }
   .ib[disabled] { opacity: .35; }
+  .ib[hidden] { display: none; }
   .ib.on { background: color-mix(in oklab, var(--accent) 22%, transparent); color: var(--accent); }
   .ib svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -63,6 +64,41 @@
   #dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--muted); }
   #dot.live { background: var(--ok); }
   #dot.bad { background: var(--bad); }
+  .rec-pill { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; margin: 0 4px; border-radius: 999px;
+    border: 1px solid color-mix(in oklab, var(--bad) 45%, transparent); background: color-mix(in oklab, var(--bad) 14%, transparent);
+    color: var(--bad); font: 700 11.5px system-ui, sans-serif; letter-spacing: .04em; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .rec-pill[hidden] { display: none; }
+  .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); animation: pulse 1.4s infinite; }
+  .rec-pill.paused { color: var(--muted); border-color: var(--line); background: var(--btn); }
+  .rec-pill.paused .rec-dot { background: var(--muted); animation: none; border-radius: 1px; width: 7px; box-shadow: none; }
+  #sessMenu { position: fixed; z-index: 60; top: 56px; right: 8px; width: 272px; max-width: calc(100vw - 16px); padding: 6px;
+    background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
+  #sessMenu[hidden] { display: none; }
+  .sm-narrow { display: none; }
+  @media (max-width: 640px) {
+    #dash, #fwd, #reload { display: none; }
+    .sm-narrow { display: flex; }
+    .rec-pill { padding: 0; width: 28px; justify-content: center; margin: 0 2px; }
+    #recPillText { display: none; }
+  }
+  #sessMenu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
+  .sm-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 2px; font-weight: 700; font-size: 14px; }
+  .sm-engine { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; background: var(--btn); color: var(--muted); }
+  .sm-status { padding: 0 10px 8px; font-size: 12px; color: var(--muted); }
+  .sm-rec { display: flex; gap: 6px; padding: 2px 4px; }
+  .sm-rec button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 600 13px system-ui, sans-serif; cursor: pointer; }
+  .sm-rec button:hover { border-color: var(--muted); }
+  .sm-rec button.rec { color: var(--bad); }
+  .sm-rec svg, .sm-item svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .sm-rec svg.fill { fill: currentColor; stroke: none; }
+  .sm-item { display: flex; align-items: center; gap: 10px; width: 100%; height: 38px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent;
+    color: var(--fg); font: 500 13.5px system-ui, sans-serif; text-decoration: none; cursor: pointer; text-align: left; }
+  .sm-item:hover { background: var(--btn); }
+  .sm-item:disabled { opacity: .4; }
+  .sm-navrow { gap: 4px; }
+  .sm-item.danger { color: var(--bad); }
+  .sm-item.danger.armed { background: var(--bad); color: #fff; }
   #dot.wait { background: #d97706; animation: pulse 1s infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
 
@@ -163,7 +199,21 @@
     <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
   </form>
   <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
+  <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
+  <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
+</div>
+<div id="sessMenu" role="menu" hidden>
+  <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle">Session</span></div>
+  <div class="sm-status" id="smStatus"></div>
+  <div class="sm-rec" id="smRec"></div>
+  <hr>
+  <div class="sm-narrow sm-navrow">
+    <button class="sm-item" id="smFwd"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>Forward</button>
+    <button class="sm-item" id="smReload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>Reload</button>
+  </div>
+  <a class="sm-item" href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Back to dashboard</a>
+  <button class="sm-item danger" id="smStop"><svg viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span id="smStopText">Stop session</span></button>
 </div>
 <div id="stage">
   <canvas id="view"></canvas>
@@ -222,7 +272,8 @@ const E = {
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
-  kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn")
+  kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn"),
+  sessBtn: $("sessBtn"), sessMenu: $("sessMenu"), recPill: $("recPill")
 };
 const ctx = E.view.getContext("2d", { alpha: false, desynchronized: true }) || E.view.getContext("2d");
 
@@ -516,7 +567,7 @@ const handlers = {
     if (type === "alert") { window.alert(message); return { accept: true }; }
     return { accept: window.confirm(message || "Leave this page?") };
   },
-  gone: (why) => setState("bad", why),
+  gone: (why) => setState("bad", stopping ? "Session stopped" : why),
   close: (d) => {
     if (d !== drv) return;   // a replaced driver shutting down
     setState("bad", "The browser session ended");
@@ -544,6 +595,7 @@ async function connect() {
     await applyMetrics();
     setState("live");
     refreshInfo();
+    startSessionPolling();
     loadTabs();
   } catch (e) {
     setState("bad", "Could not connect (" + e.message + ")");
@@ -1332,7 +1384,7 @@ window.addEventListener("paste", (e) => {
 
 /* ---------------------------------------------------------------- page picker (no ?page=) */
 async function pickPage() {
-  E.kbbtn.hidden = E.layout.hidden = E.reload.hidden = E.back.hidden = E.fwd.hidden = true;
+  E.sessBtn.hidden = E.kbbtn.hidden = E.layout.hidden = E.reload.hidden = E.back.hidden = E.fwd.hidden = true;
   if (E.tabStrip) E.tabStrip.hidden = true;
   if (E.urlBar) E.urlBar.hidden = true;
   E.overlay.classList.remove("show");
@@ -1367,6 +1419,111 @@ async function pickPage() {
   }
   E.stage.appendChild(box);
   E.dot.className = "";
+}
+
+/* ---------------------------------------------------------------- session menu: recording + stop */
+let sess = null, sessTimer = null, stopArmed = 0, stopping = false;
+const ICON = {
+  rec: '<svg class="fill" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></svg>',
+  pause: '<svg class="fill" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+  play: '<svg class="fill" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></svg>',
+  stop: '<svg class="fill" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+};
+const fmtDur = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
+
+async function sessionApi(method, path) {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}${path}`, { method, headers: authHeaders() });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  return res.json().catch(() => ({}));
+}
+
+async function refreshSession() {
+  if (!target?.sessionId) return;
+  try {
+    sess = (await sessionApi("GET", "")).session;
+    renderSession();
+  } catch { /* session gone: the driver reports it */ }
+}
+
+function renderSession() {
+  if (!sess) return;
+  E.sessBtn.hidden = false;
+  const rec = sess.is_recording, paused = rec && sess.recording_paused;
+  E.recPill.hidden = !rec;
+  E.recPill.classList.toggle("paused", paused);
+  $("recPillText").textContent = paused ? "PAUSED" : "REC";
+  $("smEngine").textContent = sess.engine || "chromium";
+  $("smTitle").textContent = sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent session" : "Throwaway session";
+  $("smStatus").textContent = `Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
+    + (rec ? (paused ? " · recording paused" : " · recording") : "");
+  const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
+  const html = !rec ? btn("record", "rec", "Start recording", "rec")
+    : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec");
+  const box = $("smRec");
+  if (box._html !== html) { box.innerHTML = html; box._html = html; }
+}
+
+function toggleSessMenu(open = E.sessMenu.hidden) {
+  E.sessMenu.hidden = !open;
+  E.sessBtn.classList.toggle("on", open);
+  disarmStop();
+  if (open) {
+    const r = E.sessBtn.getBoundingClientRect();
+    E.sessMenu.style.top = (r.bottom + 6) + "px";
+    $("smFwd").disabled = E.fwd.disabled;
+    refreshSession();
+  }
+}
+function disarmStop() {
+  clearTimeout(stopArmed); stopArmed = 0;
+  $("smStop").classList.remove("armed");
+  $("smStopText").textContent = "Stop session";
+}
+
+E.sessBtn.onclick = (e) => { e.stopPropagation(); toggleSessMenu(); };
+E.recPill.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
+document.addEventListener("pointerdown", (e) => {
+  if (!E.sessMenu.hidden && !e.target.closest("#sessMenu, #sessBtn, #recPill")) toggleSessMenu(false);
+});
+$("smFwd").onclick = () => { toggleSessMenu(false); E.fwd.click(); };
+$("smReload").onclick = () => { toggleSessMenu(false); E.reload.click(); };
+$("smRec").onclick = async (e) => {
+  const b = e.target.closest("[data-rec]");
+  if (!b) return;
+  b.disabled = true;
+  try {
+    await sessionApi("POST", "/" + b.dataset.rec);
+  } catch (err) {
+    $("smStatus").textContent = "Failed: " + err.message;
+  }
+  await refreshSession();
+};
+// Two taps (desktop: two clicks) so a stray touch cannot kill the browser.
+$("smStop").onclick = async () => {
+  if (!stopArmed) {
+    $("smStop").classList.add("armed");
+    $("smStopText").textContent = sess?.persistent || sess?.profile ? "Tap again to stop (profile is kept)" : "Tap again to stop and discard";
+    stopArmed = setTimeout(disarmStop, 4000);
+    return;
+  }
+  disarmStop();
+  $("smStopText").textContent = "Stopping…";
+  try {
+    stopping = true;
+    await sessionApi("DELETE", "");
+    if (drv) drv.close();
+    location.href = "/";
+  } catch (err) {
+    stopping = false;
+    $("smStatus").textContent = "Could not stop: " + err.message;
+    $("smStopText").textContent = "Stop session";
+  }
+};
+function startSessionPolling() {
+  clearInterval(sessTimer);
+  refreshSession();
+  sessTimer = setInterval(() => { if (document.visibilityState === "visible") refreshSession(); }, 5000);
 }
 
 // ?session=<id> (dashboard launch): open that session's first tab.

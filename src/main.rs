@@ -123,7 +123,7 @@ impl ManagedSession {
     pub async fn to_summary(
         &self,
         http_client: &reqwest::Client,
-        is_recording: bool,
+        recording: Option<&SessionRecorderHandle>,
     ) -> SessionSummary {
         let tabs_count = if let Some(ref hub) = self.bidi {
             hub.call(
@@ -157,7 +157,8 @@ impl ManagedSession {
             uptime_seconds: self.created_at.elapsed().as_secs(),
             client_count: self.client_count.load(Ordering::SeqCst),
             tabs_count,
-            is_recording,
+            is_recording: recording.is_some(),
+            recording_paused: recording.is_some_and(SessionRecorderHandle::is_paused),
         }
     }
 }
@@ -175,6 +176,8 @@ pub struct SessionSummary {
     pub client_count: usize,
     pub tabs_count: usize,
     pub is_recording: bool,
+    #[serde(default)]
+    pub recording_paused: bool,
 }
 
 #[derive(Clone)]
@@ -825,6 +828,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/sessions/{id}/stop-record",
             post(api_session_stop_record),
+        )
+        .route(
+            "/api/sessions/{id}/pause-record",
+            post(api_session_pause_record),
+        )
+        .route(
+            "/api/sessions/{id}/resume-record",
+            post(api_session_resume_record),
         )
         .route(
             "/api/profiles",
@@ -1505,8 +1516,8 @@ async fn get_local_sessions(state: &AppState) -> Vec<SessionSummary> {
 
     let mut summaries = Vec::new();
     for session in sessions {
-        let is_rec = rec_guard.contains_key(&session.id);
-        summaries.push(session.to_summary(&state.http_client, is_rec).await);
+        let rec = rec_guard.get(&session.id);
+        summaries.push(session.to_summary(&state.http_client, rec).await);
     }
     summaries
 }
@@ -1585,12 +1596,13 @@ async fn api_create_session(
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
 
-    let is_rec = state
+    let rec = state
         .active_recordings
         .read()
         .await
-        .contains_key(&session.id);
-    let summary = session.to_summary(&state.http_client, is_rec).await;
+        .get(&session.id)
+        .cloned();
+    let summary = session.to_summary(&state.http_client, rec.as_ref()).await;
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
@@ -1608,12 +1620,13 @@ async fn api_get_session(
         ))?
     };
 
-    let is_rec = state
+    let rec = state
         .active_recordings
         .read()
         .await
-        .contains_key(&session.id);
-    let summary = session.to_summary(&state.http_client, is_rec).await;
+        .get(&session.id)
+        .cloned();
+    let summary = session.to_summary(&state.http_client, rec.as_ref()).await;
     let url = format!("http://127.0.0.1:{}/json/list", session.port);
     let targets = if let Ok(res) = state.http_client.get(&url).send().await {
         res.json::<Vec<DevToolsTarget>>().await.unwrap_or_default()
@@ -1763,8 +1776,8 @@ async fn api_get_profile(
     let session_id = active_session.as_ref().map(|s| s.id);
     let session_summary = match active_session {
         Some(s) => {
-            let is_rec = state.active_recordings.read().await.contains_key(&s.id);
-            Some(s.to_summary(&state.http_client, is_rec).await)
+            let rec = state.active_recordings.read().await.get(&s.id).cloned();
+            Some(s.to_summary(&state.http_client, rec.as_ref()).await)
         }
         None => None,
     };
@@ -3067,7 +3080,10 @@ async fn api_peer_session_action(
     if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
-    if action != "record" && action != "stop-record" {
+    if !matches!(
+        action.as_str(),
+        "record" | "stop-record" | "pause-record" | "resume-record"
+    ) {
         return (StatusCode::NOT_FOUND, "Unknown session action").into_response();
     }
     let Some(peer_url) = get_peer_url(&state, &peer).await else {
@@ -3314,42 +3330,42 @@ async fn api_get_recording(
 async fn api_get_recording_frames(
     AxumPath(id): AxumPath<Uuid>,
     State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    state.check_auth(&headers)?;
+    req: axum::extract::Request,
+) -> Response {
+    if let Err(e) = state.check_auth(req.headers()) {
+        return e.into_response();
+    }
     let frames_path = state
         .recorder_config
         .recordings_dir
         .join(id.to_string())
         .join("frames.jsonl");
     if !frames_path.exists() {
-        return Err((
+        return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Frames not found for recording" })),
-        ));
+        )
+            .into_response();
     }
-    match fs::read(&frames_path).await {
-        Ok(data) => {
-            let len = data.len();
-            Ok((
-                StatusCode::OK,
-                [
-                    (
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("text/plain; charset=utf-8"),
-                    ),
-                    (
-                        header::CONTENT_LENGTH,
-                        HeaderValue::from_str(&len.to_string()).unwrap(),
-                    ),
-                ],
-                data,
-            ))
+    // Streamed from disk with Range support: recordings reach hundreds of MB,
+    // and clients resume interrupted downloads with `Range: bytes=N-`.
+    match tower_http::services::ServeFile::new(&frames_path)
+        .try_call(req)
+        .await
+    {
+        Ok(res) => {
+            let mut res = res.map(axum::body::Body::new);
+            res.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            res
         }
-        Err(e) => Err((
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": format!("Failed to read frames: {}", e) })),
-        )),
+        )
+            .into_response(),
     }
 }
 
@@ -3427,6 +3443,42 @@ async fn api_session_stop_record(
     }
 }
 
+async fn api_session_pause_record(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    set_recording_paused(&state, &headers, id, true).await
+}
+
+async fn api_session_resume_record(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    set_recording_paused(&state, &headers, id, false).await
+}
+
+async fn set_recording_paused(
+    state: &AppState,
+    headers: &HeaderMap,
+    id: Uuid,
+    paused: bool,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(headers)?;
+    let recs = state.active_recordings.read().await;
+    let handle = recs.get(&id).ok_or((
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "Session is not actively recording" })),
+    ))?;
+    handle.clock.set_paused(paused);
+    Ok(Json(serde_json::json!({
+        "status": if paused { "recording_paused" } else { "recording_resumed" },
+        "session_id": id,
+        "recording_id": handle.recording_id
+    })))
+}
+
 async fn api_peer_list_recordings(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3492,28 +3544,34 @@ async fn api_peer_get_recording_frames(
         }
     };
     let url = format!("{}/api/recordings/{}/frames", peer_url, id);
-    let res = state.peer_request(state.http_client.get(&url)).send().await;
-    match res {
+    // The shared client's 3 s timeout covers the whole body; a large recording
+    // needs far longer, so stream it through with a generous per-request limit.
+    let mut req = state
+        .peer_request(state.http_client.get(&url))
+        .timeout(Duration::from_secs(3600));
+    if let Some(range) = headers.get(header::RANGE) {
+        req = req.header(header::RANGE, range.clone());
+    }
+    match req.send().await {
         Ok(r) => {
             let status =
                 StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let bytes = r.bytes().await.unwrap_or_default();
-            let len = bytes.len();
-            (
-                status,
-                [
-                    (
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("text/plain; charset=utf-8"),
-                    ),
-                    (
-                        header::CONTENT_LENGTH,
-                        HeaderValue::from_str(&len.to_string()).unwrap(),
-                    ),
-                ],
-                bytes,
-            )
-                .into_response()
+            let mut builder = Response::builder().status(status);
+            for name in [
+                header::CONTENT_TYPE,
+                header::CONTENT_LENGTH,
+                header::CONTENT_RANGE,
+                header::ACCEPT_RANGES,
+            ] {
+                if let Some(v) = r.headers().get(name.as_str()) {
+                    if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {
+                        builder = builder.header(name, v);
+                    }
+                }
+            }
+            builder
+                .body(axum::body::Body::from_stream(r.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,

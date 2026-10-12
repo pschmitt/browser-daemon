@@ -68,104 +68,84 @@ self.addEventListener('message', async (e) => {
   }
 });
 
-async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxRetries = 3) {
+// Streams frames.jsonl and parses it line by line: a single string holding a
+// multi-hundred-MB recording exceeds the engine's string limit. Interrupted
+// transfers resume where they stopped with a Range request.
+async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxRetries = 6) {
+  const frames = [];
+  let receivedBytes = 0;
+  let totalBytes = expectedBytes || 0;
+  let carry = '';
   let attempt = 0;
-  let lastError = null;
+  let lastProgressPost = 0;
 
-  while (attempt < maxRetries) {
+  const takeLines = (chunk, final) => {
+    carry += chunk;
+    const parts = carry.split('\n');
+    carry = final ? '' : parts.pop();
+    for (const line of parts) {
+      if (!line.trim()) continue;
+      try { frames.push(JSON.parse(line)); } catch (_) {}
+    }
+  };
+
+  while (true) {
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    attempt++;
-
+    const decoder = new TextDecoder('utf-8');
     try {
-      const res = await fetch(url, { headers, signal });
+      const reqHeaders = { ...(headers || {}) };
+      if (receivedBytes > 0) reqHeaders.Range = `bytes=${receivedBytes}-`;
+      const res = await fetch(url, { headers: reqHeaders, signal, cache: 'no-store' });
+      if (res.status === 416 && receivedBytes > 0) break;
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        const err = new Error(`HTTP ${res.status}${res.statusText ? ': ' + res.statusText : ''}`);
+        err.fatal = res.status >= 400 && res.status < 500;
+        throw err;
       }
+      if (receivedBytes > 0 && res.status !== 206) {
+        // The server ignored the range: start over.
+        frames.length = 0;
+        receivedBytes = 0;
+        carry = '';
+      }
+      const len = +(res.headers.get('Content-Length') || 0);
+      if (len > 0) totalBytes = receivedBytes + len;
 
-      const headerContentLength = +(res.headers.get('Content-Length') || 0);
-      const contentLength = headerContentLength > 0 ? headerContentLength : (expectedBytes || 0);
-      let text = '';
-      let receivedBytes = 0;
-      let lastProgressPost = 0;
-
-      if (res.body && typeof res.body.getReader === 'function') {
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          receivedBytes += value.length;
-          text += decoder.decode(value, { stream: true });
-
-          const now = Date.now();
-          if (now - lastProgressPost > 100 || receivedBytes === contentLength) {
-            lastProgressPost = now;
-            const pct = contentLength > 0 ? Math.min(99, Math.round((receivedBytes / contentLength) * 100)) : 0;
-            self.postMessage({
-              type: 'PROGRESS',
-              id,
-              receivedBytes,
-              totalBytes: contentLength,
-              pct
-            });
-          }
+      const reader = res.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        receivedBytes += value.length;
+        takeLines(decoder.decode(value, { stream: true }), false);
+        attempt = 0;
+        const now = Date.now();
+        if (now - lastProgressPost > 150) {
+          lastProgressPost = now;
+          const pct = totalBytes > 0 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100)) : 0;
+          self.postMessage({ type: 'PROGRESS', id, receivedBytes, totalBytes, pct, frameCount: frames.length });
         }
-        text += decoder.decode();
-      } else {
-        text = await res.text();
-        receivedBytes = text.length;
       }
-
-      self.postMessage({
-        type: 'PROGRESS',
-        id,
-        receivedBytes,
-        totalBytes: contentLength || receivedBytes,
-        pct: 99,
-        parsing: true
-      });
-
-      // Parse JSON lines in worker thread (off the main UI thread)
-      const lines = text.trim().split('\n');
-      const frames = [];
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          frames.push(JSON.parse(line));
-        } catch (_) {}
-      }
-
-      if (frames.length === 0) {
-        throw new Error('Recording contains no frames');
-      }
-
-      // Save directly to IndexedDB
-      await saveFramesToDb(id, frames);
-
-      self.postMessage({
-        type: 'SUCCESS',
-        id,
-        frameCount: frames.length,
-        sizeBytes: receivedBytes
-      });
-
-      return;
+      if (totalBytes > 0 && receivedBytes < totalBytes) throw new Error('Connection closed early');
+      takeLines(decoder.decode(), false);
+      break;
     } catch (err) {
-      lastError = err;
-      if (err.name === 'AbortError') throw err;
-      // If network was interrupted or backgrounded, retry with backoff
-      if (attempt < maxRetries) {
-        self.postMessage({
-          type: 'RETRY',
-          id,
-          attempt,
-          maxRetries
-        });
-        await new Promise((r) => setTimeout(r, 1500));
-      }
+      if (err.name === 'AbortError' || err.fatal) throw err;
+      attempt++;
+      if (attempt > maxRetries) throw err;
+      self.postMessage({ type: 'RETRY', id, attempt, maxRetries, receivedBytes, totalBytes });
+      await new Promise((r) => setTimeout(r, Math.min(15000, 1000 * 2 ** (attempt - 1))));
     }
   }
+  takeLines('', true);
 
-  throw lastError || new Error('Download failed after retries');
+  if (frames.length === 0) throw new Error('Recording contains no frames');
+
+  let cached = true;
+  try {
+    await saveFramesToDb(id, frames);
+  } catch (err) {
+    cached = false;
+    console.warn('Could not cache recording', id, err);
+  }
+  self.postMessage({ type: 'SUCCESS', id, frameCount: frames.length, sizeBytes: receivedBytes, cached, frames });
 }

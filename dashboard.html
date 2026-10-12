@@ -61,7 +61,8 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .btn:hover { background: var(--hover); border-color: var(--line-strong); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; pointer-events: none; }
-.btn.primary { background: var(--accent); border-color: transparent; color: var(--accent-fg); }
+.btn.primary, .btn.primary .i { color: var(--accent-fg); -webkit-text-fill-color: var(--accent-fg); }
+.btn.primary { background: var(--accent); border-color: transparent; }
 .btn.primary:hover { background: color-mix(in oklab, var(--accent) 88%, #fff); }
 .btn.danger { background: var(--bad); border-color: transparent; color: #fff; }
 .btn.danger:hover { background: color-mix(in oklab, var(--bad) 88%, #fff); }
@@ -98,20 +99,25 @@ header.top {
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; letter-spacing: -.01em; flex: none; }
 .brand img { width: 28px; height: 28px; border-radius: 8px; }
-.node-filter { display: flex; gap: 2px; padding: 3px; border-radius: 11px; background: var(--surface); border: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; min-width: 0; }
-.node-filter::-webkit-scrollbar { display: none; }
-.node-filter button {
-  display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border: 0; border-radius: 8px;
-  background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap;
+.node-picker {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; min-width: 0;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+  font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: border-color .15s, background .15s;
 }
-.node-filter button:hover { color: var(--fg); }
-.node-filter button.on { background: var(--hover); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line-strong); }
-.node-filter .dot { color: var(--node, var(--muted)); }
-.node-filter .dot.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--bad); }
-.node-filter .count { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.node-picker:hover, .node-picker[aria-expanded="true"] { border-color: var(--line-strong); background: var(--raised); }
+.node-picker .dot { color: var(--node, var(--ok)); }
+.node-picker.degraded .dot { color: var(--warn); }
+.np-label { overflow: hidden; text-overflow: ellipsis; }
+.np-health { font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 2px 7px; border-radius: 999px; background: var(--hover); font-variant-numeric: tabular-nums; }
+.node-picker.degraded .np-health { color: var(--warn); background: color-mix(in oklab, var(--warn) 14%, transparent); }
+.np-caret { color: var(--faint); margin-left: -2px; }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
-.cluster-btn .dot { color: var(--ok); }
-.cluster-btn.degraded .dot { color: var(--warn); }
+.menu button.on { background: var(--hover); }
+.menu .lead { display: inline-flex; width: 16px; justify-content: center; flex: none; }
+.menu .lead .dot { color: var(--node, var(--muted)); }
+.menu .lead .dot.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--bad); }
+.menu .meta { margin-left: auto; padding-left: 18px; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.menu .tick { width: 16px; display: inline-flex; justify-content: center; color: var(--accent); flex: none; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .live-dot.on { background: var(--ok); }
 
@@ -122,8 +128,10 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-
   position: relative; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; min-height: 104px;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; text-align: left;
 }
-button.stat { cursor: pointer; transition: border-color .15s, background .15s; }
-button.stat:hover { border-color: var(--line-strong); background: var(--raised); }
+button.stat, .stat.nav { cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
+button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); background: var(--raised); }
+.stat.nav:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stat.nav.on { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); box-shadow: inset 0 -2px 0 var(--accent); }
 .stat-label { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .stat-label .i { color: var(--faint); }
 .stat-value { font-size: 26px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
@@ -373,7 +381,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 @media (max-width: 760px) {
   header.top { flex-wrap: wrap; gap: 10px; padding-left: 14px; padding-right: 14px; }
   .brand span { display: none; }
-  .node-filter { order: 3; flex: 1 0 100%; }
+  .np-health { display: none; }
   .top-actions .label { display: none; }
   .top-actions .btn.primary { width: 34px; padding: 0; }
   main { padding: 16px 14px 60px; }
@@ -420,10 +428,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
   <symbol id="i-handoff" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
@@ -460,9 +470,13 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 
 <header class="top">
   <a class="brand" href="/" title="Browser Daemon"><img src="/favicon.svg" alt=""><span>Browser Daemon</span></a>
-  <nav class="node-filter" id="nodeFilter" aria-label="Filter by node"></nav>
+  <button class="node-picker" id="nodePicker" data-act="node-menu" aria-haspopup="menu" title="Filter by node and manage the mesh">
+    <span class="dot" id="nodePickerDot"></span>
+    <span class="np-label" id="nodePickerLabel">All nodes</span>
+    <span class="np-health" id="nodePickerHealth">–</span>
+    <svg class="i sm np-caret"><use href="#i-caret"/></svg>
+  </button>
   <div class="top-actions">
-    <button class="btn ghost sm cluster-btn" id="clusterBtn" data-act="nodes" title="Mesh nodes"><span class="dot"></span><span id="clusterText">–</span></button>
     <button class="btn primary" data-act="new-session" title="Launch a new browser session"><svg class="i"><use href="#i-plus"/></svg><span class="label">New session</span></button>
     <button class="btn icon ghost" data-act="app-menu" title="More" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button>
   </div>
@@ -470,7 +484,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 
 <main>
   <section class="stats">
-    <div class="stat">
+    <div class="stat nav" role="button" tabindex="0" data-act="view" data-view="sessions" title="Show sessions">
       <div class="stat-label"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="live-dot" id="liveDot" title="Live updates"></span></div>
       <div class="stat-value" id="statSessions">0<small>/ 0</small></div>
       <svg class="spark" id="spark" viewBox="0 0 120 40" preserveAspectRatio="none">
@@ -484,12 +498,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="stat-value" id="statTabs">0</div>
       <div class="stat-sub ellipsis" id="statTabsSub">No pages open</div>
     </button>
-    <button class="stat" data-act="view" data-view="profiles">
+    <button class="stat nav" data-act="view" data-view="profiles" title="Show profiles">
       <div class="stat-label"><svg class="i sm"><use href="#i-folder"/></svg>Profiles</div>
       <div class="stat-value" id="statProfiles">0</div>
       <div class="stat-sub" id="statProfilesSub">0 B on disk</div>
     </button>
-    <div class="stat">
+    <div class="stat nav" role="button" tabindex="0" data-act="view" data-view="recordings" title="Show recordings">
       <div class="stat-label"><svg class="i sm"><use href="#i-db"/></svg>Recordings</div>
       <button class="btn ghost icon sm stat-action" data-act="vacuum" title="Vacuum: apply the retention policy now" aria-label="Vacuum recordings"><svg class="i sm"><use href="#i-broom"/></svg></button>
       <div class="stat-value" id="statStorage">0 B</div>
@@ -893,16 +907,20 @@ $('askModal').addEventListener('click', (e) => {
 
 /* ================================================================ menu */
 let menuItems = [];
-function openMenu(anchor, items) {
+function openMenu(anchor, items, { align = 'right' } = {}) {
   const menu = $('menu');
   menuItems = items.filter(Boolean);
+  const anyTick = menuItems.some((it) => it.on !== undefined);
   menu.innerHTML = menuItems.map((it, i) => it === '-' ? '<hr>'
     : it.label && !it.run ? `<div class="menu-label">${esc(it.label)}</div>`
-    : `<button role="menuitem" data-mi="${i}" class="${it.danger ? 'danger' : ''}">${icon(it.icon || 'info-c')}${esc(it.label)}</button>`).join('');
+    : `<button role="menuitem" data-mi="${i}" class="${it.danger ? 'danger' : ''}${it.on ? ' on' : ''}" ${it.style ? `style="${it.style}"` : ''}>`
+      + (anyTick ? `<span class="tick">${it.on ? icon('check', 'sm') : ''}</span>` : '')
+      + (it.lead ? `<span class="lead">${it.lead}</span>` : icon(it.icon || 'info-c'))
+      + esc(it.label) + (it.meta ? `<span class="meta">${esc(it.meta)}</span>` : '') + '</button>').join('');
   menu.classList.add('open');
   const r = anchor.getBoundingClientRect();
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
-  let left = Math.min(r.right - mw, innerWidth - mw - 8);
+  let left = Math.min(align === 'left' ? r.left : r.right - mw, innerWidth - mw - 8);
   left = Math.max(8, left);
   let top = r.bottom + 6;
   if (top + mh > innerHeight - 8) top = Math.max(8, r.top - mh - 6);
@@ -910,7 +928,7 @@ function openMenu(anchor, items) {
   menu.style.top = top + 'px';
   menu.querySelector('button')?.focus({ preventScroll: true });
 }
-function closeMenu() { $('menu').classList.remove('open'); }
+function closeMenu() { $('menu').classList.remove('open'); $('nodePicker').setAttribute('aria-expanded', 'false'); }
 $('menu').addEventListener('click', (e) => {
   const b = e.target.closest('[data-mi]');
   if (!b) return;
@@ -1006,18 +1024,33 @@ function render() {
 }
 
 function renderHeader() {
+  const online = ov.online_nodes, total = ov.total_nodes;
+  const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter);
+  const np = $('nodePicker');
+  np.classList.toggle('degraded', !sel && online < total);
+  np.style.setProperty('--node', sel ? nodeColor(sel.name) : '');
+  $('nodePickerDot').classList.toggle('off', !!sel && sel.status !== 'online');
+  $('nodePickerLabel').textContent = sel ? sel.name : 'All nodes';
+  $('nodePickerHealth').textContent = `${online}/${total} online`;
+}
+
+function openNodeMenu(anchor) {
   const counts = new Map();
   for (const s of ov.sessions) counts.set(s.node_name, (counts.get(s.node_name) || 0) + 1);
-  const btn = (name, label, dot, count) =>
-    `<button data-act="filter" data-node="${esc(name)}" class="${filter === name ? 'on' : ''}" ${dot ? `style="--node:${nodeColor(name)}"` : ''}>${dot || ''}${esc(label)}<span class="count">${count}</span></button>`;
-  const html = btn('all', 'All nodes', '', ov.sessions.length) + nodes.map((n) =>
-    btn(n.name, n.name, `<span class="dot ${n.status === 'online' ? '' : 'off'}" title="${n.status === 'online' ? 'online' : esc(n.error || 'offline')}"></span>`, counts.get(n.name) || 0)).join('');
-  const nf = $('nodeFilter');
-  if (nf._html !== html) { nf.innerHTML = html; nf._html = html; }
-
-  const online = ov.online_nodes, total = ov.total_nodes;
-  $('clusterText').textContent = `${online}/${total} nodes`;
-  $('clusterBtn').classList.toggle('degraded', online < total);
+  const plural = (n) => `${n} session${n === 1 ? '' : 's'}`;
+  anchor.setAttribute('aria-expanded', 'true');
+  openMenu(anchor, [
+    { label: 'Show' },
+    { lead: icon('server', 'sm'), label: 'All nodes', meta: plural(ov.sessions.length), on: filter === 'all', run: () => { filter = 'all'; render(); } },
+    ...nodes.map((n) => ({
+      lead: `<span class="dot ${n.status === 'online' ? '' : 'off'}"></span>`, style: `--node:${nodeColor(n.name)}`,
+      label: n.name + (n.isLocal ? ' (this node)' : ''),
+      meta: n.status === 'online' ? plural(counts.get(n.name) || 0) : 'offline',
+      on: filter === n.name, run: () => { filter = n.name; render(); },
+    })),
+    '-',
+    { icon: 'server', label: `Manage nodes… (${ov.online_nodes}/${ov.total_nodes} online)`, run: () => { renderNodes(); openModal('nodesModal'); } },
+  ], { align: 'left' });
 }
 
 function renderStats() {
@@ -1108,7 +1141,7 @@ function sessionCard(s) {
     <div class="scard-head">
       <div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>
       <div style="min-width:0;flex:1">
-        <div class="scard-title"><span class="ellipsis">${s.profile ? esc(s.profile) : '<em>Throwaway</em>'}</span>${s.is_recording ? '<span class="rec-dot" title="Recording"></span>' : ''}</div>
+        <div class="scard-title"><span class="ellipsis">${s.profile ? esc(s.profile) : '<em>Throwaway</em>'}</span>${s.is_recording ? (s.recording_paused ? '<span class="chip">rec paused</span>' : '<span class="rec-dot" title="Recording"></span>') : ''}</div>
         <div class="scard-meta">${nodeChip(s.node_name)}<span data-up title="Uptime"></span>${clients ? `<span class="sep">·</span><span>${clients}</span>` : ''}${s.persistent ? '' : '<span class="sep">·</span><span title="Stops when its last client disconnects">ephemeral</span>'}</div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions">${icon('more')}</button>
@@ -1205,7 +1238,7 @@ function setView(v) {
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   for (const name of ['sessions', 'profiles', 'recordings']) $('view-' + name).hidden = name !== v;
-  document.querySelectorAll('.views button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+  document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   $('viewActions').innerHTML = v === 'profiles'
     ? `<button class="btn sm" data-act="new-profile" title="New profile">${icon('plus', 'sm')}<span class="lbl">New profile</span></button>`
     : v === 'sessions' ? `<button class="btn sm" data-act="new-tab-any" title="Open a URL">${icon('globe', 'sm')}<span class="lbl">Open URL</span></button>` : '';
@@ -1214,8 +1247,12 @@ function setView(v) {
 /* ================================================================ actions */
 const ACT = {
   'filter': (el) => { filter = el.dataset.node; render(); },
-  'view': (el) => setView(el.dataset.view),
+  'view': (el) => {
+    setView(el.dataset.view);
+    if (el.classList.contains('stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  },
   'nodes': () => { renderNodes(); openModal('nodesModal'); },
+  'node-menu': (el) => { if (ov) openNodeMenu(el); },
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
   'take-over-latest': () => {
@@ -1238,6 +1275,9 @@ const ACT = {
       { icon: 'handoff', label: 'Take over', run: () => { location.href = handoffUrl(s.node_name, { session: s.id }); } },
       { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
       { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : 'Start recording', run: () => toggleRecording(s) },
+      s.is_recording && (s.recording_paused
+        ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
+        : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
       { icon: 'copy', label: 'Copy WebSocket URL', run: () => copyText(wsUrl) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
       '-',
@@ -1278,6 +1318,9 @@ const ACT = {
     ]);
   },
 };
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); }
+});
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el || el.disabled) return;
@@ -1399,6 +1442,11 @@ function toggleRecording(s) {
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),
     s.is_recording ? 'Recording saved' : 'Recording started');
 }
+function setRecordingPaused(s, paused) {
+  act(paused ? 'Pausing recording' : 'Resuming recording',
+    () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/${paused ? 'pause-record' : 'resume-record'}`)),
+    paused ? 'Recording paused' : 'Recording resumed');
+}
 
 async function newTab(s) {
   const url = await ask({ title: s ? 'Open a new tab' : 'Open a URL', text: s ? `In ${s.profile || 'the throwaway session'} on ${s.node_name}` : `On ${filter === 'all' ? localName() : filter} (reuses a running session or starts one)`, input: '', placeholder: 'duckduckgo.com or search terms', ok: 'Open' });
@@ -1426,7 +1474,7 @@ function showSessionDetails(s) {
   showDetails(s.profile || 'Throwaway session', [
     ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
     ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Kept alive' : 'Ends with last client'],
-    ['Uptime', formatUptime(s.uptime_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? 'yes' : 'no'],
+    ['Uptime', formatUptime(s.uptime_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);
 }
 
@@ -1764,35 +1812,32 @@ function handleWorkerMessage(e) {
       const titleText = effectiveTotal > 0 ? `Downloading session: ${sub} (${displayPct}%)` : `Downloading session: ${sub}`;
       if (loadingText) loadingText.textContent = titleText;
       if (loadingBar) loadingBar.style.width = displayPct + '%';
-      if (loadingSub) loadingSub.textContent = `Streaming frames in background worker...`;
+      if (loadingSub) loadingSub.textContent = e.data.frameCount ? `${e.data.frameCount.toLocaleString()} frames received` : 'Streaming frames…';
     }
   } else if (type === 'SUCCESS') {
-    cachedRecordingsSet.add(id);
+    const frames = e.data.frames;
+    if (e.data.cached) cachedRecordingsSet.add(id);
     if (download && download.pToast) {
-      download.pToast.done('Session Downloaded', `${frameCount} frames saved locally`);
+      download.pToast.done('Recording downloaded', e.data.cached ? `${frameCount} frames saved in this browser` : `${frameCount} frames (too large to cache here)`);
     }
     activeDownloadsMap.delete(id);
 
     render();
 
     const modal = document.getElementById('playerModal');
-    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
-      getCachedRecording(id).then(frames => {
-        if (frames && frames.length > 0) {
-          const nodeBadge = document.getElementById('playerNodeBadge');
-          if (nodeBadge) nodeBadge.textContent = `${activePlayerModalNode || 'local'} · cached`;
-          initPlayerWithFrames(id, activePlayerModalNode, frames, true);
-        }
-      });
+    if (modal && modal.classList.contains('open') && activePlayerModalId === id && frames && frames.length > 0) {
+      const nodeBadge = document.getElementById('playerNodeBadge');
+      if (nodeBadge) nodeBadge.textContent = `${activePlayerModalNode || 'local'}${e.data.cached ? ' · cached' : ''}`;
+      initPlayerWithFrames(id, activePlayerModalNode, frames, !!e.data.cached);
     }
   } else if (type === 'RETRY') {
     if (download && download.pToast) {
-      download.pToast.update(download.lastPct || 10, `Reconnecting (attempt ${attempt})...`, 'Resuming after network hiccup');
+      download.pToast.update(download.lastPct || 0, `Reconnecting (attempt ${attempt}/${e.data.maxRetries})…`, 'Resuming where it stopped');
     }
     const modal = document.getElementById('playerModal');
     if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
       const loadingSub = document.getElementById('playerLoadingSub');
-      if (loadingSub) loadingSub.textContent = `Reconnecting stream (attempt ${attempt})...`;
+      if (loadingSub) loadingSub.textContent = `Connection dropped, resuming (attempt ${attempt}/${e.data.maxRetries})…`;
     }
   } else if (type === 'ERROR') {
     if (download && download.pToast) {

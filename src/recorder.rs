@@ -59,12 +59,67 @@ pub struct ProxyRecordingFrame {
 pub struct SessionRecorderHandle {
     pub recording_id: Uuid,
     pub stop_flag: Arc<AtomicBool>,
+    pub clock: Arc<RecordingClock>,
     pub frame_tx: tokio::sync::mpsc::UnboundedSender<ProxyRecordingFrame>,
 }
 
 impl SessionRecorderHandle {
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.clock.is_paused()
+    }
+}
+
+/// Recording time that stands still while the recording is paused, so a
+/// pause leaves no frozen gap in the playback.
+pub struct RecordingClock {
+    start: Instant,
+    state: std::sync::Mutex<PauseState>,
+}
+
+#[derive(Default)]
+struct PauseState {
+    paused_total: Duration,
+    paused_since: Option<Instant>,
+}
+
+impl RecordingClock {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            state: std::sync::Mutex::new(PauseState::default()),
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, PauseState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.lock().paused_since.is_some()
+    }
+
+    /// Returns false when the clock already was in the requested state.
+    pub fn set_paused(&self, paused: bool) -> bool {
+        let mut st = self.lock();
+        match (paused, st.paused_since) {
+            (true, None) => st.paused_since = Some(Instant::now()),
+            (false, Some(since)) => {
+                st.paused_total += since.elapsed();
+                st.paused_since = None;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        let st = self.lock();
+        let paused = st.paused_total + st.paused_since.map_or(Duration::ZERO, |s| s.elapsed());
+        self.start.elapsed().saturating_sub(paused)
     }
 }
 
@@ -78,6 +133,8 @@ pub fn start_recording(
     let recording_id = Uuid::new_v4();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_clone = stop_flag.clone();
+    let clock = Arc::new(RecordingClock::new());
+    let clock_clone = clock.clone();
     let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel::<ProxyRecordingFrame>();
 
     tokio::spawn(async move {
@@ -89,6 +146,7 @@ pub fn start_recording(
             node_name,
             config,
             stop_clone,
+            clock_clone,
             frame_rx,
         )
         .await;
@@ -97,6 +155,7 @@ pub fn start_recording(
     SessionRecorderHandle {
         recording_id,
         stop_flag,
+        clock,
         frame_tx,
     }
 }
@@ -108,7 +167,7 @@ async fn write_single_frame(
     rec_dir: &Path,
     total_frames: &mut u64,
     last_meta_flush: &mut Instant,
-    start_instant: Instant,
+    clock: &RecordingClock,
     current_url: &mut Option<String>,
     current_title: &mut Option<String>,
     data: String,
@@ -139,7 +198,10 @@ async fn write_single_frame(
         }
     }
 
-    let elapsed_ms = start_instant.elapsed().as_millis() as u64;
+    if clock.is_paused() {
+        return;
+    }
+    let elapsed_ms = clock.elapsed().as_millis() as u64;
     let frame = RecordingFrame {
         t: elapsed_ms,
         url: current_url.clone(),
@@ -156,7 +218,7 @@ async fn write_single_frame(
     // Flush metadata every 4 seconds or every 30 frames
     if last_meta_flush.elapsed() > Duration::from_secs(4) || *total_frames % 30 == 0 {
         let _ = writer.flush().await;
-        meta.duration_seconds = start_instant.elapsed().as_secs();
+        meta.duration_seconds = clock.elapsed().as_secs();
         meta.frame_count = *total_frames;
         meta.size_bytes = compute_rec_dir_size(rec_dir).await;
         meta.final_url = current_url.clone();
@@ -174,6 +236,7 @@ async fn record_session_loop(
     node_name: String,
     config: RecorderConfig,
     stop_flag: Arc<AtomicBool>,
+    clock: Arc<RecordingClock>,
     mut frame_rx: tokio::sync::mpsc::UnboundedReceiver<ProxyRecordingFrame>,
 ) {
     let rec_dir = config.recordings_dir.join(recording_id.to_string());
@@ -216,7 +279,6 @@ async fn record_session_loop(
         "Started session recording"
     );
 
-    let start_instant = Instant::now();
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
@@ -257,7 +319,7 @@ async fn record_session_loop(
                 &rec_dir,
                 &mut total_frames,
                 &mut last_meta_flush,
-                start_instant,
+                &clock,
                 &mut current_url,
                 &mut current_title,
                 pf.data,
@@ -280,7 +342,7 @@ async fn record_session_loop(
                         &rec_dir,
                         &mut total_frames,
                         &mut last_meta_flush,
-                        start_instant,
+                        &clock,
                         &mut current_url,
                         &mut current_title,
                         pf.data,
@@ -444,7 +506,7 @@ async fn record_session_loop(
                                 &rec_dir,
                                 &mut total_frames,
                                 &mut last_meta_flush,
-                                start_instant,
+                                &clock,
                                 &mut current_url,
                                 &mut current_title,
                                 pf.data,
@@ -477,7 +539,7 @@ async fn record_session_loop(
                                                 &rec_dir,
                                                 &mut total_frames,
                                                 &mut last_meta_flush,
-                                                start_instant,
+                                                &clock,
                                                 &mut current_url,
                                                 &mut current_title,
                                                 frame_data.to_string(),
@@ -569,7 +631,7 @@ async fn record_session_loop(
         .unwrap_or_default()
         .as_secs();
 
-    let duration_seconds = start_instant.elapsed().as_secs();
+    let duration_seconds = clock.elapsed().as_secs();
     let size_bytes = compute_rec_dir_size(&rec_dir).await;
 
     meta.ended_at_secs = Some(ended_at_secs);
