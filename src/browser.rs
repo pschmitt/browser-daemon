@@ -42,6 +42,19 @@ pub struct BrowserConfig {
     pub default_width: u32,
     pub default_height: u32,
     pub max_session_memory_mb: Option<u64>,
+    /// Unpacked ad blocker (uBlock Origin Lite) loaded into Chromium.
+    pub chromium_adblock: Option<PathBuf>,
+    /// Ad blocker add-on (uBlock Origin .xpi) installed into Firefox.
+    pub firefox_adblock: Option<PathBuf>,
+}
+
+impl BrowserConfig {
+    pub fn adblock_available(&self, engine: BrowserEngine) -> bool {
+        match engine {
+            BrowserEngine::Chromium => self.chromium_adblock.is_some(),
+            BrowserEngine::Firefox => self.firefox_adblock.is_some(),
+        }
+    }
 }
 
 pub struct ActiveBrowser {
@@ -55,6 +68,7 @@ pub struct ActiveBrowser {
     _temp_dir: Option<tempfile::TempDir>,
     pub profile_name: Option<String>,
     pub created_at: Instant,
+    pub adblock: bool,
 }
 
 impl ActiveBrowser {
@@ -65,8 +79,10 @@ impl ActiveBrowser {
         width: Option<u32>,
         height: Option<u32>,
         max_memory_mb: Option<u64>,
+        adblock: bool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = Uuid::new_v4();
+        let adblock = adblock && config.adblock_available(engine);
         let width = width.unwrap_or(config.default_width);
         let height = height.unwrap_or(config.default_height);
 
@@ -125,6 +141,13 @@ impl ActiveBrowser {
                     .arg("about:blank")
                     .kill_on_drop(true);
 
+                if let (true, Some(ext)) = (adblock, &config.chromium_adblock) {
+                    // Unbranded Chromium still honours --load-extension; the
+                    // feature guard keeps it that way should it become default.
+                    cmd.arg(format!("--load-extension={}", ext.display()))
+                        .arg("--disable-features=DisableLoadExtensionCommandLineSwitch");
+                }
+
                 let effective_mem = max_memory_mb.or(config.max_session_memory_mb);
                 if let Some(mem_mb) = effective_mem {
                     cmd.arg(format!("--js-flags=--max-old-space-size={}", mem_mb));
@@ -155,6 +178,7 @@ impl ActiveBrowser {
                     _temp_dir: temp_dir,
                     profile_name,
                     created_at: Instant::now(),
+                    adblock,
                 })
             }
             BrowserEngine::Firefox => {
@@ -222,6 +246,23 @@ impl ActiveBrowser {
                     }
                 };
 
+                // Installed per launch: BiDi add-ons last until Firefox exits.
+                let mut adblock = adblock;
+                if let (true, Some(xpi)) = (adblock, &config.firefox_adblock) {
+                    let res = hub
+                        .call(
+                            "webExtension.install",
+                            serde_json::json!({
+                                "extensionData": { "type": "archivePath", "path": xpi }
+                            }),
+                        )
+                        .await;
+                    if let Err(e) = res {
+                        warn!(session_id = %id, error = %e, "Could not install the ad blocker");
+                        adblock = false;
+                    }
+                }
+
                 info!(session_id = %id, port = port, ws_path = "session", "Firefox ready");
 
                 Ok(Self {
@@ -234,6 +275,7 @@ impl ActiveBrowser {
                     _temp_dir: temp_dir,
                     profile_name,
                     created_at: Instant::now(),
+                    adblock,
                 })
             }
         }

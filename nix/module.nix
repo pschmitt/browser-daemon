@@ -6,6 +6,7 @@
 }:
 let
   cfg = config.services.browser-daemon;
+  adblockPkgs = pkgs.callPackage ./adblock.nix { };
 in
 {
   options.services.browser-daemon = {
@@ -149,6 +150,29 @@ in
       description = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N).";
     };
 
+    adblock = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Make the ad blocker available to sessions (uBlock Origin Lite in Chromium, uBlock Origin in Firefox).";
+      };
+      default = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Block ads in new sessions unless they opt out with `adblock: false`.";
+      };
+      chromiumExtension = lib.mkOption {
+        type = lib.types.package;
+        default = adblockPkgs.ublock-origin-lite;
+        description = "Unpacked Chromium extension to load as the ad blocker.";
+      };
+      firefoxAddon = lib.mkOption {
+        type = lib.types.path;
+        default = "${adblockPkgs.ublock-origin-xpi}/ublock-origin.xpi";
+        description = "Firefox add-on (.xpi) to install as the ad blocker.";
+      };
+    };
+
     idleTimeoutMinutes = lib.mkOption {
       type = lib.types.ints.unsigned;
       default = 30;
@@ -240,6 +264,14 @@ in
             cfg.nodeName
             "--idle-timeout-minutes"
             (toString cfg.idleTimeoutMinutes)
+            "--adblock-default"
+            (lib.boolToString cfg.adblock.default)
+          ]
+          ++ lib.optionals cfg.adblock.enable [
+            "--chromium-adblock"
+            "${cfg.adblock.chromiumExtension}"
+            "--firefox-adblock"
+            "${cfg.adblock.firefoxAddon}"
           ]
           ++ lib.optionals (cfg.publicUrl != null) [
             "--public-url"

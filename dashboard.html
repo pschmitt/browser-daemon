@@ -170,6 +170,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .scard-title em { font-style: normal; color: var(--muted); font-weight: 600; }
 .scard-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; font-size: 12px; color: var(--muted); }
 .scard-meta .sep { color: var(--faint); }
+.scard-meta .adb { display: inline-flex; color: var(--ok); }
 .tabs-list { display: flex; flex-direction: column; padding: 0 8px; gap: 2px; }
 .tab-row { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; min-width: 0; }
 .tab-row:hover { background: var(--hover); }
@@ -428,6 +429,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></symbol>
@@ -550,6 +552,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         <span class="hint">A named profile keeps cookies and logins on disk.</span>
       </div>
       <label class="switch"><input type="checkbox" id="sessionPersistent" checked><span class="track"></span><span class="txt"><b>Keep alive</b><span>Don't stop the browser when the last client disconnects</span></span></label>
+      <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
       <label class="switch"><input type="checkbox" id="sessionRecord" checked><span class="track"></span><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
       <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Open handoff</b><span>Take over the browser right after launch</span></span></label>
       <details class="adv">
@@ -1174,7 +1177,7 @@ function sessionCard(s) {
       <div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${s.profile ? esc(s.profile) : '<em>Throwaway</em>'}</span>${s.is_recording ? (s.recording_paused ? '<span class="chip">rec paused</span>' : '<span class="rec-dot" title="Recording"></span>') : ''}</div>
-        <div class="scard-meta">${nodeChip(s.node_name)}<span data-up title="Uptime"></span>${clients ? `<span class="sep">·</span><span>${clients}</span>` : ''}${s.persistent ? '' : '<span class="sep">·</span><span title="Stops when its last client disconnects">ephemeral</span>'}<span data-idle hidden></span></div>
+        <div class="scard-meta">${nodeChip(s.node_name)}<span data-up title="Uptime"></span>${clients ? `<span class="sep">·</span><span>${clients}</span>` : ''}${s.persistent ? '' : '<span class="sep">·</span><span title="Stops when its last client disconnects">ephemeral</span>'}${s.adblock ? `<span class="adb" title="Ads are blocked">${icon('shield', 'sm')}</span>` : ''}<span data-idle hidden></span></div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions">${icon('more')}</button>
     </div>
@@ -1444,6 +1447,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     profile: $('sessionProfile').value.trim() || null,
     persistent: $('sessionPersistent').checked,
     record: $('sessionRecord').checked,
+    adblock: $('sessionAdblock').checked,
     width: parseInt($('sessionWidth').value, 10) || 1920,
     height: parseInt($('sessionHeight').value, 10) || 1080,
   };
@@ -1522,7 +1526,7 @@ function showSessionDetails(s) {
   showDetails(s.profile || 'Throwaway session', [
     ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
     ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Kept alive' : 'Ends with last client'],
-    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
+    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);
 }
 

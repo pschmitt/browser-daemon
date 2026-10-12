@@ -18,11 +18,13 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           browser-daemon = pkgs.callPackage ./nix/package.nix { };
+          adblock = pkgs.callPackage ./nix/adblock.nix { };
         in
         {
           packages = {
             default = browser-daemon;
             inherit browser-daemon;
+            inherit (adblock) ublock-origin-lite ublock-origin-xpi;
           };
 
           apps.default = {

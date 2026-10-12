@@ -111,6 +111,23 @@ pub struct Args {
         help = "Stop sessions nobody used for this many minutes (0 = never)"
     )]
     pub idle_timeout_minutes: u64,
+
+    #[arg(
+        long,
+        help = "Unpacked ad blocker extension (uBlock Origin Lite) for Chromium"
+    )]
+    pub chromium_adblock: Option<PathBuf>,
+
+    #[arg(long, help = "Ad blocker add-on (uBlock Origin .xpi) for Firefox")]
+    pub firefox_adblock: Option<PathBuf>,
+
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        help = "Block ads in new sessions unless they opt out"
+    )]
+    pub adblock_default: bool,
 }
 
 #[derive(Clone)]
@@ -124,6 +141,7 @@ pub struct ManagedSession {
     pub created_at: Instant,
     pub client_count: Arc<AtomicUsize>,
     pub activity: Arc<idle::Activity>,
+    pub adblock: bool,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -166,6 +184,7 @@ impl ManagedSession {
             uptime_seconds: self.created_at.elapsed().as_secs(),
             client_count: self.client_count.load(Ordering::SeqCst),
             tabs_count,
+            adblock: self.adblock,
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -186,6 +205,8 @@ pub struct SessionSummary {
     pub uptime_seconds: u64,
     pub client_count: usize,
     pub tabs_count: usize,
+    #[serde(default)]
+    pub adblock: bool,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -210,6 +231,7 @@ pub struct AppState {
     pub recorder_config: Arc<RecorderConfig>,
     pub active_recordings: Arc<RwLock<HashMap<Uuid, SessionRecorderHandle>>>,
     pub idle_timeout_secs: u64,
+    pub adblock_default: bool,
 }
 
 impl AppState {
@@ -272,6 +294,7 @@ impl AppState {
         record: Option<bool>,
         max_memory_mb: Option<u64>,
         idle_timeout_minutes: Option<u64>,
+        adblock: Option<bool>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
@@ -312,19 +335,27 @@ impl AppState {
             ));
         }
 
-        let browser =
-            match ActiveBrowser::spawn(&self.config, engine, profile, width, height, max_memory_mb)
-                .await
-            {
-                Ok(b) => b,
-                Err(e) => {
-                    error!(error = %e, engine = %engine, "Failed to spawn browser process");
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to spawn browser process",
-                    ));
-                }
-            };
+        let adblock = adblock.unwrap_or(self.adblock_default);
+        let browser = match ActiveBrowser::spawn(
+            &self.config,
+            engine,
+            profile,
+            width,
+            height,
+            max_memory_mb,
+            adblock,
+        )
+        .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                error!(error = %e, engine = %engine, "Failed to spawn browser process");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to spawn browser process",
+                ));
+            }
+        };
 
         let session = ManagedSession {
             id: browser.id,
@@ -338,6 +369,7 @@ impl AppState {
             activity: Arc::new(idle::Activity::new(
                 idle_timeout_minutes.map_or(self.idle_timeout_secs, |m| m * 60),
             )),
+            adblock: browser.adblock,
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -409,6 +441,8 @@ pub struct LaunchParams {
     pub max_memory_mb: Option<u64>,
     /// Minutes of inactivity before the session is stopped (0 = never).
     pub idle_timeout_minutes: Option<u64>,
+    /// Load the ad blocker (defaults to the node's --adblock-default).
+    pub adblock: Option<bool>,
     /// Attach without counting as a client (handoff page).
     pub observer: Option<bool>,
 }
@@ -426,6 +460,54 @@ pub struct CreateSessionRequest {
     pub max_memory_mb: Option<u64>,
     /// Minutes of inactivity before the session is stopped (0 = never).
     pub idle_timeout_minutes: Option<u64>,
+    /// Load the ad blocker (defaults to the node's --adblock-default).
+    pub adblock: Option<bool>,
+}
+
+/// Chromium writes into unpacked extensions and shows a blocking "Error
+/// Loading Extension" dialog when it cannot (e.g. in the Nix store), so it
+/// gets a writable copy next to the profiles directory, refreshed whenever
+/// the source changes.
+fn writable_extension_copy(src: &Path, profile_dir: &Path) -> Option<PathBuf> {
+    fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let target = dst.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_dir(&entry.path(), &target)?;
+            } else {
+                std::fs::copy(entry.path(), &target)?;
+                let mut perms = std::fs::metadata(&target)?.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                perms.set_readonly(false);
+                std::fs::set_permissions(&target, perms)?;
+            }
+        }
+        Ok(())
+    }
+
+    let root = profile_dir
+        .parent()
+        .unwrap_or(profile_dir)
+        .join("extensions");
+    let dst = root.join("chromium-adblock");
+    let marker = dst.join(".source");
+    let source = src.display().to_string();
+    if std::fs::read_to_string(&marker).ok().as_deref() == Some(source.as_str()) {
+        return Some(dst);
+    }
+    let _ = std::fs::remove_dir_all(&dst);
+    match copy_dir(src, &dst).and_then(|_| std::fs::write(&marker, &source)) {
+        Ok(()) => {
+            info!(src = %source, dst = %dst.display(), "Prepared Chromium ad blocker");
+            Some(dst)
+        }
+        Err(e) => {
+            error!(src = %source, error = %e, "Could not prepare the Chromium ad blocker; ads stay unblocked");
+            None
+        }
+    }
 }
 
 fn spawn_bidi_frame_feeder(hub: Arc<BidiHub>, handle: SessionRecorderHandle) {
@@ -753,6 +835,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.bind
     );
 
+    let chromium_adblock = args
+        .chromium_adblock
+        .as_deref()
+        .and_then(|src| writable_extension_copy(src, &args.profile_dir));
     let config = Arc::new(BrowserConfig {
         chromium_bin: args.chromium,
         firefox_bin: args.firefox,
@@ -761,6 +847,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_width: args.default_width,
         default_height: args.default_height,
         max_session_memory_mb: args.max_session_memory_mb,
+        chromium_adblock,
+        firefox_adblock: args.firefox_adblock,
     });
 
     let recorder_config = Arc::new(RecorderConfig {
@@ -805,6 +893,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         recorder_config,
         active_recordings,
         idle_timeout_secs: args.idle_timeout_minutes * 60,
+        adblock_default: args.adblock_default,
     };
 
     // Stop sessions that nobody has used for a while.
@@ -1267,6 +1356,7 @@ async fn json_new(
                 Some(state.recorder_config.enabled),
                 None,
                 None,
+                None,
             )
             .await
             .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
@@ -1405,6 +1495,7 @@ async fn handle_chromium_ws(
                 params.record,
                 params.max_memory_mb,
                 params.idle_timeout_minutes,
+                params.adblock,
             )
             .await
         {
@@ -1477,6 +1568,7 @@ async fn handle_firefox_ws(
                 params.record,
                 params.max_memory_mb,
                 params.idle_timeout_minutes,
+                params.adblock,
             )
             .await
         {
@@ -1680,6 +1772,7 @@ async fn api_create_session(
             req.record,
             req.max_memory_mb,
             req.idle_timeout_minutes,
+            req.adblock,
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
