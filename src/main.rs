@@ -2510,7 +2510,7 @@ async fn api_transfer_profile(
     let archive_bytes = export_profile_archive(&state, &source_sanitized).await?;
 
     // 2. Upload to target node's /api/profiles/{target_name}/import
-    let mut import_url = format!("{}/api/profiles/{}/import", target_peer_url, target_name);
+    let mut import_url = peer_profile_url(&target_peer_url, &target_name, Some("import"));
     if req.overwrite {
         import_url.push_str("?overwrite=true");
     }
@@ -3333,7 +3333,7 @@ async fn api_peer_delete_profile(
                 .into_response();
         }
     };
-    let mut url = format!("{}/api/profiles/{}", peer_url, name);
+    let mut url = peer_profile_url(&peer_url, &name, None);
     if let Some(f) = params.force {
         url.push_str(&format!("?force={}", f));
     }
@@ -3363,7 +3363,7 @@ async fn api_peer_clone_profile(
                 .into_response();
         }
     };
-    let url = format!("{}/api/profiles/{}/clone", peer_url, name);
+    let url = peer_profile_url(&peer_url, &name, Some("clone"));
     let res = state
         .peer_request(state.http_client.post(&url))
         .json(&req)
@@ -3391,7 +3391,7 @@ async fn api_peer_update_profile(
                 .into_response();
         }
     };
-    let url = format!("{}/api/profiles/{}", peer_url, name);
+    let url = peer_profile_url(&peer_url, &name, None);
     let res = state
         .peer_request(state.http_client.patch(&url))
         .json(&req)
@@ -3418,7 +3418,7 @@ async fn api_peer_export_profile(
                 .into_response();
         }
     };
-    let url = format!("{}/api/profiles/{}/export", peer_url, name);
+    let url = peer_profile_url(&peer_url, &name, Some("export"));
     let res = state.peer_request(state.http_client.get(&url)).send().await;
     proxy_response(res).await
 }
@@ -3443,7 +3443,7 @@ async fn api_peer_import_profile(
                 .into_response();
         }
     };
-    let mut url = format!("{}/api/profiles/{}/import", peer_url, name);
+    let mut url = peer_profile_url(&peer_url, &name, Some("import"));
     if let Some(true) = params.overwrite {
         url.push_str("?overwrite=true");
     }
@@ -3475,7 +3475,7 @@ async fn api_peer_transfer_profile(
                 .into_response();
         }
     };
-    let url = format!("{}/api/profiles/{}/transfer", peer_url, name);
+    let url = peer_profile_url(&peer_url, &name, Some("transfer"));
     let res = state
         .peer_request(state.http_client.post(&url))
         .json(&req)
@@ -3939,14 +3939,35 @@ async fn copy_dir_all(src: PathBuf, dst: PathBuf) -> std::io::Result<()> {
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
 }
 
-/// Profile names become directory names: keep e-mail-like names
-/// (`google-p@example.com`) but never `..` or a hidden directory.
+/// Profile names become directory names: keep readable names such as
+/// `Google (p@example.com)` but never a path separator, `..` or a hidden
+/// directory.
 fn sanitize_profile_name(name: &str) -> String {
     let kept: String = name
         .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '@'))
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ' ' | '(' | ')'))
         .collect();
-    kept.trim_start_matches('.').to_string()
+    kept.trim_start_matches(|c: char| c == '.' || c.is_whitespace())
+        .trim_end()
+        .to_string()
+}
+
+/// `{peer}/api/profiles/{name}[/{action}]`, the name encoded as one path segment.
+fn peer_profile_url(peer_url: &str, name: &str, action: Option<&str>) -> String {
+    let mut url = match url::Url::parse(peer_url) {
+        Ok(url) => url,
+        Err(_) => {
+            let action = action.map(|a| format!("/{a}")).unwrap_or_default();
+            return format!("{}/api/profiles/{}{}", peer_url, name, action);
+        }
+    };
+    if let Ok(mut segments) = url.path_segments_mut() {
+        segments.pop_if_empty().extend(["api", "profiles", name]);
+        if let Some(action) = action {
+            segments.push(action);
+        }
+    }
+    url.to_string()
 }
 
 async fn compute_dir_size(path: PathBuf) -> u64 {
@@ -3986,6 +4007,27 @@ mod tests {
         assert_eq!(sanitize_profile_name(".."), "");
         assert_eq!(sanitize_profile_name("../etc"), "etc");
         assert_eq!(sanitize_profile_name(".hidden"), "hidden");
-        assert_eq!(sanitize_profile_name("a/b c"), "abc");
+        assert_eq!(sanitize_profile_name("a/b c"), "ab c");
+        assert_eq!(
+            sanitize_profile_name(" Google (p@pschmitt.dev) "),
+            "Google (p@pschmitt.dev)"
+        );
+        assert_eq!(sanitize_profile_name(". .."), "");
+    }
+
+    #[test]
+    fn peer_profile_urls_encode_the_name() {
+        assert_eq!(
+            peer_profile_url(
+                "https://browser.h.ts.example/",
+                "Google (p@x.dev)",
+                Some("import")
+            ),
+            "https://browser.h.ts.example/api/profiles/Google%20(p@x.dev)/import"
+        );
+        assert_eq!(
+            peer_profile_url("https://browser.h.ts.example", "a b", None),
+            "https://browser.h.ts.example/api/profiles/a%20b"
+        );
     }
 }
