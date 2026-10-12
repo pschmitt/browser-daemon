@@ -645,6 +645,19 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </div>
 </div>
 
+<!-- About -->
+<div class="modal" id="aboutModal" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="aboutTitle">About Browser Daemon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <p>Run browser sessions for automation and take over whenever you need to.</p>
+      <dl class="kv"><dt>Version</dt><dd id="aboutVersion">Unavailable</dd></dl>
+      <a class="btn" href="https://github.com/pschmitt/browser-daemon" target="_blank" rel="noopener noreferrer"><svg class="i"><use href="#i-arrow"/></svg>Source code</a>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn primary" data-close>Close</button></div>
+  </div>
+</div>
+
 <!-- Details -->
 <div class="modal" id="detailsModal">
   <div class="sheet wide">
@@ -1351,6 +1364,11 @@ const ACT = {
     { icon: 'handoff', label: 'Open handoff', run: () => { location.href = '/handoff/'; } },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
     !isStandalone && { icon: 'install', label: 'Install app', run: triggerPwaInstall },
+    { icon: 'info-c', label: 'About', run: () => {
+      $('aboutVersion').textContent = ov?.local_node?.version || 'Unavailable';
+      openModal('aboutModal');
+      $('aboutModal').querySelector('[data-close]').focus();
+    } },
   ]),
   'session-menu': (el) => {
     const s = byKey.sessions.get(el.dataset.key); if (!s) return;
