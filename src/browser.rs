@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::bidi::BidiHub;
+use crate::profiles::Profile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,6 +68,7 @@ pub struct ActiveBrowser {
     pub bidi: Option<Arc<BidiHub>>,
     _temp_dir: Option<tempfile::TempDir>,
     pub profile_name: Option<String>,
+    pub profile_id: Option<Uuid>,
     pub created_at: Instant,
     pub adblock: bool,
 }
@@ -75,7 +77,7 @@ impl ActiveBrowser {
     pub async fn spawn(
         config: &BrowserConfig,
         engine: BrowserEngine,
-        profile: Option<&str>,
+        profile: Option<&Profile>,
         width: Option<u32>,
         height: Option<u32>,
         max_memory_mb: Option<u64>,
@@ -86,26 +88,22 @@ impl ActiveBrowser {
         let width = width.unwrap_or(config.default_width);
         let height = height.unwrap_or(config.default_height);
 
-        let (user_data_dir, temp_dir, profile_name) = match profile {
-            Some(name) if !name.trim().is_empty() => {
-                let sanitized: String = name
-                    .chars()
-                    .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-                    .collect();
-                let dir = if engine == BrowserEngine::Firefox {
-                    config.profiles_dir.join(format!("firefox_{}", sanitized))
-                } else {
-                    config.profiles_dir.join(&sanitized)
-                };
-                fs::create_dir_all(&dir).await?;
-                (dir, None, Some(sanitized))
+        let (user_data_dir, temp_dir, profile_name, profile_id) = match profile {
+            Some(profile) => {
+                fs::create_dir_all(&profile.dir).await?;
+                (
+                    profile.dir.clone(),
+                    None,
+                    Some(profile.meta.name.clone()),
+                    Some(profile.meta.id),
+                )
             }
-            _ => {
+            None => {
                 let temp = tempfile::Builder::new()
                     .prefix(&format!("browserd-{}-{}-", engine, id))
                     .tempdir()?;
                 let path = temp.path().to_path_buf();
-                (path, Some(temp), None)
+                (path, Some(temp), None, None)
             }
         };
 
@@ -177,6 +175,7 @@ impl ActiveBrowser {
                     bidi: None,
                     _temp_dir: temp_dir,
                     profile_name,
+                    profile_id,
                     created_at: Instant::now(),
                     adblock,
                 })
@@ -274,6 +273,7 @@ impl ActiveBrowser {
                     bidi: Some(hub),
                     _temp_dir: temp_dir,
                     profile_name,
+                    profile_id,
                     created_at: Instant::now(),
                     adblock,
                 })

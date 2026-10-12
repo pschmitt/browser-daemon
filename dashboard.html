@@ -1022,19 +1022,27 @@ function clearStatic(container) {
 const byKey = { sessions: new Map(), profiles: new Map(), recordings: new Map() };
 const keyOf = {
   session: (s) => `${s.node_name}|${s.id}`,
-  profile: (p) => `${p.node_name}|${p.name}`,
+  profile: (p) => `${p.node_name}|${p.id || p.name}`,
   recording: (r) => `${r.node_name}|${r.id}`,
 };
 const inFilter = (x) => filter === 'all' || x.node_name === filter;
 
-// Firefox profiles live in "firefox_<name>" directories next to Chromium ones.
+// Profiles carry an id, a display name and their engine. Nodes still on the
+// name-based layout report bare directory names ("firefox_<name>" for Firefox).
 function profileInfo(p) {
+  const sessions = ov?.sessions || [];
+  if (p.id) {
+    const session = sessions.find((s) => s.node_name === p.node_name && s.profile_id === p.id);
+    return { ...p, key: p.id, display: p.name, session };
+  }
   const firefox = p.name.startsWith('firefox_');
   const name = firefox ? p.name.slice(8) : p.name;
   const engine = firefox ? 'firefox' : 'chromium';
-  const session = (ov?.sessions || []).find((s) => s.node_name === p.node_name && s.profile === name && (s.engine || 'chromium') === engine);
-  return { ...p, display: name, engine, session };
+  const session = sessions.find((s) => s.node_name === p.node_name && s.profile === name && (s.engine || 'chromium') === engine);
+  return { ...p, key: p.name, display: name, engine, session };
 }
+// Name to send for a rename/copy/transfer target; legacy nodes need the directory name.
+const profileTargetName = (p, name) => (!p.id && p.engine === 'firefox' ? 'firefox_' + name : name);
 function pagesOf(session) {
   return (ov?.targets || []).filter((t) => t.type === 'page' && t.node_name === session.node_name && t.sessionId === session.id);
 }
@@ -1402,7 +1410,7 @@ const ACT = {
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
       { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
       !p.session && others.length && { icon: 'transfer', label: 'Move to another node…', run: () => openTransfer(p) },
-      !p.session && { icon: 'download', label: 'Export archive', run: () => { location.href = api(p.node_name, `/profiles/${enc(p.name)}/export`); } },
+      !p.session && { icon: 'download', label: 'Export archive', run: () => { location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); } },
       '-',
       { icon: 'trash', label: 'Delete', danger: true, run: () => deleteProfile(p) },
     ]);
@@ -1617,7 +1625,7 @@ function openNewProfile() {
 }
 function fillCloneOptions() {
   const own = [...byKey.profiles.values()].filter((p) => p.node_name === profileNode);
-  $('profileClone').innerHTML = '<option value="">An empty profile</option>' + own.map((p) => `<option value="${esc(p.name)}">Copy of ${esc(p.display)} (${formatBytes(p.size_bytes)})</option>`).join('');
+  $('profileClone').innerHTML = '<option value="">An empty profile</option>' + own.map((p) => `<option value="${esc(p.key)}">Copy of ${esc(p.display)} (${formatBytes(p.size_bytes)})</option>`).join('');
 }
 $('newProfileForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1628,7 +1636,7 @@ $('newProfileForm').addEventListener('submit', async (e) => {
 
 function launchProfile(p) {
   act(`Launching ${p.display}`, async () => {
-    const s = await request('POST', api(p.node_name, '/sessions'), { profile: p.display, engine: p.engine, persistent: true });
+    const s = await request('POST', api(p.node_name, '/sessions'), { profile: p.id || p.display, engine: p.engine, persistent: true });
     showToast(`${p.display} is running`, 'success', 6000, { text: 'Take over', url: handoffUrl(p.node_name, { session: s.id }) });
     return s;
   }, `${p.display} launched`);
@@ -1636,14 +1644,12 @@ function launchProfile(p) {
 async function renameProfile(p) {
   const name = await ask({ title: `Rename ${p.display}`, input: p.display, ok: 'Rename' });
   if (!name || name === p.display) return;
-  const dir = p.engine === 'firefox' ? 'firefox_' + name : name;
-  act('Renaming profile', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.name)}`), { name: dir }), `Renamed to ${name}`);
+  act('Renaming profile', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { name: profileTargetName(p, name) }), `Renamed to ${name}`);
 }
 async function cloneProfile(p) {
   const name = await ask({ title: `Duplicate ${p.display}`, text: `Creates a copy on ${p.node_name}.`, input: `${p.display}-copy`, ok: 'Duplicate' });
   if (!name) return;
-  const dir = p.engine === 'firefox' ? 'firefox_' + name : name;
-  act('Duplicating profile', () => request('POST', api(p.node_name, `/profiles/${enc(p.name)}/clone`), { target_name: dir }), `Created ${name}`);
+  act('Duplicating profile', () => request('POST', api(p.node_name, `/profiles/${enc(p.key)}/clone`), { target_name: profileTargetName(p, name) }), `Created ${name}`);
 }
 async function deleteProfile(p) {
   const ok = await ask({
@@ -1651,11 +1657,12 @@ async function deleteProfile(p) {
     text: p.session ? 'This profile is in use: its session will be stopped, then cookies, logins and storage are wiped.' : 'Cookies, logins and storage of this profile are wiped from disk.',
     ok: 'Delete', danger: true,
   });
-  if (ok) act('Deleting profile', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.name)}`) + (p.session ? '?force=true' : '')), `${p.display} deleted`);
+  if (ok) act('Deleting profile', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}`) + (p.session ? '?force=true' : '')), `${p.display} deleted`);
 }
 function showProfileDetails(p) {
   showDetails(p.display, [
-    ['Directory', `<span class="mono">${esc(p.name)}</span>`], ['Node', nodeChip(p.node_name)], ['Engine', p.engine],
+    ['Storage', `<span class="mono">${esc(p.storage_dir || p.name)}</span>`], ['ID', p.id && `<span class="mono">${esc(p.id)}</span>`],
+    ['Node', nodeChip(p.node_name)], ['Engine', p.engine],
     ['Size', formatBytes(p.size_bytes)], ['Status', p.session ? 'Running' : 'Stored'],
     ['Session', p.session && `<span class="mono">${esc(p.session.id)}</span>`],
     ['Created', absTime(p.created_at_secs)], ['Modified', absTime(p.modified_at_secs)],
@@ -1680,12 +1687,12 @@ $('transferForm').addEventListener('submit', async (e) => {
   if (!p || !transferTarget) return;
   const name = $('transferName').value.trim() || p.display;
   closeModal('transferModal');
-  const t = createProgressToast('transfer-' + p.name, `Moving ${p.display} to ${transferTarget}`, 'Packing and uploading…');
+  const t = createProgressToast('transfer-' + p.key, `Moving ${p.display} to ${transferTarget}`, 'Packing and uploading…');
   t.update(35, 'Packing and uploading…');
   try {
-    await request('POST', api(p.node_name, `/profiles/${enc(p.name)}/transfer`), {
+    await request('POST', api(p.node_name, `/profiles/${enc(p.key)}/transfer`), {
       target_node: transferTarget,
-      target_name: p.engine === 'firefox' ? 'firefox_' + name : name,
+      target_name: profileTargetName(p, name),
       delete_source: $('transferMove').checked,
       overwrite: $('transferOverwrite').checked,
     });

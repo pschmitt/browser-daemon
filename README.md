@@ -13,7 +13,7 @@ A fast, lightweight, native remote browser daemon written in Rust for CDP automa
 - **Session Screencasting & Playback:** Built-in lightweight screencast recorder capturing JPEG frames and metadata, with an interactive scrubbing video player, IndexedDB background downloading, and client-side WebM export.
 - **Mobile-Friendly Live Handoff:** Embedded `/handoff/` web interface with interactive screen streaming, touch-to-click, touch-to-scroll, mobile text input, and clipboard synchronization (copy & paste from/to remote pages). Works for both engines: Chromium streams a CDP screencast, Firefox streams WebDriver BiDi screenshots.
 - **Resource Limits & Governance:** Configurable per-session memory limits (`--max-session-memory-mb`, V8 heap limits) and global systemd service limits (`MemoryMax`, `MemoryHigh`, `CPUQuota`).
-- **Named Profile Persistence:** Optional persistent profiles via `?profile=<name>` query parameter (saved under `/var/lib/browser-daemon/profiles/<name>`), alongside ephemeral auto-cleaned sessions.
+- **Named Profile Persistence:** Optional persistent profiles via `?profile=<name or id>` query parameter, alongside ephemeral auto-cleaned sessions. Each profile lives in `/var/lib/browser-daemon/profiles/<uuid>/` with a `profile.json` holding its free-text name (e.g. `Google (p@example.com)`) and engine; the API reports the directory as `storage_dir`. Name-based directories from older versions are migrated on startup.
 - **Installable PWA:** Web App Manifest with standalone display mode, badging, and offline service worker caching.
 - **Drop-In CDP & BiDi Compatibility:** Standard endpoints:
   - `/chromium` (WebSocket for Playwright, Puppeteer, CDP clients)

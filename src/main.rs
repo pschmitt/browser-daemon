@@ -1,6 +1,7 @@
 mod bidi;
 mod browser;
 mod idle;
+mod profiles;
 mod proxy;
 mod recorder;
 
@@ -27,6 +28,7 @@ use uuid::Uuid;
 
 use crate::bidi::BidiHub;
 use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine};
+use crate::profiles::Profile;
 use crate::proxy::bridge_websockets;
 use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
 
@@ -137,6 +139,7 @@ pub struct ManagedSession {
     pub port: u16,
     pub ws_path: String,
     pub profile: Option<String>,
+    pub profile_id: Option<Uuid>,
     pub persistent: bool,
     pub created_at: Instant,
     pub client_count: Arc<AtomicUsize>,
@@ -180,6 +183,7 @@ impl ManagedSession {
             port: self.port,
             ws_path: self.ws_path.clone(),
             profile: self.profile.clone(),
+            profile_id: self.profile_id,
             persistent: self.persistent,
             uptime_seconds: self.created_at.elapsed().as_secs(),
             client_count: self.client_count.load(Ordering::SeqCst),
@@ -201,6 +205,8 @@ pub struct SessionSummary {
     pub port: u16,
     pub ws_path: String,
     pub profile: Option<String>,
+    #[serde(default)]
+    pub profile_id: Option<Uuid>,
     pub persistent: bool,
     pub uptime_seconds: u64,
     pub client_count: usize,
@@ -232,6 +238,8 @@ pub struct AppState {
     pub active_recordings: Arc<RwLock<HashMap<Uuid, SessionRecorderHandle>>>,
     pub idle_timeout_secs: u64,
     pub adblock_default: bool,
+    /// Serializes profile creation and renames so names stay unique.
+    pub profiles_lock: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -303,22 +311,21 @@ impl AppState {
             ));
         }
 
-        // If a profile was given, check if an existing session is already running it with the same engine
-        if let Some(prof_name) = profile {
-            let sanitized = sanitize_profile_name(prof_name);
-            if !sanitized.is_empty() {
-                let sessions = self.sessions.read().await;
-                for session in sessions.values() {
-                    if session.engine == engine {
-                        if let Some(ref p) = session.profile {
-                            if p == &sanitized {
-                                info!(session_id = %session.id, engine = %engine, profile = %sanitized, "Attaching to existing profile session");
-                                session.activity.touch();
-                                return Ok(session.clone());
-                            }
-                        }
-                    }
-                }
+        let profile = match profile.map(str::trim).filter(|p| !p.is_empty()) {
+            Some(key) => Some(self.resolve_or_create_profile(key, engine).await?),
+            None => None,
+        };
+
+        // A profile runs in at most one browser: attach to its session if it has one.
+        if let Some(ref profile) = profile {
+            let sessions = self.sessions.read().await;
+            if let Some(session) = sessions
+                .values()
+                .find(|s| s.profile_id == Some(profile.meta.id))
+            {
+                info!(session_id = %session.id, engine = %engine, profile = %profile.meta.name, "Attaching to existing profile session");
+                session.activity.touch();
+                return Ok(session.clone());
             }
         }
 
@@ -339,7 +346,7 @@ impl AppState {
         let browser = match ActiveBrowser::spawn(
             &self.config,
             engine,
-            profile,
+            profile.as_ref(),
             width,
             height,
             max_memory_mb,
@@ -363,6 +370,7 @@ impl AppState {
             port: browser.port,
             ws_path: browser.ws_path.clone(),
             profile: browser.profile_name.clone(),
+            profile_id: browser.profile_id,
             persistent,
             created_at: browser.created_at,
             client_count: Arc::new(AtomicUsize::new(0)),
@@ -384,6 +392,38 @@ impl AppState {
         }
 
         Ok(session)
+    }
+
+    /// A profile by id or name; an unknown name creates a profile for `engine`.
+    async fn resolve_or_create_profile(
+        &self,
+        key: &str,
+        engine: BrowserEngine,
+    ) -> Result<Profile, (StatusCode, &'static str)> {
+        let _guard = self.profiles_lock.lock().await;
+        if let Some(profile) = profiles::find(&self.config.profiles_dir, key).await {
+            if profile.meta.engine != engine {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "Profile belongs to a different browser engine",
+                ));
+            }
+            return Ok(profile);
+        }
+        if Uuid::parse_str(key).is_ok() {
+            return Err((StatusCode::NOT_FOUND, "Profile not found"));
+        }
+        let name =
+            profiles::clean_name(key).ok_or((StatusCode::BAD_REQUEST, "Invalid profile name"))?;
+        profiles::create(&self.config.profiles_dir, &name, engine)
+            .await
+            .map_err(|e| {
+                error!(profile = %name, error = %e, "Failed to create profile");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create profile",
+                )
+            })
     }
 
     pub async fn start_recording(&self, session: &ManagedSession) -> Uuid {
@@ -563,7 +603,16 @@ fn default_true() -> bool {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProfileInfo {
+    /// Stable id; also the name of the profile's directory.
+    #[serde(default)]
+    pub id: Option<Uuid>,
+    /// Display name.
     pub name: String,
+    #[serde(default)]
+    pub engine: BrowserEngine,
+    /// Where the browser keeps this profile's data on its node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_dir: Option<String>,
     pub size_bytes: u64,
     pub is_active: bool,
     pub session_id: Option<Uuid>,
@@ -573,12 +622,8 @@ pub struct ProfileInfo {
 
 #[derive(Serialize, Debug, Clone)]
 pub struct ProfileDetails {
-    pub name: String,
-    pub size_bytes: u64,
-    pub is_active: bool,
-    pub session_id: Option<Uuid>,
-    pub created_at_secs: Option<u64>,
-    pub modified_at_secs: Option<u64>,
+    #[serde(flatten)]
+    pub profile: ProfileInfo,
     pub session: Option<SessionSummary>,
 }
 
@@ -586,6 +631,9 @@ pub struct ProfileDetails {
 pub struct CreateProfileRequest {
     pub name: String,
     pub clone_from: Option<String>,
+    /// Engine of a new empty profile (a clone keeps its source's).
+    #[serde(default)]
+    pub engine: BrowserEngine,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -839,6 +887,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .chromium_adblock
         .as_deref()
         .and_then(|src| writable_extension_copy(src, &args.profile_dir));
+    profiles::migrate(&args.profile_dir).await;
     let config = Arc::new(BrowserConfig {
         chromium_bin: args.chromium,
         firefox_bin: args.firefox,
@@ -894,6 +943,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         active_recordings,
         idle_timeout_secs: args.idle_timeout_minutes * 60,
         adblock_default: args.adblock_default,
+        profiles_lock: Arc::new(Mutex::new(())),
     };
 
     // Stop sessions that nobody has used for a while.
@@ -1701,51 +1751,96 @@ async fn get_local_sessions(state: &AppState) -> Vec<SessionSummary> {
     summaries
 }
 
-async fn get_local_profiles(state: &AppState) -> Vec<ProfileInfo> {
-    let active_profiles: HashMap<String, Uuid> = {
-        let guard = state.sessions.read().await;
-        guard
-            .values()
-            .filter_map(|s| s.profile.as_ref().map(|p| (p.clone(), s.id)))
-            .collect()
-    };
+type ApiError = (StatusCode, Json<serde_json::Value>);
 
-    let mut profiles = Vec::new();
-    let dir = &state.config.profiles_dir;
-    if let Ok(mut entries) = fs::read_dir(dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if let Ok(meta) = entry.metadata().await {
-                if meta.is_dir() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let size_bytes = compute_dir_size(entry.path()).await;
-                    let is_active = active_profiles.contains_key(&name);
-                    let session_id = active_profiles.get(&name).cloned();
-                    let created_at_secs = meta
-                        .created()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs());
-                    let modified_at_secs = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs());
+fn api_error(status: StatusCode, msg: impl Into<String>) -> ApiError {
+    (status, Json(serde_json::json!({ "error": msg.into() })))
+}
 
-                    profiles.push(ProfileInfo {
-                        name,
-                        size_bytes,
-                        is_active,
-                        session_id,
-                        created_at_secs,
-                        modified_at_secs,
-                    });
-                }
-            }
-        }
+async fn profile_session(state: &AppState, id: Uuid) -> Option<ManagedSession> {
+    let guard = state.sessions.read().await;
+    guard.values().find(|s| s.profile_id == Some(id)).cloned()
+}
+
+async fn profile_info(state: &AppState, profile: &Profile) -> ProfileInfo {
+    let session_id = profile_session(state, profile.meta.id).await.map(|s| s.id);
+    let modified_at_secs = fs::metadata(&profile.dir)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    ProfileInfo {
+        id: Some(profile.meta.id),
+        name: profile.meta.name.clone(),
+        engine: profile.meta.engine,
+        storage_dir: Some(profile.dir.display().to_string()),
+        size_bytes: compute_dir_size(profile.dir.clone()).await,
+        is_active: session_id.is_some(),
+        session_id,
+        created_at_secs: Some(profile.meta.created_at_secs),
+        modified_at_secs,
     }
+}
 
-    profiles.sort_by(|a, b| a.name.cmp(&b.name));
-    profiles
+async fn lookup_profile(state: &AppState, key: &str) -> Result<Profile, ApiError> {
+    profiles::find(&state.config.profiles_dir, key)
+        .await
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::NOT_FOUND,
+                format!("Profile '{}' not found", key),
+            )
+        })
+}
+
+fn new_profile_name(name: &str) -> Result<String, ApiError> {
+    profiles::clean_name(name)
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "Invalid profile name"))
+}
+
+async fn ensure_name_free(
+    state: &AppState,
+    name: &str,
+    except: Option<Uuid>,
+) -> Result<(), ApiError> {
+    if profiles::name_taken(&state.config.profiles_dir, name, except).await {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("Profile '{}' already exists", name),
+        ));
+    }
+    Ok(())
+}
+
+/// Copy a profile's data into a new id directory under a new name.
+async fn copy_profile(state: &AppState, source: &Profile, name: &str) -> Result<Profile, ApiError> {
+    let dir = state.config.profiles_dir.join(Uuid::new_v4().to_string());
+    if let Err(e) = copy_dir_all(source.dir.clone(), dir.clone()).await {
+        error!(from = %source.meta.name, to = %name, error = %e, "Failed to copy profile directory");
+        let _ = fs::remove_dir_all(&dir).await;
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to copy profile directory",
+        ));
+    }
+    profiles::adopt(dir, name, source.meta.engine)
+        .await
+        .map_err(|e| {
+            error!(profile = %name, error = %e, "Failed to write profile metadata");
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to write profile metadata",
+            )
+        })
+}
+
+async fn get_local_profiles(state: &AppState) -> Vec<ProfileInfo> {
+    let mut infos = Vec::new();
+    for profile in profiles::list(&state.config.profiles_dir).await {
+        infos.push(profile_info(state, &profile).await);
+    }
+    infos
 }
 
 async fn api_list_sessions(
@@ -1852,449 +1947,173 @@ async fn api_create_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<CreateProfileRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let sanitized = sanitize_profile_name(&req.name);
-    if sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
-        ));
-    }
+    let name = new_profile_name(&req.name)?;
+    let _guard = state.profiles_lock.lock().await;
+    ensure_name_free(&state, &name, None).await?;
 
-    let target_dir = state.config.profiles_dir.join(&sanitized);
-    if target_dir.exists() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": format!("Profile '{}' already exists", sanitized) })),
-        ));
-    }
-
-    if let Some(ref source_name) = req.clone_from {
-        let source_sanitized = sanitize_profile_name(source_name);
-        let source_dir = state.config.profiles_dir.join(&source_sanitized);
-        if !source_dir.exists() {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(
-                    serde_json::json!({ "error": format!("Source profile '{}' to clone not found", source_sanitized) }),
-                ),
-            ));
+    let profile = match req.clone_from.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(source) => {
+            let source = lookup_profile(&state, source).await?;
+            copy_profile(&state, &source, &name).await?
         }
+        None => profiles::create(&state.config.profiles_dir, &name, req.engine)
+            .await
+            .map_err(|e| {
+                error!(profile = %name, error = %e, "Failed to create profile");
+                api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to create profile",
+                )
+            })?,
+    };
 
-        if let Err(e) = copy_dir_all(source_dir, target_dir.clone()).await {
-            error!(profile = %sanitized, error = %e, "Failed to clone profile directory");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to copy profile directory" })),
-            ));
-        }
-    } else if let Err(e) = fs::create_dir_all(&target_dir).await {
-        error!(profile = %sanitized, error = %e, "Failed to create profile directory");
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to create profile directory" })),
-        ));
-    }
-
-    let meta = target_dir.metadata().ok();
-    let size_bytes = compute_dir_size(target_dir).await;
-    let created_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.created().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-    let modified_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-
-    info!(profile = %sanitized, "Profile created");
+    info!(profile = %name, id = %profile.meta.id, "Profile created");
     Ok((
         StatusCode::CREATED,
-        Json(ProfileInfo {
-            name: sanitized,
-            size_bytes,
-            is_active: false,
-            session_id: None,
-            created_at_secs,
-            modified_at_secs,
-        }),
+        Json(profile_info(&state, &profile).await),
     ))
 }
 
 async fn api_get_profile(
-    AxumPath(name): AxumPath<String>,
+    AxumPath(key): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let sanitized = sanitize_profile_name(&name);
-    if sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
-        ));
-    }
-
-    let dir = state.config.profiles_dir.join(&sanitized);
-    if !dir.exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Profile '{}' not found", sanitized) })),
-        ));
-    }
-
-    let active_session = {
-        let guard = state.sessions.read().await;
-        guard
-            .values()
-            .find(|s| s.profile.as_deref() == Some(&sanitized))
-            .cloned()
-    };
-
-    let session_id = active_session.as_ref().map(|s| s.id);
-    let session_summary = match active_session {
+    let profile = lookup_profile(&state, &key).await?;
+    let session = match profile_session(&state, profile.meta.id).await {
         Some(s) => {
             let rec = state.active_recordings.read().await.get(&s.id).cloned();
             Some(s.to_summary(&state.http_client, rec.as_ref()).await)
         }
         None => None,
     };
-
-    let meta = dir.metadata().ok();
-    let size_bytes = compute_dir_size(dir).await;
-    let created_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.created().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-    let modified_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-
     Ok(Json(ProfileDetails {
-        name: sanitized,
-        size_bytes,
-        is_active: session_id.is_some(),
-        session_id,
-        created_at_secs,
-        modified_at_secs,
-        session: session_summary,
+        profile: profile_info(&state, &profile).await,
+        session,
     }))
 }
 
+/// Rename a profile. Its directory is named by id, so a running session keeps going.
 async fn api_update_profile(
-    AxumPath(name): AxumPath<String>,
+    AxumPath(key): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<UpdateProfileRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let old_sanitized = sanitize_profile_name(&name);
-    if old_sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
-        ));
-    }
-
-    let old_dir = state.config.profiles_dir.join(&old_sanitized);
-    if !old_dir.exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Profile '{}' not found", old_sanitized) })),
-        ));
-    }
-
-    let new_name = match req.name {
-        Some(n) => sanitize_profile_name(&n),
-        None => old_sanitized.clone(),
-    };
-
-    if new_name.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "New profile name cannot be empty" })),
-        ));
-    }
-
-    if new_name == old_sanitized {
-        let meta = old_dir.metadata().ok();
-        let size_bytes = compute_dir_size(old_dir).await;
-        let created_at_secs = meta
-            .as_ref()
-            .and_then(|m| m.created().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-        let modified_at_secs = meta
-            .as_ref()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs());
-        let is_active = {
-            let guard = state.sessions.read().await;
-            guard
-                .values()
-                .any(|s| s.profile.as_deref() == Some(&old_sanitized))
-        };
-        return Ok(Json(ProfileInfo {
-            name: old_sanitized,
-            size_bytes,
-            is_active,
-            session_id: None,
-            created_at_secs,
-            modified_at_secs,
-        }));
-    }
-
-    // Check if active
-    {
-        let guard = state.sessions.read().await;
-        if let Some(s) = guard
-            .values()
-            .find(|s| s.profile.as_deref() == Some(&old_sanitized))
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Cannot rename active profile (in use by session {})", s.id)
-                })),
-            ));
+    let _guard = state.profiles_lock.lock().await;
+    let mut profile = lookup_profile(&state, &key).await?;
+    if let Some(ref requested) = req.name {
+        let name = new_profile_name(requested)?;
+        if name != profile.meta.name {
+            ensure_name_free(&state, &name, Some(profile.meta.id)).await?;
+            let old = std::mem::replace(&mut profile.meta.name, name.clone());
+            if let Err(e) = profiles::write_meta(&profile.dir, &profile.meta).await {
+                error!(profile = %old, error = %e, "Failed to write profile metadata");
+                return Err(api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to rename profile",
+                ));
+            }
+            for session in state.sessions.write().await.values_mut() {
+                if session.profile_id == Some(profile.meta.id) {
+                    session.profile = Some(name.clone());
+                }
+            }
+            info!(from = %old, to = %name, id = %profile.meta.id, "Profile renamed");
         }
     }
-
-    let new_dir = state.config.profiles_dir.join(&new_name);
-    if new_dir.exists() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": format!("Profile '{}' already exists", new_name) })),
-        ));
-    }
-
-    if let Err(e) = fs::rename(&old_dir, &new_dir).await {
-        error!(from = %old_sanitized, to = %new_name, error = %e, "Failed to rename profile directory");
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to rename profile directory" })),
-        ));
-    }
-
-    let meta = new_dir.metadata().ok();
-    let size_bytes = compute_dir_size(new_dir).await;
-    let created_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.created().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-    let modified_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-
-    info!(from = %old_sanitized, to = %new_name, "Profile renamed");
-    Ok(Json(ProfileInfo {
-        name: new_name,
-        size_bytes,
-        is_active: false,
-        session_id: None,
-        created_at_secs,
-        modified_at_secs,
-    }))
+    Ok(Json(profile_info(&state, &profile).await))
 }
 
 async fn api_clone_profile(
-    AxumPath(name): AxumPath<String>,
+    AxumPath(key): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<CloneProfileRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let source_sanitized = sanitize_profile_name(&name);
-    let target_sanitized = sanitize_profile_name(&req.target_name);
-
-    if source_sanitized.is_empty() || target_sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
-        ));
-    }
-
-    let source_dir = state.config.profiles_dir.join(&source_sanitized);
-    if !source_dir.exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({ "error": format!("Source profile '{}' not found", source_sanitized) }),
-            ),
-        ));
-    }
-
-    let target_dir = state.config.profiles_dir.join(&target_sanitized);
-    if target_dir.exists() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(
-                serde_json::json!({ "error": format!("Target profile '{}' already exists", target_sanitized) }),
-            ),
-        ));
-    }
-
-    if let Err(e) = copy_dir_all(source_dir, target_dir.clone()).await {
-        error!(from = %source_sanitized, to = %target_sanitized, error = %e, "Failed to clone profile directory");
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to clone profile directory" })),
-        ));
-    }
-
-    let meta = target_dir.metadata().ok();
-    let size_bytes = compute_dir_size(target_dir).await;
-    let created_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.created().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-    let modified_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-
-    info!(from = %source_sanitized, to = %target_sanitized, "Profile cloned");
+    let name = new_profile_name(&req.target_name)?;
+    let _guard = state.profiles_lock.lock().await;
+    let source = lookup_profile(&state, &key).await?;
+    ensure_name_free(&state, &name, None).await?;
+    let profile = copy_profile(&state, &source, &name).await?;
+    info!(from = %source.meta.name, to = %name, "Profile cloned");
     Ok((
         StatusCode::CREATED,
-        Json(ProfileInfo {
-            name: target_sanitized,
-            size_bytes,
-            is_active: false,
-            session_id: None,
-            created_at_secs,
-            modified_at_secs,
-        }),
+        Json(profile_info(&state, &profile).await),
     ))
 }
 
 async fn api_delete_profile(
-    AxumPath(name): AxumPath<String>,
+    AxumPath(key): AxumPath<String>,
     Query(params): Query<DeleteProfileParams>,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let sanitized = sanitize_profile_name(&name);
-    if sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
-        ));
-    }
-
-    // Check if profile is active in an ongoing session
-    let active_session_id = {
-        let guard = state.sessions.read().await;
-        guard
-            .values()
-            .find(|s| s.profile.as_deref() == Some(&sanitized))
-            .map(|s| s.id)
-    };
-
-    if let Some(sid) = active_session_id {
-        if params.force.unwrap_or(false) {
-            info!(profile = %sanitized, session_id = %sid, "Force terminating session before deleting profile");
-            state.terminate_session(&sid).await;
-        } else {
-            return Err((
+    let profile = lookup_profile(&state, &key).await?;
+    if let Some(session) = profile_session(&state, profile.meta.id).await {
+        if !params.force.unwrap_or(false) {
+            return Err(api_error(
                 StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Profile is currently in use by active session {}. Pass ?force=true to terminate session and delete.", sid)
-                })),
+                format!("Profile is currently in use by active session {}. Pass ?force=true to terminate session and delete.", session.id),
             ));
         }
+        info!(profile = %profile.meta.name, session_id = %session.id, "Force terminating session before deleting profile");
+        state.terminate_session(&session.id).await;
     }
 
-    let dir = state.config.profiles_dir.join(&sanitized);
-    if !dir.exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Profile directory not found" })),
-        ));
-    }
-
-    if let Err(e) = fs::remove_dir_all(&dir).await {
-        error!(profile = %sanitized, error = %e, "Failed to remove profile directory");
-        return Err((
+    if let Err(e) = fs::remove_dir_all(&profile.dir).await {
+        error!(profile = %profile.meta.name, error = %e, "Failed to remove profile directory");
+        return Err(api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to remove profile directory" })),
+            "Failed to remove profile directory",
         ));
     }
 
-    info!(profile = %sanitized, "Profile directory removed");
+    info!(profile = %profile.meta.name, id = %profile.meta.id, "Profile removed");
     Ok((
         StatusCode::OK,
-        Json(serde_json::json!({ "status": "deleted", "profile": sanitized })),
+        Json(
+            serde_json::json!({ "status": "deleted", "profile": profile.meta.name, "id": profile.meta.id }),
+        ),
     ))
 }
 
-async fn export_profile_archive(
-    state: &AppState,
-    name: &str,
-) -> Result<Vec<u8>, (StatusCode, Json<serde_json::Value>)> {
-    let sanitized = sanitize_profile_name(name);
-    if sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
+async fn export_profile_archive(state: &AppState, profile: &Profile) -> Result<Vec<u8>, ApiError> {
+    if let Some(session) = profile_session(state, profile.meta.id).await {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!(
+                "Cannot export active profile (in use by session {})",
+                session.id
+            ),
         ));
-    }
-    let dir = state.config.profiles_dir.join(&sanitized);
-    if !dir.exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Profile '{}' not found", sanitized) })),
-        ));
-    }
-    {
-        let guard = state.sessions.read().await;
-        if let Some(s) = guard
-            .values()
-            .find(|s| s.profile.as_deref() == Some(&sanitized))
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Cannot export active profile (in use by session {})", s.id)
-                })),
-            ));
-        }
     }
 
     let output = tokio::process::Command::new("tar")
         .arg("-czf")
         .arg("-")
         .arg("-C")
-        .arg(&dir)
+        .arg(&profile.dir)
         .arg(".")
         .output()
         .await
         .map_err(|e| {
-            error!(profile = %sanitized, error = %e, "Failed to run tar command for profile export");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Failed to archive profile: {}", e) })),
-            )
+            error!(profile = %profile.meta.name, error = %e, "Failed to run tar command for profile export");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to archive profile: {}", e))
         })?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        error!(profile = %sanitized, error = %err, "tar export failed");
-        return Err((
+        error!(profile = %profile.meta.name, error = %err, "tar export failed");
+        return Err(api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("tar command failed: {}", err) })),
+            format!("tar command failed: {}", err),
         ));
     }
 
@@ -2302,14 +2121,25 @@ async fn export_profile_archive(
 }
 
 async fn api_export_profile(
-    AxumPath(name): AxumPath<String>,
+    AxumPath(key): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let sanitized = sanitize_profile_name(&name);
-    let bytes = export_profile_archive(&state, &sanitized).await?;
-    let cd_value = format!("attachment; filename=\"{}.tar.gz\"", sanitized);
+    let profile = lookup_profile(&state, &key).await?;
+    let bytes = export_profile_archive(&state, &profile).await?;
+    // Header values are ASCII: keep a readable file name, fall back to the id.
+    let file_stem: String = profile
+        .meta
+        .name
+        .chars()
+        .filter(|c| c.is_ascii_graphic() && *c != '"' || *c == ' ')
+        .collect();
+    let file_stem = match file_stem.trim() {
+        "" => profile.meta.id.to_string(),
+        s => s.to_string(),
+    };
+    let cd_value = format!("attachment; filename=\"{}.tar.gz\"", file_stem);
     let cd_header =
         HeaderValue::from_str(&cd_value).unwrap_or_else(|_| HeaderValue::from_static("attachment"));
 
@@ -2325,67 +2155,50 @@ async fn api_export_profile(
     ))
 }
 
+/// Import an archive as the profile named in the path. The archive's own
+/// `profile.json` supplies the engine; archives from the old name-based
+/// layout fall back to the `firefox_` naming convention.
 async fn api_import_profile(
     AxumPath(name): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<ImportProfileParams>,
     body: Bytes,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let sanitized = sanitize_profile_name(&name);
-    if sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
-        ));
-    }
+    let name = new_profile_name(&name)?;
     if body.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Empty archive body" })),
-        ));
+        return Err(api_error(StatusCode::BAD_REQUEST, "Empty archive body"));
     }
 
-    let target_dir = state.config.profiles_dir.join(&sanitized);
-    let overwrite = params.overwrite.unwrap_or(false);
-
-    if target_dir.exists() {
-        if !overwrite {
-            return Err((
+    let _guard = state.profiles_lock.lock().await;
+    let existing = profiles::find(&state.config.profiles_dir, &name)
+        .await
+        .filter(|p| p.meta.name == name);
+    if let Some(ref existing) = existing {
+        if !params.overwrite.unwrap_or(false) {
+            return Err(api_error(
                 StatusCode::CONFLICT,
-                Json(
-                    serde_json::json!({ "error": format!("Profile '{}' already exists on target", sanitized) }),
+                format!("Profile '{}' already exists on target", name),
+            ));
+        }
+        if let Some(session) = profile_session(&state, existing.meta.id).await {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                format!(
+                    "Cannot overwrite active profile (in use by session {})",
+                    session.id
                 ),
             ));
         }
-        let guard = state.sessions.read().await;
-        if let Some(s) = guard
-            .values()
-            .find(|s| s.profile.as_deref() == Some(&sanitized))
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!("Cannot overwrite active profile (in use by session {})", s.id)
-                })),
-            ));
-        }
-        drop(guard);
-        if let Err(e) = fs::remove_dir_all(&target_dir).await {
-            error!(profile = %sanitized, error = %e, "Failed to remove existing profile directory for overwrite");
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to overwrite existing profile" })),
-            ));
-        }
     }
 
+    let target_dir = state.config.profiles_dir.join(Uuid::new_v4().to_string());
     if let Err(e) = fs::create_dir_all(&target_dir).await {
-        error!(profile = %sanitized, error = %e, "Failed to create profile directory");
-        return Err((
+        error!(profile = %name, error = %e, "Failed to create profile directory");
+        return Err(api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to create profile directory" })),
+            "Failed to create profile directory",
         ));
     }
 
@@ -2400,9 +2213,9 @@ async fn api_import_profile(
         .spawn()
         .map_err(|e| {
             error!(error = %e, "Failed to spawn tar process for import");
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Failed to spawn tar: {}", e) })),
+                format!("Failed to spawn tar: {}", e),
             )
         })?;
 
@@ -2410,104 +2223,90 @@ async fn api_import_profile(
         if let Err(e) = stdin.write_all(&body).await {
             error!(error = %e, "Failed to write archive stream to tar stdin");
             let _ = fs::remove_dir_all(&target_dir).await;
-            return Err((
+            return Err(api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Failed to write to tar: {}", e) })),
+                format!("Failed to write to tar: {}", e),
             ));
         }
     }
 
     let output = child.wait_with_output().await.map_err(|e| {
         error!(error = %e, "Failed to wait on tar process");
-        (
+        api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("tar extraction error: {}", e) })),
+            format!("tar extraction error: {}", e),
         )
     })?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        error!(profile = %sanitized, error = %err, "tar extraction failed");
+        error!(profile = %name, error = %err, "tar extraction failed");
         let _ = fs::remove_dir_all(&target_dir).await;
-        return Err((
+        return Err(api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": format!("tar extraction failed: {}", err) })),
+            format!("tar extraction failed: {}", err),
         ));
     }
 
-    let meta = target_dir.metadata().ok();
-    let size_bytes = compute_dir_size(target_dir).await;
-    let created_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.created().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
-    let modified_at_secs = meta
-        .as_ref()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs());
+    let (name, engine) = match profiles::read_meta(&target_dir).await {
+        Some(meta) => (name, meta.engine),
+        None => profiles::legacy_identity(&name),
+    };
+    let profile = match profiles::adopt(target_dir.clone(), &name, engine).await {
+        Ok(p) => p,
+        Err(e) => {
+            error!(profile = %name, error = %e, "Failed to write profile metadata");
+            let _ = fs::remove_dir_all(&target_dir).await;
+            return Err(api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to write profile metadata",
+            ));
+        }
+    };
+    // Replace the old copy only once the new one is complete.
+    if let Some(existing) = existing {
+        if let Err(e) = fs::remove_dir_all(&existing.dir).await {
+            warn!(profile = %name, error = %e, "Imported profile, but failed to remove the overwritten copy");
+        }
+    }
 
-    info!(profile = %sanitized, size_bytes = %size_bytes, "Profile imported successfully");
-    Ok((
-        StatusCode::CREATED,
-        Json(ProfileInfo {
-            name: sanitized,
-            size_bytes,
-            is_active: false,
-            session_id: None,
-            created_at_secs,
-            modified_at_secs,
-        }),
-    ))
+    let info = profile_info(&state, &profile).await;
+    info!(profile = %name, id = %profile.meta.id, size_bytes = %info.size_bytes, "Profile imported successfully");
+    Ok((StatusCode::CREATED, Json(info)))
 }
 
 async fn api_transfer_profile(
-    AxumPath(name): AxumPath<String>,
+    AxumPath(key): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<TransferProfileRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let source_sanitized = sanitize_profile_name(&name);
-    if source_sanitized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "Invalid profile name" })),
-        ));
-    }
+    let source = lookup_profile(&state, &key).await?;
 
     let target_node = req.target_node.trim();
     if target_node.is_empty() || target_node == state.node_name {
-        return Err((
+        return Err(api_error(
             StatusCode::BAD_REQUEST,
-            Json(
-                serde_json::json!({ "error": "Target node must be a different node in the cluster" }),
-            ),
+            "Target node must be a different node in the cluster",
         ));
     }
 
     let target_name = req
         .target_name
         .as_deref()
-        .map(sanitize_profile_name)
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| source_sanitized.clone());
+        .and_then(profiles::clean_name)
+        .unwrap_or_else(|| source.meta.name.clone());
 
-    let target_peer_url = match get_peer_url(&state, target_node).await {
-        Some(u) => u,
-        None => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(
-                    serde_json::json!({ "error": format!("Target node '{}' not found in mesh", target_node) }),
-                ),
-            ));
-        }
-    };
+    let target_peer_url = get_peer_url(&state, target_node).await.ok_or_else(|| {
+        api_error(
+            StatusCode::NOT_FOUND,
+            format!("Target node '{}' not found in mesh", target_node),
+        )
+    })?;
 
-    // 1. Export local profile to bytes
-    let archive_bytes = export_profile_archive(&state, &source_sanitized).await?;
+    // 1. Export local profile to bytes (profile.json carries the engine)
+    let archive_bytes = export_profile_archive(&state, &source).await?;
 
     // 2. Upload to target node's /api/profiles/{target_name}/import
     let mut import_url = peer_profile_url(&target_peer_url, &target_name, Some("import"));
@@ -2523,9 +2322,9 @@ async fn api_transfer_profile(
         .await
         .map_err(|e| {
             error!(error = %e, "Failed to upload profile archive to target node");
-            (
+            api_error(
                 StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("Failed to send profile to target node: {}", e) })),
+                format!("Failed to send profile to target node: {}", e),
             )
         })?;
 
@@ -2540,16 +2339,15 @@ async fn api_transfer_profile(
 
     // 3. If delete_source was requested, remove local directory
     if req.delete_source {
-        let source_dir = state.config.profiles_dir.join(&source_sanitized);
-        if let Err(e) = fs::remove_dir_all(&source_dir).await {
-            warn!(profile = %source_sanitized, error = %e, "Profile transferred, but failed to delete source directory");
+        if let Err(e) = fs::remove_dir_all(&source.dir).await {
+            warn!(profile = %source.meta.name, error = %e, "Profile transferred, but failed to delete source directory");
         } else {
-            info!(profile = %source_sanitized, "Source profile deleted after transfer");
+            info!(profile = %source.meta.name, "Source profile deleted after transfer");
         }
     }
 
     info!(
-        source = %source_sanitized,
+        source = %source.meta.name,
         target_node = %target_node,
         target_name = %target_name,
         "Profile transferred successfully"
@@ -2559,7 +2357,8 @@ async fn api_transfer_profile(
         "status": "transferred",
         "source_node": state.node_name,
         "target_node": target_node,
-        "source_name": source_sanitized,
+        "source_name": source.meta.name,
+        "source_id": source.meta.id,
         "target_name": target_name,
         "deleted_source": req.delete_source,
     })))
@@ -3939,19 +3738,6 @@ async fn copy_dir_all(src: PathBuf, dst: PathBuf) -> std::io::Result<()> {
     .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
 }
 
-/// Profile names become directory names: keep readable names such as
-/// `Google (p@example.com)` but never a path separator, `..` or a hidden
-/// directory.
-fn sanitize_profile_name(name: &str) -> String {
-    let kept: String = name
-        .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ' ' | '(' | ')'))
-        .collect();
-    kept.trim_start_matches(|c: char| c == '.' || c.is_whitespace())
-        .trim_end()
-        .to_string()
-}
-
 /// `{peer}/api/profiles/{name}[/{action}]`, the name encoded as one path segment.
 fn peer_profile_url(peer_url: &str, name: &str, action: Option<&str>) -> String {
     let mut url = match url::Url::parse(peer_url) {
@@ -3996,24 +3782,6 @@ async fn compute_dir_size(path: PathBuf) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn profile_names_allow_email_but_not_traversal() {
-        assert_eq!(
-            sanitize_profile_name("google-p@pschmitt.dev"),
-            "google-p@pschmitt.dev"
-        );
-        assert_eq!(sanitize_profile_name("hrworks"), "hrworks");
-        assert_eq!(sanitize_profile_name(".."), "");
-        assert_eq!(sanitize_profile_name("../etc"), "etc");
-        assert_eq!(sanitize_profile_name(".hidden"), "hidden");
-        assert_eq!(sanitize_profile_name("a/b c"), "ab c");
-        assert_eq!(
-            sanitize_profile_name(" Google (p@pschmitt.dev) "),
-            "Google (p@pschmitt.dev)"
-        );
-        assert_eq!(sanitize_profile_name(". .."), "");
-    }
 
     #[test]
     fn peer_profile_urls_encode_the_name() {
