@@ -193,7 +193,7 @@ async fn write_single_frame(
         }
     }
     if let Some(ref t) = title {
-        if !t.is_empty() {
+        if is_real_title(t) {
             *current_title = Some(t.clone());
         }
     }
@@ -227,6 +227,16 @@ async fn write_single_frame(
         *last_meta_flush = Instant::now();
     }
 }
+
+/// Chromium reports a blank tab's URL as its title; that is no title.
+fn is_real_title(title: &str) -> bool {
+    !title.is_empty() && title != "about:blank"
+}
+
+/// CDP request ids at or above this ask for `document.title`.
+const TITLE_REQUEST_ID: u64 = 1 << 40;
+/// Re-read the title this often: single-page apps retitle without navigating.
+const TITLE_REFRESH: Duration = Duration::from_secs(5);
 
 async fn record_session_loop(
     recording_id: Uuid,
@@ -447,7 +457,7 @@ async fn record_session_loop(
             }
         }
         if let Some(t) = target.get("title").and_then(|v| v.as_str()) {
-            if !t.is_empty() {
+            if is_real_title(t) {
                 current_title = Some(t.to_string());
             }
         }
@@ -490,6 +500,9 @@ async fn record_session_loop(
 
         let mut next_ack_id = 100u64;
         let mut last_bg_frame_time = Instant::now();
+        let mut next_title_id = TITLE_REQUEST_ID;
+        // The target's title above may predate a navigation; ask right away.
+        let mut last_title_request = Instant::now() - TITLE_REFRESH;
 
         // Inner frame loop for this page
         while !stop_flag.load(Ordering::SeqCst) {
@@ -526,6 +539,27 @@ async fn record_session_loop(
                         Ok(Some(Ok(Message::Text(text)))) => {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
                                 let method = val.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                                if val.get("id").and_then(|v| v.as_u64()).is_some_and(|id| id >= TITLE_REQUEST_ID) {
+                                    if let Some(t) = val.pointer("/result/result/value").and_then(|v| v.as_str()) {
+                                        if is_real_title(t) {
+                                            current_title = Some(t.to_string());
+                                        }
+                                    }
+                                }
+                                let navigated = method == "Page.loadEventFired"
+                                    || method == "Page.navigatedWithinDocument"
+                                    || (method == "Page.frameNavigated"
+                                        && val.pointer("/params/frame/parentId").is_none());
+                                if navigated || last_title_request.elapsed() >= TITLE_REFRESH {
+                                    next_title_id += 1;
+                                    let title_cmd = serde_json::json!({
+                                        "id": next_title_id,
+                                        "method": "Runtime.evaluate",
+                                        "params": { "expression": "document.title", "returnByValue": true }
+                                    });
+                                    let _ = write.send(Message::Text(title_cmd.to_string().into())).await;
+                                    last_title_request = Instant::now();
+                                }
                                 if method == "Page.screencastFrame" {
                                     if let Some(params) = val.get("params") {
                                         let ack_session_id = params.get("sessionId").and_then(|v| v.as_u64());

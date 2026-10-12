@@ -470,7 +470,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-broom" viewBox="0 0 24 24"><path d="m15 4 5 5M9.5 9.5 14.5 14.5M4 20s1-5 3.5-7.5l4 4C9 19 4 20 4 20zM13 7l4 4 2.5-2.5-4-4z"/></symbol>
-  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+  <symbol id="i-saved" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M8 9l3 3 5-6"/></symbol>
   <symbol id="i-chromium" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 8.5h8.2M8.97 13.75 4.85 6.6M15.03 13.75 10.9 20.9"/></symbol>
   <symbol id="i-firefox" viewBox="0 0 24 24"><path d="M20.5 9.5A9 9 0 1 1 6 4.6c-.3 1.4.1 2.6 1 3.4.4-1.7 1.6-2.9 3.2-3.4-.5 1.9.6 3.3 2.2 3.8 1.9.6 3.5 2 3.5 4.1a4 4 0 0 1-7.6 1.7"/></symbol>
   <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></symbol>
@@ -1280,7 +1280,7 @@ function renderViewActions(recordings = visibleRecordings()) {
   const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
   const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected</span>` : ''}
     <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
-    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('bolt', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
+    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
   if (actions.innerHTML !== html) actions.innerHTML = html;
 }
 
@@ -1288,10 +1288,10 @@ function recordingRow(r) {
   const key = esc(keyOf.recording(r));
   const selected = selectedRecordings.has(keyOf.recording(r));
   const url = r.final_url || r.initial_url || '';
-  const title = r.title || shortUrl(url) || (r.profile ? `Profile ${r.profile}` : 'Untitled session');
+  const title = (r.title !== 'about:blank' && r.title) || shortUrl(url) || (r.profile ? `Profile ${r.profile}` : 'Untitled session');
   const sub = [shortUrl(url), r.profile && `profile ${r.profile}`].filter(Boolean).join(' · ') || `${r.frame_count} frames`;
   const live = isLive(r);
-  const cached = cachedRecordingsSet.has(r.id) ? `<span class="cached" title="Cached in this browser">${icon('bolt', 'sm')}</span>` : '';
+  const cached = cachedRecordingsSet.has(r.id) ? `<span class="cached" title="Saved in this browser: plays without the server">${icon('saved', 'sm')}</span>` : '';
   return `
   <div class="row ${selected ? 'selected' : ''}" data-key="${key}">
     <div><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
@@ -1397,7 +1397,7 @@ const ACT = {
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
       { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
-      cachedRecordingsSet.has(r.id) && { icon: 'bolt', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
+      cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
       '-',
       { icon: 'trash', label: 'Delete', danger: true, run: () => deleteRecording(r.id, r.node_name) },
     ]);
@@ -2411,7 +2411,8 @@ function renderPlayerFrame(idx, { quiet = false } = {}) {
   document.getElementById('playerFrameOffset').textContent = `+${(frame.t / 1000).toFixed(1)}s`;
 
   if (quiet) return;
-  if (frame.title) document.getElementById('playerPageTitle').textContent = frame.title;
+  const frameTitle = (frame.title !== 'about:blank' && frame.title) || shortUrl(frame.url);
+  if (frameTitle) document.getElementById('playerPageTitle').textContent = frameTitle;
   if (frame.url) document.getElementById('playerPageUrl').textContent = frame.url;
 
   const canvas = document.getElementById('playerCanvas');
