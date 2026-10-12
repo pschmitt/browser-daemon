@@ -588,7 +588,7 @@ async function connect() {
     const host = testHost || location.host;
     drv = target.engine === "firefox"
       ? new BidiDriver(`${scheme}${host}/firefox?session_id=${encodeURIComponent(target.sessionId)}&observer=true`, pageId, handlers)
-      : new CdpDriver(`${scheme}${host}/devtools/page/${encodeURIComponent(pageId)}`, handlers);
+      : new CdpDriver(`${scheme}${host}/devtools/page/${encodeURIComponent(pageId)}?observer=true`, handlers);
     document.body.dataset.engine = target.engine || "chromium";
     await drv.ready;
     await drv.start();

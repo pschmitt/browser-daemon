@@ -497,7 +497,12 @@ impl BidiHub {
     }
 
     /// Serve one `/firefox` WebSocket client until either side closes.
-    pub async fn serve_client(self: Arc<Self>, socket: ClientWs) {
+    pub async fn serve_client(
+        self: Arc<Self>,
+        socket: ClientWs,
+        activity: Arc<crate::idle::Activity>,
+        observer: bool,
+    ) {
         let client = self.next_client.fetch_add(1, Ordering::SeqCst);
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         self.clients.lock().await.insert(
@@ -522,6 +527,7 @@ impl BidiHub {
             while let Some(Ok(msg)) = stream.next().await {
                 match msg {
                     ClientMsg::Text(text) => {
+                        activity.note_command(text.as_str(), observer);
                         self.handle_client_command(client, text.as_str()).await
                     }
                     ClientMsg::Close(_) => break,

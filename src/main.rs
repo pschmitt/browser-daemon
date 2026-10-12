@@ -1,5 +1,6 @@
 mod bidi;
 mod browser;
+mod idle;
 mod proxy;
 mod recorder;
 
@@ -103,6 +104,13 @@ pub struct Args {
         help = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N)"
     )]
     pub max_session_memory_mb: Option<u64>,
+
+    #[arg(
+        long,
+        default_value_t = 30,
+        help = "Stop sessions nobody used for this many minutes (0 = never)"
+    )]
+    pub idle_timeout_minutes: u64,
 }
 
 #[derive(Clone)]
@@ -115,6 +123,7 @@ pub struct ManagedSession {
     pub persistent: bool,
     pub created_at: Instant,
     pub client_count: Arc<AtomicUsize>,
+    pub activity: Arc<idle::Activity>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -157,6 +166,8 @@ impl ManagedSession {
             uptime_seconds: self.created_at.elapsed().as_secs(),
             client_count: self.client_count.load(Ordering::SeqCst),
             tabs_count,
+            idle_seconds: self.activity.idle_secs(),
+            idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
             recording_paused: recording.is_some_and(SessionRecorderHandle::is_paused),
         }
@@ -175,6 +186,11 @@ pub struct SessionSummary {
     pub uptime_seconds: u64,
     pub client_count: usize,
     pub tabs_count: usize,
+    #[serde(default)]
+    pub idle_seconds: u64,
+    /// 0: never stopped for inactivity.
+    #[serde(default)]
+    pub idle_timeout_seconds: u64,
     pub is_recording: bool,
     #[serde(default)]
     pub recording_paused: bool,
@@ -193,6 +209,7 @@ pub struct AppState {
     pub cluster_secret: Option<String>,
     pub recorder_config: Arc<RecorderConfig>,
     pub active_recordings: Arc<RwLock<HashMap<Uuid, SessionRecorderHandle>>>,
+    pub idle_timeout_secs: u64,
 }
 
 impl AppState {
@@ -254,6 +271,7 @@ impl AppState {
         height: Option<u32>,
         record: Option<bool>,
         max_memory_mb: Option<u64>,
+        idle_timeout_minutes: Option<u64>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
@@ -272,6 +290,7 @@ impl AppState {
                         if let Some(ref p) = session.profile {
                             if p == &sanitized {
                                 info!(session_id = %session.id, engine = %engine, profile = %sanitized, "Attaching to existing profile session");
+                                session.activity.touch();
                                 return Ok(session.clone());
                             }
                         }
@@ -316,6 +335,9 @@ impl AppState {
             persistent,
             created_at: browser.created_at,
             client_count: Arc::new(AtomicUsize::new(0)),
+            activity: Arc::new(idle::Activity::new(
+                idle_timeout_minutes.map_or(self.idle_timeout_secs, |m| m * 60),
+            )),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -385,6 +407,8 @@ pub struct LaunchParams {
     pub height: Option<u32>,
     pub record: Option<bool>,
     pub max_memory_mb: Option<u64>,
+    /// Minutes of inactivity before the session is stopped (0 = never).
+    pub idle_timeout_minutes: Option<u64>,
     /// Attach without counting as a client (handoff page).
     pub observer: Option<bool>,
 }
@@ -400,6 +424,8 @@ pub struct CreateSessionRequest {
     pub height: Option<u32>,
     pub record: Option<bool>,
     pub max_memory_mb: Option<u64>,
+    /// Minutes of inactivity before the session is stopped (0 = never).
+    pub idle_timeout_minutes: Option<u64>,
 }
 
 fn spawn_bidi_frame_feeder(hub: Arc<BidiHub>, handle: SessionRecorderHandle) {
@@ -778,7 +804,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cluster_secret,
         recorder_config,
         active_recordings,
+        idle_timeout_secs: args.idle_timeout_minutes * 60,
     };
+
+    // Stop sessions that nobody has used for a while.
+    let reaper_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let expired: Vec<(Uuid, u64)> = reaper_state
+                .sessions
+                .read()
+                .await
+                .values()
+                .filter(|s| s.activity.expired())
+                .map(|s| (s.id, s.activity.idle_secs()))
+                .collect();
+            for (id, idle) in expired {
+                info!(session_id = %id, idle_secs = idle, "Stopping idle session");
+                reaper_state.terminate_session(&id).await;
+            }
+        }
+    });
 
     let app = Router::new()
         .route("/", get(dashboard_page))
@@ -828,6 +876,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/sessions/{id}/stop-record",
             post(api_session_stop_record),
+        )
+        .route(
+            "/api/sessions/{id}/idle-timeout",
+            post(api_session_idle_timeout),
         )
         .route(
             "/api/sessions/{id}/pause-record",
@@ -1214,11 +1266,13 @@ async fn json_new(
                 None,
                 Some(state.recorder_config.enabled),
                 None,
+                None,
             )
             .await
             .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
     };
 
+    session.activity.touch();
     if let Some(ref hub) = session.bidi {
         let ctx = hub.create_tab(&target_url).await.map_err(|e| {
             (
@@ -1350,6 +1404,7 @@ async fn handle_chromium_ws(
                 params.height,
                 params.record,
                 params.max_memory_mb,
+                params.idle_timeout_minutes,
             )
             .await
         {
@@ -1360,6 +1415,7 @@ async fn handle_chromium_ws(
 
     ws.on_upgrade(move |socket| async move {
         session.client_count.fetch_add(1, Ordering::SeqCst);
+        session.activity.touch();
 
         let ws_path = session.ws_path.trim_start_matches('/');
         let backend_ws_url = format!("ws://127.0.0.1:{}/{}", session.port, ws_path);
@@ -1372,7 +1428,8 @@ async fn handle_chromium_ws(
 
         match tokio_tungstenite::connect_async(&backend_ws_url).await {
             Ok((server_ws, _)) => {
-                bridge_websockets(socket, server_ws, frame_tx, None, None).await;
+                let activity = Some((session.activity.clone(), false));
+                bridge_websockets(socket, server_ws, frame_tx, activity, None, None).await;
             }
             Err(e) => {
                 error!(session_id = %session.id, error = %e, "Failed to connect to Chromium backend");
@@ -1419,6 +1476,7 @@ async fn handle_firefox_ws(
                 params.height,
                 params.record,
                 params.max_memory_mb,
+                params.idle_timeout_minutes,
             )
             .await
         {
@@ -1439,7 +1497,9 @@ async fn handle_firefox_ws(
         }
         info!(session_id = %session.id, observer = !counted, "Client attached to Firefox WebDriver BiDi");
 
-        hub.serve_client(socket).await;
+        session.activity.touch();
+        hub.serve_client(socket, session.activity.clone(), !counted)
+            .await;
 
         if counted {
             let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
@@ -1454,6 +1514,7 @@ async fn handle_firefox_ws(
 async fn handle_page_ws(
     AxumPath(page_id): AxumPath<String>,
     ws: WebSocketUpgrade,
+    Query(params): Query<LaunchParams>,
     State(state): State<AppState>,
 ) -> Response {
     let sessions: Vec<ManagedSession> = {
@@ -1461,7 +1522,13 @@ async fn handle_page_ws(
         guard.values().cloned().collect()
     };
 
-    let mut target_info: Option<(u16, Uuid, Option<String>, Option<String>)> = None;
+    let mut target_info: Option<(
+        u16,
+        Uuid,
+        Arc<idle::Activity>,
+        Option<String>,
+        Option<String>,
+    )> = None;
     for session in sessions {
         if session.bidi.is_some() {
             continue;
@@ -1470,14 +1537,20 @@ async fn handle_page_ws(
         if let Ok(res) = state.http_client.get(&url).send().await {
             if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
                 if let Some(target) = targets.into_iter().find(|t| t.id == page_id) {
-                    target_info = Some((session.port, session.id, target.title, Some(target.url)));
+                    target_info = Some((
+                        session.port,
+                        session.id,
+                        session.activity.clone(),
+                        target.title,
+                        Some(target.url),
+                    ));
                     break;
                 }
             }
         }
     }
 
-    let (port, session_id, initial_title, initial_url) = match target_info {
+    let (port, session_id, activity, initial_title, initial_url) = match target_info {
         Some(info) => info,
         None => {
             warn!(page_id = %page_id, "Page not found across active sessions");
@@ -1490,11 +1563,25 @@ async fn handle_page_ws(
         recs.get(&session_id).map(|h| h.frame_tx.clone())
     };
 
+    // The handoff page attaches as an observer: watching alone is not activity.
+    let observer = params.observer.unwrap_or(false);
+    if !observer {
+        activity.touch();
+    }
     let backend_url = format!("ws://127.0.0.1:{}/devtools/page/{}", port, page_id);
     ws.on_upgrade(move |socket| async move {
         match tokio_tungstenite::connect_async(&backend_url).await {
             Ok((server_ws, _)) => {
-                bridge_websockets(socket, server_ws, frame_tx, initial_url, initial_title).await;
+                let activity = Some((activity, observer));
+                bridge_websockets(
+                    socket,
+                    server_ws,
+                    frame_tx,
+                    activity,
+                    initial_url,
+                    initial_title,
+                )
+                .await;
             }
             Err(e) => {
                 error!(page_id = %page_id, error = %e, "Failed to bridge to target page");
@@ -1592,6 +1679,7 @@ async fn api_create_session(
             req.height,
             req.record,
             req.max_memory_mb,
+            req.idle_timeout_minutes,
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
@@ -3076,13 +3164,14 @@ async fn api_peer_session_action(
     State(state): State<AppState>,
     headers: HeaderMap,
     AxumPath((peer, id, action)): AxumPath<(String, String, String)>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
     if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
     if !matches!(
         action.as_str(),
-        "record" | "stop-record" | "pause-record" | "resume-record"
+        "record" | "stop-record" | "pause-record" | "resume-record" | "idle-timeout"
     ) {
         return (StatusCode::NOT_FOUND, "Unknown session action").into_response();
     }
@@ -3093,7 +3182,10 @@ async fn api_peer_session_action(
         )
             .into_response();
     };
-    let url = format!("{}/api/sessions/{}/{}", peer_url, id, action);
+    let url = match query {
+        Some(q) if !q.is_empty() => format!("{}/api/sessions/{}/{}?{}", peer_url, id, action, q),
+        _ => format!("{}/api/sessions/{}/{}", peer_url, id, action),
+    };
     let res = state
         .peer_request(state.http_client.post(&url))
         .send()
@@ -3441,6 +3533,32 @@ async fn api_session_stop_record(
             Json(serde_json::json!({ "error": "Session is not actively recording" })),
         ))
     }
+}
+
+#[derive(Deserialize)]
+struct IdleTimeoutParams {
+    minutes: u64,
+}
+
+/// Changes how long a session may sit unused (0 = never stop it) and
+/// restarts its idle clock.
+async fn api_session_idle_timeout(
+    AxumPath(id): AxumPath<Uuid>,
+    Query(params): Query<IdleTimeoutParams>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let guard = state.sessions.read().await;
+    let session = guard.get(&id).ok_or((
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "error": "Session not found" })),
+    ))?;
+    session.activity.set_timeout_secs(params.minutes * 60);
+    Ok(Json(serde_json::json!({
+        "session_id": id,
+        "idle_timeout_seconds": params.minutes * 60
+    })))
 }
 
 async fn api_session_pause_record(

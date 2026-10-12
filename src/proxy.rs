@@ -3,7 +3,9 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message as ServerMsg;
 use tracing::debug;
 
+use crate::idle::Activity;
 use crate::recorder::ProxyRecordingFrame;
+use std::sync::Arc;
 
 pub async fn bridge_websockets(
     client_ws: ClientWs,
@@ -11,6 +13,8 @@ pub async fn bridge_websockets(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     frame_tx: Option<tokio::sync::mpsc::UnboundedSender<ProxyRecordingFrame>>,
+    // The session's idle clock, and whether this client is a mere observer.
+    activity: Option<(Arc<Activity>, bool)>,
     initial_url: Option<String>,
     initial_title: Option<String>,
 ) {
@@ -19,6 +23,9 @@ pub async fn bridge_websockets(
 
     let client_to_server = async {
         while let Some(Ok(msg)) = client_rx.next().await {
+            if let (Some((activity, observer)), ClientMsg::Text(text)) = (&activity, &msg) {
+                activity.note_command(text.as_str(), *observer);
+            }
             let server_msg = match msg {
                 ClientMsg::Text(text) => ServerMsg::Text(text.as_str().into()),
                 ClientMsg::Binary(bin) => ServerMsg::Binary(bin),

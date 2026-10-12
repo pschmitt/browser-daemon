@@ -149,6 +149,12 @@ in
       description = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N).";
     };
 
+    idleTimeoutMinutes = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 30;
+      description = "Stop sessions nobody used for this many minutes (0 = never). Sessions can override it.";
+    };
+
     memoryMax = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -232,6 +238,8 @@ in
             (toString cfg.defaultHeight)
             "--node-name"
             cfg.nodeName
+            "--idle-timeout-minutes"
+            (toString cfg.idleTimeoutMinutes)
           ]
           ++ lib.optionals (cfg.publicUrl != null) [
             "--public-url"

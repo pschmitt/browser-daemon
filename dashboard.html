@@ -428,6 +428,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></symbol>
@@ -567,6 +568,16 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
             <div class="field"><label for="sessionWidth">Width</label><input class="input" type="number" id="sessionWidth" value="1920" min="320" max="3840"></div>
             <div class="field"><label for="sessionHeight">Height</label><input class="input" type="number" id="sessionHeight" value="1080" min="240" max="2160"></div>
           </div>
+          <div class="field"><label for="sessionIdle">Stop when idle for</label>
+            <select class="input" id="sessionIdle">
+              <option value="">Node default</option>
+              <option value="15">15 minutes</option>
+              <option value="60">1 hour</option>
+              <option value="240">4 hours</option>
+              <option value="1440">1 day</option>
+              <option value="0">Never</option>
+            </select>
+            <span class="hint">Idle means no automation commands and no input in handoff; just watching does not count.</span></div>
           <div class="field"><label for="sessionMem">Memory limit (MB)</label><input class="input" type="number" id="sessionMem" min="128" max="65536" placeholder="Node default"><span class="hint">Caps the JS heap of this browser.</span></div>
         </div>
       </details>
@@ -1118,7 +1129,28 @@ function renderSessions() {
   reconcile(grid, list, keyOf.session, sessionCard, (el, s) => {
     const up = el.querySelector('[data-up]');
     if (up) up.textContent = formatUptime(s.uptime_seconds);
+    const idle = el.querySelector('[data-idle]');
+    if (idle) {
+      const st = idleState(s);
+      idle.hidden = !st;
+      if (st) { idle.textContent = st.text; idle.className = 'chip ' + st.cls; idle.title = st.title; }
+    }
   });
+}
+
+// Idle time is only worth showing once the session has sat unused for a bit.
+function idleState(s) {
+  const idle = s.idle_seconds || 0, limit = s.idle_timeout_seconds || 0;
+  if (limit && limit - idle <= 600) {
+    const left = Math.max(0, limit - idle);
+    return { cls: 'warn', text: left < 60 ? 'stopping…' : `stops in ${formatUptime(left)}`, title: `Idle for ${formatUptime(idle)}; stops after ${formatUptime(limit)} without use` };
+  }
+  if (idle >= 300) return { cls: '', text: `idle ${formatUptime(idle)}`, title: limit ? `Stops after ${formatUptime(limit)} without use` : 'Never stopped for inactivity' };
+  return null;
+}
+
+function idleLabel(secs) {
+  return !secs ? 'never' : secs % 3600 === 0 ? `${secs / 3600} h` : `${Math.round(secs / 60)} min`;
 }
 
 function sessionCard(s) {
@@ -1142,7 +1174,7 @@ function sessionCard(s) {
       <div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${s.profile ? esc(s.profile) : '<em>Throwaway</em>'}</span>${s.is_recording ? (s.recording_paused ? '<span class="chip">rec paused</span>' : '<span class="rec-dot" title="Recording"></span>') : ''}</div>
-        <div class="scard-meta">${nodeChip(s.node_name)}<span data-up title="Uptime"></span>${clients ? `<span class="sep">·</span><span>${clients}</span>` : ''}${s.persistent ? '' : '<span class="sep">·</span><span title="Stops when its last client disconnects">ephemeral</span>'}</div>
+        <div class="scard-meta">${nodeChip(s.node_name)}<span data-up title="Uptime"></span>${clients ? `<span class="sep">·</span><span>${clients}</span>` : ''}${s.persistent ? '' : '<span class="sep">·</span><span title="Stops when its last client disconnects">ephemeral</span>'}<span data-idle hidden></span></div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions">${icon('more')}</button>
     </div>
@@ -1275,6 +1307,7 @@ const ACT = {
       { icon: 'handoff', label: 'Take over', run: () => { location.href = handoffUrl(s.node_name, { session: s.id }); } },
       { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
       { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : 'Start recording', run: () => toggleRecording(s) },
+      { icon: 'clock', label: `Auto-stop when idle: ${idleLabel(s.idle_timeout_seconds)}…`, run: () => setIdleTimeout(s) },
       s.is_recording && (s.recording_paused
         ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
         : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
@@ -1416,6 +1449,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
   };
   const mem = parseInt($('sessionMem').value, 10);
   if (mem > 0) payload.max_memory_mb = mem;
+  if ($('sessionIdle').value !== '') payload.idle_timeout_minutes = parseInt($('sessionIdle').value, 10);
   const t = createProgressToast('launch', `Starting ${sessionEngine === 'firefox' ? 'Firefox' : 'Chromium'} on ${node}`, 'Spawning the browser…');
   t.update(30, 'Spawning the browser…');
   try {
@@ -1442,6 +1476,20 @@ function toggleRecording(s) {
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),
     s.is_recording ? 'Recording saved' : 'Recording started');
 }
+async function setIdleTimeout(s) {
+  const cur = s.idle_timeout_seconds ? Math.round(s.idle_timeout_seconds / 60) : 0;
+  const v = await ask({
+    title: 'Auto-stop when idle',
+    text: 'Minutes without any use (automation commands, or input in handoff) before this browser is stopped. 0 keeps it running.',
+    input: String(cur), ok: 'Save',
+  });
+  if (v === null || v === undefined) return;
+  const min = parseInt(v, 10);
+  if (!(min >= 0)) { showToast('Enter a number of minutes', 'danger'); return; }
+  act('Saving', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/idle-timeout?minutes=${min}`)),
+    min ? `Stops after ${idleLabel(min * 60)} without use` : 'Never stopped for inactivity');
+}
+
 function setRecordingPaused(s, paused) {
   act(paused ? 'Pausing recording' : 'Resuming recording',
     () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/${paused ? 'pause-record' : 'resume-record'}`)),
@@ -1474,7 +1522,7 @@ function showSessionDetails(s) {
   showDetails(s.profile || 'Throwaway session', [
     ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
     ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Kept alive' : 'Ends with last client'],
-    ['Uptime', formatUptime(s.uptime_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
+    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);
 }
 
