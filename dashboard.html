@@ -355,6 +355,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .player-loading-bar-wrap { width: min(320px, 80%); height: 5px; border-radius: 999px; background: rgba(255, 255, 255, .15); overflow: hidden; }
 .player-loading-bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .player-controls-wrap { padding: 4px 12px 10px; background: linear-gradient(to top, rgba(0, 0, 0, .9), rgba(0, 0, 0, .75)); transition: opacity .25s; }
+.player-buffer { height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; margin: 0 2px -2px; }
+.player-buffer.done { visibility: hidden; }
+.player-buffer > span { display: block; height: 100%; width: 0; background: rgba(255,255,255,.45); transition: width .3s; }
 .player-scrubber { width: 100%; margin: 0; height: 18px; accent-color: var(--accent); cursor: pointer; }
 .player-buttons-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .player-controls-left, .player-controls-right { display: flex; align-items: center; gap: 4px; }
@@ -678,6 +681,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       </div>
     </div>
     <div class="player-controls-wrap">
+      <div class="player-buffer" id="playerBufferWrap"><span id="playerBuffered"></span></div>
       <input type="range" id="playerScrubber" class="player-scrubber" min="0" max="0" value="0" oninput="onScrubberInput(this.value)" aria-label="Seek">
       <div class="player-buttons-row">
         <div class="player-controls-left">
@@ -1731,40 +1735,56 @@ async function vacuum() {
 
 /* ================================================================ recordings: cache, downloads, player */
 const REC_DB_NAME = 'BrowserDaemonRecordings';
-const REC_DB_VERSION = 1;
-const REC_STORE_NAME = 'recordings';
+const REC_DB_VERSION = 2;
+const REC_STORE_NAME = 'recordings';    // one entry per fully cached recording
+const CHUNK_STORE_NAME = 'chunks';      // its frames, in batches (see download-worker.js)
 let cachedRecordingsSet = new Set();
 
+let recDbPromise = null;
 function openRecordingsDb() {
-  return new Promise((resolve) => {
-    if (typeof indexedDB === 'undefined') {
-      resolve(null);
-      return;
-    }
+  if (recDbPromise) return recDbPromise;
+  recDbPromise = new Promise((resolve) => {
+    if (typeof indexedDB === 'undefined') { resolve(null); return; }
     const req = indexedDB.open(REC_DB_NAME, REC_DB_VERSION);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains(REC_STORE_NAME)) {
-        db.createObjectStore(REC_STORE_NAME, { keyPath: 'id' });
-      }
+      if (!db.objectStoreNames.contains(REC_STORE_NAME)) db.createObjectStore(REC_STORE_NAME, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(CHUNK_STORE_NAME)) db.createObjectStore(CHUNK_STORE_NAME, { keyPath: ['id', 'seq'] });
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => resolve(null);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => { db.close(); recDbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => { recDbPromise = null; resolve(null); };
   });
+  return recDbPromise;
 }
+
+const chunkRange = (id) => IDBKeyRange.bound([id, 0], [id, Infinity]);
 
 async function getCachedRecording(id) {
   try {
     const db = await openRecordingsDb();
     if (!db) return null;
-    return new Promise((resolve) => {
-      const tx = db.transaction(REC_STORE_NAME, 'readonly');
-      const store = tx.objectStore(REC_STORE_NAME);
-      const req = store.get(id);
-      req.onsuccess = () => resolve(req.result ? req.result.frames : null);
+    return await new Promise((resolve) => {
+      const tx = db.transaction([REC_STORE_NAME, CHUNK_STORE_NAME], 'readonly');
+      const req = tx.objectStore(REC_STORE_NAME).get(id);
+      req.onsuccess = () => {
+        const meta = req.result;
+        if (!meta) return resolve(null);
+        if (meta.frames) return resolve(meta.frames);   // cached before chunking existed
+        const all = tx.objectStore(CHUNK_STORE_NAME).getAll(chunkRange(id));
+        all.onsuccess = () => {
+          const frames = [];
+          for (const c of all.result) for (const f of c.frames) frames.push(f);
+          resolve(frames.length ? frames : null);
+        };
+        all.onerror = () => resolve(null);
+      };
       req.onerror = () => resolve(null);
     });
-  } catch(e) {
+  } catch (e) {
     return null;
   }
 }
@@ -1774,23 +1794,23 @@ async function setCachedRecording(id, frames) {
     const db = await openRecordingsDb();
     if (!db) return;
     return new Promise((resolve) => {
-      const tx = db.transaction(REC_STORE_NAME, 'readwrite');
-      const store = tx.objectStore(REC_STORE_NAME);
-      store.put({ id, frames, cachedAt: Date.now() });
+      const tx = db.transaction([REC_STORE_NAME, CHUNK_STORE_NAME], 'readwrite');
+      tx.objectStore(CHUNK_STORE_NAME).delete(chunkRange(id));
+      tx.objectStore(REC_STORE_NAME).put({ id, frames, cachedAt: Date.now() });
       tx.oncomplete = () => resolve(true);
       tx.onerror = () => resolve(false);
     });
-  } catch(e) {}
+  } catch (e) {}
 }
 
 async function deleteCachedRecording(id) {
   try {
     const db = await openRecordingsDb();
     if (!db) return;
-    const tx = db.transaction(REC_STORE_NAME, 'readwrite');
-    const store = tx.objectStore(REC_STORE_NAME);
-    store.delete(id);
-  } catch(e) {}
+    const tx = db.transaction([REC_STORE_NAME, CHUNK_STORE_NAME], 'readwrite');
+    tx.objectStore(REC_STORE_NAME).delete(id);
+    tx.objectStore(CHUNK_STORE_NAME).delete(chunkRange(id));
+  } catch (e) {}
 }
 
 async function syncCachedRecordingsSet() {
@@ -1832,6 +1852,16 @@ function handleWorkerMessage(e) {
   const { type, id, pct, receivedBytes, totalBytes, frameCount, error, attempt } = e.data || {};
   const download = activeDownloadsMap.get(id);
 
+  if (type === 'FRAMES') {
+    if (!download) return;
+    const frames = download.frames;
+    for (const f of e.data.frames) frames.push(f);
+    if (activePlayerModalId !== id) return;
+    if (activePlayer?.id === id) streamProgress();
+    else if (frames.length >= 2) startStreamingPlayer(id, download);
+    return;
+  }
+
   if (type === 'PROGRESS') {
     const effectiveTotal = (totalBytes > 0) ? totalBytes : (download?.expectedBytes || 0);
     const mb = (receivedBytes / (1024 * 1024)).toFixed(1);
@@ -1857,7 +1887,8 @@ function handleWorkerMessage(e) {
     }
 
     const modal = document.getElementById('playerModal');
-    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
+    if (activePlayer?.id === id) streamProgress();
+    else if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
       const loadingText = document.getElementById('playerLoadingText');
       const loadingBar = document.getElementById('playerLoadingBar');
       const loadingSub = document.getElementById('playerLoadingSub');
@@ -1867,20 +1898,19 @@ function handleWorkerMessage(e) {
       if (loadingSub) loadingSub.textContent = e.data.frameCount ? `${e.data.frameCount.toLocaleString()} frames received` : 'Streaming frames…';
     }
   } else if (type === 'SUCCESS') {
-    const frames = e.data.frames;
     if (e.data.cached) cachedRecordingsSet.add(id);
     if (download && download.pToast) {
       download.pToast.done('Recording downloaded', e.data.cached ? `${frameCount} frames saved in this browser` : `${frameCount} frames (too large to cache here)`);
     }
     activeDownloadsMap.delete(id);
-
     render();
 
-    const modal = document.getElementById('playerModal');
-    if (modal && modal.classList.contains('open') && activePlayerModalId === id && frames && frames.length > 0) {
-      const nodeBadge = document.getElementById('playerNodeBadge');
-      if (nodeBadge) nodeBadge.textContent = `${activePlayerModalNode || 'local'}${e.data.cached ? ' · cached' : ''}`;
-      initPlayerWithFrames(id, activePlayerModalNode, frames, !!e.data.cached);
+    if (activePlayer?.id === id) {
+      activePlayer.streaming = false;
+      streamProgress();
+      if (e.data.cached) $('playerNodeBadge').textContent = `${activePlayerModalNode || 'local'} · cached`;
+    } else if (activePlayerModalId === id && download?.frames.length) {
+      initPlayerWithFrames(id, activePlayerModalNode, download.frames, !!e.data.cached);
     }
   } else if (type === 'RETRY') {
     if (download && download.pToast) {
@@ -1896,8 +1926,12 @@ function handleWorkerMessage(e) {
       download.pToast.error('Download Failed', error);
     }
     activeDownloadsMap.delete(id);
-    const modal = document.getElementById('playerModal');
-    if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
+    if (activePlayer?.id === id) {
+      // Keep playing what arrived.
+      activePlayer.streaming = false;
+      streamProgress();
+      showToast('The rest of the recording could not be loaded', 'danger', 7000, null, error);
+    } else if (activePlayerModalId === id) {
       showToast('Could not load the recording', 'danger', 7000, null, error);
       closePlayerModal();
     }
@@ -1944,6 +1978,11 @@ function handlePlayerModalOverlayClick(e) {
 }
 
 function closePlayerModal() {
+  const d = activeDownloadsMap.get(activePlayerModalId);
+  if (d && !d.pToast) {
+    d.pToast = createProgressToast(`rec-${activePlayerModalId}`, `Session ${activePlayerModalId.slice(0, 8)}`, 'Downloading in the background…');
+    d.pToast.update(d.lastPct || 0, d.lastSub || '', 'Downloading in the background…');
+  }
   activePlayerModalId = null;
   activePlayerModalNode = null;
   if (activePlayer) {
@@ -2066,11 +2105,45 @@ function jumpSeconds(deltaSec) {
   renderPlayerFrame(closestIdx);
 }
 
-function initPlayerWithFrames(id, node, frames, isCached) {
+// Playback starts as soon as the first frames arrive; the rest keep
+// streaming in (see the FRAMES worker message).
+function startStreamingPlayer(id, download) {
+  // The player shows the progress itself; the toast comes back if it is closed early.
+  download.pToast?.remove();
+  download.pToast = null;
+  const rec = byKey.recordings ? [...byKey.recordings.values()].find((r) => r.id === id) : null;
+  initPlayerWithFrames(id, download.node, download.frames, false, {
+    streaming: true,
+    expectedFrames: rec?.frame_count || 0,
+    expectedMs: (rec?.duration_seconds || 0) * 1000,
+  });
+}
+
+function streamProgress() {
+  const p = activePlayer;
+  if (!p) return;
+  const have = p.frames.length;
+  const total = p.streaming ? Math.max(have, p.expectedFrames || 0) : have;
+  $('playerScrubber').max = Math.max(0, total - 1);
+  $('playerBuffered').style.width = (p.streaming && total ? Math.min(100, (have / total) * 100) : 100) + '%';
+  $('playerBufferWrap').classList.toggle('done', !p.streaming);
+  if (p.waiting && (have > p.currentIndex + 1 || !p.streaming)) {
+    p.waiting = false;
+    playNextFrame();
+  }
+  renderPlayerFrame(p.currentIndex, { quiet: true });
+}
+
+function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, expectedFrames = 0, expectedMs = 0 } = {}) {
+  if (activePlayer?.timer) clearTimeout(activePlayer.timer);
   activePlayer = {
     id,
     node,
     frames,
+    streaming,
+    expectedFrames,
+    expectedMs,
+    waiting: false,
     currentIndex: 0,
     isPlaying: false,
     isLooping: false,
@@ -2080,7 +2153,7 @@ function initPlayerWithFrames(id, node, frames, isCached) {
   };
 
   const centerPlayBtn = document.getElementById('playerCenterPlayBtn');
-  if (frames.length <= 1) {
+  if (frames.length <= 1 && !streaming) {
     document.getElementById('playerScrubber').max = 0;
     document.getElementById('playerFrameDisplay').textContent = `(Snapshot: 1 frame)`;
     updatePlayPauseButton();
@@ -2106,6 +2179,7 @@ function initPlayerWithFrames(id, node, frames, isCached) {
   if (loadingOverlay) loadingOverlay.style.display = 'none';
 
   renderPlayerFrame(0);
+  streamProgress();
 
   // Auto-play immediately if multiple frames!
   if (frames.length > 1) {
@@ -2160,6 +2234,10 @@ async function openPlayerModal(id, node) {
   // 2. Check if already downloading in background worker
   if (activeDownloadsMap.has(id)) {
     const d = activeDownloadsMap.get(id);
+    activePlayerModalId = id;
+    activePlayerModalNode = node;
+    pToast.done('Still downloading', 'Playing what has arrived');
+    if (d.frames.length >= 2) { startStreamingPlayer(id, d); return; }
     if (loadingText && d.lastSub) loadingText.textContent = `Downloading session: ${d.lastSub} (${d.lastPct || 0}%)`;
     if (loadingBar && d.lastPct) loadingBar.style.width = (d.lastPct || 0) + '%';
     if (loadingSub) loadingSub.textContent = 'Resuming progress from background download...';
@@ -2174,7 +2252,7 @@ async function openPlayerModal(id, node) {
   const expectedBytes = (recMeta && recMeta.size_bytes > 0) ? recMeta.size_bytes : 0;
 
   pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Connecting in background...`);
-  activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB', expectedBytes });
+  activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB', expectedBytes, frames: [] });
 
   const worker = getDownloadWorker();
   if (worker) {
@@ -2218,22 +2296,27 @@ async function fallbackDownloadFrames(id, node, url, pToast, expectedBytes = 0) 
   }
 }
 
-function renderPlayerFrame(idx) {
+function renderPlayerFrame(idx, { quiet = false } = {}) {
   if (!activePlayer || !activePlayer.frames[idx]) return;
-  activePlayer.currentIndex = idx;
-  const frame = activePlayer.frames[idx];
-  const totalFrames = activePlayer.frames.length;
+  const p = activePlayer;
+  p.currentIndex = idx;
+  const frame = p.frames[idx];
+  const totalFrames = p.frames.length;
+  const shownTotal = p.streaming ? Math.max(totalFrames, p.expectedFrames || 0) : totalFrames;
 
   document.getElementById('playerScrubber').value = idx;
-  document.getElementById('playerFrameDisplay').textContent = `(${idx + 1} / ${totalFrames} frames)`;
+  document.getElementById('playerFrameDisplay').textContent = p.waiting ? '(buffering…)'
+    : `(${idx + 1} / ${shownTotal} frames${p.streaming ? ` · ${Math.round((totalFrames / Math.max(1, shownTotal)) * 100)}% loaded` : ''})`;
 
   const curSec = Math.floor(frame.t / 1000);
-  const maxSec = Math.floor(activePlayer.frames[totalFrames - 1].t / 1000);
+  const lastT = p.frames[totalFrames - 1].t;
+  const maxSec = Math.floor((p.streaming ? Math.max(lastT, p.expectedMs || 0) : lastT) / 1000);
   const pad = n => String(n).padStart(2, '0');
   document.getElementById('playerTimeDisplay').textContent =
     `${pad(Math.floor(curSec / 60))}:${pad(curSec % 60)} / ${pad(Math.floor(maxSec / 60))}:${pad(maxSec % 60)}`;
   document.getElementById('playerFrameOffset').textContent = `+${(frame.t / 1000).toFixed(1)}s`;
 
+  if (quiet) return;
   if (frame.title) document.getElementById('playerPageTitle').textContent = frame.title;
   if (frame.url) document.getElementById('playerPageUrl').textContent = frame.url;
 
@@ -2333,7 +2416,7 @@ function togglePlayPause() {
   updateCenterPlayButtonState();
 
   if (activePlayer.isPlaying) {
-    if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+    if (!activePlayer.streaming && activePlayer.currentIndex >= activePlayer.frames.length - 1) {
       activePlayer.currentIndex = 0;
       renderPlayerFrame(0);
     }
@@ -2347,6 +2430,12 @@ function togglePlayPause() {
 
 function playNextFrame() {
   if (!activePlayer || !activePlayer.isPlaying) return;
+  if (activePlayer.streaming && activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+    // Caught up with the download: wait for more frames (streamProgress resumes).
+    activePlayer.waiting = true;
+    renderPlayerFrame(activePlayer.currentIndex, { quiet: true });
+    return;
+  }
   if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
     if (activePlayer.isLooping) {
       activePlayer.currentIndex = 0;
@@ -2382,7 +2471,9 @@ function stepFrame(delta) {
 
 function onScrubberInput(val) {
   if (!activePlayer) return;
-  const idx = parseInt(val, 10);
+  // Not downloaded yet: stop at what is there.
+  const idx = Math.min(parseInt(val, 10), activePlayer.frames.length - 1);
+  if (String(idx) !== String(val)) $('playerScrubber').value = idx;
   renderPlayerFrame(idx);
 }
 
@@ -2409,6 +2500,7 @@ function setPlaySpeed(s) {
 
 async function exportRecordingWebM() {
   if (!activePlayer || !activePlayer.frames || activePlayer.frames.length === 0) return;
+  if (activePlayer.streaming) { showToast('Still downloading', 'info', 4000, null, 'Export works once the whole recording is here.'); return; }
   const btn = document.getElementById('exportWebmBtn');
   const btnLabel = btn.querySelector('span');
   btn.disabled = true;

@@ -1,10 +1,19 @@
-// Browser Daemon Recording Background Downloader Worker
+// Browser Daemon recording downloader.
+//
+// Streams frames.jsonl, hands frames to the page in batches so playback can
+// start right away, and caches them in IndexedDB chunk by chunk. A recording
+// only counts as cached once its "recordings" entry (written last) exists.
 const REC_DB_NAME = 'BrowserDaemonRecordings';
-const REC_DB_VERSION = 1;
+const REC_DB_VERSION = 2;
 const REC_STORE_NAME = 'recordings';
+const CHUNK_STORE_NAME = 'chunks';
+const BATCH_FRAMES = 40;
+const BATCH_MS = 250;
 
+let dbPromise = null;
 function openDb() {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     if (!self.indexedDB) {
       reject(new Error('IndexedDB not supported in worker'));
       return;
@@ -12,26 +21,33 @@ function openDb() {
     const req = self.indexedDB.open(REC_DB_NAME, REC_DB_VERSION);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains(REC_STORE_NAME)) {
-        db.createObjectStore(REC_STORE_NAME, { keyPath: 'id' });
-      }
+      if (!db.objectStoreNames.contains(REC_STORE_NAME)) db.createObjectStore(REC_STORE_NAME, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(CHUNK_STORE_NAME)) db.createObjectStore(CHUNK_STORE_NAME, { keyPath: ['id', 'seq'] });
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => { db.close(); dbPromise = null; };
+      resolve(db);
+    };
+    req.onerror = () => { dbPromise = null; reject(req.error); };
   });
+  return dbPromise;
 }
 
-function saveFramesToDb(id, frames) {
-  return openDb().then((db) => {
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(REC_STORE_NAME, 'readwrite');
-      const store = tx.objectStore(REC_STORE_NAME);
-      store.put({ id, frames, cachedAt: Date.now() });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  });
+function tx(storeNames, mode, fn) {
+  return openDb().then((db) => new Promise((resolve, reject) => {
+    const t = db.transaction(storeNames, mode);
+    fn(t);
+    t.oncomplete = () => resolve();
+    t.onerror = () => reject(t.error);
+    t.onabort = () => reject(t.error || new Error('Transaction aborted'));
+  }));
 }
+
+const putChunk = (id, seq, frames) => tx(CHUNK_STORE_NAME, 'readwrite', (t) => t.objectStore(CHUNK_STORE_NAME).put({ id, seq, frames }));
+// Spans the chunk store too, so it is ordered after the pending chunk writes.
+const putMeta = (id, chunks, frameCount) => tx([CHUNK_STORE_NAME, REC_STORE_NAME], 'readwrite', (t) => t.objectStore(REC_STORE_NAME).put({ id, chunks, frameCount, cachedAt: Date.now() }));
+const dropChunks = (id) => tx(CHUNK_STORE_NAME, 'readwrite', (t) => t.objectStore(CHUNK_STORE_NAME).delete(IDBKeyRange.bound([id, 0], [id, Infinity])));
 
 const activeTasks = new Map();
 
@@ -48,36 +64,49 @@ self.addEventListener('message', async (e) => {
   }
 
   if (action === 'DOWNLOAD') {
-    if (activeTasks.has(id)) {
-      // Already downloading in background
-      return;
-    }
-
+    if (activeTasks.has(id)) return;
     const controller = new AbortController();
     activeTasks.set(id, { controller, startTime: Date.now() });
-
     try {
-      await downloadAndSave(id, url, headers, controller.signal, expectedBytes || 0);
-      activeTasks.delete(id);
+      await download(id, url, headers, controller.signal, expectedBytes || 0);
     } catch (err) {
+      if (err.name !== 'AbortError') self.postMessage({ type: 'ERROR', id, error: String(err.message || err) });
+      dropChunks(id).catch(() => {});
+    } finally {
       activeTasks.delete(id);
-      if (err.name !== 'AbortError') {
-        self.postMessage({ type: 'ERROR', id, error: String(err.message || err) });
-      }
     }
   }
 });
 
-// Streams frames.jsonl and parses it line by line: a single string holding a
-// multi-hundred-MB recording exceeds the engine's string limit. Interrupted
-// transfers resume where they stopped with a Range request.
-async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxRetries = 6) {
-  const frames = [];
+// Parses frames.jsonl line by line (one string cannot hold a recording of
+// several hundred MB) and resumes interrupted transfers with a Range request.
+async function download(id, url, headers, signal, expectedBytes = 0, maxRetries = 6) {
+  let batch = [];
+  let lastFlush = Date.now();
+  let frameCount = 0;
+  let seq = 0;
+  let cacheOk = true;
   let receivedBytes = 0;
   let totalBytes = expectedBytes || 0;
   let carry = '';
   let attempt = 0;
   let lastProgressPost = 0;
+
+  await dropChunks(id).catch(() => { cacheOk = false; });
+
+  const flush = (force) => {
+    if (!batch.length || (!force && batch.length < BATCH_FRAMES && Date.now() - lastFlush < BATCH_MS)) return;
+    const frames = batch;
+    batch = [];
+    lastFlush = Date.now();
+    self.postMessage({ type: 'FRAMES', id, frames, offset: frameCount - frames.length });
+    if (cacheOk) {
+      putChunk(id, seq++, frames).catch((err) => {
+        cacheOk = false;
+        console.warn('Could not cache recording', id, err);
+      });
+    }
+  };
 
   const takeLines = (chunk, final) => {
     carry += chunk;
@@ -85,8 +114,9 @@ async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxR
     carry = final ? '' : parts.pop();
     for (const line of parts) {
       if (!line.trim()) continue;
-      try { frames.push(JSON.parse(line)); } catch (_) {}
+      try { batch.push(JSON.parse(line)); frameCount++; } catch (_) {}
     }
+    flush(final);
   };
 
   while (true) {
@@ -103,10 +133,8 @@ async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxR
         throw err;
       }
       if (receivedBytes > 0 && res.status !== 206) {
-        // The server ignored the range: start over.
-        frames.length = 0;
-        receivedBytes = 0;
-        carry = '';
+        // The server ignored the range: frames already sent are sent again.
+        throw Object.assign(new Error('Server cannot resume this download'), { fatal: true });
       }
       const len = +(res.headers.get('Content-Length') || 0);
       if (len > 0) totalBytes = receivedBytes + len;
@@ -122,7 +150,7 @@ async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxR
         if (now - lastProgressPost > 150) {
           lastProgressPost = now;
           const pct = totalBytes > 0 ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100)) : 0;
-          self.postMessage({ type: 'PROGRESS', id, receivedBytes, totalBytes, pct, frameCount: frames.length });
+          self.postMessage({ type: 'PROGRESS', id, receivedBytes, totalBytes, pct, frameCount });
         }
       }
       if (totalBytes > 0 && receivedBytes < totalBytes) throw new Error('Connection closed early');
@@ -138,14 +166,16 @@ async function downloadAndSave(id, url, headers, signal, expectedBytes = 0, maxR
   }
   takeLines('', true);
 
-  if (frames.length === 0) throw new Error('Recording contains no frames');
+  if (frameCount === 0) throw new Error('Recording contains no frames');
 
-  let cached = true;
-  try {
-    await saveFramesToDb(id, frames);
-  } catch (err) {
-    cached = false;
-    console.warn('Could not cache recording', id, err);
+  let cached = cacheOk;
+  if (cached) {
+    try {
+      await putMeta(id, seq, frameCount);
+    } catch (err) {
+      cached = false;
+    }
   }
-  self.postMessage({ type: 'SUCCESS', id, frameCount: frames.length, sizeBytes: receivedBytes, cached, frames });
+  if (!cached) dropChunks(id).catch(() => {});
+  self.postMessage({ type: 'SUCCESS', id, frameCount, sizeBytes: receivedBytes, cached });
 }
