@@ -373,45 +373,54 @@ class CdpDriver {
     await this.cdp.call("Page.enable");
     // Chromium only paints (and screencasts) the tab in front of its window.
     await this.cdp.call("Page.bringToFront").catch(() => {});
-    // The toolbar's height, measured before any emulation changes innerHeight.
-    const r = await this.cdp.call("Runtime.evaluate", { expression: "outerHeight - innerHeight", returnByValue: true }).catch(() => null);
-    this.chromeH = Math.max(0, Math.min(200, r?.result?.value | 0)) || 90;
   }
-  // The screencast captures the real window, so emulating a larger or denser screen
-  // only helps if the window has that many pixels too.
-  async resizeWindow(width, height) {
-    const w = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
-    if (!w?.windowId) return;
-    const b = w.bounds || {};
-    if (Math.abs((b.width || 0) - width) < 2 && Math.abs((b.height || 0) - height) < 2) return;
-    await this.cdp.call("Browser.setWindowBounds", { windowId: w.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
+  // The screencast delivers CSS-pixel frames even when a higher pixel density is
+  // emulated, so Native and Phone would stay blurry on dense screens. Once the page
+  // has been still for a moment, a screenshot (which honours the density) replaces
+  // the frame: motion comes from the screencast, sharp text from the screenshot.
+  scheduleSharp(meta) {
+    clearTimeout(this.sharpTimer);
+    const seq = ++this.sharpSeq;
+    if (!this.sharp) return;
+    this.sharpTimer = setTimeout(async () => {
+      const r = await this.cdp.call("Page.captureScreenshot", { format: "jpeg", quality: this.sharpQuality, optimizeForSpeed: true }).catch(() => null);
+      // A newer frame arrived meanwhile: this picture is already stale.
+      if (r?.data && seq === this.sharpSeq) await this.h.frame(r.data, meta);
+    }, 300);
   }
-  async applyMetrics({ w, h, dpr, mode, windowSize }) {
-    // Native and Phone: one image pixel per screen pixel (up to 2x), so text stays
-    // sharp. Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
+  async applyMetrics({ w, h, dpr, mode }) {
+    // Native and Phone: the screen's density (up to 2x), sharpened by screenshots.
+    // Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
     const fit = mode === "phone" || mode === "native";
     const scale = Math.min(dpr, fit ? 2 : 1.25);
+    this.sharp = fit && scale > 1.05;
+    this.sharpQuality = mode === "native" ? 85 : 75;
+    this.lastCast = "";
     if (fit) {
       const phone = mode === "phone";
-      await this.resizeWindow(Math.min(Math.ceil(w * scale), 3840), Math.min(Math.ceil(h * scale), 2160) + (this.chromeH || 90));
       await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: scale, mobile: phone, screenWidth: w, screenHeight: h });
       await this.cdp.call("Emulation.setTouchEmulationEnabled", phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false }).catch(() => {});
     } else {
       await this.cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
       await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
-      if (windowSize?.w && windowSize?.h) await this.resizeWindow(windowSize.w, windowSize.h);
     }
     await this.cdp.call("Page.stopScreencast").catch(() => {});
     await this.cdp.call("Page.startScreencast", {
-      format: "jpeg", quality: mode === "native" ? 85 : mode === "phone" ? 75 : 65, everyNthFrame: 1,
-      maxWidth: Math.min(Math.round(w * scale), fit ? 3840 : 1600), maxHeight: Math.min(Math.round(h * scale), fit ? 2400 : 1000),
+      format: "jpeg", quality: 65, everyNthFrame: 1,
+      maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
     });
   }
   onEvent(method, p) {
     const h = this.h;
     if (method === "Page.screencastFrame") {
+      const ack = () => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId });
+      // An unchanged frame (e.g. the repaint a sharpening screenshot causes) must not
+      // replace the sharp picture or start another round.
+      if (this.sharp && p.data === this.lastCast) { ack(); return; }
+      this.lastCast = p.data;
       // ACK after drawing: keeps 1:1 pacing instead of queueing frames.
-      h.frame(p.data, p.metadata).finally(() => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId }));
+      h.frame(p.data, p.metadata).finally(ack);
+      this.scheduleSharp(p.metadata);
     } else if (method === "Page.frameStartedLoading" || method === "Page.frameStartedNavigating") {
       h.loading();
     } else if (method === "Page.frameNavigated" && !p.frame.parentId) {
@@ -756,8 +765,7 @@ async function applyMetrics() {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
-  const windowSize = sess?.window_width ? { w: sess.window_width, h: sess.window_height } : null;
-  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mode: layoutMode, windowSize });
+  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mode: layoutMode });
   renderLayout();
 }
 
