@@ -354,30 +354,14 @@ class CdpDriver {
       await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
     }
     await this.cdp.call("Page.stopScreencast").catch(() => {});
-    this.screencastFrames = 0;
     await this.cdp.call("Page.startScreencast", {
       format: "jpeg", quality: 65, everyNthFrame: 1,
       maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
     });
-    this.stillFrame();
-  }
-  // The screencast only sends a frame when the page repaints, which a static page may
-  // not do for seconds: show a screenshot meanwhile, unless a real frame beat it.
-  async stillFrame() {
-    try {
-      const [shot, lm] = await Promise.all([
-        this.cdp.call("Page.captureScreenshot", { format: "jpeg", quality: 65 }),
-        this.cdp.call("Page.getLayoutMetrics"),
-      ]);
-      const vp = lm.cssVisualViewport || lm.visualViewport || {};
-      if (!shot?.data || this.screencastFrames) return;
-      await this.h.frame(shot.data, { deviceWidth: vp.clientWidth, deviceHeight: vp.clientHeight, pageScaleFactor: vp.scale || 1, offsetTop: 0 });
-    } catch { /* the screencast will deliver */ }
   }
   onEvent(method, p) {
     const h = this.h;
     if (method === "Page.screencastFrame") {
-      this.screencastFrames = (this.screencastFrames || 0) + 1;
       // ACK after drawing: keeps 1:1 pacing instead of queueing frames.
       h.frame(p.data, p.metadata).finally(() => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId }));
     } else if (method === "Page.frameStartedLoading" || method === "Page.frameStartedNavigating") {
