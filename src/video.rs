@@ -52,27 +52,30 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
         .arg("-i")
         .arg(format!("{display}+{},{}", r.x, r.y));
     // Drop frames that did not change, so a still page costs next to nothing, but
-    // never more than `max` in a row: VAAPI keeps frames in its pipeline until more
-    // arrive, so without a trickle the last change (or a still page's only frame)
-    // would never come out. ~5 fps when still for VAAPI, ~2 fps for x264.
-    let decimate = |max: u32| format!("mpdecimate=hi=768:lo=320:frac=0.33:max={max}");
+    // keep ~2 fps when still, so a client that lost a frame catches up.
+    let decimate = "mpdecimate=hi=768:lo=320:frac=0.33:max=15";
     match cfg.encoder {
         Encoder::Vaapi(ref device) => {
             cmd.arg("-vaapi_device")
                 .arg(device)
+                // Converted on the GPU with BT.601 and tagged as such: left alone,
+                // the stream says "RGB matrix, full range" and colours wash out.
                 .args([
                     "-vf",
                     &format!(
-                        "{},hwupload,scale_vaapi=format=nv12:out_range=full",
-                        decimate(6)
+                        "{decimate},hwupload,scale_vaapi=format=nv12:out_range=limited\
+                         :out_color_matrix=bt470bg:out_color_primaries=bt709\
+                         :out_color_transfer=bt709"
                     ),
                 ])
                 .args(["-fps_mode", "vfr"])
                 .args(["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "22"])
+                // One frame in flight: the default depth held each frame ~270 ms.
+                .args(["-async_depth", "1"])
                 .args(["-bf", "0", "-g", "120", "-aud", "1"]);
         }
         Encoder::X264 => {
-            cmd.args(["-vf", &decimate(15), "-fps_mode", "vfr"])
+            cmd.args(["-vf", decimate, "-fps_mode", "vfr"])
                 .args([
                     "-c:v",
                     "libx264",
@@ -82,6 +85,9 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
                     "zerolatency",
                 ])
                 .args(["-crf", "23", "-pix_fmt", "yuv420p", "-bf", "0", "-g", "120"])
+                // swscale converts with BT.601; say so rather than leave it to guess.
+                .args(["-color_range", "tv", "-colorspace", "smpte170m"])
+                .args(["-color_primaries", "bt709", "-color_trc", "bt709"])
                 .args(["-x264-params", "aud=1:repeat-headers=1"]);
         }
     }
