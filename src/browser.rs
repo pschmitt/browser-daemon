@@ -230,6 +230,13 @@ impl ActiveBrowser {
                     Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
                     _ => {}
                 }
+                // Save-password and autofill bubbles are browser UI, out of reach
+                // for the live view's input; keep them from ever showing up.
+                let prefs_dir = user_data_dir.join("Default");
+                fs::create_dir_all(&prefs_dir).await?;
+                let prefs_file = prefs_dir.join("Preferences");
+                let existing = fs::read_to_string(&prefs_file).await.unwrap_or_default();
+                fs::write(&prefs_file, chromium_preferences(&existing)).await?;
                 let child = cmd.spawn()?;
                 let (port, ws_path) = match wait_for_devtools_port(&user_data_dir).await {
                     Ok(res) => res,
@@ -288,6 +295,17 @@ impl ActiveBrowser {
                     "user_pref(\"ui.systemUsesDarkTheme\", {});",
                     u8::from(dark)
                 ));
+                // No save-password or autofill prompts: the live view can't reach them.
+                for (pref, value) in [
+                    ("signon.rememberSignons", "false"),
+                    ("signon.autofillForms", "false"),
+                    ("signon.generation.enabled", "false"),
+                    ("signon.firefoxRelay.feature", "\"disabled\""),
+                    ("extensions.formautofill.addresses.enabled", "false"),
+                    ("extensions.formautofill.creditCards.enabled", "false"),
+                ] {
+                    prefs.push(format!("user_pref(\"{pref}\", {value});"));
+                }
                 fs::write(&user_js, proxies::firefox_user_js(&existing, &prefs)).await?;
 
                 // Headful on the virtual display, like Chromium; headless only without one.
@@ -393,6 +411,36 @@ impl ActiveBrowser {
     }
 }
 
+/// The profile's `Preferences` with the password manager and autofill switched
+/// off; everything else Chromium stored there is kept.
+fn chromium_preferences(existing: &str) -> String {
+    let mut prefs: serde_json::Value = serde_json::from_str(existing)
+        .ok()
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    for (path, value) in [
+        ("credentials_enable_service", false),
+        ("credentials_enable_autosignin", false),
+        ("profile.password_manager_enabled", false),
+        ("autofill.profile_enabled", false),
+        ("autofill.credit_card_enabled", false),
+    ] {
+        let mut node = &mut prefs;
+        let mut keys = path.split('.').peekable();
+        while let Some(key) = keys.next() {
+            if !node[key].is_object() && keys.peek().is_some() {
+                node[key] = serde_json::json!({});
+            }
+            if keys.peek().is_none() {
+                node[key] = value.into();
+            } else {
+                node = &mut node[key];
+            }
+        }
+    }
+    prefs.to_string()
+}
+
 async fn wait_for_devtools_port(
     user_data_dir: &Path,
 ) -> Result<(u16, String), Box<dyn std::error::Error + Send + Sync>> {
@@ -459,5 +507,24 @@ async fn wait_for_firefox_bidi(
         Ok(Ok(port)) => Ok(port),
         Ok(Err(_)) => Err("Firefox process closed stderr without advertising BiDi port".into()),
         Err(_) => Err("Timed out waiting for Firefox WebDriver BiDi port on stderr".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chromium_preferences_disable_password_manager() {
+        let out: serde_json::Value = serde_json::from_str(&chromium_preferences(
+            r#"{"profile":{"name":"x","password_manager_enabled":true},"autofill":7}"#,
+        ))
+        .unwrap();
+        assert_eq!(out["profile"]["name"], "x");
+        assert_eq!(out["profile"]["password_manager_enabled"], false);
+        assert_eq!(out["credentials_enable_service"], false);
+        assert_eq!(out["autofill"]["credit_card_enabled"], false);
+        let fresh: serde_json::Value = serde_json::from_str(&chromium_preferences("")).unwrap();
+        assert_eq!(fresh["autofill"]["profile_enabled"], false);
     }
 }
