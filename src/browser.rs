@@ -167,6 +167,7 @@ impl ActiveBrowser {
                     .arg("--disable-blink-features=AutomationControlled")
                     // Keeps Chromium from showing a bar about the unsupported flag above.
                     .arg("--test-type")
+                    .arg("--hide-crash-restore-bubble")
                     .arg(format!("--window-size={},{}", width, height))
                     // Top-left: with a display of its own, the screen is the window.
                     .arg("--window-position=0,0")
@@ -305,6 +306,8 @@ impl ActiveBrowser {
                     ("signon.firefoxRelay.feature", "\"disabled\""),
                     ("extensions.formautofill.addresses.enabled", "false"),
                     ("extensions.formautofill.creditCards.enabled", "false"),
+                    // Sessions end by being killed: no "restore session" afterwards.
+                    ("browser.sessionstore.resume_from_crash", "false"),
                 ] {
                     prefs.push(format!("user_pref(\"{pref}\", {value});"));
                 }
@@ -414,18 +417,21 @@ impl ActiveBrowser {
 }
 
 /// The profile's `Preferences` with the password manager and autofill switched
-/// off; everything else Chromium stored there is kept.
+/// off, and the last run marked clean (sessions end by being killed, which would
+/// offer to restore pages); everything else Chromium stored there is kept.
 fn chromium_preferences(existing: &str) -> String {
     let mut prefs: serde_json::Value = serde_json::from_str(existing)
         .ok()
         .filter(serde_json::Value::is_object)
         .unwrap_or_else(|| serde_json::json!({}));
     for (path, value) in [
-        ("credentials_enable_service", false),
-        ("credentials_enable_autosignin", false),
-        ("profile.password_manager_enabled", false),
-        ("autofill.profile_enabled", false),
-        ("autofill.credit_card_enabled", false),
+        ("credentials_enable_service", serde_json::Value::Bool(false)),
+        ("credentials_enable_autosignin", false.into()),
+        ("profile.password_manager_enabled", false.into()),
+        ("autofill.profile_enabled", false.into()),
+        ("autofill.credit_card_enabled", false.into()),
+        ("profile.exit_type", "Normal".into()),
+        ("profile.exited_cleanly", true.into()),
     ] {
         let mut node = &mut prefs;
         let mut keys = path.split('.').peekable();
@@ -434,7 +440,7 @@ fn chromium_preferences(existing: &str) -> String {
                 node[key] = serde_json::json!({});
             }
             if keys.peek().is_none() {
-                node[key] = value.into();
+                node[key] = value.clone();
             } else {
                 node = &mut node[key];
             }
@@ -526,6 +532,7 @@ mod tests {
         assert_eq!(out["profile"]["password_manager_enabled"], false);
         assert_eq!(out["credentials_enable_service"], false);
         assert_eq!(out["autofill"]["credit_card_enabled"], false);
+        assert_eq!(out["profile"]["exit_type"], "Normal");
         let fresh: serde_json::Value = serde_json::from_str(&chromium_preferences("")).unwrap();
         assert_eq!(fresh["autofill"]["profile_enabled"], false);
     }
