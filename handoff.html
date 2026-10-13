@@ -74,6 +74,22 @@
   #sessMenu { position: fixed; z-index: 60; top: 56px; right: 8px; width: 272px; max-width: calc(100vw - 16px); padding: 6px;
     background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
   #sessMenu[hidden] { display: none; }
+  .ib.chev { width: 20px; margin-left: -4px; border-radius: 8px; color: var(--muted); }
+  .ib.chev svg { width: 16px; height: 16px; }
+  /* Other running sessions of the mesh, from the dashboard button's chevron (or hover). */
+  #sessPop { position: fixed; z-index: 61; top: 52px; left: 8px; width: 320px; max-width: calc(100vw - 16px); max-height: min(70vh, 480px); overflow-y: auto;
+    padding: 6px; background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
+  #sessPop[hidden] { display: none; }
+  #sessPop .sp-head { padding: 6px 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+  #sessPop a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; color: inherit; text-decoration: none; }
+  #sessPop a:hover, #sessPop a:focus-visible { background: var(--btn); outline: none; }
+  #sessPop .sp-eng { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--btn); color: var(--muted); }
+  #sessPop .sp-eng.firefox { color: #ff7139; } #sessPop .sp-eng.chromium { color: #4f8ff7; }
+  #sessPop .sp-t { min-width: 0; display: flex; flex-direction: column; }
+  #sessPop .sp-t b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sessPop .sp-t span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sessPop .sp-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+  #sessPop hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
   #view:focus { outline: none; }
@@ -216,6 +232,7 @@
 </div>
 <div id="bar">
   <a href="/" class="ib" id="dash" aria-label="Dashboard" title="Return to Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></a>
+  <button class="ib chev" id="dashMore" aria-label="Other sessions" title="Other sessions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
   <button class="ib" id="back" aria-label="Back" disabled title="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
   <button class="ib" id="fwd" aria-label="Forward" disabled title="Forward"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
   <button class="ib" id="reload" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg></button>
@@ -231,6 +248,7 @@
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
 </div>
+<div id="sessPop" role="menu" hidden></div>
 <div id="sessMenu" role="menu" hidden>
   <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle">Session</span></div>
   <div class="sm-status" id="smStatus"></div>
@@ -2004,22 +2022,34 @@ function renderAudioButton() {
 function stopAudio() {
   try { audio.ws?.close(); } catch { /* closed */ }
   if (audio.el) { audio.el.pause(); URL.revokeObjectURL(audio.el.src); audio.el.removeAttribute("src"); }
-  Object.assign(audio, { el: null, ws: null, ms: null, sb: null, queue: [], session: null });
+  Object.assign(audio, { el: null, ws: null, ms: null, sb: null, queue: [], session: null, appending: false, synced: false });
   renderAudioButton();
 }
+// Keep ~0.4 s of sound buffered: enough to ride out network jitter, little enough to
+// stay close to the picture. Drift is corrected by playing slightly faster or slower
+// (pitch is preserved); only falling far behind jumps, which is audible.
 function pumpAudio() {
-  const { sb, el, queue } = audio;
-  if (!sb || sb.updating) return;
+  const { sb, el } = audio;
+  if (!sb || sb.updating || audio.appending) return;
   const b = sb.buffered;
   if (b.length) {
-    const end = b.end(b.length - 1);
-    if (end - el.currentTime > 0.6) el.currentTime = end - 0.15;   // fell behind: jump to live
-    if (el.currentTime - b.start(0) > 20) { sb.remove(b.start(0), el.currentTime - 10); return; }
+    const end = b.end(b.length - 1), ahead = end - el.currentTime;
+    // Start (sound piles up before playback begins) or far behind: jump to live.
+    if (ahead > 2 || (!audio.synced && ahead > 0.6)) { el.currentTime = end - 0.4; el.playbackRate = 1; audio.synced = true; }
+    else el.playbackRate = ahead > 1 ? 1.1 : ahead > 0.5 ? 1.05 : ahead < 0.2 ? 0.96 : 1;
+    if (el.currentTime - b.start(0) > 30) { sb.remove(b.start(0), el.currentTime - 15); return; }
   }
-  if (!queue.length) return;
-  const chunk = queue.length === 1 ? queue[0] : new Blob(queue).arrayBuffer();
+  if (!audio.queue.length) return;
+  // One append at a time: merging chunks is asynchronous, and a second append while
+  // one is pending throws (which used to stop the sound).
+  const parts = audio.queue;
   audio.queue = [];
-  Promise.resolve(chunk).then((buf) => { try { audio.sb === sb && sb.appendBuffer(buf); } catch { stopAudio(); } });
+  audio.appending = true;
+  (parts.length === 1 ? Promise.resolve(parts[0]) : new Blob(parts).arrayBuffer()).then((buf) => {
+    audio.appending = false;
+    if (audio.sb !== sb) return;
+    try { sb.appendBuffer(buf); } catch { stopAudio(); }
+  });
 }
 // Must run inside the click: browsers only allow playback started by a gesture.
 function startAudio() {
@@ -2032,7 +2062,7 @@ function startAudio() {
   const el = new Audio();
   const ms = new MediaSource();
   el.src = URL.createObjectURL(ms);
-  Object.assign(audio, { el, ms, queue: [], session: sessionId });
+  Object.assign(audio, { el, ms, queue: [], session: sessionId, appending: false, synced: false });
   el.play().catch(() => {});
   ms.addEventListener("sourceopen", () => {
     audio.sb = ms.addSourceBuffer(type);
@@ -2049,6 +2079,55 @@ function startAudio() {
 }
 E.audioBtn.onclick = () => (audio.el ? stopAudio() : startAudio());
 renderAudioButton();
+
+/* ---------------------------------------------------------------- other sessions */
+// The dashboard button's chevron (and, with a mouse, hovering it) lists the mesh's
+// other running sessions; picking one opens its handoff view.
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmtAge = (secs) => (secs < 60 ? `${secs | 0}s` : secs < 3600 ? `${(secs / 60) | 0}m` : `${(secs / 3600) | 0}h ${((secs % 3600) / 60) | 0}m`);
+let sessPopTimer = 0;
+async function openSessPop() {
+  const pop = $("sessPop");
+  const r = $("dash").getBoundingClientRect();
+  pop.style.left = Math.max(8, r.left) + "px";
+  pop.style.top = r.bottom + 6 + "px";
+  if (pop.hidden) pop.innerHTML = '<div class="sp-empty">Loading sessions…</div>';
+  pop.hidden = false;
+  $("dashMore").setAttribute("aria-expanded", "true");
+  try {
+    const res = await fetch("/api/mesh/overview", { headers: authHeaders() });
+    if (!res.ok) throw new Error(res.statusText);
+    const ov = await res.json();
+    const others = (ov.sessions || []).filter((x) => x.id !== target?.sessionId)
+      .sort((a, b) => a.uptime_seconds - b.uptime_seconds);
+    const firstTab = (x) => (ov.targets || []).find((t) => t.sessionId === x.id && t.node_name === x.node_name && t.type === "page" && t.url !== "about:blank");
+    const local = ov.local_node?.name;
+    pop.innerHTML = `<div class="sp-head">Other sessions</div>` + (others.length ? others.map((x) => {
+      const tab = firstTab(x);
+      const base = x.node_name === local ? "" : (x.node_url || "").replace(/\/$/, "");
+      const href = `${base}/handoff/?session=${encodeURIComponent(x.id)}`;
+      const eng = x.engine === "firefox" ? "firefox" : "chromium";
+      return `<a href="${esc(href)}" role="menuitem"><span class="sp-eng ${eng}" title="${eng === "firefox" ? "Firefox" : "Chromium"}">${eng === "firefox" ? "FF" : "CR"}</span>`
+        + `<span class="sp-t"><b>${esc(x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${fmtAge(x.uptime_seconds || 0)}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
+    }).join("") : '<div class="sp-empty">No other sessions are running.</div>') + '<hr><a href="/" role="menuitem"><span class="sp-eng">⌂</span><span class="sp-t"><b>Dashboard</b></span></a>';
+  } catch (err) {
+    pop.innerHTML = `<div class="sp-empty">Could not load sessions (${esc(err.message)}).</div>`;
+  }
+}
+function closeSessPop() {
+  clearTimeout(sessPopTimer);
+  $("sessPop").hidden = true;
+  $("dashMore").setAttribute("aria-expanded", "false");
+}
+$("dashMore").onclick = (e) => { e.stopPropagation(); $("sessPop").hidden ? openSessPop() : closeSessPop(); };
+// Hover (mouse only): open after a short pause, close once the pointer leaves both.
+if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
+  const enter = () => { clearTimeout(sessPopTimer); if ($("sessPop").hidden) sessPopTimer = setTimeout(openSessPop, 350); };
+  const leave = () => { clearTimeout(sessPopTimer); sessPopTimer = setTimeout(closeSessPop, 300); };
+  for (const el of [$("dash"), $("dashMore"), $("sessPop")]) { el.addEventListener("mouseenter", enter); el.addEventListener("mouseleave", leave); }
+}
+document.addEventListener("pointerdown", (e) => { if (!$("sessPop").hidden && !e.target.closest("#sessPop, #dashMore, #dash")) closeSessPop(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sessPop").hidden) closeSessPop(); });
 
 function renderSession() {
   if (!sess) return;

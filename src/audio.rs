@@ -98,10 +98,10 @@ pub fn encoder(cfg: &AudioConfig, sink: &str) -> std::io::Result<Child> {
         .args(["-fflags", "nobuffer", "-f", "pulse"])
         .arg("-server")
         .arg(cfg.server_arg())
-        // 10 ms of 48 kHz stereo s16 per read.
+        // 20 ms of 48 kHz stereo s16 per read, matching the Opus frames.
         .args([
             "-fragment_size",
-            "1920",
+            "3840",
             "-sample_rate",
             "48000",
             "-channels",
