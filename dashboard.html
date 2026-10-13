@@ -683,7 +683,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-head"><h2 id="aboutTitle">About Browser Daemon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <p>Run browser sessions for automation and take over whenever you need to.</p>
-      <dl class="kv"><dt>Version</dt><dd id="aboutVersion">Unavailable</dd></dl>
+      <dl class="kv" id="aboutNodes"><dt>Version</dt><dd>Unavailable</dd></dl>
       <a class="btn" href="https://github.com/pschmitt/browser-daemon" target="_blank" rel="noopener noreferrer"><svg class="i"><use href="#i-arrow"/></svg>Source code</a>
     </div>
     <div class="sheet-foot"><button type="button" class="btn primary" data-close>Close</button></div>
@@ -1457,7 +1457,7 @@ const ACT = {
     ]) },
     !isStandalone && { icon: 'install', label: 'Install app', run: triggerPwaInstall },
     { icon: 'info-c', label: 'About', run: () => {
-      $('aboutVersion').textContent = ov?.local_node?.version || 'Unavailable';
+      renderAbout();
       openModal('aboutModal');
       $('aboutModal').querySelector('[data-close]').focus();
     } },
@@ -1772,6 +1772,26 @@ function toggleRecording(s) {
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),
     s.is_recording ? 'Recording saved' : 'Recording started');
 }
+// Every node's version and commit (linked on GitHub); nodes on another commit than
+// this one are marked, so a half-finished rollout shows.
+const REPO = 'https://github.com/pschmitt/browser-daemon';
+function renderAbout() {
+  const local = ov?.local_node;
+  const list = local ? [{ ...local, isLocal: true }, ...(ov.peers || [])] : [];
+  const commit = (rev) => {
+    if (!rev) return '<span style="color:var(--muted)">unknown commit</span>';
+    const sha = rev.replace(/-dirty$/, '');
+    const short = esc(sha.slice(0, 7)) + (rev.endsWith('-dirty') ? ' (uncommitted changes)' : '');
+    return `<a class="mono" href="${REPO}/commit/${esc(sha)}" target="_blank" rel="noopener noreferrer">${short}</a>`;
+  };
+  $('aboutNodes').innerHTML = list.length ? list.map((n) => {
+    const odd = !n.isLocal && n.revision && local.revision && n.revision !== local.revision;
+    const state = n.status && n.status !== 'online' ? ` <span style="color:var(--muted)">(${esc(n.status)})</span>` : '';
+    const ver = n.version ? `v${esc(n.version)} · ${commit(n.revision)}` : '<span style="color:var(--muted)">version unknown</span>';
+    return `<dt>${esc(n.name)}${n.isLocal ? ' (this node)' : ''}</dt><dd>${ver}${odd ? ' <span style="color:var(--warn)" title="Runs another commit than this node">differs</span>' : ''}${state}</dd>`;
+  }).join('') : '<dt>Version</dt><dd>Unavailable</dd>';
+}
+
 // Sessions are named at creation (or get a made-up name like "quiet-otter").
 const sessName = (s) => s.name || s.profile || 'Throwaway session';
 async function renameSession(s) {

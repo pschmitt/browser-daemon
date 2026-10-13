@@ -1,10 +1,14 @@
 {
   lib,
   rustPlatform,
+  # Git commit of the flake, shown in the dashboard's About (null: unknown).
+  rev ? null,
 }:
 rustPlatform.buildRustPackage {
   pname = "browser-daemon";
   version = "0.1.0";
+
+  env = lib.optionalAttrs (rev != null) { BROWSER_DAEMON_REV = rev; };
 
   src = lib.cleanSourceWith {
     src = ./..;

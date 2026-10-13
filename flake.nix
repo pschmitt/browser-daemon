@@ -13,11 +13,13 @@
       flake-utils,
     }:
     let
+      # Uncommitted builds report "<sha>-dirty".
+      rev = self.rev or self.dirtyRev or null;
       eachSystem = flake-utils.lib.eachDefaultSystem (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          browser-daemon = pkgs.callPackage ./nix/package.nix { };
+          browser-daemon = pkgs.callPackage ./nix/package.nix { inherit rev; };
           adblock = pkgs.callPackage ./nix/adblock.nix { };
         in
         {
@@ -49,7 +51,7 @@
     eachSystem
     // {
       overlays.default = _final: prev: {
-        browser-daemon = prev.callPackage ./nix/package.nix { };
+        browser-daemon = prev.callPackage ./nix/package.nix { inherit rev; };
       };
 
       nixosModules.default = import ./nix/module.nix;

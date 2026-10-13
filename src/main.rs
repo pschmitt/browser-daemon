@@ -56,6 +56,9 @@ static ICON_192: &[u8] = include_bytes!("../icon-192.png");
 static ICON_512: &[u8] = include_bytes!("../icon-512.png");
 static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 
+/// Git commit this build comes from, passed in by the Nix build.
+pub const REVISION: Option<&str> = option_env!("BROWSER_DAEMON_REV");
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Native NixOS remote browser daemon")]
 pub struct Args {
@@ -965,6 +968,9 @@ pub struct NodeInfo {
     pub name: String,
     pub url: String,
     pub version: String,
+    /// Git commit it was built from (absent in builds without one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
     pub uptime_seconds: u64,
     pub active_sessions: usize,
     pub max_sessions: usize,
@@ -983,6 +989,10 @@ pub struct PeerState {
     pub name: String,
     pub url: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
     pub latency_ms: Option<u64>,
     pub active_sessions: usize,
     pub max_sessions: usize,
@@ -2870,6 +2880,7 @@ async fn api_mesh_node(
         name: state.node_name.clone(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        revision: REVISION.map(str::to_string),
         uptime_seconds: state.start_time.elapsed().as_secs(),
         active_sessions: sessions_count,
         max_sessions: state.max_sessions,
@@ -2897,6 +2908,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         name: state.node_name.clone(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        revision: REVISION.map(str::to_string),
         uptime_seconds: state.start_time.elapsed().as_secs(),
         active_sessions: local_sessions.len(),
         max_sessions: state.max_sessions,
@@ -2954,6 +2966,8 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         max_storage_bytes,
                         supported_engines,
                         proxies,
+                        version,
+                        revision,
                     ) = match node_info {
                         Ok(info) => (
                             info.name,
@@ -2966,6 +2980,8 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             info.max_storage_bytes,
                             info.supported_engines,
                             info.proxies,
+                            Some(info.version),
+                            info.revision,
                         ),
                         Err(_) => (
                             p_name.clone(),
@@ -2978,6 +2994,8 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             0,
                             vec![BrowserEngine::Chromium],
                             Vec::new(),
+                            None,
+                            None,
                         ),
                     };
 
@@ -3022,6 +3040,8 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             name: node_name.clone(),
                             url: p_url.clone(),
                             status: "online".to_string(),
+                            version,
+                            revision,
                             latency_ms: Some(latency_ms),
                             active_sessions,
                             max_sessions,
@@ -3047,6 +3067,8 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         name: p_name.clone(),
                         url: p_url.clone(),
                         status: "unreachable".to_string(),
+                        version: None,
+                        revision: None,
                         latency_ms: Some(latency_ms),
                         active_sessions: 0,
                         max_sessions: 8,
@@ -3071,6 +3093,8 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         name: p_name.clone(),
                         url: p_url.clone(),
                         status: "unreachable".to_string(),
+                        version: None,
+                        revision: None,
                         latency_ms: None,
                         active_sessions: 0,
                         max_sessions: 8,
@@ -3359,6 +3383,7 @@ async fn api_list_peers(
             "name": state.node_name,
             "url": state.public_url,
             "version": env!("CARGO_PKG_VERSION"),
+            "revision": REVISION,
             "uptime_seconds": state.start_time.elapsed().as_secs(),
         },
         "peers": peer_list,
