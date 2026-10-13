@@ -390,10 +390,10 @@ class CdpDriver {
       // capture): ignore them, or they would replace the sharp picture and start
       // another round.
       this.echoUntil = Infinity;
-      const r = await this.cdp.call("Page.captureScreenshot", { format: "jpeg", quality: this.sharpQuality }).catch(() => null);
+      const r = await this.cdp.call("Page.captureScreenshot", this.sharpFormat).catch(() => null);
       this.echoUntil = performance.now() + 400;
       // A real change arrived before the capture started: this picture is stale.
-      if (r?.data && seq === this.sharpSeq) await this.h.frame(r.data, meta);
+      if (r?.data && seq === this.sharpSeq) await this.h.frame(r.data, meta, this.sharpFormat.format === "png" ? "image/png" : "image/jpeg");
     }, 300);
   }
 
@@ -402,8 +402,10 @@ class CdpDriver {
     // Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
     const fit = mode === "phone" || mode === "native";
     const scale = Math.min(dpr, fit ? 2 : 1.25);
-    this.sharp = fit && scale > 1.05;
-    this.sharpQuality = mode === "native" ? 85 : 75;
+    // Native: always, and lossless (JPEG smears small and colored text even at 1x).
+    // Phone: only when the screen is denser than the stream, as JPEG (mobile data).
+    this.sharp = mode === "native" || (fit && scale > 1.05);
+    this.sharpFormat = mode === "native" ? { format: "png" } : { format: "jpeg", quality: 80 };
     this.lastCast = "";
     this.echoUntil = 0;
     if (fit) {
@@ -416,7 +418,7 @@ class CdpDriver {
     }
     await this.cdp.call("Page.stopScreencast").catch(() => {});
     await this.cdp.call("Page.startScreencast", {
-      format: "jpeg", quality: 65, everyNthFrame: 1,
+      format: "jpeg", quality: mode === "native" ? 80 : 65, everyNthFrame: 1,
       maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
     });
   }
@@ -701,13 +703,13 @@ async function fetchTargets() {
 }
 
 const handlers = {
-  frame: (data, m) => {
+  frame: (data, m, mime) => {
     hadFrame = true;
     // Only frames of the settled tab are remembered: a late frame of the old tab must
     // not end up as the new tab's picture.
-    if ($("switching").hidden) rememberFrame(pageId, data, m);
+    if ($("switching").hidden) rememberFrame(pageId, data, m, mime);
     endSwitching();
-    return drawFrame(data, m);
+    return drawFrame(data, m, mime);
   },
   loading: () => { E.dot.className = "wait"; },
   navigated: (url) => {
@@ -814,15 +816,15 @@ function base64ToBlob(b64, mime = "image/jpeg") {
 
 let lastBitmap = null;
 
-async function drawFrame(data, frameMeta) {
+async function drawFrame(data, frameMeta, mime = "image/jpeg") {
   try {
     meta = frameMeta;
     let img;
     if (typeof createImageBitmap === "function") {
-      img = await createImageBitmap(base64ToBlob(data));   // decoded off the main thread
+      img = await createImageBitmap(base64ToBlob(data, mime));   // decoded off the main thread
     } else {
       img = await new Promise((resolve, reject) => {
-        const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = "data:image/jpeg;base64," + data;
+        const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = `data:${mime};base64,` + data;
       });
     }
     if (refitting && Math.abs(meta.deviceWidth - fitSize.w) < 8 && Math.abs(meta.deviceHeight - fitSize.h) < 8) refitting = false;
@@ -1231,10 +1233,10 @@ E.urlBar.onsubmit = async (e) => {
 let busy = Promise.resolve();
 // The last picture of each tab seen, shown at once when switching back to it.
 const frameCache = new Map();
-function rememberFrame(id, data, m) {
+function rememberFrame(id, data, m, mime) {
   if (!id) return;
   frameCache.delete(id);
-  frameCache.set(id, { data, m });
+  frameCache.set(id, { data, m, mime });
   if (frameCache.size > 12) frameCache.delete(frameCache.keys().next().value);
 }
 // Shown from a tab switch until the new tab's first frame (slow on remote nodes):
@@ -1271,7 +1273,7 @@ async function doSwitchTab(id, { push = true } = {}) {
   const label = document.querySelector(`.tab-strip-item[href*="page=${CSS.escape(id)}"]`)?.textContent.replace(/[✕×]/g, "").trim();
   const cached = frameCache.get(id);
   startSwitching(label, !!cached);
-  if (cached) drawFrame(cached.data, cached.m);
+  if (cached) drawFrame(cached.data, cached.m, cached.mime);
   loadTabs();
   const next = (await fetchTargets().catch(() => [])).find((t) => t.id === id);
   if (drv instanceof BidiDriver && drv.isOpen() && next && target && next.sessionId === target.sessionId) {
