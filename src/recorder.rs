@@ -238,7 +238,14 @@ const TITLE_REQUEST_ID: u64 = 1 << 40;
 /// Re-read the title this often: single-page apps retitle without navigating.
 const TITLE_REFRESH: Duration = Duration::from_secs(5);
 /// Recordings are for replaying what happened, not for smooth video: 4 frames a second.
+/// They are screenshots, not a screencast: an active screencast makes Chromium capture
+/// every rendered frame, ~70% of a core on an animated page however few frames it
+/// delivers; four screenshots a second cost ~15%.
 const RECORD_FRAME_INTERVAL: Duration = Duration::from_millis(250);
+const LAYOUT_REQUEST_ID: u64 = 1 << 41;
+const SHOT_REQUEST_ID: u64 = 1 << 42;
+/// Recorded frames are scaled to fit this box.
+const RECORD_MAX: (f64, f64) = (1024.0, 640.0);
 
 async fn record_session_loop(
     recording_id: Uuid,
@@ -374,7 +381,7 @@ async fn record_session_loop(
             }
         }
 
-        // 3. Otherwise, use background CDP screencast loop for headless sessions
+        // 3. Otherwise, record with timed screenshots while nobody watches
         let targets_url = format!("http://127.0.0.1:{}/json/list", port);
         let active_page_target = match http_client.get(&targets_url).send().await {
             Ok(res) => {
@@ -476,7 +483,7 @@ async fn record_session_loop(
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Enable Page domain and start screencast
+        // Enable the Page domain (navigation events)
         let enable_cmd = serde_json::json!({
             "id": 1,
             "method": "Page.enable"
@@ -485,24 +492,22 @@ async fn record_session_loop(
             .send(Message::Text(enable_cmd.to_string().into()))
             .await;
 
-        let start_screencast = serde_json::json!({
-            "id": 2,
-            "method": "Page.startScreencast",
-            "params": {
-                "format": "jpeg",
-                "quality": 60,
-                "maxWidth": 1024,
-                "maxHeight": 640,
-                "everyNthFrame": 1
-            }
-        });
-        let _ = write
-            .send(Message::Text(start_screencast.to_string().into()))
-            .await;
-
-        let mut next_ack_id = 100u64;
         let mut last_bg_frame_time = Instant::now();
-        let mut last_ack = Instant::now() - RECORD_FRAME_INTERVAL;
+        let mut shot_timer = tokio::time::interval(RECORD_FRAME_INTERVAL);
+        shot_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut next_shot_id = SHOT_REQUEST_ID;
+        let mut shot_in_flight = false;
+        let mut last_shot = String::new();
+        // CSS viewport size, for scaling screenshots down to RECORD_MAX.
+        let mut viewport: Option<(f64, f64)> = None;
+        let mut next_layout_id = LAYOUT_REQUEST_ID;
+        let _ = write
+            .send(Message::Text(
+                serde_json::json!({ "id": next_layout_id, "method": "Page.getLayoutMetrics" })
+                    .to_string()
+                    .into(),
+            ))
+            .await;
         let mut next_title_id = TITLE_REQUEST_ID;
         // The target's title above may predate a navigation; ask right away.
         let mut last_title_request = Instant::now() - TITLE_REFRESH;
@@ -537,12 +542,61 @@ async fn record_session_loop(
                         }
                     }
                 }
+                _ = shot_timer.tick() => {
+                    if !shot_in_flight {
+                        next_shot_id += 1;
+                        let mut params = serde_json::json!({ "format": "jpeg", "quality": 60 });
+                        if let Some((w, h)) = viewport {
+                            let scale = (RECORD_MAX.0 / w).min(RECORD_MAX.1 / h).min(1.0);
+                            params["clip"] = serde_json::json!({ "x": 0, "y": 0, "width": w, "height": h, "scale": scale });
+                        }
+                        let cmd = serde_json::json!({ "id": next_shot_id, "method": "Page.captureScreenshot", "params": params });
+                        shot_in_flight = write.send(Message::Text(cmd.to_string().into())).await.is_ok();
+                    }
+                }
                 msg_res = tokio::time::timeout(Duration::from_millis(600), read.next()) => {
                     match msg_res {
                         Ok(Some(Ok(Message::Text(text)))) => {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
                                 let method = val.get("method").and_then(|v| v.as_str()).unwrap_or("");
-                                if val.get("id").and_then(|v| v.as_u64()).is_some_and(|id| id >= TITLE_REQUEST_ID) {
+                                let reply_id = val.get("id").and_then(|v| v.as_u64());
+                                if reply_id.is_some_and(|id| id >= SHOT_REQUEST_ID) {
+                                    shot_in_flight = false;
+                                    last_bg_frame_time = Instant::now();
+                                    // Unchanged picture: nothing to record.
+                                    if let Some(data) = val.pointer("/result/data").and_then(|v| v.as_str()) {
+                                        if data != last_shot {
+                                            last_shot = data.to_string();
+                                            write_single_frame(
+                                                &mut frames_writer,
+                                                &mut meta,
+                                                &meta_file,
+                                                &rec_dir,
+                                                &mut total_frames,
+                                                &mut last_meta_flush,
+                                                &clock,
+                                                &mut current_url,
+                                                &mut current_title,
+                                                last_shot.clone(),
+                                                None,
+                                                None,
+                                            ).await;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if reply_id.is_some_and(|id| (LAYOUT_REQUEST_ID..SHOT_REQUEST_ID).contains(&id)) {
+                                    let vp = val.pointer("/result/cssLayoutViewport");
+                                    let w = vp.and_then(|v| v.get("clientWidth")).and_then(|v| v.as_f64());
+                                    let h = vp.and_then(|v| v.get("clientHeight")).and_then(|v| v.as_f64());
+                                    if let (Some(w), Some(h)) = (w, h) {
+                                        if w > 0.0 && h > 0.0 {
+                                            viewport = Some((w, h));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if reply_id.is_some_and(|id| (TITLE_REQUEST_ID..LAYOUT_REQUEST_ID).contains(&id)) {
                                     if let Some(t) = val.pointer("/result/result/value").and_then(|v| v.as_str()) {
                                         if is_real_title(t) {
                                             current_title = Some(t.to_string());
@@ -562,51 +616,12 @@ async fn record_session_loop(
                                     });
                                     let _ = write.send(Message::Text(title_cmd.to_string().into())).await;
                                     last_title_request = Instant::now();
+                                    // The viewport may have changed too (resize, emulation).
+                                    next_layout_id += 1;
+                                    let layout_cmd = serde_json::json!({ "id": next_layout_id, "method": "Page.getLayoutMetrics" });
+                                    let _ = write.send(Message::Text(layout_cmd.to_string().into())).await;
                                 }
-                                if method == "Page.screencastFrame" {
-                                    if let Some(params) = val.get("params") {
-                                        let ack_session_id = params.get("sessionId").and_then(|v| v.as_u64());
-                                        let data = params.get("data").and_then(|v| v.as_str());
-
-                                        if let (Some(frame_data), Some(ack_id)) = (data, ack_session_id) {
-                                            write_single_frame(
-                                                &mut frames_writer,
-                                                &mut meta,
-                                                &meta_file,
-                                                &rec_dir,
-                                                &mut total_frames,
-                                                &mut last_meta_flush,
-                                                &clock,
-                                                &mut current_url,
-                                                &mut current_title,
-                                                frame_data.to_string(),
-                                                None,
-                                                None,
-                                            ).await;
-                                            last_bg_frame_time = Instant::now();
-
-                                            // Chromium captures the next frame only after this ACK:
-                                            // pacing it caps recordings at RECORD_FPS. Unpaced, a busy
-                                            // page cost more than a CPU core in JPEG encoding alone.
-                                            let since = last_ack.elapsed();
-                                            if since < RECORD_FRAME_INTERVAL {
-                                                tokio::time::sleep(RECORD_FRAME_INTERVAL - since).await;
-                                            }
-                                            last_ack = Instant::now();
-
-                                            // Send frame ACK
-                                            next_ack_id += 1;
-                                            let ack_msg = serde_json::json!({
-                                                "id": next_ack_id,
-                                                "method": "Page.screencastFrameAck",
-                                                "params": {
-                                                    "sessionId": ack_id
-                                                }
-                                            });
-                                            let _ = write.send(Message::Text(ack_msg.to_string().into())).await;
-                                        }
-                                    }
-                                } else if method == "Page.frameNavigated" {
+                                if method == "Page.frameNavigated" {
                                     if let Some(frame) = val.pointer("/params/frame") {
                                         if frame.get("parentId").is_none() {
                                             if let Some(u) = frame.get("url").and_then(|v| v.as_str()) {
@@ -652,8 +667,8 @@ async fn record_session_loop(
                                             break;
                                         }
 
-                                        // Re-issue startScreencast in case it was interrupted
-                                        let _ = write.send(Message::Text(start_screencast.to_string().into())).await;
+                                        // A screenshot got lost (navigation): ask again.
+                                        shot_in_flight = false;
                                         last_bg_frame_time = Instant::now();
                                     }
                                 } else {
