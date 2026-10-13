@@ -59,6 +59,9 @@ pub struct BrowserConfig {
     pub session_displays: Option<DisplayConfig>,
     /// H.264 live view of per-session displays.
     pub video: Option<crate::video::VideoConfig>,
+    /// Render Chromium on the GPU (ANGLE on Vulkan) instead of in software, so
+    /// pages see a real GPU in WebGL: software renderers are a bot tell.
+    pub chromium_gpu: bool,
 }
 
 impl BrowserConfig {
@@ -175,7 +178,6 @@ impl ActiveBrowser {
                     .arg("--disable-component-update")
                     .arg("--disable-breakpad")
                     .arg("--disable-dev-shm-usage")
-                    .arg("--disable-gpu")
                     .arg("--disable-background-timer-throttling")
                     .arg("--disable-backgrounding-occluded-windows")
                     .arg("--disable-renderer-backgrounding")
@@ -189,6 +191,17 @@ impl ActiveBrowser {
                     // feature guard keeps it that way should it become default.
                     cmd.arg(format!("--load-extension={}", ext.display()))
                         .arg("--disable-features=DisableLoadExtensionCommandLineSwitch");
+                }
+
+                if config.chromium_gpu {
+                    // Vulkan reaches the GPU through the render node; GL would go
+                    // through Xvfb, which has none, and end up in llvmpipe.
+                    cmd.arg("--ignore-gpu-blocklist")
+                        .arg("--use-gl=angle")
+                        .arg("--use-angle=vulkan")
+                        .arg("--enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan");
+                } else {
+                    cmd.arg("--disable-gpu");
                 }
 
                 cmd.args(proxies::chromium_args(relay.port()));

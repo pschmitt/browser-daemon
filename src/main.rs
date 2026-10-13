@@ -193,6 +193,20 @@ pub struct Args {
 
     #[arg(long, default_value = "/dev/dri/renderD128")]
     pub vaapi_device: PathBuf,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value = "none",
+        help = "Render Chromium on the GPU: vulkan (ANGLE on Vulkan), or none (software)"
+    )]
+    pub chromium_gpu: ChromiumGpuArg,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChromiumGpuArg {
+    None,
+    Vulkan,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1122,6 +1136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chromium_adblock,
         firefox_adblock: args.firefox_adblock,
         proxies,
+        chromium_gpu: args.chromium_gpu == ChromiumGpuArg::Vulkan,
         video: match (args.video_encoder, args.display_mode) {
             (Some(enc), DisplayMode::PerSession) => Some(video::VideoConfig {
                 ffmpeg: args.video_ffmpeg.clone(),

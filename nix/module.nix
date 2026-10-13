@@ -87,6 +87,13 @@ in
       };
     };
 
+    gpu.enable = lib.mkEnableOption ''
+      rendering Chromium on the GPU (ANGLE on Vulkan, through the render node)
+      instead of in software. Pages then see the real GPU in WebGL rather than
+      a software renderer, which bot detectors flag. Needs a Vulkan driver
+      (hardware.graphics)
+    '';
+
     xvfbPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.xorg-server;
@@ -428,6 +435,10 @@ in
               (lib.getExe cfg.video.ffmpegPackage)
               "--vaapi-device"
               cfg.video.vaapiDevice
+            ]
+            ++ lib.optionals cfg.gpu.enable [
+              "--chromium-gpu"
+              "vulkan"
             ]
             ++ lib.optionals cfg.audio.enable [
               "--pulse-server"
