@@ -604,7 +604,7 @@ async function fetchTargets() {
 }
 
 const handlers = {
-  frame: (data, m) => drawFrame(data, m),
+  frame: (data, m) => { hadFrame = true; return drawFrame(data, m); },
   loading: () => { E.dot.className = "wait"; },
   navigated: (url) => {
     if (url && url !== "about:blank") {
@@ -635,11 +635,16 @@ const handlers = {
 };
 
 let connecting = false;
+// Once a picture is up, reconnects keep it visible instead of the overlay.
+let hadFrame = false;
 // quiet: switching tabs keeps the last picture up instead of the "Connecting" overlay.
 async function connect({ quiet = false } = {}) {
   if (connecting) return;
   connecting = true;
-  if (drv) drv.close();
+  // Detach the old driver first: its close event must not look like the session ending.
+  const old = drv;
+  drv = null;
+  if (old) old.close();
   if (quiet) E.dot.className = "wait";
   else setState("wait", "Connecting to the browser…");
   try {
@@ -1500,7 +1505,7 @@ async function autoReconnect() {
   if (!drv || !drv.isOpen()) {
     reconnecting = true;
     try {
-      await connect();
+      await connect({ quiet: hadFrame });
     } catch {
       // ignore, connect handles error state
     } finally {
