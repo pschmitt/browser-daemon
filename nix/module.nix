@@ -64,6 +64,29 @@ in
       '';
     };
 
+    video = {
+      enable = lib.mkEnableOption "the handoff live view as H.264 video (needs displayMode = \"per-session\")";
+      encoder = lib.mkOption {
+        type = lib.types.enum [
+          "vaapi"
+          "x264"
+        ];
+        default = "x264";
+        description = "H.264 encoder: VAAPI (GPU, needs a VAAPI driver, e.g. intel-media-driver) or x264 (CPU).";
+      };
+      vaapiDevice = lib.mkOption {
+        type = lib.types.str;
+        default = "/dev/dri/renderD128";
+        description = "Render node for VAAPI encoding.";
+      };
+      ffmpegPackage = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.ffmpeg-full;
+        defaultText = lib.literalExpression "pkgs.ffmpeg-full";
+        description = "ffmpeg with x11grab (the default ffmpeg lacks it).";
+      };
+    };
+
     xvfbPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.xorg-server;
@@ -270,6 +293,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.video.enable -> cfg.displayMode == "per-session";
+        message = "services.browser-daemon.video needs displayMode = \"per-session\" (each session's screen is captured on its own).";
+      }
+    ];
+
     users.users.${cfg.user} = {
       isSystemUser = true;
       inherit (cfg) group;
@@ -390,6 +420,14 @@ in
               "${cfg.xvfbPackage}/bin/Xvfb"
               "--xdotool"
               (lib.getExe pkgs.xdotool)
+            ]
+            ++ lib.optionals cfg.video.enable [
+              "--video-encoder"
+              cfg.video.encoder
+              "--video-ffmpeg"
+              (lib.getExe cfg.video.ffmpegPackage)
+              "--vaapi-device"
+              cfg.video.vaapiDevice
             ]
             ++ lib.optionals cfg.audio.enable [
               "--pulse-server"

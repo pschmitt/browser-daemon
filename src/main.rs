@@ -9,6 +9,7 @@ mod proxy;
 mod recorder;
 mod relay;
 mod tui;
+mod video;
 
 use axum::body::Bytes;
 use axum::extract::ws::WebSocketUpgrade;
@@ -175,6 +176,29 @@ pub struct Args {
 
     #[arg(long, help = "xdotool, to park the X pointer on per-session displays")]
     pub xdotool: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_enum,
+        help = "Offer the live view as H.264 video (needs --display-mode per-session)"
+    )]
+    pub video_encoder: Option<VideoEncoderArg>,
+
+    #[arg(
+        long,
+        default_value = "ffmpeg",
+        help = "ffmpeg with x11grab (ffmpeg-full) for --video-encoder"
+    )]
+    pub video_ffmpeg: PathBuf,
+
+    #[arg(long, default_value = "/dev/dri/renderD128")]
+    pub vaapi_device: PathBuf,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoEncoderArg {
+    Vaapi,
+    X264,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,8 +229,11 @@ pub struct ManagedSession {
     pub relay: Arc<relay::Relay>,
     /// PulseAudio sink the browser plays into.
     pub audio_sink: Option<String>,
-    /// The session's own X display (per-session display mode).
+    /// The X display the browser runs on: its own (per-session mode) or the shared one.
     pub display: Option<String>,
+    /// Size of the session's own display (per-session mode only).
+    pub display_size: Option<(u32, u32)>,
+    pub video: bool,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -254,6 +281,9 @@ impl ManagedSession {
             proxy: self.relay.current(),
             audio: self.audio_sink.is_some(),
             display: self.display.clone(),
+            display_server: self.display.as_ref().map(|_| "xvfb".to_string()),
+            display_shared: self.display.is_some() && self.display_size.is_none(),
+            video: self.video,
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -284,9 +314,18 @@ pub struct SessionSummary {
     /// Its audio can be listened to on /audio.
     #[serde(default)]
     pub audio: bool,
-    /// Its own X display, when the node runs one per session.
+    /// The display the browser runs on (`:100`); absent for headless browsers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
+    /// Which display server provides it ("xvfb").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_server: Option<String>,
+    /// The display is shared with other sessions (not one of its own).
+    #[serde(default)]
+    pub display_shared: bool,
+    /// Its live view is available as H.264 video on /video.
+    #[serde(default)]
+    pub video: bool,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -525,7 +564,13 @@ impl AppState {
             adblock: browser.adblock,
             relay: browser.relay.clone(),
             audio_sink: browser.audio.as_ref().map(|s| s.name.clone()),
-            display: browser.display.as_ref().map(|d| d.name.clone()),
+            display: browser
+                .display
+                .as_ref()
+                .map(|d| d.name.clone())
+                .or_else(|| self.config.display.clone()),
+            display_size: browser.display.as_ref().map(|d| (d.width, d.height)),
+            video: browser.display.is_some() && self.config.video.is_some(),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -1077,6 +1122,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chromium_adblock,
         firefox_adblock: args.firefox_adblock,
         proxies,
+        video: match (args.video_encoder, args.display_mode) {
+            (Some(enc), DisplayMode::PerSession) => Some(video::VideoConfig {
+                ffmpeg: args.video_ffmpeg.clone(),
+                encoder: match enc {
+                    VideoEncoderArg::Vaapi => video::Encoder::Vaapi(args.vaapi_device.clone()),
+                    VideoEncoderArg::X264 => video::Encoder::X264,
+                },
+            }),
+            (Some(_), DisplayMode::Shared) => {
+                eprintln!("--video-encoder needs --display-mode per-session; video disabled");
+                None
+            }
+            _ => None,
+        },
         session_displays: (args.display_mode == DisplayMode::PerSession).then(|| {
             display::DisplayConfig {
                 xvfb: args.xvfb.clone(),
@@ -1198,6 +1257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/firefox", get(handle_firefox_ws))
         .route("/devtools/page/{page_id}", get(handle_page_ws))
         .route("/audio", get(handle_audio_ws))
+        .route("/video", get(handle_video_ws))
         // REST Management APIs for sessions and profiles
         .route(
             "/api/sessions",
@@ -3762,6 +3822,114 @@ async fn api_list_proxies(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     Ok(Json(state.proxy_infos()))
+}
+
+#[derive(Deserialize)]
+struct VideoParams {
+    session_id: Uuid,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+/// Stream a region of a session's own display as H.264, one access unit per
+/// binary message: a flag byte (1 = keyframe) followed by the Annex B data. One
+/// encoder per viewer; reconnect to change the region. Access control as for the
+/// page WebSocket (unguessable session id, mesh or Authelia in front).
+async fn handle_video_ws(
+    ws: WebSocketUpgrade,
+    Query(p): Query<VideoParams>,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(cfg) = state.config.video.clone() else {
+        return (StatusCode::NOT_FOUND, "This node does not stream video").into_response();
+    };
+    let found = state
+        .sessions
+        .read()
+        .await
+        .get(&p.session_id)
+        .and_then(|s| Some((s.display.clone()?, s.display_size?)));
+    let Some((xdisplay, (dw, dh))) = found else {
+        return (
+            StatusCode::NOT_FOUND,
+            "No display of its own for this session",
+        )
+            .into_response();
+    };
+    let region = video::Region {
+        x: p.x,
+        y: p.y,
+        w: p.w,
+        h: p.h,
+    };
+    let Some(region) = region.clamp(dw, dh) else {
+        return (StatusCode::BAD_REQUEST, "Region outside the display").into_response();
+    };
+    ws.on_upgrade(move |mut socket| async move {
+        use axum::extract::ws::Message;
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+        let mut child = match video::encoder(&cfg, &xdisplay, region) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(xdisplay = %xdisplay, error = %e, "Could not start the video encoder");
+                return;
+            }
+        };
+        let Some(mut out) = child.stdout.take() else {
+            return;
+        };
+        if let Some(err) = child.stderr.take() {
+            let xdisplay = xdisplay.clone();
+            tokio::spawn(async move {
+                let mut lines = tokio::io::BufReader::new(err).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    warn!(xdisplay = %xdisplay, "ffmpeg: {line}");
+                }
+            });
+        }
+        info!(session_id = %p.session_id, region = ?region, "Video viewer attached");
+        let mut units = video::AccessUnits::default();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut pending = false;
+        'stream: loop {
+            tokio::select! {
+                // Encoder quiet for a moment: the buffered frame is complete.
+                _ = tokio::time::sleep(std::time::Duration::from_millis(20)), if pending => {
+                    pending = false;
+                    if let Some((key, au)) = units.flush() {
+                        let mut msg = Vec::with_capacity(au.len() + 1);
+                        msg.push(u8::from(key));
+                        msg.extend_from_slice(&au);
+                        if socket.send(Message::Binary(msg.into())).await.is_err() {
+                            break 'stream;
+                        }
+                    }
+                }
+                n = out.read(&mut buf) => match n {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        pending = true;
+                        for (key, au) in units.push(&buf[..n]) {
+                            let mut msg = Vec::with_capacity(au.len() + 1);
+                            msg.push(u8::from(key));
+                            msg.extend_from_slice(&au);
+                            if socket.send(Message::Binary(msg.into())).await.is_err() {
+                                break 'stream;
+                            }
+                        }
+                    }
+                },
+                msg = socket.recv() => match msg {
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                    _ => {}
+                },
+            }
+        }
+        let _ = child.kill().await;
+        info!(session_id = %p.session_id, "Video viewer left");
+    })
 }
 
 #[derive(Deserialize)]

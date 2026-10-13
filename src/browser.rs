@@ -57,6 +57,8 @@ pub struct BrowserConfig {
     pub audio: Option<AudioConfig>,
     /// Give every session its own Xvfb instead of the shared `display`.
     pub session_displays: Option<DisplayConfig>,
+    /// H.264 live view of per-session displays.
+    pub video: Option<crate::video::VideoConfig>,
 }
 
 impl BrowserConfig {

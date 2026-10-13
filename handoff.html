@@ -265,6 +265,7 @@
   </div>
   <button class="sm-item" id="audioBtn" role="menuitemcheckbox" aria-checked="false" hidden></button>
   <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
+  <label class="sm-item sm-search" id="smStreamRow" hidden><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/></svg>Picture<select id="smStream" aria-label="Picture"><option value="video">Video (H.264)</option><option value="jpeg">Images (JPEG)</option></select></label>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search with<select id="smSearch" aria-label="Search engine"></select></label>
   <a class="sm-item" href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Back to dashboard</a>
@@ -391,6 +392,16 @@ class CdpDriver {
     await this.cdp.call("Page.enable");
     // Chromium only paints (and screencasts) the tab in front of its window.
     await this.cdp.call("Page.bringToFront").catch(() => {});
+    // Toolbar height, measured before any emulation: where the page starts on the
+    // display (for the H.264 stream's capture region).
+    this.chromeH = await this.evaluate("outerHeight - innerHeight").catch(() => null);
+  }
+  // H.264 stream active: no screencast meanwhile; back to it when the stream ends.
+  async setVideo(on) {
+    if (this.video === on) return;
+    this.video = on;
+    if (on) await this.cdp.call("Page.stopScreencast").catch(() => {});
+    else if (this.lastMetrics) await this.applyMetrics(this.lastMetrics).catch(() => {});
   }
   // The screencast delivers CSS-pixel frames even when a higher pixel density is
   // emulated, so Native and Phone would stay blurry on dense screens. Once the page
@@ -401,7 +412,7 @@ class CdpDriver {
   scheduleSharp(meta) {
     clearTimeout(this.sharpTimer);
     const seq = this.sharpSeq = (this.sharpSeq || 0) + 1;
-    if (!this.sharp) return;
+    if (!this.sharp || this.video) return;
     this.sharpTimer = setTimeout(async () => {
       // Taking the screenshot re-renders the page at the higher density, and the
       // screencast reports those renders as new frames (during and right after the
@@ -416,6 +427,7 @@ class CdpDriver {
   }
 
   async applyMetrics({ w, h, dpr, mode }) {
+    this.lastMetrics = { w, h, dpr, mode };
     // Native and Phone: the screen's density (up to 2x), sharpened by screenshots.
     // Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
     const fit = mode === "phone" || mode === "native";
@@ -435,6 +447,7 @@ class CdpDriver {
       await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
     }
     await this.cdp.call("Page.stopScreencast").catch(() => {});
+    if (this.video) return;   // the H.264 stream shows the page
     await this.cdp.call("Page.startScreencast", {
       format: "jpeg", quality: mode === "native" ? 80 : 65, everyNthFrame: 1,
       maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
@@ -594,7 +607,9 @@ class BidiDriver {
     await this.measure();
     this.kick();
   }
+  async setVideo(on) { this.video = on; if (!on) this.kick(); }
   async start() {
+    this.chromeH = await this.evaluate("outerHeight - innerHeight").catch(() => null);
     await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [this.ctx] });
     await this.rpc("browsingContext.activate", { context: this.ctx }).catch(() => {});
     await this.measure();
@@ -610,7 +625,7 @@ class BidiDriver {
   kick() { this.interval = 60; }
   async loop() {
     while (this.ws.readyState === WebSocket.OPEN) {
-      if (document.visibilityState !== "visible") { await sleep(400); continue; }
+      if (document.visibilityState !== "visible" || this.video) { await sleep(400); continue; }
       const t0 = performance.now();
       try {
         if (t0 - this.lastMeasure > 2000) await this.measure();
@@ -812,6 +827,8 @@ async function applyMetrics() {
   const r = E.stage.getBoundingClientRect();
   const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
   await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mode: layoutMode });
+  // The page area changed (or video no longer fits the mode): follow with the stream.
+  if (canVideo()) startVideo(); else if (video.ws) stopVideo(true);
   renderLayout();
 }
 
@@ -2016,6 +2033,77 @@ async function refreshSession() {
   } catch { /* session gone: the driver reports it */ }
 }
 
+/* ---------------------------------------------------------------- video */
+// The live view as H.264 from the session's own display (/video), decoded with
+// WebCodecs: far cheaper for the node than a JPEG screencast. Falls back to the
+// screencast when unavailable, when it fails, or where Chromium would scale the
+// picture (an emulated density above 1).
+const video = { ws: null, decoder: null, region: null, session: null, waitingKey: true };
+function streamPref() {
+  try { return localStorage.getItem("handoff.stream") || "video"; } catch { return "video"; }
+}
+function canVideo() {
+  return !!(sess?.video && window.VideoDecoder && drv && streamPref() === "video"
+    && !(fitLayout && Math.min(devicePixelRatio || 1, 2) > 1.05));
+}
+// fallback: hand the picture back to the screencast.
+function stopVideo(fallback = false) {
+  const { ws, decoder } = video;
+  Object.assign(video, { ws: null, decoder: null, region: null, session: null, waitingKey: true });
+  try { ws?.close(); } catch { /* closed */ }
+  try { if (decoder && decoder.state !== "closed") decoder.close(); } catch { /* closed */ }
+  if (fallback && drv) drv.setVideo(false);
+}
+async function startVideo() {
+  const d = drv;
+  if (!d || !target?.sessionId) return;
+  const m = await d.evaluate("[innerWidth, innerHeight, outerHeight - innerHeight]").catch(() => null);
+  if (!m || d !== drv) return;
+  const region = { x: 0, y: Math.max(0, d.chromeH ?? m[2]), w: m[0], h: m[1] };
+  const same = video.ws && video.session === target.sessionId && video.region
+    && ["x", "y", "w", "h"].every((k) => video.region[k] === region[k]);
+  // Same display and area (e.g. another tab): keep the stream, pause this driver's screencast.
+  if (same) { await d.setVideo(true); return; }
+  stopVideo();
+  const decoder = new VideoDecoder({
+    output: (frame) => drawVideoFrame(frame, region),
+    error: (e) => { console.warn("video decoder:", e); if (video.decoder === decoder) stopVideo(true); },
+  });
+  decoder.configure({ codec: "avc1.640033", optimizeForLatency: true });
+  const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+  const qs = new URLSearchParams({ session_id: target.sessionId, ...Object.fromEntries(Object.entries(region).map(([k, v]) => [k, Math.round(v)])) });
+  const ws = new WebSocket(`${scheme}${location.host}/video?${qs}`);
+  ws.binaryType = "arraybuffer";
+  Object.assign(video, { ws, decoder, region, session: target.sessionId, waitingKey: true });
+  ws.onmessage = (e) => {
+    if (video.ws !== ws || decoder.state !== "configured") return;
+    const b = new Uint8Array(e.data);
+    const key = b[0] === 1;
+    if (video.waitingKey && !key) return;
+    video.waitingKey = false;
+    // Behind (slow device): skip to the next keyframe rather than lag further.
+    if (decoder.decodeQueueSize > 3 && !key) return;
+    decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: Math.round(performance.now() * 1000), data: b.subarray(1) }));
+  };
+  ws.onclose = () => { if (video.ws === ws) stopVideo(true); };
+  await d.setVideo(true);
+}
+function drawVideoFrame(frame, region) {
+  try {
+    meta = { deviceWidth: region.w, deviceHeight: region.h, pageScaleFactor: 1, offsetTop: 0 };
+    hadFrame = true;
+    endSwitching();
+    if (E.view.width !== frame.displayWidth || E.view.height !== frame.displayHeight) {
+      E.view.width = frame.displayWidth;
+      E.view.height = frame.displayHeight;
+    }
+    sizeCanvas();
+    ctx.drawImage(frame, 0, 0);
+  } finally {
+    frame.close();
+  }
+}
+
 /* ---------------------------------------------------------------- audio */
 // The session's sound: Opus in WebM from /audio, played through MediaSource and kept
 // close to live (a phone that stalls must not drift seconds behind the picture).
@@ -2156,6 +2244,12 @@ if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
 document.addEventListener("pointerdown", (e) => { if (!$("sessPop").hidden && !e.target.closest("#sessPop, #dashMore, #dash")) closeSessPop(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sessPop").hidden) closeSessPop(); });
 
+$("smStream").value = streamPref();
+$("smStream").onchange = () => {
+  try { localStorage.setItem("handoff.stream", $("smStream").value); } catch { /* storage unavailable */ }
+  if (canVideo()) startVideo(); else stopVideo(true);
+};
+
 function renderSession() {
   if (!sess) return;
   E.sessBtn.hidden = false;
@@ -2173,6 +2267,8 @@ function renderSession() {
   // Another session (switched from the drawer): its sound, not the old one's.
   if (audio.el && audio.session !== target?.sessionId) stopAudio();
   if (sess.audio && audioWanted && !audio.el) startAudio();
+  $("smStreamRow").hidden = !sess.video || !window.VideoDecoder;
+  if (canVideo() && !video.ws) startVideo();
   const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
   const html = !rec ? btn("record", "rec", "Start recording", "rec")
     : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec");
