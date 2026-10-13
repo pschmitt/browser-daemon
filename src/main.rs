@@ -1520,12 +1520,33 @@ async fn json_new(
 
     session.activity.touch();
     if let Some(ref hub) = session.bidi {
+        // Like Chromium below: an untouched about:blank start tab gives way to the new one.
+        let start_tab =
+            if target_url != "about:blank" && session.client_count.load(Ordering::SeqCst) == 0 {
+                match hub.contexts().await.as_slice() {
+                    [only] if only.url == "about:blank" => Some(only.id.clone()),
+                    _ => None,
+                }
+            } else {
+                None
+            };
         let ctx = hub.create_tab(&target_url).await.map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({ "error": e })),
             )
         })?;
+        if let Some(blank) = start_tab.filter(|id| *id != ctx.id) {
+            if let Err(e) = hub
+                .call(
+                    "browsingContext.close",
+                    serde_json::json!({ "context": blank }),
+                )
+                .await
+            {
+                warn!(session_id = %session.id, error = %e, "Could not close the blank start tab");
+            }
+        }
         return Ok(Json(firefox_target(&session, ctx)));
     }
 
