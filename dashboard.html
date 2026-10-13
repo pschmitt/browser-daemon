@@ -1435,6 +1435,11 @@ const ACT = {
       { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
       { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : 'Start recording', run: () => toggleRecording(s) },
       { icon: 'clock', label: `Auto-stop when idle: ${idleLabel(s.idle_timeout_seconds)}…`, run: () => setIdleTimeout(s) },
+      nodeProxies(s.node_name).length && { icon: 'route', label: 'Proxy', meta: s.proxy ? proxyName(s.node_name, s.proxy) : 'Direct', run: () => openMenu(el, [
+        { label: 'Proxy (switches now)' },
+        { label: 'Direct', on: !s.proxy, run: () => setSessionProxy(s, 'none') },
+        ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
+      ]) },
       s.is_recording && (s.recording_paused
         ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
         : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
@@ -1457,7 +1462,7 @@ const ACT = {
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
       nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', run: () => openMenu(el, [
-        { label: p.session ? 'Proxy (applies on next launch)' : 'Proxy' },
+        { label: p.session ? 'Default proxy (from the next launch)' : 'Default proxy' },
         { label: 'Direct', on: !p.proxy, run: () => setProfileProxy(p, 'none') },
         ...nodeProxies(p.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: p.proxy === x.id, run: () => setProfileProxy(p, x.id) })),
       ]) },
@@ -1781,6 +1786,10 @@ async function renameProfile(p) {
   const name = await ask({ title: `Rename ${p.display}`, input: p.display, ok: 'Rename' });
   if (!name || name === p.display) return;
   act('Renaming profile', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { name: profileTargetName(p, name) }), `Renamed to ${name}`);
+}
+function setSessionProxy(s, id) {
+  const label = id === 'none' ? 'direct connections' : proxyName(s.node_name, id);
+  act('Switching the proxy', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/proxy`), { proxy: id }), `Session now uses ${label}`);
 }
 function setProfileProxy(p, id) {
   const label = id === 'none' ? 'direct connections' : proxyName(p.node_name, id);

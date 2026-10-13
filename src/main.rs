@@ -5,6 +5,7 @@ mod profiles;
 mod proxies;
 mod proxy;
 mod recorder;
+mod relay;
 mod tui;
 
 use axum::body::Bytes;
@@ -163,7 +164,7 @@ pub struct ManagedSession {
     pub client_count: Arc<AtomicUsize>,
     pub activity: Arc<idle::Activity>,
     pub adblock: bool,
-    pub proxy: Option<String>,
+    pub relay: Arc<relay::Relay>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -208,7 +209,7 @@ impl ManagedSession {
             client_count: self.client_count.load(Ordering::SeqCst),
             tabs_count,
             adblock: self.adblock,
-            proxy: self.proxy.clone(),
+            proxy: self.relay.current(),
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -445,7 +446,7 @@ impl AppState {
                 idle_timeout_minutes.map_or(self.idle_timeout_secs, |m| m * 60),
             )),
             adblock: browser.adblock,
-            proxy: browser.proxy.clone(),
+            relay: browser.relay.clone(),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -1111,6 +1112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_session).delete(api_delete_session),
         )
         .route("/api/proxies", get(api_list_proxies))
+        .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/record", post(api_session_start_record))
         .route(
             "/api/sessions/{id}/files",
@@ -3655,6 +3657,39 @@ async fn api_list_proxies(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     Ok(Json(state.proxy_infos()))
+}
+
+#[derive(Deserialize)]
+struct SetProxyRequest {
+    /// Proxy id, or "none" for direct connections.
+    proxy: String,
+}
+
+/// Switch a running session's proxy. Open connections are dropped, so pages
+/// reconnect through the new route; nothing is restarted.
+async fn api_session_set_proxy(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SetProxyRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let proxy = state
+        .check_proxy(&req.proxy)?
+        .and_then(|id| state.config.proxies.iter().find(|p| p.id == id).cloned());
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    session.activity.touch();
+    session.relay.set(proxy);
+    let rec = state.active_recordings.read().await.get(&id).cloned();
+    Ok(Json(
+        session.to_summary(&state.http_client, rec.as_ref()).await,
+    ))
 }
 
 /// Largest file handoff can drop into a page.

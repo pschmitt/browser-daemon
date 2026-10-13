@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::bidi::BidiHub;
 use crate::profiles::Profile;
 use crate::proxies::{self, Proxy};
+use crate::relay::Relay;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -74,8 +75,8 @@ pub struct ActiveBrowser {
     pub profile_id: Option<Uuid>,
     pub created_at: Instant,
     pub adblock: bool,
-    /// Id of the proxy the browser's traffic goes through.
-    pub proxy: Option<String>,
+    /// Local SOCKS relay all of the browser's traffic goes through.
+    pub relay: Arc<Relay>,
 }
 
 impl ActiveBrowser {
@@ -90,7 +91,7 @@ impl ActiveBrowser {
         adblock: bool,
         proxy: Option<&Proxy>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let proxy_id = proxy.map(|p| p.id.clone());
+        let relay = Relay::start(proxy.cloned()).await?;
         let id = Uuid::new_v4();
         let adblock = adblock && config.adblock_available(engine);
         let width = width.unwrap_or(config.default_width);
@@ -154,9 +155,7 @@ impl ActiveBrowser {
                         .arg("--disable-features=DisableLoadExtensionCommandLineSwitch");
                 }
 
-                if let Some(proxy) = proxy {
-                    cmd.args(proxy.chromium_args());
-                }
+                cmd.args(proxies::chromium_args(relay.port()));
 
                 let effective_mem = max_memory_mb.or(config.max_session_memory_mb);
                 if let Some(mem_mb) = effective_mem {
@@ -196,7 +195,7 @@ impl ActiveBrowser {
                     profile_id,
                     created_at: Instant::now(),
                     adblock,
-                    proxy: proxy_id,
+                    relay: relay.clone(),
                 })
             }
             BrowserEngine::Firefox => {
@@ -214,11 +213,10 @@ impl ActiveBrowser {
                 );
 
                 fs::create_dir_all(&user_data_dir).await?;
-                // Proxy prefs are rewritten on every launch: a persistent profile
-                // may have run with another proxy (or none) last time.
+                // Proxy prefs are rewritten on every launch: the relay's port changes.
                 let user_js = user_data_dir.join("user.js");
                 let existing = fs::read_to_string(&user_js).await.unwrap_or_default();
-                let prefs = proxy.map(Proxy::firefox_prefs).unwrap_or_default();
+                let prefs = proxies::firefox_prefs(relay.port());
                 fs::write(&user_js, proxies::firefox_user_js(&existing, &prefs)).await?;
 
                 // Headful on the virtual display, like Chromium; headless only without one.
@@ -301,7 +299,7 @@ impl ActiveBrowser {
                     profile_id,
                     created_at: Instant::now(),
                     adblock,
-                    proxy: proxy_id,
+                    relay: relay.clone(),
                 })
             }
         }

@@ -14,7 +14,7 @@ A fast, lightweight, native remote browser daemon written in Rust for CDP automa
 - **Live Handoff:** Embedded `/handoff/` view of any tab, for phones and desktops. Touch: tap to click, drag to scroll, the phone keyboard mirrors the focused field. Mouse and keyboard: drag to select, double/triple click, Ctrl+C/X/V through the local clipboard, Ctrl+A/Z/Y, arrow keys; a capture button (fullscreen + Keyboard Lock) sends browser shortcuts like Ctrl+W to the page. Files dropped onto the view are dropped into the page (Chromium). Works for both engines: Chromium streams a CDP screencast, Firefox streams WebDriver BiDi screenshots.
 - **Resource Limits & Governance:** Configurable per-session memory limits (`--max-session-memory-mb`, V8 heap limits) and global systemd service limits (`MemoryMax`, `MemoryHigh`, `CPUQuota`).
 - **Named Profile Persistence:** Optional persistent profiles via `?profile=<name or id>` query parameter, alongside ephemeral auto-cleaned sessions. Each profile lives in `/var/lib/browser-daemon/profiles/<uuid>/` with a `profile.json` holding its free-text name (e.g. `Google (p@example.com)`) and engine; the API reports the directory as `storage_dir`. Name-based directories from older versions are migrated on startup.
-- **Upstream Proxies:** Route a session through a SOCKS or HTTP proxy configured on its node (`services.browser-daemon.proxies`). Pick one per session (`"proxy": "<id>"` when creating it, `?proxy=<id>` on `/chromium` and `/firefox`, `none` for direct) or store a default on a profile (`PATCH /api/profiles/<name> {"proxy": "<id>"}`). DNS goes through SOCKS5 proxies, and WebRTC is kept from bypassing them. `GET /api/proxies` lists a node's proxies.
+- **Upstream Proxies:** Route a session through a SOCKS or HTTP proxy configured on its node (`services.browser-daemon.proxies`). Pick one per session (`"proxy": "<id>"` when creating it, `?proxy=<id>` on `/chromium` and `/firefox`, `none` for direct) or store a default on a profile (`PATCH /api/profiles/<name> {"proxy": "<id>"}`). A running session switches on the fly (`POST /api/sessions/<id>/proxy {"proxy": "<id>"}`, the session menu in the dashboard and handoff, `p` in the TUI): browsers always talk to a per-session SOCKS5 relay in the daemon, which forwards directly or through the chosen proxy and drops open connections when the route changes. DNS goes through SOCKS5 proxies, and WebRTC is kept from bypassing them. `GET /api/proxies` lists a node's proxies.
 - **Installable PWA:** Web App Manifest with standalone display mode, badging, and offline service worker caching.
 - **Drop-In CDP & BiDi Compatibility:** Standard endpoints:
   - `/chromium` (WebSocket for Playwright, Puppeteer, CDP clients)
@@ -68,7 +68,7 @@ Enable the service in your NixOS configuration:
 
 `browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, refreshed every few seconds.
 
-- Sessions: take over in the browser, stop, start or stop recording, start a throwaway session, show the WebSocket URL.
+- Sessions: take over in the browser, stop, switch the proxy, start or stop recording, start a throwaway session, show the WebSocket URL.
 - Profiles: launch (or take over a running one), cycle the proxy, delete.
 - Recordings: play in the dashboard, delete.
 

@@ -324,6 +324,38 @@ impl App {
                     self.act(label, req).await;
                 }
             }
+            (Tab::Sessions, KeyCode::Char('p')) => {
+                if let Some(s) = self.session() {
+                    let choices: Vec<Option<String>> = std::iter::once(None)
+                        .chain(
+                            self.node_proxies(&s.node_name)
+                                .into_iter()
+                                .map(|x| Some(x.id)),
+                        )
+                        .collect();
+                    if choices.len() == 1 {
+                        self.set_status(format!("{} has no proxies configured", s.node_name), true);
+                        return;
+                    }
+                    let cur = choices
+                        .iter()
+                        .position(|c| *c == s.session.proxy)
+                        .unwrap_or(0);
+                    let next = choices[(cur + 1) % choices.len()].clone();
+                    let label = match next {
+                        Some(ref id) => format!(
+                            "Session now goes through {}",
+                            self.proxy_name(&s.node_name, id)
+                        ),
+                        None => "Session now connects directly".to_string(),
+                    };
+                    let url = self.api(&s.node_name, &format!("/sessions/{}/proxy", s.session.id));
+                    let req = self.request(reqwest::Method::POST, &url).json(
+                        &serde_json::json!({ "proxy": next.unwrap_or_else(|| "none".into()) }),
+                    );
+                    self.act(&label, req).await;
+                }
+            }
             (Tab::Sessions, KeyCode::Char('w')) => {
                 if let Some(s) = self.session() {
                     let engine = if s.session.engine == crate::BrowserEngine::Firefox {
@@ -930,7 +962,7 @@ fn draw_detail(f: &mut Frame, area: Rect, lines: Option<Vec<Line<'static>>>) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.tab {
-        Tab::Sessions => "⏎ take over  s stop  R record  n new  w ws url",
+        Tab::Sessions => "⏎ take over  s stop  p proxy  R record  n new  w ws url",
         Tab::Profiles => "⏎ launch/take over  p proxy  d delete",
         Tab::Recordings => "⏎ play  d delete",
         Tab::Nodes => "n new session there",
@@ -957,6 +989,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("Sessions", ""),
         ("  ⏎ / o", "open the handoff view in your browser"),
         ("  s", "stop the session"),
+        ("  p", "switch its proxy now (direct, then each proxy)"),
         ("  R", "start or stop recording"),
         ("  n", "start a throwaway session on that node"),
         ("  w", "show the session's WebSocket URL"),
@@ -964,7 +997,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("  ⏎ / o", "launch it, or take over its session"),
         (
             "  p",
-            "cycle its proxy (direct, then each proxy of its node)",
+            "cycle its default proxy (applies from the next launch)",
         ),
         ("  d", "delete it"),
         ("Recordings", ""),

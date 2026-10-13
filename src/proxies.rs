@@ -1,5 +1,7 @@
 //! Upstream proxies a session's traffic can go through, configured per node
 //! (`--proxies-file`, a JSON list) and chosen per session or stored on a profile.
+//! Browsers never talk to them directly: they use the session's relay
+//! (`relay.rs`), so the upstream can change while the session runs.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -14,7 +16,7 @@ pub struct Proxy {
     pub id: String,
     /// Shown in the dashboard.
     pub name: String,
-    /// `socks5://host:port`, `socks5h://…`, `socks4://…`, `http://…` or `https://…`.
+    /// `socks5://host:port` (also `socks5h://`), `socks4://…` or `http://…`.
     pub url: String,
 }
 
@@ -28,93 +30,88 @@ pub struct ProxyInfo {
     pub port: u16,
 }
 
-struct Parsed {
-    scheme: &'static str,
-    host: String,
-    port: u16,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Upstream {
+    /// Names are resolved by the proxy.
+    Socks5,
+    /// SOCKS4a: names are resolved by the proxy.
+    Socks4,
+    /// HTTP CONNECT tunnels.
+    Http,
 }
 
-fn parse(url: &str) -> Result<Parsed, String> {
+#[derive(Debug, Clone)]
+pub struct UpstreamAddr {
+    pub kind: Upstream,
+    pub host: String,
+    pub port: u16,
+}
+
+fn parse(url: &str) -> Result<UpstreamAddr, String> {
     let u = Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
-    let (scheme, default_port) = match u.scheme() {
-        // Chromium and Firefox both resolve names through a SOCKS5 proxy.
-        "socks5" | "socks5h" | "socks" => ("socks5", 1080),
-        "socks4" | "socks4a" => ("socks4", 1080),
-        "http" => ("http", 80),
-        "https" => ("https", 443),
+    let (kind, default_port) = match u.scheme() {
+        "socks5" | "socks5h" | "socks" => (Upstream::Socks5, 1080),
+        "socks4" | "socks4a" => (Upstream::Socks4, 1080),
+        "http" => (Upstream::Http, 80),
         other => return Err(format!("unsupported scheme {other}")),
     };
     if !u.username().is_empty() || u.password().is_some() {
-        // Neither browser takes proxy credentials on the command line or in prefs.
         return Err("proxy credentials are not supported".to_string());
     }
-    let host = u.host_str().ok_or("missing host")?.to_string();
-    Ok(Parsed {
-        scheme,
+    let host = u
+        .host_str()
+        .ok_or("missing host")?
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    Ok(UpstreamAddr {
+        kind,
         host,
         port: u.port().unwrap_or(default_port),
     })
 }
 
 impl Proxy {
+    pub fn upstream(&self) -> UpstreamAddr {
+        parse(&self.url).expect("validated on load")
+    }
+
     pub fn info(&self) -> ProxyInfo {
-        let p = parse(&self.url).expect("validated on load");
+        let p = self.upstream();
         ProxyInfo {
             id: self.id.clone(),
             name: self.name.clone(),
-            scheme: p.scheme.to_string(),
+            scheme: match p.kind {
+                Upstream::Socks5 => "socks5",
+                Upstream::Socks4 => "socks4",
+                Upstream::Http => "http",
+            }
+            .to_string(),
             host: p.host,
             port: p.port,
         }
     }
+}
 
-    /// Chromium command-line flags routing all traffic through this proxy.
-    pub fn chromium_args(&self) -> Vec<String> {
-        let p = parse(&self.url).expect("validated on load");
-        let host = if p.host.contains(':') {
-            format!("[{}]", p.host)
-        } else {
-            p.host
-        };
-        vec![
-            format!("--proxy-server={}://{}:{}", p.scheme, host, p.port),
-            // Keep WebRTC from reaching out around the proxy and revealing the real address.
-            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string(),
-        ]
-    }
+/// Chromium flags sending all traffic through the session's relay.
+pub fn chromium_args(relay_port: u16) -> Vec<String> {
+    vec![
+        format!("--proxy-server=socks5://127.0.0.1:{relay_port}"),
+        // WebRTC must not reach out around the relay and reveal the real address.
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string(),
+    ]
+}
 
-    /// Firefox prefs (user.js lines) routing all traffic through this proxy.
-    pub fn firefox_prefs(&self) -> Vec<String> {
-        let p = parse(&self.url).expect("validated on load");
-        let host = serde_json::to_string(&p.host).unwrap_or_default();
-        let mut prefs = vec!["user_pref(\"network.proxy.type\", 1);".to_string()];
-        match p.scheme {
-            "socks5" | "socks4" => prefs.extend([
-                format!("user_pref(\"network.proxy.socks\", {host});"),
-                format!("user_pref(\"network.proxy.socks_port\", {});", p.port),
-                format!(
-                    "user_pref(\"network.proxy.socks_version\", {});",
-                    if p.scheme == "socks5" { 5 } else { 4 }
-                ),
-                "user_pref(\"network.proxy.socks_remote_dns\", true);".to_string(),
-            ]),
-            _ => {
-                for key in ["http", "ssl"] {
-                    prefs.push(format!("user_pref(\"network.proxy.{key}\", {host});"));
-                    prefs.push(format!(
-                        "user_pref(\"network.proxy.{key}_port\", {});",
-                        p.port
-                    ));
-                }
-            }
-        }
-        prefs.push("user_pref(\"media.peerconnection.ice.proxy_only\", true);".to_string());
-        // Only the proxy's own name is resolved locally (pages resolve through the
-        // proxy), and Firefox does not fall back to IPv4 when IPv6 to the proxy is
-        // silently dropped: it waits for the connection to time out.
-        prefs.push("user_pref(\"network.dns.disableIPv6\", true);".to_string());
-        prefs
-    }
+/// Firefox prefs (user.js lines) sending all traffic through the session's relay.
+pub fn firefox_prefs(relay_port: u16) -> Vec<String> {
+    vec![
+        "user_pref(\"network.proxy.type\", 1);".to_string(),
+        "user_pref(\"network.proxy.socks\", \"127.0.0.1\");".to_string(),
+        format!("user_pref(\"network.proxy.socks_port\", {relay_port});"),
+        "user_pref(\"network.proxy.socks_version\", 5);".to_string(),
+        "user_pref(\"network.proxy.socks_remote_dns\", true);".to_string(),
+        "user_pref(\"media.peerconnection.ice.proxy_only\", true);".to_string(),
+    ]
 }
 
 /// Load and validate the node's proxies. Errors name the offending entry.
@@ -140,7 +137,7 @@ fn validate(proxies: Vec<Proxy>) -> Result<Vec<Proxy>, String> {
 }
 
 /// Rewrite the browser-daemon block of a Firefox profile's user.js, leaving
-/// anything else in the file alone. `prefs` empty means direct connections.
+/// anything else in the file alone.
 pub fn firefox_user_js(existing: &str, prefs: &[String]) -> String {
     const BEGIN: &str = "// browser-daemon proxy: begin";
     const END: &str = "// browser-daemon proxy: end";
@@ -158,13 +155,9 @@ pub fn firefox_user_js(existing: &str, prefs: &[String]) -> String {
     }
     out.push_str(BEGIN);
     out.push('\n');
-    if prefs.is_empty() {
-        out.push_str("user_pref(\"network.proxy.type\", 0);\n");
-    } else {
-        for p in prefs {
-            out.push_str(p);
-            out.push('\n');
-        }
+    for p in prefs {
+        out.push_str(p);
+        out.push('\n');
     }
     out.push_str(END);
     out.push('\n');
@@ -184,13 +177,17 @@ mod tests {
     }
 
     #[test]
-    fn socks5h_maps_to_chromium_socks5() {
-        let p = proxy("m", "socks5h://turris.example:1080");
+    fn upstreams_parse() {
+        let p = proxy("m", "socks5h://turris.example:1080").upstream();
         assert_eq!(
-            p.chromium_args()[0],
-            "--proxy-server=socks5://turris.example:1080"
+            (p.kind, p.host.as_str(), p.port),
+            (Upstream::Socks5, "turris.example", 1080)
         );
-        assert_eq!(p.info().scheme, "socks5");
+        let p = proxy("h", "http://[::1]").upstream();
+        assert_eq!(
+            (p.kind, p.host.as_str(), p.port),
+            (Upstream::Http, "::1", 80)
+        );
     }
 
     #[test]
@@ -198,19 +195,19 @@ mod tests {
         assert!(validate(vec![proxy("none", "socks5://a:1")]).is_err());
         assert!(validate(vec![proxy("a", "socks5://a:1"), proxy("a", "socks5://b:1")]).is_err());
         assert!(validate(vec![proxy("a", "ftp://a:1")]).is_err());
+        assert!(validate(vec![proxy("a", "https://a:1")]).is_err());
         assert!(validate(vec![proxy("a", "socks5://u:p@a:1")]).is_err());
         assert!(validate(vec![proxy("a", "http://a")]).is_ok());
     }
 
     #[test]
     fn user_js_block_is_replaced_not_appended() {
-        let p = proxy("m", "socks5://h:1080");
-        let once = firefox_user_js("user_pref(\"x\", 1);\n", &p.firefox_prefs());
-        let twice = firefox_user_js(&once, &p.firefox_prefs());
+        let once = firefox_user_js("user_pref(\"x\", 1);\n", &firefox_prefs(1080));
+        let twice = firefox_user_js(&once, &firefox_prefs(1080));
         assert_eq!(once, twice);
         assert!(once.starts_with("user_pref(\"x\", 1);\n"));
-        let direct = firefox_user_js(&twice, &[]);
-        assert!(direct.contains("\"network.proxy.type\", 0"));
-        assert!(!direct.contains("socks_port"));
+        let moved = firefox_user_js(&twice, &firefox_prefs(2000));
+        assert!(moved.contains("socks_port\", 2000"));
+        assert!(!moved.contains("socks_port\", 1080"));
     }
 }
