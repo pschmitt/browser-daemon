@@ -296,6 +296,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .pick .pk-check { flex: none; color: var(--accent); visibility: hidden; }
 .pick button.on .pk-check { visibility: visible; }
 .pick hr { border: 0; border-top: 1px solid var(--line); margin: 2px 6px; }
+.pick .pk-group { padding: 8px 10px 2px; font-size: 11.5px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: .03em; }
 .switch { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 2px 0; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
 .switch .track { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--line-strong); transition: background .15s; flex: none; }
@@ -615,7 +616,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         </div>
       </details>
     </div>
-    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="sessionSubmit"><svg class="i"><use href="#i-play"/></svg>Launch</button></div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="sessionSubmit"><svg class="i"><use href="#i-play"/></svg><span id="sessionSubmitText">Launch</span></button></div>
   </form>
 </div>
 
@@ -1332,11 +1333,6 @@ function renderViewActions(recordings = visibleRecordings()) {
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
-  if (view === 'sessions') {
-    const html = `<button class="btn sm" data-act="new-tab-any" title="Open a URL">${icon('globe', 'sm')}<span class="lbl">Open URL</span></button>`;
-    if (actions.innerHTML !== html) actions.innerHTML = html;
-    return;
-  }
   if (view !== 'recordings') { if (actions.innerHTML) actions.innerHTML = ''; return; }
 
   const keys = recordings.map(keyOf.recording);
@@ -1450,7 +1446,6 @@ const ACT = {
     ]);
   },
   'new-tab': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) newTab(s); },
-  'new-tab-any': () => newTab(null),
   'launch-profile': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) launchProfile(p); },
   'profile-menu': (el) => {
     const p = byKey.profiles.get(el.dataset.key); if (!p) return;
@@ -1554,6 +1549,7 @@ function setEngine(engine) {
     ? `${sessionNode} has no ${engine === 'firefox' ? 'Firefox' : 'Chromium'} configured.`
     : engine === 'firefox' ? 'WebDriver BiDi on /firefox; handoff streams screenshots.' : 'Chrome DevTools Protocol on /chromium; handoff streams a live screencast.';
   $('engineHint').style.color = supported ? '' : 'var(--bad)';
+  $('sessionSubmit').dataset.unsupported = supported ? '' : '1';
   $('sessionSubmit').disabled = !supported;
   renderProfilePicker();
 }
@@ -1561,7 +1557,7 @@ function setEngine(engine) {
 function openNewSession(prefill = {}) {
   sessionNode = prefill.node || (filter !== 'all' ? filter : localName());
   nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true });
-  sessionProfile = prefill.profile ? { name: prefill.profile } : null;
+  sessionProfile = prefill.profile ? { node: sessionNode, name: prefill.profile } : null;
   sessionProxy = null;
   $('sessionProfileName').value = '';
   setEngine(prefill.engine || 'chromium');
@@ -1569,34 +1565,60 @@ function openNewSession(prefill = {}) {
   setTimeout(() => ($('sessionProfiles').querySelector('.on') || $('sessionProfiles').querySelector('button'))?.focus(), 40);
 }
 
-/* Profile picker: null = throwaway, { new: true } = name a new one, { name } = existing. */
+/* Profile picker: null = throwaway, { new: true } = name a new one, { node, name } = existing.
+   Profiles of other nodes are listed too: launching one copies it to the chosen node first. */
 let sessionProfile = null;
+let pickerProfiles = [];
+const pickedProfile = () => (sessionProfile?.name
+  ? pickerProfiles.find((p) => p.node_name === sessionProfile.node && p.display === sessionProfile.name) : null);
 function renderProfilePicker() {
-  const list = [...byKey.profiles.values()]
-    .filter((p) => p.node_name === sessionNode && (p.engine || 'chromium') === sessionEngine)
-    .sort((a, b) => (b.modified_at_secs || 0) - (a.modified_at_secs || 0));
-  if (sessionProfile?.name && !sessionProfile.new && !list.some((p) => p.display === sessionProfile.name)) {
-    // Prefilled or left over from another node/engine: offer it as a new profile.
-    $('sessionProfileName').value = sessionProfile.name;
-    sessionProfile = { new: true };
+  const online = new Set(nodes.filter((n) => n.status === 'online').map((n) => n.name));
+  const recent = (a, b) => (b.modified_at_secs || 0) - (a.modified_at_secs || 0);
+  const all = [...byKey.profiles.values()].filter((p) => (p.engine || 'chromium') === sessionEngine && online.has(p.node_name));
+  const here = all.filter((p) => p.node_name === sessionNode).sort(recent);
+  const elsewhere = all.filter((p) => p.node_name !== sessionNode).sort(recent);
+  pickerProfiles = [...here, ...elsewhere];
+  if (sessionProfile?.name && !sessionProfile.new && !pickedProfile()) {
+    // Prefilled, or left over from an engine change: here if it exists, else a new one.
+    const same = here.find((p) => p.display === sessionProfile.name);
+    if (same) sessionProfile = { node: same.node_name, name: same.display };
+    else { $('sessionProfileName').value = sessionProfile.name; sessionProfile = { new: true }; }
   }
   const row = (key, ico, name, sub, on, badge = '') => `<button type="button" role="radio" aria-checked="${on}" data-pk="${esc(key)}" class="${on ? 'on' : ''}" tabindex="${on ? 0 : -1}">
-    <span class="pk-icon">${ico}</span><span class="pk-text"><span class="pk-name">${esc(name)}</span><span class="pk-sub">${esc(sub)}</span></span>
+    <span class="pk-icon">${ico}</span><span class="pk-text"><span class="pk-name">${esc(name)}</span><span class="pk-sub">${sub}</span></span>
     ${badge ? `<span class="pk-badge">${esc(badge)}</span>` : ''}${icon('check', 'sm pk-check')}</button>`;
+  const engineIcon = icon(sessionEngine === 'firefox' ? 'firefox' : 'chromium');
+  const profRow = (p, i) => row('p:' + i, engineIcon, p.display,
+    (p.node_name === sessionNode ? '' : `on ${esc(p.node_name)} · `) + esc(`${formatBytes(p.size_bytes)} · used ${relTime(p.modified_at_secs)}`),
+    sessionProfile?.node === p.node_name && sessionProfile?.name === p.display,
+    p.session ? 'running' : p.node_name === sessionNode ? '' : 'copy');
   $('sessionProfiles').innerHTML = [
     row('', icon('broom'), 'Throwaway', 'Fresh browser; nothing is kept when it stops', !sessionProfile),
-    list.length ? '<hr>' : '',
-    ...list.map((p) => row('p:' + p.display, icon(sessionEngine === 'firefox' ? 'firefox' : 'chromium'), p.display,
-      `${formatBytes(p.size_bytes)} · used ${relTime(p.modified_at_secs)}`, sessionProfile?.name === p.display, p.session ? 'running' : '')),
+    here.length ? '<hr>' : '',
+    ...here.map((p, i) => profRow(p, i)),
+    elsewhere.length ? `<div class="pk-group">On other nodes · copied to ${esc(sessionNode)} when launched</div>` : '',
+    ...elsewhere.map((p, i) => profRow(p, here.length + i)),
     '<hr>',
     row('new', icon('plus'), 'New profile…', 'Keeps cookies and logins on disk', !!sessionProfile?.new),
   ].join('');
   const isNew = !!sessionProfile?.new;
   $('sessionProfileName').hidden = !isNew;
-  renderProxyPicker(list.find((p) => p.display === sessionProfile?.name));
-  const running = list.find((p) => p.display === sessionProfile?.name)?.session;
-  $('sessionProfileHint').textContent = running ? 'Already running: launching attaches to that session.'
-    : isNew ? 'Created on first launch.' : sessionProfile ? 'Picks up cookies and logins from the last session.' : '';
+  const picked = pickedProfile();
+  renderProxyPicker(picked);
+  const remote = picked && picked.node_name !== sessionNode;
+  const clash = remote && here.find((p) => p.display === picked.display);
+  let hint = '';
+  if (remote && picked.session) hint = `Running on ${picked.node_name}: stop it there first, a running profile cannot be copied.`;
+  else if (clash?.session) hint = `${picked.display} is running on ${sessionNode}: stop it before replacing it.`;
+  else if (clash) hint = `Replaces ${sessionNode}'s ${picked.display} (its cookies and logins) with the copy from ${picked.node_name}. The original stays on ${picked.node_name}.`;
+  else if (remote) hint = `Copied to ${sessionNode} before launch; the original stays on ${picked.node_name}.`;
+  else if (picked?.session) hint = 'Already running: launching attaches to that session.';
+  else if (isNew) hint = 'Created on first launch.';
+  else if (picked) hint = 'Picks up cookies and logins from the last session.';
+  $('sessionProfileHint').textContent = hint;
+  $('sessionProfileHint').style.color = remote && (picked.session || clash?.session) ? 'var(--bad)' : '';
+  $('sessionSubmit').disabled = !!(remote && (picked.session || clash?.session)) || $('sessionSubmit').dataset.unsupported === '1';
+  $('sessionSubmitText').textContent = remote ? 'Copy & launch' : 'Launch';
 }
 /* Proxy for the new session: null = the profile's default, 'none' = direct, or an id. */
 let sessionProxy = null;
@@ -1624,7 +1646,8 @@ $('sessionProfiles').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-pk]');
   if (!b) return;
   const k = b.dataset.pk;
-  sessionProfile = k === '' ? null : k === 'new' ? { new: true } : { name: k.slice(2) };
+  const picked = k.startsWith('p:') ? pickerProfiles[+k.slice(2)] : null;
+  sessionProfile = k === '' ? null : k === 'new' ? { new: true } : { node: picked.node_name, name: picked.display };
   renderProfilePicker();
   if (sessionProfile?.new) $('sessionProfileName').focus();
   else $('sessionProfiles').querySelector('.on')?.focus();
@@ -1671,6 +1694,16 @@ $('newSessionForm').addEventListener('submit', async (e) => {
   const t = createProgressToast('launch', `Starting ${sessionEngine === 'firefox' ? 'Firefox' : 'Chromium'} on ${node}`, 'Spawning the browser…');
   t.update(30, 'Spawning the browser…');
   try {
+    const picked = pickedProfile();
+    if (picked && picked.node_name !== node) {
+      // From another node: copy it here first (the original stays where it is).
+      t.update(15, `Copying ${picked.display} from ${picked.node_name}…`);
+      const clash = [...byKey.profiles.values()].some((p) => p.node_name === node && p.display === picked.display);
+      await request('POST', api(picked.node_name, `/profiles/${enc(picked.key)}/transfer`), {
+        target_node: node, target_name: profileTargetName(picked, picked.display), delete_source: false, overwrite: clash,
+      });
+      t.update(60, 'Spawning the browser…');
+    }
     // A new profile remembers the proxy it was first launched with.
     if (sessionProfile?.new && payload.profile && sessionProxy && sessionProxy !== 'none') {
       await request('POST', api(node, '/profiles'), { name: payload.profile, engine: sessionEngine, proxy: sessionProxy });
@@ -1719,15 +1752,13 @@ function setRecordingPaused(s, paused) {
 }
 
 async function newTab(s) {
-  const url = await ask({ title: s ? 'Open a new tab' : 'Open a URL', text: s ? `In ${s.profile || 'the throwaway session'} on ${s.node_name}` : `On ${filter === 'all' ? localName() : filter} (reuses a running session or starts one)`, input: '', placeholder: `Address, or search ${searchEngine().name}`, ok: 'Open' });
+  const url = await ask({ title: 'Open a new tab', text: `In ${s.profile || 'the throwaway session'} on ${s.node_name}`, input: '', placeholder: `Address, or search ${searchEngine().name}`, ok: 'Open' });
   if (url === null || url === undefined) return;
   let target = url || 'about:blank';
   if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = target.includes('.') && !target.includes(' ') ? 'https://' + target : searchEngine().url + enc(target);
-  const node = s ? s.node_name : (filter === 'all' ? localName() : filter);
-  const qs = `url=${enc(target)}` + (s ? `&session_id=${enc(s.id)}` : '');
   try {
-    const tab = await request('PUT', jsonNewUrl(node, qs));
-    location.href = handoffUrl(node, { page: tab.id });
+    const tab = await request('PUT', jsonNewUrl(s.node_name, `url=${enc(target)}&session_id=${enc(s.id)}`));
+    location.href = handoffUrl(s.node_name, { page: tab.id });
   } catch (err) {
     showToast('Could not open the tab', 'danger', 6000, null, err.message);
   }
