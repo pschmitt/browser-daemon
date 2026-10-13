@@ -464,6 +464,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
+  <symbol id="i-takeover" viewBox="0 0 24 24"><path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2 8 5.1M5.1 8 2.2 7.2M14 4.1 12 6.2M6.2 12l-2.1 2"/></symbol>
   <symbol id="i-handoff" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M7 17 17 7M8 7h9v9"/></symbol>
   <symbol id="i-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></symbol>
@@ -1251,8 +1252,7 @@ function sessionCard(s) {
     </div>
     <div class="tabs-list">${tabs || '<div class="tabs-empty">No open tabs</div>'}${more}</div>
     <div class="scard-foot">
-      <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}">${icon('handoff', 'sm')}Take over</a>
-      <button class="btn sm ${s.is_recording ? 'rec-on' : ''}" data-act="toggle-rec" data-key="${key}">${s.is_recording ? icon('stop', 'sm') + 'Stop recording' : icon('rec', 'sm') + 'Record'}</button>
+      <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}">${icon('takeover', 'sm')}Take over</a>
     </div>
   </article>`;
 }
@@ -1279,7 +1279,7 @@ function profileRow(p) {
   const color = PALETTE[hashOf(p.display) % PALETTE.length];
   const status = p.session ? `<span style="color:var(--ok)">● Running</span> · ${formatUptime(p.session.uptime_seconds)}` : 'Stored';
   const primary = p.session
-    ? `<a class="btn sm primary" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}">${icon('handoff', 'sm')}Take over</a>`
+    ? `<a class="btn sm primary" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}">${icon('takeover', 'sm')}Take over</a>`
     : `<button class="btn sm" data-act="launch-profile" data-key="${key}">${icon('play', 'sm fill')}Launch</button>`;
   return `
   <div class="row" data-key="${key}">
@@ -1422,7 +1422,7 @@ const ACT = {
     const s = byKey.sessions.get(el.dataset.key); if (!s) return;
     const wsUrl = `${nodeBase(s.node_name).replace(/^http/, 'ws')}/${s.engine === 'firefox' ? 'firefox' : 'chromium'}?session_id=${s.id}`;
     openMenu(el, [
-      { icon: 'handoff', label: 'Take over', run: () => { location.href = handoffUrl(s.node_name, { session: s.id }); } },
+      { icon: 'takeover', label: 'Take over', run: () => { location.href = handoffUrl(s.node_name, { session: s.id }); } },
       { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
       { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : 'Start recording', run: () => toggleRecording(s) },
       { icon: 'clock', label: `Auto-stop when idle: ${idleLabel(s.idle_timeout_seconds)}…`, run: () => setIdleTimeout(s) },
@@ -1435,7 +1435,6 @@ const ACT = {
       { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
     ]);
   },
-  'toggle-rec': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) toggleRecording(s); },
   'new-tab': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) newTab(s); },
   'new-tab-any': () => newTab(null),
   'launch-profile': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) launchProfile(p); },
@@ -1444,7 +1443,7 @@ const ACT = {
     const others = nodes.filter((n) => n.name !== p.node_name && n.status === 'online');
     openMenu(el, [
       p.session
-        ? { icon: 'handoff', label: 'Take over', run: () => { location.href = handoffUrl(p.node_name, { session: p.session.id }); } }
+        ? { icon: 'takeover', label: 'Take over', run: () => { location.href = handoffUrl(p.node_name, { session: p.session.id }); } }
         : { icon: 'play', label: `Launch in ${p.engine === 'firefox' ? 'Firefox' : 'Chromium'}`, run: () => launchProfile(p) },
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },

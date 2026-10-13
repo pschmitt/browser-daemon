@@ -74,6 +74,10 @@
   #sessMenu { position: fixed; z-index: 60; top: 56px; right: 8px; width: 272px; max-width: calc(100vw - 16px); padding: 6px;
     background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
   #sessMenu[hidden] { display: none; }
+  #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
+    background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
+  #view:focus { outline: none; }
+  #clipToast.show { opacity: 1; transform: translate(-50%, 0); }
   .sm-narrow { display: none; }
   @media (max-width: 640px) {
     #fwd, #reload { display: none; }
@@ -218,7 +222,7 @@
   <button class="sm-item danger" id="smStop"><svg viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span id="smStopText">Stop session</span></button>
 </div>
 <div id="stage">
-  <canvas id="view"></canvas>
+  <canvas id="view" tabindex="-1"></canvas>
   <div id="ripple"></div>
   <div id="overlay">
     <div class="spin" id="spin"></div>
@@ -368,6 +372,20 @@ class CdpDriver {
   }
   wheel(x, y, dx, dy) { this.cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy }); }
   insertText(text) { this.cdp.send("Input.insertText", { text }); }
+  // Desktop mouse: real presses and drags, so text can be selected.
+  mouseDown(x, y, clickCount) {
+    this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    this.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount });
+  }
+  mouseMove(x, y, down) { this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: down ? "left" : "none", buttons: down ? 1 : 0 }); }
+  mouseUp(x, y, clickCount) { this.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount }); }
+  // Ctrl/Cmd shortcut; `command` makes headless Chromium run the editing command.
+  shortcut(key, shift, command) {
+    const code = "Key" + key.toUpperCase(), vk = key.toUpperCase().charCodeAt(0);
+    const base = { modifiers: 2 | (shift ? 8 : 0), key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
+    this.cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base, commands: command ? [command] : [] });
+    this.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
   pressKey(key) {
     const [vk, text] = CDP_KEYS[key];
     this.cdp.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, text });
@@ -509,6 +527,17 @@ class BidiDriver {
       return document.execCommand("insertText", false, ${JSON.stringify(text)}); })()`)
       .then((ok) => { if (!ok) this.actions([{ type: "key", id: "kbd", actions: chars.flatMap((c) => [{ type: "keyDown", value: c }, { type: "keyUp", value: c }]) }]); })
       .catch(() => {});
+  }
+  mouseDown(x, y) { this.pointer([{ type: "pointerMove", x: Math.round(x), y: Math.round(y) }, { type: "pointerDown", button: 0 }]); }
+  mouseMove(x, y) { this.pointer([{ type: "pointerMove", x: Math.round(x), y: Math.round(y) }]); }
+  mouseUp(x, y) { this.pointer([{ type: "pointerMove", x: Math.round(x), y: Math.round(y) }, { type: "pointerUp", button: 0 }]); }
+  pointer(actions) { this.actions([{ type: "pointer", id: "mouse", parameters: { pointerType: "mouse" }, actions }]); }
+  shortcut(key, shift) {
+    const mods = shift ? ["\uE009", "\uE008"] : ["\uE009"];
+    this.actions([{ type: "key", id: "kbd", actions: [
+      ...mods.map((value) => ({ type: "keyDown", value })), { type: "keyDown", value: key }, { type: "keyUp", value: key },
+      ...mods.reverse().map((value) => ({ type: "keyUp", value })),
+    ] }]);
   }
   pressKey(key) {
     const v = BIDI_KEYS[key];
@@ -747,15 +776,42 @@ function flushWheel() {
 }
 
 let touch = null;
+// A mouse drives the remote mouse directly (drag selects text, double-click selects a word);
+// touch keeps tap = click and drag = scroll.
+let mouse = null, lastDown = { t: 0, x: 0, y: 0, n: 0 };
 E.view.addEventListener("pointerdown", (e) => {
   if (!e.isPrimary) return;
+  if (e.pointerType === "mouse") {
+    if (e.button !== 0 || !drv || refitting) return;
+    const p = toPage(e);
+    if (!p) return;
+    E.view.setPointerCapture(e.pointerId);
+    E.view.focus({ preventScroll: true });
+    // pointerdown carries no click count: count double and triple clicks here.
+    const now = performance.now();
+    const again = now - lastDown.t < 450 && Math.hypot(e.clientX - lastDown.x, e.clientY - lastDown.y) < 6;
+    lastDown = { t: now, x: e.clientX, y: e.clientY, n: again ? Math.min(lastDown.n + 1, 3) : 1 };
+    mouse = { clicks: lastDown.n };
+    drv.mouseDown(Math.round(p.x), Math.round(p.y), mouse.clicks);
+    return;
+  }
   E.view.setPointerCapture(e.pointerId);
   const t = touch = { x: e.clientX, y: e.clientY, lastY: e.clientY, moved: false, t: performance.now(), editable: false };
   // Is there a text field under the finger? Asked now, so the answer is in by the time the finger lifts.
   const p = toPage(e);
   if (p && drv) drv.evaluate(hitExpr(p.x, p.y)).then((v) => { t.editable = v === true; }).catch(() => {});
 });
+let moveRaf = 0, lastMove = null;
 E.view.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "mouse") {
+    if (!mouse || !drv) return;   // hover moves are not forwarded: they would flood the socket
+    lastMove = toPage(e);
+    if (!moveRaf) moveRaf = requestAnimationFrame(() => {
+      moveRaf = 0;
+      if (lastMove && mouse && drv) drv.mouseMove(Math.round(lastMove.x), Math.round(lastMove.y), true);
+    });
+    return;
+  }
   if (!touch || !e.isPrimary) return;
   if (!touch.moved && Math.hypot(e.clientX - touch.x, e.clientY - touch.y) > 9) touch.moved = true;
   if (touch.moved) {
@@ -765,6 +821,15 @@ E.view.addEventListener("pointermove", (e) => {
   }
 });
 E.view.addEventListener("pointerup", (e) => {
+  if (e.pointerType === "mouse") {
+    if (!mouse || !drv) return;
+    const p = toPage(e), clicks = mouse.clicks;
+    mouse = null;
+    if (p) drv.mouseUp(Math.round(p.x), Math.round(p.y), clicks);
+    setTimeout(probeFocus, 160);
+    refreshRemoteSelection();
+    return;
+  }
   if (!touch || !e.isPrimary) return;
   const wasTap = !touch.moved;
   const editable = touch.editable;
@@ -782,7 +847,7 @@ E.view.addEventListener("pointerup", (e) => {
   drv.click(px, py, mobileLayout);
   setTimeout(probeFocus, 160);
 });
-E.view.addEventListener("pointercancel", () => { touch = null; flushWheel(); });
+E.view.addEventListener("pointercancel", () => { touch = null; mouse = null; flushWheel(); });
 E.view.addEventListener("wheel", (e) => {
   e.preventDefault();
   const p = toPage(e);
@@ -1377,40 +1442,98 @@ window.addEventListener("focus", () => {
   autoReconnect();
 });
 
-// Desktop: type straight into the page and handle copy/paste shortcuts.
+// Desktop: type straight into the page. Copy, cut and paste use the browser's own clipboard
+// events (no permission prompt): the remote selection is fetched ahead of time, after every
+// mouse release or key press, because a copy event has to be answered synchronously.
+let remoteSel = "", selTimer = 0;
+const SEL_EXPR = `(() => {
+  let a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")) {
+    try { if (a.selectionEnd > a.selectionStart) return a.value.substring(a.selectionStart, a.selectionEnd); } catch (e) {}
+  }
+  return window.getSelection()?.toString() || "";
+})()`;
+function refreshRemoteSelection(delay = 120) {
+  clearTimeout(selTimer);
+  selTimer = setTimeout(() => {
+    if (drv) drv.evaluate(SEL_EXPR).then((t) => { remoteSel = t || ""; }).catch(() => {});
+  }, delay);
+}
+const localTyping = () => !drv || document.activeElement === E.kb || document.activeElement === E.urlInput
+  || !!document.activeElement?.closest?.("#sessMenu, #tabsModal, dialog");
+const SHORTCUTS = { a: "selectAll", z: "undo", y: "redo" };
 window.addEventListener("keydown", (e) => {
-  if (!drv || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-    e.preventDefault();
-    copyRemoteSelection();
-    return;
+  if (localTyping()) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.altKey) {
+    const k = e.key.toLowerCase();
+    // c, x, v: let the native copy/cut/paste events fire (handled below); should the
+    // browser skip the event (nothing selected locally), fall back to the async clipboard API.
+    if (k === "c" || k === "x" || k === "v") {
+      clipEventSeen = false;
+      setTimeout(() => {
+        if (clipEventSeen || !drv) return;
+        if (k === "v") pasteToRemote();
+        else copyRemoteSelection().then((t) => {
+          toast(t ? (k === "x" ? "Cut" : "Copied") : "Nothing selected");
+          if (t && k === "x") drv.evaluate(`document.execCommand("delete")`).catch(() => {});
+        });
+      }, 60);
+      return;
+    }
+    if (k in SHORTCUTS) {
+      e.preventDefault();
+      const redo = k === "z" && e.shiftKey;
+      drv.shortcut(redo ? "z" : k, e.shiftKey, redo ? "redo" : SHORTCUTS[k]);
+      refreshRemoteSelection();
+      return;
+    }
+    return;   // leave the rest (Ctrl+L, Ctrl+T, …) to the local browser
   }
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-    e.preventDefault();
-    pasteToRemote();
-    return;
-  }
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (mod || e.altKey) return;
   if (e.key.length === 1) { drv.insertText(e.key); e.preventDefault(); }
   else if (KEYS[e.key]) { pressKey(e.key); e.preventDefault(); }
+  else return;
+  refreshRemoteSelection(250);
 });
-
-window.addEventListener("copy", (e) => {
-  if (!drv || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
+let clipEventSeen = false;
+function copyFromRemote(e, cut) {
+  if (localTyping()) return;
+  clipEventSeen = true;
   e.preventDefault();
-  copyRemoteSelection();
-});
-
-window.addEventListener("paste", (e) => {
-  if (!drv || document.activeElement === E.kb || document.activeElement === E.urlInput) return;
-  e.preventDefault();
-  const text = e.clipboardData?.getData("text");
-  if (text) {
-    drv.insertText(text);
+  if (remoteSel) {
+    e.clipboardData.setData("text/plain", remoteSel);
+    toast(cut ? "Cut" : "Copied");
   } else {
-    pasteToRemote();
+    // Nothing cached yet (selection made by a script, say): ask now and write asynchronously.
+    copyRemoteSelection().then((t) => toast(t ? (cut ? "Cut" : "Copied") : "Nothing selected"));
   }
+  if (cut) drv.evaluate(`document.execCommand("delete")`).catch(() => {}).finally(() => refreshRemoteSelection());
+}
+window.addEventListener("copy", (e) => copyFromRemote(e, false));
+window.addEventListener("cut", (e) => copyFromRemote(e, true));
+window.addEventListener("paste", (e) => {
+  if (localTyping()) return;
+  clipEventSeen = true;
+  e.preventDefault();
+  const text = e.clipboardData?.getData("text/plain");
+  if (text) { drv.insertText(text); refreshRemoteSelection(250); }
+  else pasteToRemote();
 });
+let toastTimer = 0;
+function toast(text) {
+  let el = document.getElementById("clipToast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "clipToast";
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 1100);
+}
 
 /* ---------------------------------------------------------------- page picker (no ?page=) */
 async function pickPage() {
