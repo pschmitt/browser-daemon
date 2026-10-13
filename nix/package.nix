@@ -27,7 +27,7 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Multi-tenant Chromium CDP daemon with virtual display isolation and mobile handoff";
     homepage = "https://github.com/pschmitt/browser-daemon";
-    license = lib.licenses.mit;
+    license = lib.licenses.gpl3Only;
     maintainers = [ ];
     mainProgram = "browser-daemon";
   };
