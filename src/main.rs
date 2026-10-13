@@ -1423,6 +1423,33 @@ async fn json_new(
         return Ok(Json(firefox_target(&session, ctx)));
     }
 
+    // Chromium starts every session on an about:blank tab. When that is still the only
+    // page and nothing is attached that might be about to use it, it is replaced by the
+    // new tab instead of lingering as an empty second tab.
+    let start_tab =
+        if target_url != "about:blank" && session.client_count.load(Ordering::SeqCst) == 0 {
+            let list_url = format!("http://127.0.0.1:{}/json/list", session.port);
+            match state.http_client.get(&list_url).send().await {
+                Ok(res) => res
+                    .json::<Vec<DevToolsTarget>>()
+                    .await
+                    .ok()
+                    .and_then(|targets| {
+                        let pages: Vec<_> = targets
+                            .into_iter()
+                            .filter(|t| t.target_type == "page")
+                            .collect();
+                        match pages.as_slice() {
+                            [only] if only.url == "about:blank" => Some(only.id.clone()),
+                            _ => None,
+                        }
+                    }),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
     let mut dest_url = url::Url::parse(&format!("http://127.0.0.1:{}/json/new", session.port))
         .map_err(|e| {
             (
@@ -1445,6 +1472,13 @@ async fn json_new(
             Json(serde_json::json!({ "error": e.to_string() })),
         )
     })?;
+
+    if let Some(blank) = start_tab.filter(|id| *id != target.id) {
+        let close_url = format!("http://127.0.0.1:{}/json/close/{}", session.port, blank);
+        if let Err(e) = state.http_client.get(&close_url).send().await {
+            warn!(session_id = %session.id, error = %e, "Could not close the blank start tab");
+        }
+    }
 
     target.web_socket_debugger_url = Some(format!("/devtools/page/{}", target.id));
     target.session_id = Some(session.id);
