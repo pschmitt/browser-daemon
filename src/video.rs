@@ -58,14 +58,15 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
         Encoder::Vaapi(ref device) => {
             cmd.arg("-vaapi_device")
                 .arg(device)
-                // Converted on the GPU with BT.601 and tagged as such: left alone,
-                // the stream says "RGB matrix, full range" and colours wash out.
+                // Converted on the GPU with BT.601 and tagged as such (sRGB transfer,
+                // as captured, so browsers do not re-gamma it): left alone, the stream
+                // says "RGB matrix, full range" and colours wash out.
                 .args([
                     "-vf",
                     &format!(
                         "{decimate},hwupload,scale_vaapi=format=nv12:out_range=limited\
                          :out_color_matrix=bt470bg:out_color_primaries=bt709\
-                         :out_color_transfer=bt709"
+                         :out_color_transfer=iec61966-2-1"
                     ),
                 ])
                 .args(["-fps_mode", "vfr"])
@@ -86,9 +87,11 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
                 ])
                 .args(["-crf", "23", "-pix_fmt", "yuv420p", "-bf", "0", "-g", "120"])
                 // swscale converts with BT.601; say so rather than leave it to guess.
-                .args(["-color_range", "tv", "-colorspace", "smpte170m"])
-                .args(["-color_primaries", "bt709", "-color_trc", "bt709"])
-                .args(["-x264-params", "aud=1:repeat-headers=1"]);
+                .args([
+                    "-x264-params",
+                    "aud=1:repeat-headers=1:range=tv:colormatrix=smpte170m\
+                     :colorprim=bt709:transfer=iec61966-2-1",
+                ]);
         }
     }
     cmd.args(["-f", "h264", "pipe:1"])

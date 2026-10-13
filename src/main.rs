@@ -3895,8 +3895,9 @@ async fn handle_video_ws(
         let mut pending = false;
         'stream: loop {
             tokio::select! {
-                // Encoder quiet for a moment: the buffered frame is complete.
-                _ = tokio::time::sleep(std::time::Duration::from_millis(20)), if pending => {
+                // Encoder quiet for a moment: the buffered frame is complete. ffmpeg
+                // writes a frame in back-to-back chunks, so a few ms is plenty.
+                _ = tokio::time::sleep(std::time::Duration::from_millis(4)), if pending => {
                     pending = false;
                     if let Some((key, au)) = units.flush() {
                         let mut msg = Vec::with_capacity(au.len() + 1);
