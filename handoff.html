@@ -516,6 +516,31 @@ class CdpDriver {
     await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
     winFit.fitted = true;
   }
+  // Phone: the page sees Android Chrome (same version; user agent and client hints),
+  // so sites serve their mobile version. Undone when leaving Phone.
+  async setMobileIdentity(on) {
+    if (!on) {
+      if (!this.desktopUa) return;
+      await this.cdp.call("Emulation.setUserAgentOverride", this.desktopUa).catch(() => {});
+      this.desktopUa = null;
+      return;
+    }
+    if (this.desktopUa) return;
+    const ua = await this.evaluate("navigator.userAgent").catch(() => null);
+    const brands = await this.evaluate("navigator.userAgentData?.brands || []").catch(() => []);
+    const full = await this.cdp.call("Browser.getVersion").catch(() => null);
+    if (!ua) return;
+    const version = (/Chrome\/([\d.]+)/.exec(full?.product || ua) || [])[1] || "";
+    const meta = (mobile, platform, platformVersion, model) => ({
+      brands, fullVersion: version, platform, platformVersion, architecture: mobile ? "" : "x86", model, mobile,
+    });
+    this.desktopUa = { userAgent: ua, userAgentMetadata: meta(false, "Linux", "", "") };
+    await this.cdp.call("Emulation.setUserAgentOverride", {
+      userAgent: `Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${version.split(".")[0]}.0.0.0 Mobile Safari/537.36`,
+      platform: "Linux armv8l",
+      userAgentMetadata: meta(true, "Android", "14.0.0", "Pixel 8"),
+    }).catch(() => {});
+  }
   // Back to the size the browser was launched with, if it isn't already.
   async restoreWindow([width, height]) {
     const r = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
@@ -548,10 +573,12 @@ class CdpDriver {
     if (fit) {
       this.emulating = true;
       const phone = mode === "phone";
+      await this.setMobileIdentity(phone);
       await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: scale, mobile: phone, screenWidth: w, screenHeight: h });
       await this.cdp.call("Emulation.setTouchEmulationEnabled", phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false }).catch(() => {});
     } else if (!passive || this.emulating) {
       this.emulating = false;
+      await this.setMobileIdentity(false);
       await this.cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
       await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
     }
@@ -973,11 +1000,15 @@ async function doConnect({ quiet = false } = {}) {
 
 // The remote page gets the size of this screen (like a real phone) or its own desktop size.
 let applied = null, metricsYielding = false;
+// This view itself runs on a phone (touch, small screen): Phone then uses its real size.
+const onPhone = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 600;
 async function applyMetrics({ ifDrifted = false } = {}) {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   let w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
   const dpr = devicePixelRatio || 1;
+  // Phone on a desktop screen: a phone's size (a common Android one), not the screen's.
+  if (layoutMode === "phone" && !onPhone) { w = Math.min(w, 412); h = Math.min(h, 915); }
   // An automation client attached (an agent's session handed over) sets the page size
   // itself: emulating another one would fight it and flicker. Show its size instead.
   const yielding = layoutMode !== "window" && !forceSize && (sess?.client_count || 0) > 0;
@@ -1910,6 +1941,7 @@ renderLayout();
 $("smLayout").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-layout]");
   if (!b || b.dataset.layout === layoutMode) return;
+  const wasPhone = layoutMode === "phone";
   layoutMode = b.dataset.layout;
   mobileLayout = layoutMode === "phone";
   fitLayout = layoutMode !== "window";
@@ -1917,6 +1949,8 @@ $("smLayout").addEventListener("click", async (e) => {
   renderLayout();
   await applyMetrics();
   sizeCanvas();
+  // Sites choose their mobile or desktop version when the page loads.
+  if (wasPhone !== mobileLayout && drv && !metricsYielding) drv.reload();
 });
 E.kbbtn.onclick = () => {
   manualKb = !manualKb;
