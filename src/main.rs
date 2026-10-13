@@ -1079,6 +1079,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    if let Some(ref cfg) = config.audio {
+        audio::remove_stale_sinks(cfg).await;
+    }
+
     let state = AppState {
         config,
         max_sessions: args.max_sessions,

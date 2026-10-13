@@ -90,6 +90,38 @@ impl Drop for Sink {
     }
 }
 
+/// Remove per-session sinks a previous run left behind (it was killed, so their
+/// Drop never ran). Called at startup, before any session exists.
+pub async fn remove_stale_sinks(cfg: &AudioConfig) {
+    let Ok(out) = Command::new(&cfg.pactl)
+        .arg("--server")
+        .arg(cfg.server_arg())
+        .args(["list", "short", "modules"])
+        .output()
+        .await
+    else {
+        return;
+    };
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut cols = line.split('\t');
+        let (Some(index), Some("module-null-sink"), Some(args)) =
+            (cols.next(), cols.next(), cols.next())
+        else {
+            continue;
+        };
+        if !args.contains("sink_name=browserd_") || args.contains("sink_name=browserd_idle") {
+            continue;
+        }
+        let _ = Command::new(&cfg.pactl)
+            .arg("--server")
+            .arg(cfg.server_arg())
+            .args(["unload-module", index])
+            .output()
+            .await;
+        info!(module = %index, "Removed a stale audio sink");
+    }
+}
+
 /// An ffmpeg encoding `sink`'s monitor to Opus in WebM on stdout, tuned for
 /// low latency: small clusters, 20 ms frames, no input buffering.
 pub fn encoder(cfg: &AudioConfig, sink: &str) -> std::io::Result<Child> {

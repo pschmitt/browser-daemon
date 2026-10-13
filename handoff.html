@@ -244,7 +244,6 @@
     <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
   </form>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
-  <button class="ib" id="audioBtn" aria-label="Sound" title="Play the page's sound" aria-pressed="false" hidden></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
 </div>
@@ -264,6 +263,7 @@
     <button type="button" data-layout="native" title="The remote page gets this screen's size and pixel density, and follows resizes">Native</button>
     <button type="button" data-layout="phone" title="A phone: this screen's size with touch input">Phone</button>
   </div>
+  <button class="sm-item" id="audioBtn" role="menuitemcheckbox" aria-checked="false" hidden></button>
   <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search with<select id="smSearch" aria-label="Search engine"></select></label>
@@ -448,8 +448,15 @@ class CdpDriver {
       // replace the sharp picture or start another round.
       if (this.sharp && (p.data === this.lastCast || performance.now() < (this.echoUntil || 0))) { ack(); return; }
       this.lastCast = p.data;
-      // ACK after drawing: keeps 1:1 pacing instead of queueing frames.
-      h.frame(p.data, p.metadata).finally(ack);
+      // Two frames in flight: while one is decoded and drawn, Chromium already
+      // captures and sends the next (ACK at once when nothing is being drawn, else
+      // after that draw). More would only pile frames up on a slow link.
+      if (this.drawing) (this.deferredAcks ||= []).push(ack);
+      else ack();
+      this.drawing = (this.drawing || 0) + 1;
+      h.frame(p.data, p.metadata).finally(() => {
+        if (--this.drawing === 0 && this.deferredAcks?.length) this.deferredAcks.splice(0).forEach((a) => a());
+      });
       this.scheduleSharp(p.metadata);
     } else if (method === "Page.frameStartedLoading" || method === "Page.frameStartedNavigating") {
       h.loading();
@@ -723,11 +730,12 @@ async function fetchTargets() {
 const handlers = {
   frame: (data, m, mime) => {
     hadFrame = true;
+    const seq = ++frameSeq;
     // Only frames of the settled tab are remembered: a late frame of the old tab must
     // not end up as the new tab's picture.
     if ($("switching").hidden) rememberFrame(pageId, data, m, mime);
     endSwitching();
-    return drawFrame(data, m, mime);
+    return drawFrame(data, m, mime, seq);
   },
   loading: () => { E.dot.className = "wait"; },
   navigated: (url) => {
@@ -834,9 +842,10 @@ function base64ToBlob(b64, mime = "image/jpeg") {
 
 let lastBitmap = null;
 
-async function drawFrame(data, frameMeta, mime = "image/jpeg") {
+// Frames decode concurrently (two in flight): a slow one must not overwrite a newer one.
+let frameSeq = 0, drawnSeq = 0;
+async function drawFrame(data, frameMeta, mime = "image/jpeg", seq = ++frameSeq) {
   try {
-    meta = frameMeta;
     let img;
     if (typeof createImageBitmap === "function") {
       img = await createImageBitmap(base64ToBlob(data, mime));   // decoded off the main thread
@@ -845,6 +854,9 @@ async function drawFrame(data, frameMeta, mime = "image/jpeg") {
         const i = new Image(); i.onload = () => resolve(i); i.onerror = reject; i.src = `data:${mime};base64,` + data;
       });
     }
+    if (seq < drawnSeq) { if (img.close) img.close(); return; }   // a newer frame is already up
+    drawnSeq = seq;
+    meta = frameMeta;
     if (refitting && Math.abs(meta.deviceWidth - fitSize.w) < 8 && Math.abs(meta.deviceHeight - fitSize.h) < 8) refitting = false;
     if (E.view.width !== img.width || E.view.height !== img.height) { E.view.width = img.width; E.view.height = img.height; }
     sizeCanvas();
@@ -2012,12 +2024,22 @@ const AUDIO_ICONS = {
   on: '<svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>',
 };
 const audio = { el: null, ws: null, ms: null, sb: null, queue: [], session: null };
+// Sound is on unless the viewer turned it off (remembered per browser).
+let audioWanted = true;
+try { audioWanted = localStorage.getItem("handoff.audio") !== "0"; } catch { /* storage unavailable */ }
 function renderAudioButton() {
   const on = !!audio.el;
-  E.audioBtn.innerHTML = on ? AUDIO_ICONS.on : AUDIO_ICONS.off;
-  E.audioBtn.classList.toggle("on", on);
+  E.audioBtn.innerHTML = (on ? AUDIO_ICONS.on : AUDIO_ICONS.off) + (on ? "Sound on" : "Sound off");
   E.audioBtn.title = on ? "Mute the page's sound" : "Play the page's sound";
-  E.audioBtn.setAttribute("aria-pressed", String(on));
+  E.audioBtn.setAttribute("aria-checked", String(on));
+}
+// Browsers only start playback after a click or key press on this page: until then
+// the stream buffers, and the first interaction starts it (the backlog is skipped).
+function playWhenAllowed(el) {
+  el.play().catch(() => {
+    const go = () => { if (audio.el === el) el.play().catch(() => {}); };
+    for (const t of ["pointerdown", "keydown"]) addEventListener(t, go, { once: true, capture: true });
+  });
 }
 function stopAudio() {
   try { audio.ws?.close(); } catch { /* closed */ }
@@ -2063,7 +2085,7 @@ function startAudio() {
   const ms = new MediaSource();
   el.src = URL.createObjectURL(ms);
   Object.assign(audio, { el, ms, queue: [], session: sessionId, appending: false, synced: false });
-  el.play().catch(() => {});
+  playWhenAllowed(el);
   ms.addEventListener("sourceopen", () => {
     audio.sb = ms.addSourceBuffer(type);
     audio.sb.mode = "sequence";
@@ -2072,12 +2094,17 @@ function startAudio() {
     const ws = new WebSocket(`${scheme}${location.host}/audio?session_id=${encodeURIComponent(sessionId)}`);
     ws.binaryType = "arraybuffer";
     ws.onmessage = (e) => { audio.queue.push(e.data); pumpAudio(); };
-    ws.onclose = () => { if (audio.ws === ws) { stopAudio(); toast("Sound stopped", 2000); } };
+    // Dropped (node restart, network): the next session refresh reconnects it.
+    ws.onclose = () => { if (audio.ws === ws) stopAudio(); };
     audio.ws = ws;
   }, { once: true });
   renderAudioButton();
 }
-E.audioBtn.onclick = () => (audio.el ? stopAudio() : startAudio());
+E.audioBtn.onclick = () => {
+  audioWanted = !audio.el;
+  try { localStorage.setItem("handoff.audio", audioWanted ? "1" : "0"); } catch { /* storage unavailable */ }
+  audioWanted ? startAudio() : stopAudio();
+};
 renderAudioButton();
 
 /* ---------------------------------------------------------------- other sessions */
@@ -2145,6 +2172,7 @@ function renderSession() {
   E.audioBtn.hidden = !sess.audio;
   // Another session (switched from the drawer): its sound, not the old one's.
   if (audio.el && audio.session !== target?.sessionId) stopAudio();
+  if (sess.audio && audioWanted && !audio.el) startAudio();
   const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
   const html = !rec ? btn("record", "rec", "Start recording", "rec")
     : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec");

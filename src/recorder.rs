@@ -237,6 +237,8 @@ fn is_real_title(title: &str) -> bool {
 const TITLE_REQUEST_ID: u64 = 1 << 40;
 /// Re-read the title this often: single-page apps retitle without navigating.
 const TITLE_REFRESH: Duration = Duration::from_secs(5);
+/// Recordings are for replaying what happened, not for smooth video: 4 frames a second.
+const RECORD_FRAME_INTERVAL: Duration = Duration::from_millis(250);
 
 async fn record_session_loop(
     recording_id: Uuid,
@@ -488,9 +490,9 @@ async fn record_session_loop(
             "method": "Page.startScreencast",
             "params": {
                 "format": "jpeg",
-                "quality": 65,
-                "maxWidth": 1280,
-                "maxHeight": 800,
+                "quality": 60,
+                "maxWidth": 1024,
+                "maxHeight": 640,
                 "everyNthFrame": 1
             }
         });
@@ -500,6 +502,7 @@ async fn record_session_loop(
 
         let mut next_ack_id = 100u64;
         let mut last_bg_frame_time = Instant::now();
+        let mut last_ack = Instant::now() - RECORD_FRAME_INTERVAL;
         let mut next_title_id = TITLE_REQUEST_ID;
         // The target's title above may predate a navigation; ask right away.
         let mut last_title_request = Instant::now() - TITLE_REFRESH;
@@ -581,6 +584,15 @@ async fn record_session_loop(
                                                 None,
                                             ).await;
                                             last_bg_frame_time = Instant::now();
+
+                                            // Chromium captures the next frame only after this ACK:
+                                            // pacing it caps recordings at RECORD_FPS. Unpaced, a busy
+                                            // page cost more than a CPU core in JPEG encoding alone.
+                                            let since = last_ack.elapsed();
+                                            if since < RECORD_FRAME_INTERVAL {
+                                                tokio::time::sleep(RECORD_FRAME_INTERVAL - since).await;
+                                            }
+                                            last_ack = Instant::now();
 
                                             // Send frame ACK
                                             next_ack_id += 1;
