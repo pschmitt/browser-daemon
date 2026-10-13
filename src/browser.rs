@@ -313,9 +313,6 @@ impl ActiveBrowser {
                     ("browser.sessionstore.resume_from_crash", "false"),
                     // 2 = block: sites can't ask to show notifications.
                     ("permissions.default.desktop-notification", "2"),
-                    // navigator.webdriver stays false, as in Chromium (AutomationControlled):
-                    // Google refuses sign-ins ("Something went wrong") when it is true.
-                    ("dom.webdriver.enabled", "false"),
                 ] {
                     prefs.push(format!("user_pref(\"{pref}\", {value});"));
                 }
