@@ -129,6 +129,12 @@
     padding: 24px; text-align: center; background: color-mix(in oklab, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
   #overlay.show { display: flex; }
   #overlay p { margin: 0; color: var(--muted); max-width: 28ch; }
+  /* Tab switch in progress: the last picture stays, dimmed, until the new tab's first frame. */
+  #switching { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, .45); color: #fff; font-weight: 600; font-size: 14px; pointer-events: none; animation: fade-in .15s ease-out; }
+  #switching[hidden] { display: none; }
+  #switching span { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; }
+  @keyframes fade-in { from { opacity: 0; } }
   .spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .btn { padding: 12px 20px; border-radius: 14px; border: 0; background: var(--accent); color: #fff; font-size: 15px; font-weight: 600; }
@@ -229,6 +235,7 @@
 <div id="stage">
   <canvas id="view" tabindex="-1"></canvas>
   <div id="ripple"></div>
+  <div id="switching" hidden><div class="spin"></div><span id="switchingText">Loading tab…</span></div>
   <div id="overlay">
     <div class="spin" id="spin"></div>
     <p id="msg">Connecting to the browser…</p>
@@ -592,6 +599,7 @@ let mobileLayout = (localStorage.getItem("handoff.mobile") ?? (matchMedia("(poin
 let refitting = false, manualKb = false, mirror = "", composing = false, resyncTimer = null, probeSeq = 0;
 
 function setState(kind, text) {
+  if (kind === "bad") endSwitching();
   E.dot.className = kind === "live" ? "live" : kind === "bad" ? "bad" : "wait";
   const show = kind !== "live";
   E.overlay.classList.toggle("show", show);
@@ -608,7 +616,7 @@ async function fetchTargets() {
 }
 
 const handlers = {
-  frame: (data, m) => { hadFrame = true; return drawFrame(data, m); },
+  frame: (data, m) => { hadFrame = true; endSwitching(); return drawFrame(data, m); },
   loading: () => { E.dot.className = "wait"; },
   navigated: (url) => {
     if (url && url !== "about:blank") {
@@ -684,7 +692,7 @@ async function applyMetrics() {
   const r = E.stage.getBoundingClientRect();
   const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
   await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mobile: mobileLayout });
-  E.layout.classList.toggle("on", mobileLayout);
+  renderLayoutButton();
 }
 
 function sizeCanvas() {
@@ -1129,6 +1137,19 @@ E.urlBar.onsubmit = async (e) => {
 // Opens a blank tab and focuses its URL bar, like a browser's new-tab button.
 // Settles once a tab switch or (re)connect in progress is done.
 let busy = Promise.resolve();
+// Shown from a tab switch until the new tab's first frame (slow on remote nodes).
+let switchingTimer = 0;
+function startSwitching(title) {
+  $("switchingText").textContent = title ? `Loading ${title}…` : "Loading tab…";
+  $("switching").hidden = false;
+  clearTimeout(switchingTimer);
+  // Pages that never repaint send no new frame: do not leave the veil up forever.
+  switchingTimer = setTimeout(endSwitching, 8000);
+}
+function endSwitching() {
+  clearTimeout(switchingTimer);
+  $("switching").hidden = true;
+}
 const track = (p) => { busy = p.catch(() => {}); return p; };
 
 // Switch to another tab without reloading this page.
@@ -1145,6 +1166,8 @@ async function doSwitchTab(id, { push = true } = {}) {
   }
   pageId = id;
   currentUrl = "";
+  const label = document.querySelector(`.tab-strip-item[href*="page=${CSS.escape(id)}"]`)?.textContent.replace(/[✕×]/g, "").trim();
+  startSwitching(label);
   loadTabs();
   const next = (await fetchTargets().catch(() => [])).find((t) => t.id === id);
   if (drv instanceof BidiDriver && drv.isOpen() && next && target && next.sessionId === target.sessionId) {
@@ -1422,6 +1445,19 @@ E.tabsModal.onclick = (e) => {
 async function navigateHistory(d) {
   if (drv) await drv.history(d).catch(() => {});
 }
+// The button shows what it switches to: a monitor in mobile layout, a phone in desktop layout.
+const LAYOUT_ICONS = {
+  mobile: '<svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>',
+  desktop: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8M12 16.5V20"/></svg>',
+};
+function renderLayoutButton() {
+  const label = mobileLayout ? "Switch to desktop layout" : "Switch to mobile layout";
+  E.layout.innerHTML = mobileLayout ? LAYOUT_ICONS.desktop : LAYOUT_ICONS.mobile;
+  E.layout.title = label;
+  E.layout.setAttribute("aria-label", label);
+  E.layout.setAttribute("aria-pressed", String(mobileLayout));
+}
+renderLayoutButton();
 E.layout.onclick = async () => {
   mobileLayout = !mobileLayout;
   localStorage.setItem("handoff.mobile", mobileLayout ? "1" : "0");

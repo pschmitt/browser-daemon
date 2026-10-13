@@ -1209,7 +1209,10 @@ function renderSessions() {
   clearStatic(grid);
   reconcile(grid, list, keyOf.session, sessionCard, (el, s) => {
     const up = el.querySelector('[data-up]');
-    if (up) up.textContent = formatUptime(s.uptime_seconds);
+    if (up) {
+      up.dataset.start = sessionStart(s);
+      up.textContent = formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - sessionStart(s))));
+    }
     const idle = el.querySelector('[data-idle]');
     if (idle) {
       const st = idleState(s);
@@ -1218,6 +1221,21 @@ function renderSessions() {
     }
   });
 }
+
+// Uptimes tick locally every second from a start time estimated once per session:
+// overview updates arrive irregularly (and late from peers), which made them jump.
+const sessionStarts = new Map();
+function sessionStart(s) {
+  const key = keyOf.session(s), est = Date.now() / 1000 - (s.uptime_seconds || 0), cur = sessionStarts.get(key);
+  if (cur === undefined || Math.abs(cur - est) > 5) sessionStarts.set(key, est);
+  return sessionStarts.get(key);
+}
+setInterval(() => {
+  const now = Date.now() / 1000;
+  document.querySelectorAll('[data-up][data-start]').forEach((el) => {
+    el.textContent = formatUptime(Math.max(0, Math.floor(now - +el.dataset.start)));
+  });
+}, 1000);
 
 // Idle time is only worth showing once the session has sat unused for a bit.
 function idleState(s) {
