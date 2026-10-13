@@ -82,6 +82,8 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .chip.node { background: color-mix(in oklab, var(--node) 16%, transparent); color: var(--node); }
 .chip.node::before, .dot { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .chip.ok { background: var(--ok-soft); color: var(--ok); }
+.chip.proxy { background: var(--accent-soft); color: var(--accent); gap: 4px; }
+.chip.proxy .i { width: 12px; height: 12px; }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
 .chip.bad { background: var(--bad-soft); color: var(--bad); }
 .chip.accent { background: var(--accent-soft); color: var(--accent); }
@@ -464,6 +466,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></symbol>
   <symbol id="i-takeover" viewBox="0 0 24 24"><path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2 8 5.1M5.1 8 2.2 7.2M14 4.1 12 6.2M6.2 12l-2.1 2"/></symbol>
   <symbol id="i-handoff" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M7 17 17 7M8 7h9v9"/></symbol>
@@ -577,6 +580,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         <input class="input" id="sessionProfileName" placeholder="Profile name, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
         <span class="hint" id="sessionProfileHint"></span>
       </div>
+      <div class="field" id="sessionProxyField"><span class="field-label">Proxy</span><div class="seg" id="sessionProxies"></div><span class="hint" id="sessionProxyHint"></span></div>
       <label class="switch"><input type="checkbox" id="sessionPersistent" checked><span class="track"></span><span class="txt"><b>Keep alive</b><span>Don't stop the browser when the last client disconnects</span></span></label>
       <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
       <label class="switch"><input type="checkbox" id="sessionRecord" checked><span class="track"></span><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
@@ -621,8 +625,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-head"><h2>New profile</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="field"><span class="field-label">Node</span><div class="seg" id="profileNodes"></div></div>
-      <div class="field"><label for="profileName">Name</label><input class="input" id="profileName" required pattern="[A-Za-z0-9_\-]+" placeholder="e.g. hrworks" autocomplete="off" spellcheck="false"><span class="hint">Letters, digits, dashes and underscores.</span></div>
+      <div class="field"><label for="profileName">Name</label><input class="input" id="profileName" required maxlength="128" placeholder="e.g. Google (me@example.com)" autocomplete="off" spellcheck="false"></div>
       <div class="field"><label for="profileClone">Start from</label><select class="input" id="profileClone"></select></div>
+      <div class="field" id="profileProxyField"><label for="profileProxy">Proxy</label><select class="input" id="profileProxy"></select><span class="hint">Sessions of this profile go through it unless they pick another.</span></div>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-plus"/></svg>Create</button></div>
   </form>
@@ -634,7 +639,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-head"><h2 id="transferTitle">Move profile</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="field"><span class="field-label">Destination</span><div class="seg" id="transferNodes"></div></div>
-      <div class="field"><label for="transferName">Name on destination</label><input class="input" id="transferName" pattern="[A-Za-z0-9_\-]+" autocomplete="off" spellcheck="false"></div>
+      <div class="field"><label for="transferName">Name on destination</label><input class="input" id="transferName" maxlength="128" autocomplete="off" spellcheck="false"></div>
       <label class="switch"><input type="checkbox" id="transferMove" checked><span class="track"></span><span class="txt"><b>Move</b><span>Delete the profile here once it arrived</span></span></label>
       <label class="switch"><input type="checkbox" id="transferOverwrite"><span class="track"></span><span class="txt"><b>Overwrite</b><span>Replace a profile with the same name on the destination</span></span></label>
     </div>
@@ -832,6 +837,10 @@ const NODE_COLORS = { 'fnuc': '#34d399', 'rofl-13': '#c084fc', 'rofl-14': '#fbbf
 const PALETTE = ['#f472b6', '#a3e635', '#2dd4bf', '#fb7185', '#60a5fa', '#f59e0b'];
 function hashOf(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
 const nodeColor = (name) => NODE_COLORS[String(name || '').toLowerCase()] || PALETTE[hashOf(name) % PALETTE.length];
+// Proxies are per node: ids only mean something on the node that defines them.
+const nodeProxies = (node) => nodes.find((n) => n.name === node)?.proxies || [];
+const proxyName = (node, id) => nodeProxies(node).find((x) => x.id === id)?.name || id;
+const proxyChip = (node, id) => (id ? `<span class="chip proxy" title="Traffic goes through ${esc(proxyName(node, id))}">${icon('route')}${esc(proxyName(node, id))}</span>` : '');
 const nodeChip = (name) => `<span class="chip node" style="--node:${nodeColor(name)}">${esc(name || 'local')}</span>`;
 
 let ov = null;                                // last mesh overview
@@ -1245,7 +1254,7 @@ function sessionCard(s) {
       <div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${s.profile ? esc(s.profile) : '<em>Throwaway</em>'}</span></div>
-        <div class="scard-meta">${nodeChip(s.node_name)}<span data-up title="Uptime"></span>${clients ? `<span class="sep">·</span><span>${clients}</span>` : ''}${s.persistent ? '' : '<span class="sep">·</span><span title="Stops when its last client disconnects">ephemeral</span>'}${s.adblock ? `<span class="adb" title="Ads are blocked">${icon('shield', 'sm')}</span>` : ''}<span data-idle hidden></span></div>
+        <div class="scard-meta">${nodeChip(s.node_name)}${proxyChip(s.node_name, s.proxy)}<span data-up title="Uptime"></span>${clients ? `<span class="sep">·</span><span>${clients}</span>` : ''}${s.persistent ? '' : '<span class="sep">·</span><span title="Stops when its last client disconnects">ephemeral</span>'}${s.adblock ? `<span class="adb" title="Ads are blocked">${icon('shield', 'sm')}</span>` : ''}<span data-idle hidden></span></div>
       </div>
       ${s.is_recording ? (s.recording_paused ? `<span class="chip scard-rec" title="Recording paused" aria-label="Recording paused">${icon('pause', 'sm')}REC</span>` : '<span class="chip bad scard-rec" title="Recording" aria-label="Recording"><span class="rec-dot" aria-hidden="true"></span>REC</span>') : ''}
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions">${icon('more')}</button>
@@ -1284,7 +1293,7 @@ function profileRow(p) {
   return `
   <div class="row" data-key="${key}">
     <div class="main"><div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>
-      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}</b><span>${status}</span></div></div>
+      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}</b><span>${status}</span></div></div>
     <div class="c-node">${nodeChip(p.node_name)}</div>
     <div class="num c-size">${formatBytes(p.size_bytes)}</div>
     <div class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
@@ -1447,6 +1456,11 @@ const ACT = {
         : { icon: 'play', label: `Launch in ${p.engine === 'firefox' ? 'Firefox' : 'Chromium'}`, run: () => launchProfile(p) },
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
+      nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', run: () => openMenu(el, [
+        { label: p.session ? 'Proxy (applies on next launch)' : 'Proxy' },
+        { label: 'Direct', on: !p.proxy, run: () => setProfileProxy(p, 'none') },
+        ...nodeProxies(p.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: p.proxy === x.id, run: () => setProfileProxy(p, x.id) })),
+      ]) },
       { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
       !p.session && others.length && { icon: 'transfer', label: 'Move to another node…', run: () => openTransfer(p) },
       !p.session && { icon: 'download', label: 'Export archive', run: () => { location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); } },
@@ -1543,6 +1557,7 @@ function openNewSession(prefill = {}) {
   sessionNode = prefill.node || (filter !== 'all' ? filter : localName());
   nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true });
   sessionProfile = prefill.profile ? { name: prefill.profile } : null;
+  sessionProxy = null;
   $('sessionProfileName').value = '';
   setEngine(prefill.engine || 'chromium');
   openModal('newSessionModal');
@@ -1573,10 +1588,33 @@ function renderProfilePicker() {
   ].join('');
   const isNew = !!sessionProfile?.new;
   $('sessionProfileName').hidden = !isNew;
+  renderProxyPicker(list.find((p) => p.display === sessionProfile?.name));
   const running = list.find((p) => p.display === sessionProfile?.name)?.session;
   $('sessionProfileHint').textContent = running ? 'Already running: launching attaches to that session.'
     : isNew ? 'Created on first launch.' : sessionProfile ? 'Picks up cookies and logins from the last session.' : '';
 }
+/* Proxy for the new session: null = the profile's default, 'none' = direct, or an id. */
+let sessionProxy = null;
+function renderProxyPicker(profile) {
+  const list = nodeProxies(sessionNode);
+  $('sessionProxyField').hidden = !list.length;
+  if (!list.length) { sessionProxy = null; return; }
+  if (sessionProxy && sessionProxy !== 'none' && !list.some((x) => x.id === sessionProxy)) sessionProxy = null;
+  const def = profile?.proxy;
+  const pill = (key, label, title = '') => `<button type="button" data-proxy="${esc(key)}" class="${(sessionProxy ?? '') === key ? 'on' : ''}" title="${esc(title)}">${label}</button>`;
+  $('sessionProxies').innerHTML = [
+    profile ? pill('', `Profile default · ${esc(def ? proxyName(sessionNode, def) : 'Direct')}`) : pill('', 'Direct'),
+    profile ? pill('none', 'Direct') : '',
+    ...list.map((x) => pill(x.id, `${icon('route', 'sm')}${esc(x.name)}`, `${x.scheme}://${x.host}:${x.port}`)),
+  ].join('');
+  $('sessionProxyHint').textContent = profile?.session ? 'The profile is already running: its session keeps the proxy it started with.' : '';
+}
+$('sessionProxies').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-proxy]');
+  if (!b) return;
+  sessionProxy = b.dataset.proxy || null;
+  $('sessionProxies').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+});
 $('sessionProfiles').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-pk]');
   if (!b) return;
@@ -1615,6 +1653,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
   const payload = {
     engine: sessionEngine,
     profile: (sessionProfile?.new ? $('sessionProfileName').value.trim() : sessionProfile?.name) || null,
+    proxy: sessionProxy,
     persistent: $('sessionPersistent').checked,
     record: $('sessionRecord').checked,
     adblock: $('sessionAdblock').checked,
@@ -1627,6 +1666,10 @@ $('newSessionForm').addEventListener('submit', async (e) => {
   const t = createProgressToast('launch', `Starting ${sessionEngine === 'firefox' ? 'Firefox' : 'Chromium'} on ${node}`, 'Spawning the browser…');
   t.update(30, 'Spawning the browser…');
   try {
+    // A new profile remembers the proxy it was first launched with.
+    if (sessionProfile?.new && payload.profile && sessionProxy && sessionProxy !== 'none') {
+      await request('POST', api(node, '/profiles'), { name: payload.profile, engine: sessionEngine, proxy: sessionProxy });
+    }
     const s = await request('POST', api(node, '/sessions'), payload);
     closeModal('newSessionModal');
     const url = handoffUrl(node, { session: s.id });
@@ -1704,11 +1747,17 @@ function showSessionDetails(s) {
 let profileNode = null;
 function openNewProfile() {
   profileNode = filter !== 'all' ? filter : localName();
-  nodePills($('profileNodes'), profileNode, (n) => { profileNode = n; fillCloneOptions(); }, { onlineOnly: true });
+  nodePills($('profileNodes'), profileNode, (n) => { profileNode = n; fillCloneOptions(); fillProxyOptions(); }, { onlineOnly: true });
+  fillProxyOptions();
   $('profileName').value = '';
   fillCloneOptions();
   openModal('newProfileModal');
   setTimeout(() => $('profileName').focus(), 40);
+}
+function fillProxyOptions() {
+  const list = nodeProxies(profileNode);
+  $('profileProxyField').hidden = !list.length;
+  $('profileProxy').innerHTML = '<option value="">Direct</option>' + list.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
 }
 function fillCloneOptions() {
   const own = [...byKey.profiles.values()].filter((p) => p.node_name === profileNode);
@@ -1717,7 +1766,7 @@ function fillCloneOptions() {
 $('newProfileForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $('profileName').value.trim();
-  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null }), `Profile ${name} created`);
+  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null, proxy: $('profileProxy').value || null }), `Profile ${name} created`);
   if (r !== undefined) closeModal('newProfileModal');
 });
 
@@ -1732,6 +1781,11 @@ async function renameProfile(p) {
   const name = await ask({ title: `Rename ${p.display}`, input: p.display, ok: 'Rename' });
   if (!name || name === p.display) return;
   act('Renaming profile', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { name: profileTargetName(p, name) }), `Renamed to ${name}`);
+}
+function setProfileProxy(p, id) {
+  const label = id === 'none' ? 'direct connections' : proxyName(p.node_name, id);
+  act('Setting the proxy', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { proxy: id }),
+    `${p.display} uses ${label}` + (p.session ? ' from its next launch' : ''));
 }
 async function cloneProfile(p) {
   const name = await ask({ title: `Duplicate ${p.display}`, text: `Creates a copy on ${p.node_name}.`, input: `${p.display}-copy`, ok: 'Duplicate' });
@@ -1750,6 +1804,7 @@ function showProfileDetails(p) {
   showDetails(p.display, [
     ['Storage', `<span class="mono">${esc(p.storage_dir || p.name)}</span>`], ['ID', p.id && `<span class="mono">${esc(p.id)}</span>`],
     ['Node', nodeChip(p.node_name)], ['Engine', p.engine],
+    ['Proxy', p.proxy ? proxyChip(p.node_name, p.proxy) : 'Direct'],
     ['Size', formatBytes(p.size_bytes)], ['Status', p.session ? 'Running' : 'Stored'],
     ['Session', p.session && `<span class="mono">${esc(p.session.id)}</span>`],
     ['Created', absTime(p.created_at_secs)], ['Modified', absTime(p.modified_at_secs)],

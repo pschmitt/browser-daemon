@@ -14,6 +14,7 @@ A fast, lightweight, native remote browser daemon written in Rust for CDP automa
 - **Mobile-Friendly Live Handoff:** Embedded `/handoff/` web interface with interactive screen streaming, touch-to-click, touch-to-scroll, mobile text input, and clipboard synchronization (copy & paste from/to remote pages). Works for both engines: Chromium streams a CDP screencast, Firefox streams WebDriver BiDi screenshots.
 - **Resource Limits & Governance:** Configurable per-session memory limits (`--max-session-memory-mb`, V8 heap limits) and global systemd service limits (`MemoryMax`, `MemoryHigh`, `CPUQuota`).
 - **Named Profile Persistence:** Optional persistent profiles via `?profile=<name or id>` query parameter, alongside ephemeral auto-cleaned sessions. Each profile lives in `/var/lib/browser-daemon/profiles/<uuid>/` with a `profile.json` holding its free-text name (e.g. `Google (p@example.com)`) and engine; the API reports the directory as `storage_dir`. Name-based directories from older versions are migrated on startup.
+- **Upstream Proxies:** Route a session through a SOCKS or HTTP proxy configured on its node (`services.browser-daemon.proxies`). Pick one per session (`"proxy": "<id>"` when creating it, `?proxy=<id>` on `/chromium` and `/firefox`, `none` for direct) or store a default on a profile (`PATCH /api/profiles/<name> {"proxy": "<id>"}`). DNS goes through SOCKS5 proxies, and WebRTC is kept from bypassing them. `GET /api/proxies` lists a node's proxies.
 - **Installable PWA:** Web App Manifest with standalone display mode, badging, and offline service worker caching.
 - **Drop-In CDP & BiDi Compatibility:** Standard endpoints:
   - `/chromium` (WebSocket for Playwright, Puppeteer, CDP clients)
@@ -49,6 +50,14 @@ Enable the service in your NixOS configuration:
     enable = true;
     bind = "127.0.0.1:3001";
     maxSessions = 8;
+    # Optional: proxies sessions and profiles can choose from.
+    proxies = [
+      {
+        id = "vpn";
+        name = "VPN exit";
+        url = "socks5://10.0.0.1:1080";
+      }
+    ];
   };
 }
 ```

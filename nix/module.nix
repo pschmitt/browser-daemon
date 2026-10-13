@@ -186,6 +186,33 @@ in
       };
     };
 
+    proxies = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            id = lib.mkOption {
+              type = lib.types.strMatching "[A-Za-z0-9._-]+";
+              description = "Stable key that sessions and profiles refer to.";
+            };
+            name = lib.mkOption {
+              type = lib.types.str;
+              description = "Name shown in the dashboard.";
+            };
+            url = lib.mkOption {
+              type = lib.types.str;
+              example = "socks5://proxy.example:1080";
+              description = ''
+                Proxy URL: `socks5://`, `socks5h://`, `socks4://`, `http://` or `https://`.
+                Credentials are not supported.
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      description = "Upstream proxies sessions can be routed through, per session or as a profile default.";
+    };
+
     idleTimeoutMinutes = lib.mkOption {
       type = lib.types.ints.unsigned;
       default = 30;
@@ -286,6 +313,10 @@ in
             "${cfg.adblock.chromiumExtension}"
             "--firefox-adblock"
             "${cfg.adblock.firefoxAddon}"
+          ]
+          ++ lib.optionals (cfg.proxies != [ ]) [
+            "--proxies-file"
+            "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" cfg.proxies}"
           ]
           ++ lib.optionals (cfg.publicUrl != null) [
             "--public-url"

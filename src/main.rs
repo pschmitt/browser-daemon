@@ -2,6 +2,7 @@ mod bidi;
 mod browser;
 mod idle;
 mod profiles;
+mod proxies;
 mod proxy;
 mod recorder;
 
@@ -131,6 +132,12 @@ pub struct Args {
         help = "Block ads in new sessions unless they opt out"
     )]
     pub adblock_default: bool,
+
+    #[arg(
+        long,
+        help = "JSON list of upstream proxies sessions can use: [{\"id\", \"name\", \"url\"}]"
+    )]
+    pub proxies_file: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -146,6 +153,7 @@ pub struct ManagedSession {
     pub client_count: Arc<AtomicUsize>,
     pub activity: Arc<idle::Activity>,
     pub adblock: bool,
+    pub proxy: Option<String>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -190,6 +198,7 @@ impl ManagedSession {
             client_count: self.client_count.load(Ordering::SeqCst),
             tabs_count,
             adblock: self.adblock,
+            proxy: self.proxy.clone(),
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -214,6 +223,9 @@ pub struct SessionSummary {
     pub tabs_count: usize,
     #[serde(default)]
     pub adblock: bool,
+    /// Id of the proxy the session's traffic goes through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -244,6 +256,30 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn proxy_infos(&self) -> Vec<proxies::ProxyInfo> {
+        self.config
+            .proxies
+            .iter()
+            .map(proxies::Proxy::info)
+            .collect()
+    }
+
+    /// A proxy id this node knows, `None` for a direct connection.
+    pub fn check_proxy(&self, key: &str) -> Result<Option<String>, ApiError> {
+        let key = key.trim();
+        if proxies::DIRECT.contains(&key) {
+            return Ok(None);
+        }
+        if self.config.proxies.iter().any(|p| p.id == key) {
+            Ok(Some(key.to_string()))
+        } else {
+            Err(api_error(
+                StatusCode::BAD_REQUEST,
+                format!("Unknown proxy '{key}' on this node"),
+            ))
+        }
+    }
+
     pub fn peer_request(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(ref sec) = self.cluster_secret {
             builder
@@ -293,6 +329,7 @@ impl AppState {
         }
         Ok(())
     }
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn_session(
         &self,
         engine: BrowserEngine,
@@ -304,6 +341,7 @@ impl AppState {
         max_memory_mb: Option<u64>,
         idle_timeout_minutes: Option<u64>,
         adblock: Option<bool>,
+        proxy: Option<&str>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
@@ -343,6 +381,23 @@ impl AppState {
             ));
         }
 
+        // An explicit choice wins ("none" for a direct connection), then the profile's.
+        let proxy_key = proxy
+            .map(str::trim)
+            .map(str::to_string)
+            .or_else(|| profile.as_ref().and_then(|p| p.meta.proxy.clone()));
+        let proxy = match proxy_key.as_deref() {
+            None => None,
+            Some(k) if proxies::DIRECT.contains(&k) => None,
+            Some(k) => Some(
+                self.config
+                    .proxies
+                    .iter()
+                    .find(|p| p.id == k)
+                    .ok_or((StatusCode::BAD_REQUEST, "Unknown proxy on this node"))?,
+            ),
+        };
+
         let adblock = adblock.unwrap_or(self.adblock_default);
         let browser = match ActiveBrowser::spawn(
             &self.config,
@@ -352,6 +407,7 @@ impl AppState {
             height,
             max_memory_mb,
             adblock,
+            proxy,
         )
         .await
         {
@@ -379,6 +435,7 @@ impl AppState {
                 idle_timeout_minutes.map_or(self.idle_timeout_secs, |m| m * 60),
             )),
             adblock: browser.adblock,
+            proxy: browser.proxy.clone(),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -485,6 +542,8 @@ pub struct LaunchParams {
     pub idle_timeout_minutes: Option<u64>,
     /// Load the ad blocker (defaults to the node's --adblock-default).
     pub adblock: Option<bool>,
+    /// Proxy id, or "none"; defaults to the profile's proxy.
+    pub proxy: Option<String>,
     /// Attach without counting as a client (handoff page).
     pub observer: Option<bool>,
 }
@@ -504,6 +563,8 @@ pub struct CreateSessionRequest {
     pub idle_timeout_minutes: Option<u64>,
     /// Load the ad blocker (defaults to the node's --adblock-default).
     pub adblock: Option<bool>,
+    /// Proxy id, or "none"; defaults to the profile's proxy.
+    pub proxy: Option<String>,
 }
 
 /// Chromium writes into unpacked extensions and shows a blocking "Error
@@ -620,6 +681,9 @@ pub struct ProfileInfo {
     pub session_id: Option<Uuid>,
     pub created_at_secs: Option<u64>,
     pub modified_at_secs: Option<u64>,
+    /// Proxy id new sessions of the profile use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -636,11 +700,15 @@ pub struct CreateProfileRequest {
     /// Engine of a new empty profile (a clone keeps its source's).
     #[serde(default)]
     pub engine: BrowserEngine,
+    /// Proxy id new sessions of the profile use.
+    pub proxy: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UpdateProfileRequest {
     pub name: Option<String>,
+    /// Proxy id new sessions use; "none" (or "") clears it.
+    pub proxy: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -703,6 +771,8 @@ pub struct NodeInfo {
     pub max_storage_bytes: u64,
     #[serde(default)]
     pub supported_engines: Vec<BrowserEngine>,
+    #[serde(default)]
+    pub proxies: Vec<proxies::ProxyInfo>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -721,6 +791,8 @@ pub struct PeerState {
     pub uptime_seconds: u64,
     #[serde(default)]
     pub supported_engines: Vec<BrowserEngine>,
+    #[serde(default)]
+    pub proxies: Vec<proxies::ProxyInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -890,6 +962,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .and_then(|src| writable_extension_copy(src, &args.profile_dir));
     profiles::migrate(&args.profile_dir).await;
+    let proxies = match args.proxies_file {
+        Some(ref path) => match proxies::load(path) {
+            Ok(list) => list,
+            Err(e) => {
+                eprintln!("Invalid proxies file: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => Vec::new(),
+    };
     let config = Arc::new(BrowserConfig {
         chromium_bin: args.chromium,
         firefox_bin: args.firefox,
@@ -900,6 +982,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_session_memory_mb: args.max_session_memory_mb,
         chromium_adblock,
         firefox_adblock: args.firefox_adblock,
+        proxies,
     });
 
     let recorder_config = Arc::new(RecorderConfig {
@@ -1013,6 +1096,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/sessions/{id}",
             get(api_get_session).delete(api_delete_session),
         )
+        .route("/api/proxies", get(api_list_proxies))
         .route("/api/sessions/{id}/record", post(api_session_start_record))
         .route(
             "/api/sessions/{id}/files",
@@ -1414,6 +1498,7 @@ async fn json_new(
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
@@ -1587,6 +1672,7 @@ async fn handle_chromium_ws(
                 params.max_memory_mb,
                 params.idle_timeout_minutes,
                 params.adblock,
+                params.proxy.as_deref(),
             )
             .await
         {
@@ -1660,6 +1746,7 @@ async fn handle_firefox_ws(
                 params.max_memory_mb,
                 params.idle_timeout_minutes,
                 params.adblock,
+                params.proxy.as_deref(),
             )
             .await
         {
@@ -1821,6 +1908,7 @@ async fn profile_info(state: &AppState, profile: &Profile) -> ProfileInfo {
         session_id,
         created_at_secs: Some(profile.meta.created_at_secs),
         modified_at_secs,
+        proxy: profile.meta.proxy.clone(),
     }
 }
 
@@ -1909,6 +1997,7 @@ async fn api_create_session(
             req.max_memory_mb,
             req.idle_timeout_minutes,
             req.adblock,
+            req.proxy.as_deref(),
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
@@ -1991,10 +2080,15 @@ async fn api_create_profile(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let name = new_profile_name(&req.name)?;
+    let proxy = req
+        .proxy
+        .as_deref()
+        .map(|k| state.check_proxy(k))
+        .transpose()?;
     let _guard = state.profiles_lock.lock().await;
     ensure_name_free(&state, &name, None).await?;
 
-    let profile = match req.clone_from.as_deref().filter(|s| !s.trim().is_empty()) {
+    let mut profile = match req.clone_from.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(source) => {
             let source = lookup_profile(&state, source).await?;
             copy_profile(&state, &source, &name).await?
@@ -2009,6 +2103,13 @@ async fn api_create_profile(
                 )
             })?,
     };
+
+    if let Some(proxy) = proxy {
+        profile.meta.proxy = proxy;
+        profiles::write_meta(&profile.dir, &profile.meta)
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
 
     info!(profile = %name, id = %profile.meta.id, "Profile created");
     Ok((
@@ -2065,6 +2166,17 @@ async fn api_update_profile(
                 }
             }
             info!(from = %old, to = %name, id = %profile.meta.id, "Profile renamed");
+        }
+    }
+    if let Some(ref requested) = req.proxy {
+        let proxy = state.check_proxy(requested)?;
+        if proxy != profile.meta.proxy {
+            profile.meta.proxy = proxy;
+            profiles::write_meta(&profile.dir, &profile.meta)
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            // A running session keeps its proxy until it is restarted.
+            info!(profile = %profile.meta.name, proxy = ?profile.meta.proxy, "Profile proxy changed");
         }
     }
     Ok(Json(profile_info(&state, &profile).await))
@@ -2448,6 +2560,7 @@ async fn api_mesh_node(
         storage_used_bytes,
         max_storage_bytes,
         supported_engines,
+        proxies: state.proxy_infos(),
     }))
 }
 
@@ -2474,6 +2587,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         storage_used_bytes: local_storage_used_bytes,
         max_storage_bytes: state.recorder_config.max_storage_bytes,
         supported_engines: local_supported_engines,
+        proxies: state.proxy_infos(),
     };
 
     let peers: Vec<(String, String)> = {
@@ -2521,6 +2635,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         storage_used_bytes,
                         max_storage_bytes,
                         supported_engines,
+                        proxies,
                     ) = match node_info {
                         Ok(info) => (
                             info.name,
@@ -2532,6 +2647,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             info.storage_used_bytes,
                             info.max_storage_bytes,
                             info.supported_engines,
+                            info.proxies,
                         ),
                         Err(_) => (
                             p_name.clone(),
@@ -2543,6 +2659,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             0,
                             0,
                             vec![BrowserEngine::Chromium],
+                            Vec::new(),
                         ),
                     };
 
@@ -2595,6 +2712,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             storage_used_bytes,
                             uptime_seconds,
                             supported_engines,
+                            proxies,
                             error: None,
                         },
                         node_name,
@@ -2619,6 +2737,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         storage_used_bytes: 0,
                         uptime_seconds: 0,
                         supported_engines: vec![BrowserEngine::Chromium],
+                        proxies: Vec::new(),
                         error: Some(format!("HTTP {}", res.status())),
                     },
                     p_name,
@@ -2642,6 +2761,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         storage_used_bytes: 0,
                         uptime_seconds: 0,
                         supported_engines: vec![BrowserEngine::Chromium],
+                        proxies: Vec::new(),
                         error: Some(err.to_string()),
                     },
                     p_name,
@@ -3492,6 +3612,14 @@ async fn api_session_idle_timeout(
         "session_id": id,
         "idle_timeout_seconds": params.minutes * 60
     })))
+}
+
+async fn api_list_proxies(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    Ok(Json(state.proxy_infos()))
 }
 
 /// Largest file handoff can drop into a page.

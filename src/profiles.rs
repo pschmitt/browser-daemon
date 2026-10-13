@@ -23,6 +23,9 @@ pub struct ProfileMeta {
     #[serde(default)]
     pub engine: BrowserEngine,
     pub created_at_secs: u64,
+    /// Proxy id sessions of this profile use unless they ask for another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +107,7 @@ pub async fn create(
         name: name.to_string(),
         engine,
         created_at_secs: now_secs(),
+        proxy: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
     fs::create_dir_all(&dir).await?;
@@ -113,6 +117,8 @@ pub async fn create(
 
 /// Give a directory fresh metadata (after a copy or an import).
 pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::Result<Profile> {
+    // A copied or imported profile keeps its proxy choice.
+    let proxy = read_meta(&dir).await.and_then(|m| m.proxy);
     let id = dir
         .file_name()
         .and_then(|n| Uuid::parse_str(&n.to_string_lossy()).ok())
@@ -122,6 +128,7 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         name: name.to_string(),
         engine,
         created_at_secs: now_secs(),
+        proxy,
     };
     write_meta(&dir, &meta).await?;
     Ok(Profile { meta, dir })
@@ -172,6 +179,7 @@ pub async fn migrate(profiles_dir: &Path) {
             name: name.clone(),
             engine,
             created_at_secs,
+            proxy: None,
         };
         let new = profiles_dir.join(id.to_string());
         if new != old {

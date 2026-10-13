@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::bidi::BidiHub;
 use crate::profiles::Profile;
+use crate::proxies::{self, Proxy};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +48,8 @@ pub struct BrowserConfig {
     pub chromium_adblock: Option<PathBuf>,
     /// Ad blocker add-on (uBlock Origin .xpi) installed into Firefox.
     pub firefox_adblock: Option<PathBuf>,
+    /// Upstream proxies sessions can choose from.
+    pub proxies: Vec<Proxy>,
 }
 
 impl BrowserConfig {
@@ -71,9 +74,12 @@ pub struct ActiveBrowser {
     pub profile_id: Option<Uuid>,
     pub created_at: Instant,
     pub adblock: bool,
+    /// Id of the proxy the browser's traffic goes through.
+    pub proxy: Option<String>,
 }
 
 impl ActiveBrowser {
+    #[allow(clippy::too_many_arguments)]
     pub async fn spawn(
         config: &BrowserConfig,
         engine: BrowserEngine,
@@ -82,7 +88,9 @@ impl ActiveBrowser {
         height: Option<u32>,
         max_memory_mb: Option<u64>,
         adblock: bool,
+        proxy: Option<&Proxy>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let proxy_id = proxy.map(|p| p.id.clone());
         let id = Uuid::new_v4();
         let adblock = adblock && config.adblock_available(engine);
         let width = width.unwrap_or(config.default_width);
@@ -146,6 +154,10 @@ impl ActiveBrowser {
                         .arg("--disable-features=DisableLoadExtensionCommandLineSwitch");
                 }
 
+                if let Some(proxy) = proxy {
+                    cmd.args(proxy.chromium_args());
+                }
+
                 let effective_mem = max_memory_mb.or(config.max_session_memory_mb);
                 if let Some(mem_mb) = effective_mem {
                     cmd.arg(format!("--js-flags=--max-old-space-size={}", mem_mb));
@@ -184,6 +196,7 @@ impl ActiveBrowser {
                     profile_id,
                     created_at: Instant::now(),
                     adblock,
+                    proxy: proxy_id,
                 })
             }
             BrowserEngine::Firefox => {
@@ -201,6 +214,12 @@ impl ActiveBrowser {
                 );
 
                 fs::create_dir_all(&user_data_dir).await?;
+                // Proxy prefs are rewritten on every launch: a persistent profile
+                // may have run with another proxy (or none) last time.
+                let user_js = user_data_dir.join("user.js");
+                let existing = fs::read_to_string(&user_js).await.unwrap_or_default();
+                let prefs = proxy.map(Proxy::firefox_prefs).unwrap_or_default();
+                fs::write(&user_js, proxies::firefox_user_js(&existing, &prefs)).await?;
 
                 // Headful on the virtual display, like Chromium; headless only without one.
                 let mut cmd = Command::new(firefox_bin);
@@ -282,6 +301,7 @@ impl ActiveBrowser {
                     profile_id,
                     created_at: Instant::now(),
                     adblock,
+                    proxy: proxy_id,
                 })
             }
         }

@@ -1697,6 +1697,11 @@ async function sessionApi(method, path) {
   return res.json().catch(() => ({}));
 }
 
+// Proxy ids to names, for the session menu (not reachable through the public view).
+let proxyNames = {};
+fetch("/api/proxies", { headers: authHeaders() }).then((r) => (r.ok ? r.json() : []))
+  .then((list) => { proxyNames = Object.fromEntries(list.map((x) => [x.id, x.name])); }).catch(() => {});
+
 async function refreshSession() {
   if (!target?.sessionId) return;
   try {
@@ -1715,7 +1720,8 @@ function renderSession() {
   $("smEngine").textContent = sess.engine || "chromium";
   $("smTitle").textContent = sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent session" : "Throwaway session";
   $("smStatus").textContent = `Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
-    + (rec ? (paused ? " · recording paused" : " · recording") : "");
+    + (rec ? (paused ? " · recording paused" : " · recording") : "")
+    + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : "");
   const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
   const html = !rec ? btn("record", "rec", "Start recording", "rec")
     : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec");
