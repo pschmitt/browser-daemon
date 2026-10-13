@@ -277,6 +277,23 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .seg button .dot { color: var(--node, var(--muted)); }
 .seg button.off { opacity: .5; }
 .seg.small button { height: 30px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
+.pick { display: flex; flex-direction: column; gap: 4px; max-height: 248px; overflow-y: auto; padding: 4px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg); }
+.pick button {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 6px 10px; border: 1px solid transparent; border-radius: 9px;
+  background: transparent; color: var(--fg); text-align: left; font-size: 13px;
+}
+.pick button:hover { background: var(--hover); }
+.pick button:focus-visible { outline: none; border-color: var(--accent); }
+.pick button.on { border-color: var(--accent); background: var(--accent-soft); }
+.pick .pk-icon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: var(--raised); color: var(--muted); flex: none; }
+.pick button.on .pk-icon { color: var(--accent); }
+.pick .pk-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.pick .pk-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick .pk-sub { font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick .pk-badge { flex: none; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.pick .pk-check { flex: none; color: var(--accent); visibility: hidden; }
+.pick button.on .pk-check { visibility: visible; }
+.pick hr { border: 0; border-top: 1px solid var(--line); margin: 2px 6px; }
 .switch { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 2px 0; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
 .switch .track { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--line-strong); transition: background .15s; flex: none; }
@@ -554,10 +571,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         <span class="hint" id="engineHint"></span>
       </div>
       <div class="field">
-        <label for="sessionProfile">Profile</label>
-        <input class="input" id="sessionProfile" list="profileOptions" placeholder="Leave empty for a throwaway session" autocomplete="off" spellcheck="false">
-        <datalist id="profileOptions"></datalist>
-        <span class="hint">A named profile keeps cookies and logins on disk.</span>
+        <span class="field-label" id="sessionProfileLabel">Profile</span>
+        <div class="pick" id="sessionProfiles" role="radiogroup" aria-labelledby="sessionProfileLabel"></div>
+        <input class="input" id="sessionProfileName" placeholder="Profile name, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
+        <span class="hint" id="sessionProfileHint"></span>
       </div>
       <label class="switch"><input type="checkbox" id="sessionPersistent" checked><span class="track"></span><span class="txt"><b>Keep alive</b><span>Don't stop the browser when the last client disconnects</span></span></label>
       <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
@@ -1520,17 +1537,64 @@ function setEngine(engine) {
     : engine === 'firefox' ? 'WebDriver BiDi on /firefox; handoff streams screenshots.' : 'Chrome DevTools Protocol on /chromium; handoff streams a live screencast.';
   $('engineHint').style.color = supported ? '' : 'var(--bad)';
   $('sessionSubmit').disabled = !supported;
+  renderProfilePicker();
 }
 
 function openNewSession(prefill = {}) {
   sessionNode = prefill.node || (filter !== 'all' ? filter : localName());
   nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true });
-  $('profileOptions').innerHTML = [...new Set([...byKey.profiles.values()].map((p) => p.display))].map((n) => `<option value="${esc(n)}">`).join('');
-  $('sessionProfile').value = prefill.profile || '';
+  sessionProfile = prefill.profile ? { name: prefill.profile } : null;
+  $('sessionProfileName').value = '';
   setEngine(prefill.engine || 'chromium');
   openModal('newSessionModal');
-  setTimeout(() => $('sessionProfile').focus(), 40);
+  setTimeout(() => ($('sessionProfiles').querySelector('.on') || $('sessionProfiles').querySelector('button'))?.focus(), 40);
 }
+
+/* Profile picker: null = throwaway, { new: true } = name a new one, { name } = existing. */
+let sessionProfile = null;
+function renderProfilePicker() {
+  const list = [...byKey.profiles.values()]
+    .filter((p) => p.node_name === sessionNode && (p.engine || 'chromium') === sessionEngine)
+    .sort((a, b) => (b.modified_at_secs || 0) - (a.modified_at_secs || 0));
+  if (sessionProfile?.name && !sessionProfile.new && !list.some((p) => p.display === sessionProfile.name)) {
+    // Prefilled or left over from another node/engine: offer it as a new profile.
+    $('sessionProfileName').value = sessionProfile.name;
+    sessionProfile = { new: true };
+  }
+  const row = (key, ico, name, sub, on, badge = '') => `<button type="button" role="radio" aria-checked="${on}" data-pk="${esc(key)}" class="${on ? 'on' : ''}" tabindex="${on ? 0 : -1}">
+    <span class="pk-icon">${ico}</span><span class="pk-text"><span class="pk-name">${esc(name)}</span><span class="pk-sub">${esc(sub)}</span></span>
+    ${badge ? `<span class="pk-badge">${esc(badge)}</span>` : ''}${icon('check', 'sm pk-check')}</button>`;
+  $('sessionProfiles').innerHTML = [
+    row('', icon('broom'), 'Throwaway', 'Fresh browser; nothing is kept when it stops', !sessionProfile),
+    list.length ? '<hr>' : '',
+    ...list.map((p) => row('p:' + p.display, icon(sessionEngine === 'firefox' ? 'firefox' : 'chromium'), p.display,
+      `${formatBytes(p.size_bytes)} · used ${relTime(p.modified_at_secs)}`, sessionProfile?.name === p.display, p.session ? 'running' : '')),
+    '<hr>',
+    row('new', icon('plus'), 'New profile…', 'Keeps cookies and logins on disk', !!sessionProfile?.new),
+  ].join('');
+  const isNew = !!sessionProfile?.new;
+  $('sessionProfileName').hidden = !isNew;
+  const running = list.find((p) => p.display === sessionProfile?.name)?.session;
+  $('sessionProfileHint').textContent = running ? 'Already running: launching attaches to that session.'
+    : isNew ? 'Created on first launch.' : sessionProfile ? 'Picks up cookies and logins from the last session.' : '';
+}
+$('sessionProfiles').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-pk]');
+  if (!b) return;
+  const k = b.dataset.pk;
+  sessionProfile = k === '' ? null : k === 'new' ? { new: true } : { name: k.slice(2) };
+  renderProfilePicker();
+  if (sessionProfile?.new) $('sessionProfileName').focus();
+  else $('sessionProfiles').querySelector('.on')?.focus();
+});
+$('sessionProfiles').addEventListener('keydown', (e) => {
+  const step = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  const btns = [...$('sessionProfiles').querySelectorAll('button')];
+  const i = btns.indexOf(document.activeElement);
+  btns[(i + step + btns.length) % btns.length]?.click();
+});
 document.querySelectorAll('#sessionEngines button').forEach((b) => b.addEventListener('click', () => setEngine(b.dataset.engine)));
 $('sizePresets').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-w]');
@@ -1545,12 +1609,13 @@ $('sizePresets').addEventListener('click', (e) => {
 
 $('newSessionForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (sessionProfile?.new && !$('sessionProfileName').value.trim()) { $('sessionProfileName').focus(); return; }
   const btn = $('sessionSubmit');
   btn.disabled = true;
   const node = sessionNode;
   const payload = {
     engine: sessionEngine,
-    profile: $('sessionProfile').value.trim() || null,
+    profile: (sessionProfile?.new ? $('sessionProfileName').value.trim() : sessionProfile?.name) || null,
     persistent: $('sessionPersistent').checked,
     record: $('sessionRecord').checked,
     adblock: $('sessionAdblock').checked,
