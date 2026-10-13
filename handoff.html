@@ -375,8 +375,10 @@ class CdpDriver {
     await this.cdp.call("Page.bringToFront").catch(() => {});
   }
   async applyMetrics({ w, h, dpr, mode }) {
-    // Cap the screencast scale factor (4K JPEG encoding on CPU is slow).
-    const scale = Math.min(dpr, 1.25);
+    // Native: one image pixel per screen pixel and less JPEG smear, so text stays
+    // sharp. Otherwise capped (4K JPEG encoding on CPU is slow, and so is the wire).
+    const native = mode === "native";
+    const scale = Math.min(dpr, native ? 2 : 1.25);
     if (mode === "phone" || mode === "native") {
       const phone = mode === "phone";
       await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(dpr, 2), mobile: phone, screenWidth: w, screenHeight: h });
@@ -387,8 +389,8 @@ class CdpDriver {
     }
     await this.cdp.call("Page.stopScreencast").catch(() => {});
     await this.cdp.call("Page.startScreencast", {
-      format: "jpeg", quality: 65, everyNthFrame: 1,
-      maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
+      format: "jpeg", quality: native ? 85 : 65, everyNthFrame: 1,
+      maxWidth: Math.min(Math.round(w * scale), native ? 3840 : 1600), maxHeight: Math.min(Math.round(h * scale), native ? 2400 : 1000),
     });
   }
   onEvent(method, p) {
@@ -545,7 +547,7 @@ class BidiDriver {
       try {
         if (t0 - this.lastMeasure > 2000) await this.measure();
         const r = await this.rpc("browsingContext.captureScreenshot", {
-          context: this.ctx, origin: "viewport", format: { type: "image/jpeg", quality: 0.65 },
+          context: this.ctx, origin: "viewport", format: { type: "image/jpeg", quality: this.quality || 0.65 },
         });
         if (r.data !== this.lastFrame) {
           this.lastFrame = r.data;
@@ -560,6 +562,7 @@ class BidiDriver {
     }
   }
   async applyMetrics({ w, h, dpr, mode }) {
+    this.quality = mode === "native" ? 0.85 : 0.65;
     await this.rpc("browsingContext.setViewport", mode !== "window"
       ? { context: this.ctx, viewport: { width: w, height: h }, devicePixelRatio: Math.min(dpr, 2) }
       : { context: this.ctx, viewport: null, devicePixelRatio: null });
