@@ -373,24 +373,38 @@ class CdpDriver {
     await this.cdp.call("Page.enable");
     // Chromium only paints (and screencasts) the tab in front of its window.
     await this.cdp.call("Page.bringToFront").catch(() => {});
+    // The toolbar's height, measured before any emulation changes innerHeight.
+    const r = await this.cdp.call("Runtime.evaluate", { expression: "outerHeight - innerHeight", returnByValue: true }).catch(() => null);
+    this.chromeH = Math.max(0, Math.min(200, r?.result?.value | 0)) || 90;
   }
-  async applyMetrics({ w, h, dpr, mode }) {
-    // Native: one image pixel per screen pixel and less JPEG smear, so text stays
-    // sharp. Otherwise capped (4K JPEG encoding on CPU is slow, and so is the wire).
-    const native = mode === "native";
-    const scale = Math.min(dpr, native ? 2 : 1.25);
-    if (mode === "phone" || mode === "native") {
+  // The screencast captures the real window, so emulating a larger or denser screen
+  // only helps if the window has that many pixels too.
+  async resizeWindow(width, height) {
+    const w = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
+    if (!w?.windowId) return;
+    const b = w.bounds || {};
+    if (Math.abs((b.width || 0) - width) < 2 && Math.abs((b.height || 0) - height) < 2) return;
+    await this.cdp.call("Browser.setWindowBounds", { windowId: w.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
+  }
+  async applyMetrics({ w, h, dpr, mode, windowSize }) {
+    // Native and Phone: one image pixel per screen pixel (up to 2x), so text stays
+    // sharp. Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
+    const fit = mode === "phone" || mode === "native";
+    const scale = Math.min(dpr, fit ? 2 : 1.25);
+    if (fit) {
       const phone = mode === "phone";
-      await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(dpr, 2), mobile: phone, screenWidth: w, screenHeight: h });
+      await this.resizeWindow(Math.min(Math.ceil(w * scale), 3840), Math.min(Math.ceil(h * scale), 2160) + (this.chromeH || 90));
+      await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: scale, mobile: phone, screenWidth: w, screenHeight: h });
       await this.cdp.call("Emulation.setTouchEmulationEnabled", phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false }).catch(() => {});
     } else {
       await this.cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
       await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
+      if (windowSize?.w && windowSize?.h) await this.resizeWindow(windowSize.w, windowSize.h);
     }
     await this.cdp.call("Page.stopScreencast").catch(() => {});
     await this.cdp.call("Page.startScreencast", {
-      format: "jpeg", quality: native ? 85 : 65, everyNthFrame: 1,
-      maxWidth: Math.min(Math.round(w * scale), native ? 3840 : 1600), maxHeight: Math.min(Math.round(h * scale), native ? 2400 : 1000),
+      format: "jpeg", quality: mode === "native" ? 85 : mode === "phone" ? 75 : 65, everyNthFrame: 1,
+      maxWidth: Math.min(Math.round(w * scale), fit ? 3840 : 1600), maxHeight: Math.min(Math.round(h * scale), fit ? 2400 : 1000),
     });
   }
   onEvent(method, p) {
@@ -742,7 +756,8 @@ async function applyMetrics() {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
-  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mode: layoutMode });
+  const windowSize = sess?.window_width ? { w: sess.window_width, h: sess.window_height } : null;
+  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mode: layoutMode, windowSize });
   renderLayout();
 }
 

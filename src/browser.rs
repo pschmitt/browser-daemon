@@ -78,6 +78,8 @@ pub struct ActiveBrowser {
     pub profile_id: Option<Uuid>,
     pub created_at: Instant,
     pub adblock: bool,
+    /// Launch size of the window (handoff restores it after Native/Phone).
+    pub window: (u32, u32),
     /// Local SOCKS relay all of the browser's traffic goes through.
     pub relay: Arc<Relay>,
     /// The session's audio sink, when the node has audio.
@@ -146,6 +148,9 @@ impl ActiveBrowser {
                     .arg(format!("--user-data-dir={}", user_data_dir.display()))
                     .arg("--disable-blink-features=AutomationControlled")
                     .arg(format!("--window-size={},{}", width, height))
+                    // Window pixels = CSS pixels: Xvfb's DPI otherwise yields odd ratios
+                    // (1.046875), and handoff sizes the window in pixels.
+                    .arg("--force-device-scale-factor=1")
                     .arg("--no-first-run")
                     .arg("--no-default-browser-check")
                     .arg("--disable-sync")
@@ -213,6 +218,7 @@ impl ActiveBrowser {
                     profile_id,
                     created_at: Instant::now(),
                     adblock,
+                    window: (width, height),
                     relay: relay.clone(),
                     audio,
                 })
@@ -321,6 +327,7 @@ impl ActiveBrowser {
                     profile_id,
                     created_at: Instant::now(),
                     adblock,
+                    window: (width, height),
                     relay: relay.clone(),
                     audio,
                 })

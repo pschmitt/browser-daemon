@@ -12,7 +12,8 @@ let
   # pointer as a mouse move whenever it handles a mouse press; with the pointer
   # over a window that move cancels drags, so text could not be selected in handoff.
   screenWidth = lib.max cfg.defaultWidth 3840 + 16;
-  screenHeight = lib.max cfg.defaultHeight 2160 + 16;
+  # Room for handoff's Native/Phone modes: a 4K viewport plus the browser's toolbar.
+  screenHeight = lib.max cfg.defaultHeight 2160 + 160;
   pulseDir = "/run/browser-daemon-pulse";
   # A bare PulseAudio for the browsers: an idle default sink, and the daemon
   # adds a null sink per session through pactl.

@@ -180,6 +180,7 @@ pub struct ManagedSession {
     pub relay: Arc<relay::Relay>,
     /// PulseAudio sink the browser plays into.
     pub audio_sink: Option<String>,
+    pub window: (u32, u32),
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -226,6 +227,8 @@ impl ManagedSession {
             adblock: self.adblock,
             proxy: self.relay.current(),
             audio: self.audio_sink.is_some(),
+            window_width: self.window.0,
+            window_height: self.window.1,
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -256,6 +259,11 @@ pub struct SessionSummary {
     /// Its audio can be listened to on /audio.
     #[serde(default)]
     pub audio: bool,
+    /// The browser window's launch size.
+    #[serde(default)]
+    pub window_width: u32,
+    #[serde(default)]
+    pub window_height: u32,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -492,6 +500,7 @@ impl AppState {
                 idle_timeout_minutes.map_or(self.idle_timeout_secs, |m| m * 60),
             )),
             adblock: browser.adblock,
+            window: browser.window,
             relay: browser.relay.clone(),
             audio_sink: browser.audio.as_ref().map(|s| s.name.clone()),
             bidi: browser.bidi.clone(),
