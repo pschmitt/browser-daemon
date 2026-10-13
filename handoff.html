@@ -21,7 +21,7 @@
   body { display: flex; flex-direction: column; height: 100dvh; padding-top: env(safe-area-inset-top); }
 
   /* tab strip */
-  #tabStrip { display: flex; align-items: center; gap: 4px; padding: 4px 6px 0; background: color-mix(in oklab, var(--bar) 75%, var(--bg)); border-bottom: 1px solid var(--line); flex: none; min-height: 38px; }
+  #tabStrip { touch-action: manipulation; user-select: none; display: flex; align-items: center; gap: 4px; padding: 4px 6px 0; background: color-mix(in oklab, var(--bar) 75%, var(--bg)); border-bottom: 1px solid var(--line); flex: none; min-height: 38px; }
   #tabsScroll { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   #tabsScroll::-webkit-scrollbar { display: none; }
   .tab-strip-item { height: 33px; padding: 0 8px 0 10px; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; max-width: 200px; flex: none; text-decoration: none; user-select: none; }
@@ -275,7 +275,7 @@ function authHeaders(extra = {}) {
 }
 
 const params = new URLSearchParams(location.search);
-const pageId = params.get("page");
+let pageId = params.get("page");
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const $ = (id) => document.getElementById(id);
 const E = {
@@ -472,6 +472,15 @@ class BidiDriver {
       if (method !== "browsingContext.domContentLoaded") { this.measure(); h.loaded(); }
     }
   }
+  // Another tab of the same Firefox: same BiDi session, just follow that context.
+  async switchTo(ctx) {
+    this.ctx = ctx;
+    this.lastFrame = "";
+    await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [ctx] });
+    await this.rpc("browsingContext.activate", { context: ctx }).catch(() => {});
+    await this.measure();
+    this.kick();
+  }
   async start() {
     await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [this.ctx] });
     await this.rpc("browsingContext.activate", { context: this.ctx }).catch(() => {});
@@ -626,11 +635,13 @@ const handlers = {
 };
 
 let connecting = false;
-async function connect() {
+// quiet: switching tabs keeps the last picture up instead of the "Connecting" overlay.
+async function connect({ quiet = false } = {}) {
   if (connecting) return;
   connecting = true;
   if (drv) drv.close();
-  setState("wait", "Connecting to the browser…");
+  if (quiet) E.dot.className = "wait";
+  else setState("wait", "Connecting to the browser…");
   try {
     target = (await fetchTargets()).find((t) => t.id === pageId) || null;
     if (!target) { setState("bad", "This tab no longer exists"); return; }
@@ -1102,6 +1113,36 @@ E.urlBar.onsubmit = async (e) => {
 
 /* ---------------------------------------------------------------- tabs & sessions */
 // Opens a blank tab and focuses its URL bar, like a browser's new-tab button.
+// Switch to another tab without reloading this page.
+async function switchTab(id, { push = true } = {}) {
+  if (!id || id === pageId) return;
+  if (push) {
+    const u = new URL(location.href);
+    u.searchParams.set("page", id);
+    u.searchParams.delete("newtab");
+    history.pushState(null, "", u.toString());
+  }
+  pageId = id;
+  currentUrl = "";
+  loadTabs();
+  const next = (await fetchTargets().catch(() => [])).find((t) => t.id === id);
+  if (drv instanceof BidiDriver && drv.isOpen() && next && target && next.sessionId === target.sessionId) {
+    try {
+      target = next;
+      await drv.switchTo(id);
+      if (mobileLayout) await applyMetrics();
+      E.dot.className = "live";
+      refreshInfo();
+      return;
+    } catch { /* fall back to a fresh connection */ }
+  }
+  connect({ quiet: true });
+}
+addEventListener("popstate", () => {
+  const id = new URLSearchParams(location.search).get("page");
+  if (id && id !== pageId) switchTab(id, { push: false });
+});
+
 async function openNewTab() {
   try {
     const qs = new URLSearchParams();
@@ -1115,12 +1156,11 @@ async function openNewTab() {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || res.statusText);
     }
-    const target = await res.json();
-    if (target && target.id) {
-      const u = new URL(location.href);
-      u.searchParams.set("page", target.id);
-      u.searchParams.set("newtab", "1");
-      location.href = u.toString();
+    const created = await res.json();
+    if (created && created.id) {
+      await switchTab(created.id);
+      E.urlInput.value = "";
+      E.urlInput.focus();
       return;
     }
     throw new Error("Invalid response from /json/new");
@@ -1139,15 +1179,15 @@ async function closeTab(id) {
     });
     if (!res.ok) throw new Error("Close request failed");
     if (isCurrent) {
-      const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
-      const pages = list.filter((p) => p.type === "page" && p.id !== id);
-      const u = new URL(location.href);
+      // Stay in this session: another of its tabs, else the page picker.
+      const pages = (await fetchTargets()).filter((p) => p.id !== id && p.sessionId === target?.sessionId);
       if (pages.length > 0) {
-        u.searchParams.set("page", pages[0].id);
+        await switchTab(pages[0].id);
       } else {
+        const u = new URL(location.href);
         u.searchParams.delete("page");
+        location.href = u.toString();
       }
-      location.href = u.toString();
     } else {
       loadTabs();
     }
@@ -1177,10 +1217,10 @@ function renderTabStrip(pages) {
     itemUrl.searchParams.set("page", p.id);
     item.href = itemUrl.toString();
     item.onclick = (e) => {
+      // Ctrl/middle click keeps opening it in a new browser tab.
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
       e.preventDefault();
-      if (!isCurrent) {
-        location.href = itemUrl.toString();
-      }
+      if (!isCurrent) switchTab(p.id);
     };
 
     let iconHost = "";
@@ -1316,11 +1356,7 @@ function renderTabsModal(pages) {
 
     card.onclick = () => {
       closeTabsModal();
-      if (!isCurrent) {
-        const u = new URL(location.href);
-        u.searchParams.set("page", p.id);
-        location.href = u.toString();
-      }
+      if (!isCurrent) switchTab(p.id);
     };
 
     E.tabsList.appendChild(card);
@@ -1344,6 +1380,17 @@ function closeTabsModal() {
 E.tabAddBtn.onclick = () => openNewTab();
 E.tabsDrawerBtn.onclick = () => openTabsModal();
 E.newTabBtn.onclick = () => openNewTab();
+// Double click (or double tap) on the empty part of the tab bar opens a new tab, like a
+// desktop browser. Taps are counted here: phones do not reliably fire dblclick.
+let stripTap = { t: 0, x: 0, y: 0 };
+E.tabStrip.addEventListener("pointerup", (e) => {
+  if (e.target.closest("button, a, .tab-strip-item")) return;
+  const now = performance.now();
+  const again = now - stripTap.t < 400 && Math.hypot(e.clientX - stripTap.x, e.clientY - stripTap.y) < 24;
+  stripTap = again ? { t: 0, x: 0, y: 0 } : { t: now, x: e.clientX, y: e.clientY };
+  if (again) openNewTab();
+});
+E.tabStrip.addEventListener("dblclick", (e) => e.preventDefault());
 E.closeTabsBtn.onclick = () => closeTabsModal();
 E.tabsModal.onclick = (e) => {
   if (e.target === E.tabsModal) closeTabsModal();
