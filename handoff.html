@@ -28,6 +28,9 @@
   .tab-strip-item:hover { background: color-mix(in oklab, var(--bar) 75%, var(--btn)); color: var(--fg); }
   .tab-strip-item.active { background: var(--bar); color: var(--fg); font-weight: 600; border-color: var(--line); border-bottom: 1px solid var(--bar); margin-bottom: -1px; }
   .tab-strip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  /* Playing sound, like a desktop browser's tab speaker. */
+  .audible { display: inline-flex; flex: none; color: var(--accent, currentColor); margin-right: 4px; vertical-align: -2px; }
+  .audible svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .tab-strip-tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; background: var(--btn); color: var(--muted); flex: none; }
   .tab-strip-close { width: 18px; height: 18px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; padding: 0; margin-left: 2px; flex: none; }
   .tab-strip-close:hover { background: color-mix(in oklab, var(--bad) 25%, transparent); color: var(--bad); }
@@ -379,6 +382,14 @@ const CDP_KEYS = {
   Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27], Delete: [46],
   ArrowLeft: [37], ArrowUp: [38], ArrowRight: [39], ArrowDown: [40], Home: [36], End: [35], PageUp: [33], PageDown: [34],
 };
+
+function speakerIcon() {
+  const el = document.createElement("span");
+  el.className = "audible";
+  el.title = "Playing sound";
+  el.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>`;
+  return el;
+}
 
 // The session's window while Native/Phone has resized it, and its own size to go back to.
 const winFit = { session: null, own: null, fitted: false };
@@ -1508,17 +1519,24 @@ async function closeTab(id) {
   }
 }
 
+let tabsSig = "";
 async function loadTabs() {
   try {
     const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
     // The tabs of this browser only; the node's other sessions are in the drawer's picker.
     const all = list.filter((x) => x.type === "page");
     const pages = all.filter((x) => !target?.sessionId || x.sessionId === target.sessionId);
+    // Redrawn only when something shown changed: this also runs on a timer.
+    const sig = JSON.stringify([target?.id, all.map((x) => [x.id, x.title, x.url, x.audible])]);
+    if (sig === tabsSig) return;
+    tabsSig = sig;
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
     renderTabStrip(pages);
     renderTabsModal(all);
   } catch { /* ignore */ }
 }
+// Titles and the speaker on tabs playing sound stay current between page events.
+setInterval(() => { if (document.visibilityState === "visible" && target) loadTabs(); }, 2500);
 
 function renderTabStrip(pages) {
   if (!E.tabsScroll) return;
@@ -1574,6 +1592,7 @@ function renderTabStrip(pages) {
     }
     title.textContent = p.title || fallback;
     title.title = p.title ? (p.title + " (" + p.url + ")") : p.url;
+    if (p.audible) item.appendChild(speakerIcon());
     item.appendChild(title);
 
     if (p.profile) {
@@ -1625,6 +1644,7 @@ function renderTabsModal(pages) {
     const title = document.createElement("div");
     title.className = "tab-title";
     title.innerHTML = `${iconImg}<span>${(p.title || "(untitled)").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</span>`;
+    if (p.audible) title.insertBefore(speakerIcon(), title.lastChild);
 
     const url = document.createElement("div");
     url.className = "tab-url";
@@ -2305,7 +2325,7 @@ async function openSessPop() {
       const href = `${base}/handoff/?session=${encodeURIComponent(x.id)}`;
       const eng = x.engine === "firefox" ? "firefox" : "chromium";
       return `<a href="${esc(href)}" role="menuitem"><span class="sp-eng ${eng}" title="${eng === "firefox" ? "Firefox" : "Chromium"}">${eng === "firefox" ? "FF" : "CR"}</span>`
-        + `<span class="sp-t"><b>${esc(x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${fmtAge(x.uptime_seconds || 0)}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
+        + `<span class="sp-t"><b>${x.audible ? speakerIcon().outerHTML : ""}${esc(x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${fmtAge(x.uptime_seconds || 0)}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
     }).join("") : '<div class="sp-empty">No other sessions are running.</div>') + '<hr><a href="/" role="menuitem"><span class="sp-eng">⌂</span><span class="sp-t"><b>Dashboard</b></span></a>';
   } catch (err) {
     pop.innerHTML = `<div class="sp-empty">Could not load sessions (${esc(err.message)}).</div>`;

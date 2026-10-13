@@ -2,6 +2,7 @@
 //! `/audio?session_id=…` streams that sink's monitor as Opus in WebM, encoded
 //! by ffmpeg, one encoder per listener.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -120,6 +121,34 @@ pub async fn remove_stale_sinks(cfg: &AudioConfig) {
             .await;
         info!(module = %index, "Removed a stale audio sink");
     }
+}
+
+/// Sinks with a stream playing into them right now (not corked, not muted).
+/// The sink's own state would not do: a listener on its monitor keeps it running.
+pub async fn audible_sinks(cfg: &AudioConfig) -> Option<HashSet<String>> {
+    let list = |what: &'static str| async move {
+        let out = Command::new(&cfg.pactl)
+            .arg("--server")
+            .arg(cfg.server_arg())
+            .args(["-f", "json", "list", what])
+            .output()
+            .await
+            .ok()?;
+        serde_json::from_slice::<Vec<serde_json::Value>>(&out.stdout).ok()
+    };
+    let sinks: HashMap<u64, String> = list("sinks")
+        .await?
+        .iter()
+        .filter_map(|s| Some((s["index"].as_u64()?, s["name"].as_str()?.to_string())))
+        .collect();
+    Some(
+        list("sink-inputs")
+            .await?
+            .iter()
+            .filter(|i| i["corked"] == false && i["mute"] == false)
+            .filter_map(|i| sinks.get(&i["sink"].as_u64()?).cloned())
+            .collect(),
+    )
 }
 
 /// An ffmpeg encoding `sink`'s monitor to Opus in WebM on stdout, tuned for

@@ -1,3 +1,4 @@
+mod audible;
 mod audio;
 mod bidi;
 mod browser;
@@ -24,7 +25,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
@@ -249,6 +250,8 @@ pub struct ManagedSession {
     pub display_size: Option<(u32, u32)>,
     pub video: bool,
     pub color_scheme: ColorScheme,
+    /// Sound is playing (kept current by the audible monitor).
+    pub audible: Arc<AtomicBool>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -300,6 +303,7 @@ impl ManagedSession {
             display_shared: self.display.is_some() && self.display_size.is_none(),
             video: self.video,
             color_scheme: self.color_scheme,
+            audible: self.audible.load(Ordering::Relaxed),
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -345,6 +349,9 @@ pub struct SessionSummary {
     /// Appearance the browser was launched with.
     #[serde(default)]
     pub color_scheme: ColorScheme,
+    /// Sound is playing.
+    #[serde(default)]
+    pub audible: bool,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -375,6 +382,8 @@ pub struct AppState {
     /// First-seen order of tabs: Chromium lists them most recently used first,
     /// which reshuffles the tab bar whenever another tab is brought to the front.
     pub tab_order: Arc<std::sync::Mutex<TabOrder>>,
+    /// Ids of the tabs playing sound.
+    pub audible_pages: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
 }
 
 #[derive(Default)]
@@ -597,6 +606,7 @@ impl AppState {
             display_size: browser.display.as_ref().map(|d| (d.width, d.height)),
             video: browser.display.is_some() && self.config.video.is_some(),
             color_scheme,
+            audible: Arc::new(AtomicBool::new(false)),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -927,6 +937,9 @@ pub struct DevToolsTarget {
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<BrowserEngine>,
+    /// Playing sound.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audible: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1236,7 +1249,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         adblock_default: args.adblock_default,
         profiles_lock: Arc::new(Mutex::new(())),
         tab_order: Arc::new(std::sync::Mutex::new(TabOrder::default())),
+        audible_pages: Arc::default(),
     };
+    audible::spawn_monitor(state.clone());
 
     // Stop sessions that nobody has used for a while.
     let reaper_state = state.clone();
@@ -1492,6 +1507,11 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
     if let Ok(mut order) = state.tab_order.lock() {
         order.sort(&mut all_targets);
     }
+    if let Ok(audible) = state.audible_pages.read() {
+        for t in &mut all_targets {
+            t.audible = audible.contains(&t.id);
+        }
+    }
     all_targets
 }
 
@@ -1506,6 +1526,7 @@ fn firefox_target(session: &ManagedSession, ctx: bidi::BidiContext) -> DevToolsT
         session_id: Some(session.id),
         profile: session.profile.clone(),
         engine: Some(BrowserEngine::Firefox),
+        audible: false,
     }
 }
 
@@ -4495,6 +4516,7 @@ mod tests {
             session_id: None,
             profile: None,
             engine: None,
+            audible: false,
         };
         let mut order = TabOrder::default();
         let mut list = vec![tab("a"), tab("b"), tab("c")];
