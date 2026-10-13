@@ -24,15 +24,14 @@
   #tabStrip { touch-action: manipulation; user-select: none; display: flex; align-items: center; gap: 4px; padding: 4px 6px 0; background: color-mix(in oklab, var(--bar) 75%, var(--bg)); border-bottom: 1px solid var(--line); flex: none; min-height: 38px; }
   #tabsScroll { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   #tabsScroll::-webkit-scrollbar { display: none; }
-  .tab-strip-item { height: 33px; padding: 0 8px 0 10px; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; max-width: 200px; flex: none; text-decoration: none; user-select: none; }
+  .tab-strip-item { height: 33px; padding: 0 8px 0 10px; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 1 220px; min-width: 96px; max-width: 240px; overflow: hidden; text-decoration: none; user-select: none; }
   .tab-strip-item:hover { background: color-mix(in oklab, var(--bar) 75%, var(--btn)); color: var(--fg); }
   .tab-strip-item.active { background: var(--bar); color: var(--fg); font-weight: 600; border-color: var(--line); border-bottom: 1px solid var(--bar); margin-bottom: -1px; }
   .tab-strip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
   /* Playing sound, like a desktop browser's tab speaker. */
   .audible { display: inline-flex; flex: none; color: var(--accent, currentColor); margin-right: 4px; vertical-align: -2px; }
   .audible svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .tab-strip-tag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; background: var(--btn); color: var(--muted); flex: none; }
-  .tab-strip-close { width: 18px; height: 18px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; padding: 0; margin-left: 2px; flex: none; }
+  .tab-strip-close { width: 20px; height: 20px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; padding: 0; margin-left: 2px; flex: none; }
   .tab-strip-close:hover { background: color-mix(in oklab, var(--bad) 25%, transparent); color: var(--bad); }
   .tab-strip-add { width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none; margin-bottom: 3px; }
   .tab-strip-add:hover { background: var(--btn); color: var(--fg); }
@@ -1722,13 +1721,6 @@ function renderTabStrip(pages) {
     title.title = p.title ? (p.title + " (" + p.url + ")") : p.url;
     if (p.audible) item.appendChild(speakerIcon());
     item.appendChild(title);
-
-    if (p.profile) {
-      const tag = document.createElement("span");
-      tag.className = "tab-strip-tag";
-      tag.textContent = p.profile;
-      item.appendChild(tag);
-    }
 
     const closeBtn = document.createElement("button");
     closeBtn.className = "tab-strip-close";

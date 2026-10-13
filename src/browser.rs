@@ -308,6 +308,8 @@ impl ActiveBrowser {
                     ("extensions.formautofill.creditCards.enabled", "false"),
                     // Sessions end by being killed: no "restore session" afterwards.
                     ("browser.sessionstore.resume_from_crash", "false"),
+                    // 2 = block: sites can't ask to show notifications.
+                    ("permissions.default.desktop-notification", "2"),
                 ] {
                     prefs.push(format!("user_pref(\"{pref}\", {value});"));
                 }
@@ -417,7 +419,7 @@ impl ActiveBrowser {
 }
 
 /// The profile's `Preferences` with the password manager and autofill switched
-/// off, and the last run marked clean (sessions end by being killed, which would
+/// off, notifications blocked, and the last run marked clean (sessions end by being killed, which would
 /// offer to restore pages); everything else Chromium stored there is kept.
 fn chromium_preferences(existing: &str) -> String {
     let mut prefs: serde_json::Value = serde_json::from_str(existing)
@@ -432,6 +434,11 @@ fn chromium_preferences(existing: &str) -> String {
         ("autofill.credit_card_enabled", false.into()),
         ("profile.exit_type", "Normal".into()),
         ("profile.exited_cleanly", true.into()),
+        // 2 = block: sites can't ask to show notifications.
+        (
+            "profile.default_content_setting_values.notifications",
+            2.into(),
+        ),
     ] {
         let mut node = &mut prefs;
         let mut keys = path.split('.').peekable();
@@ -533,6 +540,10 @@ mod tests {
         assert_eq!(out["credentials_enable_service"], false);
         assert_eq!(out["autofill"]["credit_card_enabled"], false);
         assert_eq!(out["profile"]["exit_type"], "Normal");
+        assert_eq!(
+            out["profile"]["default_content_setting_values"]["notifications"],
+            2
+        );
         let fresh: serde_json::Value = serde_json::from_str(&chromium_preferences("")).unwrap();
         assert_eq!(fresh["autofill"]["profile_enabled"], false);
     }
