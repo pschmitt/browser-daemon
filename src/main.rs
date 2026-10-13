@@ -11,6 +11,7 @@ mod recorder;
 mod relay;
 mod tui;
 mod video;
+mod viewers;
 
 use axum::body::Bytes;
 use axum::extract::ws::WebSocketUpgrade;
@@ -384,6 +385,8 @@ pub struct AppState {
     pub tab_order: Arc<std::sync::Mutex<TabOrder>>,
     /// Ids of the tabs playing sound.
     pub audible_pages: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
+    /// Live views per session, for the size Native viewers share.
+    pub viewers: Arc<viewers::Viewers>,
 }
 
 #[derive(Default)]
@@ -1250,6 +1253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         profiles_lock: Arc::new(Mutex::new(())),
         tab_order: Arc::new(std::sync::Mutex::new(TabOrder::default())),
         audible_pages: Arc::default(),
+        viewers: Arc::default(),
     };
     audible::spawn_monitor(state.clone());
 
@@ -1311,6 +1315,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/devtools/page/{page_id}", get(handle_page_ws))
         .route("/audio", get(handle_audio_ws))
         .route("/video", get(handle_video_ws))
+        .route("/viewers", get(handle_viewers_ws))
         // REST Management APIs for sessions and profiles
         .route(
             "/api/sessions",
@@ -4069,6 +4074,51 @@ async fn handle_audio_ws(
         }
         let _ = child.kill().await;
         info!(session_id = %params.session_id, "Audio listener left");
+    })
+}
+
+#[derive(Deserialize)]
+struct ViewerReport {
+    /// [width, height] while in Native layout, null otherwise.
+    native: Option<(u32, u32)>,
+}
+
+/// One live view of a session: it reports its size in Native layout and gets
+/// the size all Native viewers of the session share.
+async fn handle_viewers_ws(
+    ws: WebSocketUpgrade,
+    Query(params): Query<AudioParams>,
+    State(state): State<AppState>,
+) -> Response {
+    if !state.sessions.read().await.contains_key(&params.session_id) {
+        return (StatusCode::NOT_FOUND, "No such session").into_response();
+    }
+    ws.on_upgrade(move |mut socket| async move {
+        use axum::extract::ws::Message;
+        let session = params.session_id;
+        let (id, mut rx) = state.viewers.join(session);
+        loop {
+            tokio::select! {
+                out = rx.recv() => match out {
+                    Some(text) => {
+                        if socket.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+                msg = socket.recv() => match msg {
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(r) = serde_json::from_str::<ViewerReport>(&t) {
+                            state.viewers.set(session, id, r.native);
+                        }
+                    }
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                    _ => {}
+                },
+            }
+        }
+        state.viewers.leave(session, id);
     })
 }
 

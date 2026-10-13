@@ -877,8 +877,11 @@ async function doConnect({ quiet = false } = {}) {
 async function applyMetrics() {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
-  const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
+  let w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
   const dpr = devicePixelRatio || 1;
+  // Native: the smallest screen among the session's Native viewers, so all see everything.
+  reportViewerSize(layoutMode === "native" ? [w, h] : null);
+  if (layoutMode === "native" && viewers.native) { w = Math.min(w, viewers.native[0]); h = Math.min(h, viewers.native[1]); }
   // Chromium on a display of its own, at density 1: the window takes this size.
   const fitWindow = layoutMode !== "window" && !!sess?.display && !sess.display_shared
     && target?.engine !== "firefox" && Math.min(dpr, 2) <= 1.05;
@@ -892,7 +895,11 @@ function sizeCanvas() {
   E.stage.classList.toggle("fixed", fitLayout);
   if (fitLayout && meta.deviceWidth > 0 && meta.deviceHeight > 0) {
     const stageRect = E.stage.getBoundingClientRect();
-    if (stageRect.width > 0 && Math.abs(stageRect.width - meta.deviceWidth) < 25) {
+    // Native, sized down for a smaller viewer: 1:1 in the middle rather than stretched.
+    const fits = layoutMode === "native"
+      ? meta.deviceWidth <= stageRect.width + 1 && meta.deviceHeight <= stageRect.height + 1
+      : Math.abs(stageRect.width - meta.deviceWidth) < 25;
+    if (stageRect.width > 0 && fits) {
       E.view.style.width = meta.deviceWidth + "px";
       E.view.style.height = meta.deviceHeight + "px";
     } else {
@@ -2330,6 +2337,39 @@ E.audioBtn.onclick = () => {
 };
 renderAudioButton();
 
+/* ---------------------------------------------------------------- shared Native size */
+// Every view of a session tells the node its screen size while in Native layout and
+// gets back the smallest width and height among those views.
+const viewers = { ws: null, session: null, native: null, own: null, sent: undefined, count: 1 };
+function connectViewers() {
+  const sessionId = target?.sessionId;
+  if (viewers.ws && viewers.session === sessionId) return;
+  try { viewers.ws?.close(); } catch { /* closed */ }
+  Object.assign(viewers, { ws: null, session: sessionId, native: null, sent: undefined, count: 1 });
+  if (!sessionId) return;
+  const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+  const ws = new WebSocket(`${scheme}${location.host}/viewers?session_id=${encodeURIComponent(sessionId)}`);
+  ws.onopen = () => reportViewerSize(viewers.own);
+  ws.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    viewers.count = m.viewers || 1;
+    const changed = JSON.stringify(m.native) !== JSON.stringify(viewers.native);
+    viewers.native = m.native;
+    if (changed && layoutMode === "native") applyMetrics();
+  };
+  // Dropped (node restart, network): the next session refresh reconnects it.
+  ws.onclose = () => { if (viewers.ws === ws) Object.assign(viewers, { ws: null, native: null }); };
+  viewers.ws = ws;
+}
+function reportViewerSize(native) {
+  viewers.own = native;
+  const msg = JSON.stringify({ native });
+  if (viewers.ws?.readyState !== WebSocket.OPEN || msg === viewers.sent) return;
+  viewers.sent = msg;
+  viewers.ws.send(msg);
+}
+
 /* ---------------------------------------------------------------- other sessions */
 // The dashboard button's chevron (and, with a mouse, hovering it) lists the mesh's
 // other running sessions; picking one opens its handoff view.
@@ -2402,6 +2442,7 @@ function renderSession() {
   // Another session (switched from the drawer): its sound, not the old one's.
   if (audio.el && audio.session !== target?.sessionId) stopAudio();
   if (sess.audio && audioWanted && !audio.el) startAudio();
+  connectViewers();
   $("smStreamRow").hidden = !sess.video || !window.VideoDecoder;
   if (canVideo() && !video.ws) startVideo();
   const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
