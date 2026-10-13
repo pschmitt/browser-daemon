@@ -312,7 +312,10 @@ class Cdp {
   close() { try { this.ws.close(); } catch { /* already closed */ } }
 }
 
-const CDP_KEYS = { Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27] };
+const CDP_KEYS = {
+  Enter: [13, "\r"], Tab: [9], Backspace: [8], Escape: [27], Delete: [46],
+  ArrowLeft: [37], ArrowUp: [38], ArrowRight: [39], ArrowDown: [40], Home: [36], End: [35], PageUp: [33], PageDown: [34],
+};
 
 class CdpDriver {
   constructor(url, h) {
@@ -408,7 +411,10 @@ class CdpDriver {
 }
 
 // WebDriver key codes for the special keys the UI sends.
-const BIDI_KEYS = { Enter: "", Tab: "", Backspace: "", Escape: "" };
+const BIDI_KEYS = {
+  Enter: "\uE007", Tab: "\uE004", Backspace: "\uE003", Escape: "\uE00C", Delete: "\uE017",
+  ArrowLeft: "\uE012", ArrowUp: "\uE013", ArrowRight: "\uE014", ArrowDown: "\uE015", Home: "\uE011", End: "\uE010", PageUp: "\uE00E", PageDown: "\uE00F",
+};
 const BIDI_EVENTS = [
   "browsingContext.navigationStarted", "browsingContext.load", "browsingContext.domContentLoaded",
   "browsingContext.fragmentNavigated", "browsingContext.historyUpdated", "browsingContext.contextDestroyed",
@@ -826,7 +832,8 @@ E.view.addEventListener("pointerup", (e) => {
     const p = toPage(e), clicks = mouse.clicks;
     mouse = null;
     if (p) drv.mouseUp(Math.round(p.x), Math.round(p.y), clicks);
-    setTimeout(probeFocus, 160);
+    // No probeFocus here: with a physical keyboard, keys go straight to the page, and the
+    // probe would collapse a selection just made inside a text field.
     refreshRemoteSelection();
     return;
   }
@@ -938,6 +945,19 @@ async function resync() {
   } catch { /* ignore */ }
 }
 E.kb.addEventListener("keydown", (e) => {
+  // Editing shortcuts act on the remote field; the mirror follows (select all) or resyncs.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && drv) {
+    const k = e.key.toLowerCase();
+    if (k === "a" || k === "z" || k === "y") {
+      e.preventDefault();
+      const redo = k === "y" || (k === "z" && e.shiftKey);
+      drv.shortcut(k, e.shiftKey, k === "a" ? "selectAll" : redo ? "redo" : "undo");
+      if (k === "a") E.kb.select();
+      else { clearTimeout(resyncTimer); resyncTimer = setTimeout(resync, 150); }
+      refreshRemoteSelection();
+    }
+    return;
+  }
   if (e.key === "Enter") { e.preventDefault(); pressKey("Enter"); setTimeout(probeFocus, 400); }
   else if (e.key === "Tab") { e.preventDefault(); pressKey("Tab"); setTimeout(probeFocus, 200); }
   else if (e.key === "Escape") { e.preventDefault(); pressKey("Escape"); }
