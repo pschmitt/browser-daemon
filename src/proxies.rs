@@ -109,6 +109,10 @@ impl Proxy {
             }
         }
         prefs.push("user_pref(\"media.peerconnection.ice.proxy_only\", true);".to_string());
+        // Only the proxy's own name is resolved locally (pages resolve through the
+        // proxy), and Firefox does not fall back to IPv4 when IPv6 to the proxy is
+        // silently dropped: it waits for the connection to time out.
+        prefs.push("user_pref(\"network.dns.disableIPv6\", true);".to_string());
         prefs
     }
 }
