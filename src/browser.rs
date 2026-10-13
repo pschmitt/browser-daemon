@@ -358,12 +358,14 @@ async fn wait_for_firefox_bidi(
         let mut tx = Some(tx);
         while let Ok(Some(line)) = reader.next_line().await {
             if tx.is_some() {
-                if let Some(pos) = line.find("WebDriver BiDi listening on ws://127.0.0.1:") {
-                    let rest = &line[pos + "WebDriver BiDi listening on ws://127.0.0.1:".len()..];
-                    let port_str = rest
-                        .split(|c: char| !c.is_ascii_digit())
+                // "ws://127.0.0.1:<port>", or "ws://localhost:<port>" (e.g. with a proxy set).
+                const MARKER: &str = "WebDriver BiDi listening on ws://";
+                if let Some(pos) = line.find(MARKER) {
+                    let authority = line[pos + MARKER.len()..]
+                        .split(|c: char| c == '/' || c.is_whitespace())
                         .next()
                         .unwrap_or("");
+                    let port_str = authority.rsplit(':').next().unwrap_or("");
                     if let Ok(port) = port_str.parse::<u16>() {
                         if port > 0 {
                             if let Some(c) = tx.take() {
