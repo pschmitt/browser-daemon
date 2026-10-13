@@ -385,7 +385,12 @@ class CdpDriver {
     this.sharpTimer = setTimeout(async () => {
       const r = await this.cdp.call("Page.captureScreenshot", { format: "jpeg", quality: this.sharpQuality, optimizeForSpeed: true }).catch(() => null);
       // A newer frame arrived meanwhile: this picture is already stale.
-      if (r?.data && seq === this.sharpSeq) await this.h.frame(r.data, meta);
+      if (!r?.data || seq !== this.sharpSeq) return;
+      // Taking it re-renders the page at the higher density, which the screencast
+      // reports as a new (smaller) frame: ignore those echoes, or they would replace
+      // the sharp picture and start another round.
+      this.echoUntil = performance.now() + 400;
+      await this.h.frame(r.data, meta);
     }, 300);
   }
   async applyMetrics({ w, h, dpr, mode }) {
@@ -416,7 +421,7 @@ class CdpDriver {
       const ack = () => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId });
       // An unchanged frame (e.g. the repaint a sharpening screenshot causes) must not
       // replace the sharp picture or start another round.
-      if (this.sharp && p.data === this.lastCast) { ack(); return; }
+      if (this.sharp && (p.data === this.lastCast || performance.now() < (this.echoUntil || 0))) { ack(); return; }
       this.lastCast = p.data;
       // ACK after drawing: keeps 1:1 pacing instead of queueing frames.
       h.frame(p.data, p.metadata).finally(ack);
