@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 
+use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -123,9 +124,52 @@ pub async fn remove_stale_sinks(cfg: &AudioConfig) {
     }
 }
 
-/// Sinks with a stream playing into them right now (not corked, not muted).
-/// The sink's own state would not do: a listener on its monitor keeps it running.
+/// Sinks actually making sound: a stream plays into them (not corked, not
+/// muted), and a short sample of their monitor is not silence. A stream alone
+/// would not do: Chromium keeps one open, playing silence, after a pause (and so
+/// does a page holding an idle AudioContext). Neither would the sink's state: a
+/// listener on its monitor keeps it running.
 pub async fn audible_sinks(cfg: &AudioConfig) -> Option<HashSet<String>> {
+    let mut out = HashSet::new();
+    for sink in playing_sinks(cfg).await? {
+        if !silent(cfg, &sink).await {
+            out.insert(sink);
+        }
+    }
+    Some(out)
+}
+
+/// Peak of 0.2 s of `sink`'s monitor below about -50 dBFS.
+async fn silent(cfg: &AudioConfig, sink: &str) -> bool {
+    const SAMPLE: std::time::Duration = std::time::Duration::from_millis(200);
+    const THRESHOLD: i16 = 100;
+    let parec = cfg.pactl.with_file_name("parec");
+    let Ok(mut child) = Command::new(parec)
+        .arg("--server")
+        .arg(cfg.server_arg())
+        .arg(format!("--device={sink}.monitor"))
+        .args(["--format=s16le", "--channels=1", "--rate=8000", "--raw"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+    else {
+        return false;
+    };
+    let mut pcm = Vec::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = tokio::time::timeout(SAMPLE, stdout.read_to_end(&mut pcm)).await;
+    }
+    let _ = child.kill().await;
+    !pcm.as_chunks::<2>()
+        .0
+        .iter()
+        .any(|s| i16::from_le_bytes(*s).saturating_abs() > THRESHOLD)
+}
+
+/// Sinks with a stream playing into them (not corked, not muted).
+async fn playing_sinks(cfg: &AudioConfig) -> Option<HashSet<String>> {
     let list = |what: &'static str| async move {
         let out = Command::new(&cfg.pactl)
             .arg("--server")
