@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::audio::{AudioConfig, Sink};
 use crate::bidi::BidiHub;
 use crate::display::{DisplayConfig, VirtualDisplay};
-use crate::profiles::Profile;
+use crate::profiles::{ColorScheme, Profile};
 use crate::proxies::{self, Proxy};
 use crate::relay::Relay;
 
@@ -105,6 +105,7 @@ impl ActiveBrowser {
         max_memory_mb: Option<u64>,
         adblock: bool,
         proxy: Option<&Proxy>,
+        color_scheme: ColorScheme,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = Uuid::new_v4();
         let relay = Relay::start(proxy.cloned()).await?;
@@ -206,6 +207,11 @@ impl ActiveBrowser {
 
                 cmd.args(proxies::chromium_args(relay.port()));
 
+                // Dark browser UI, and prefers-color-scheme: dark for pages.
+                if color_scheme == ColorScheme::Dark {
+                    cmd.arg("--force-dark-mode");
+                }
+
                 let effective_mem = max_memory_mb.or(config.max_session_memory_mb);
                 if let Some(mem_mb) = effective_mem {
                     cmd.arg(format!("--js-flags=--max-old-space-size={}", mem_mb));
@@ -267,10 +273,21 @@ impl ActiveBrowser {
                 );
 
                 fs::create_dir_all(&user_data_dir).await?;
-                // Proxy prefs are rewritten on every launch: the relay's port changes.
+                // Per-launch prefs are rewritten every time: the relay's port changes,
+                // and so may the appearance.
                 let user_js = user_data_dir.join("user.js");
                 let existing = fs::read_to_string(&user_js).await.unwrap_or_default();
-                let prefs = proxies::firefox_prefs(relay.port());
+                let mut prefs = proxies::firefox_prefs(relay.port());
+                // Pages (prefers-color-scheme: 0 dark, 1 light) and the browser's UI.
+                let dark = color_scheme == ColorScheme::Dark;
+                prefs.push(format!(
+                    "user_pref(\"layout.css.prefers-color-scheme.content-override\", {});",
+                    if dark { 0 } else { 1 }
+                ));
+                prefs.push(format!(
+                    "user_pref(\"ui.systemUsesDarkTheme\", {});",
+                    u8::from(dark)
+                ));
                 fs::write(&user_js, proxies::firefox_user_js(&existing, &prefs)).await?;
 
                 // Headful on the virtual display, like Chromium; headless only without one.

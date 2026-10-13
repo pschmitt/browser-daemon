@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::bidi::BidiHub;
 use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine};
-use crate::profiles::Profile;
+use crate::profiles::{ColorScheme, Profile};
 use crate::proxy::bridge_websockets;
 use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
 
@@ -248,6 +248,7 @@ pub struct ManagedSession {
     /// Size of the session's own display (per-session mode only).
     pub display_size: Option<(u32, u32)>,
     pub video: bool,
+    pub color_scheme: ColorScheme,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -298,6 +299,7 @@ impl ManagedSession {
             display_server: self.display.as_ref().map(|_| "xvfb".to_string()),
             display_shared: self.display.is_some() && self.display_size.is_none(),
             video: self.video,
+            color_scheme: self.color_scheme,
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -340,6 +342,9 @@ pub struct SessionSummary {
     /// Its live view is available as H.264 video on /video.
     #[serde(default)]
     pub video: bool,
+    /// Appearance the browser was launched with.
+    #[serde(default)]
+    pub color_scheme: ColorScheme,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -483,6 +488,7 @@ impl AppState {
         idle_timeout_minutes: Option<u64>,
         adblock: Option<bool>,
         proxy: Option<&str>,
+        color_scheme: Option<ColorScheme>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
@@ -540,6 +546,10 @@ impl AppState {
         };
 
         let adblock = adblock.unwrap_or(self.adblock_default);
+        // An explicit choice wins, then the profile's; dark otherwise.
+        let color_scheme = color_scheme
+            .or_else(|| profile.as_ref().and_then(|p| p.meta.color_scheme))
+            .unwrap_or_default();
         let browser = match ActiveBrowser::spawn(
             &self.config,
             engine,
@@ -549,6 +559,7 @@ impl AppState {
             max_memory_mb,
             adblock,
             proxy,
+            color_scheme,
         )
         .await
         {
@@ -585,6 +596,7 @@ impl AppState {
                 .or_else(|| self.config.display.clone()),
             display_size: browser.display.as_ref().map(|d| (d.width, d.height)),
             video: browser.display.is_some() && self.config.video.is_some(),
+            color_scheme,
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -693,6 +705,8 @@ pub struct LaunchParams {
     pub adblock: Option<bool>,
     /// Proxy id, or "none"; defaults to the profile's proxy.
     pub proxy: Option<String>,
+    /// "dark" or "light"; defaults to the profile's (dark).
+    pub color_scheme: Option<ColorScheme>,
     /// Attach without counting as a client (handoff page).
     pub observer: Option<bool>,
 }
@@ -714,6 +728,8 @@ pub struct CreateSessionRequest {
     pub adblock: Option<bool>,
     /// Proxy id, or "none"; defaults to the profile's proxy.
     pub proxy: Option<String>,
+    /// "dark" or "light"; defaults to the profile's (dark).
+    pub color_scheme: Option<ColorScheme>,
 }
 
 /// Chromium writes into unpacked extensions and shows a blocking "Error
@@ -833,6 +849,9 @@ pub struct ProfileInfo {
     /// Proxy id new sessions of the profile use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
+    /// Appearance of the profile's sessions.
+    #[serde(default)]
+    pub color_scheme: ColorScheme,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -851,6 +870,8 @@ pub struct CreateProfileRequest {
     pub engine: BrowserEngine,
     /// Proxy id new sessions of the profile use.
     pub proxy: Option<String>,
+    /// Appearance of the profile's sessions (dark when unset).
+    pub color_scheme: Option<ColorScheme>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -858,6 +879,8 @@ pub struct UpdateProfileRequest {
     pub name: Option<String>,
     /// Proxy id new sessions use; "none" (or "") clears it.
     pub proxy: Option<String>,
+    /// Appearance of new sessions; a running one keeps its own until restarted.
+    pub color_scheme: Option<ColorScheme>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1689,6 +1712,7 @@ async fn json_new(
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
@@ -1890,6 +1914,7 @@ async fn handle_chromium_ws(
                 params.idle_timeout_minutes,
                 params.adblock,
                 params.proxy.as_deref(),
+                params.color_scheme,
             )
             .await
         {
@@ -1964,6 +1989,7 @@ async fn handle_firefox_ws(
                 params.idle_timeout_minutes,
                 params.adblock,
                 params.proxy.as_deref(),
+                params.color_scheme,
             )
             .await
         {
@@ -2126,6 +2152,7 @@ async fn profile_info(state: &AppState, profile: &Profile) -> ProfileInfo {
         created_at_secs: Some(profile.meta.created_at_secs),
         modified_at_secs,
         proxy: profile.meta.proxy.clone(),
+        color_scheme: profile.meta.color_scheme.unwrap_or_default(),
     }
 }
 
@@ -2215,6 +2242,7 @@ async fn api_create_session(
             req.idle_timeout_minutes,
             req.adblock,
             req.proxy.as_deref(),
+            req.color_scheme,
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
@@ -2321,8 +2349,13 @@ async fn api_create_profile(
             })?,
     };
 
-    if let Some(proxy) = proxy {
-        profile.meta.proxy = proxy;
+    if proxy.is_some() || req.color_scheme.is_some() {
+        if let Some(proxy) = proxy {
+            profile.meta.proxy = proxy;
+        }
+        if req.color_scheme.is_some() {
+            profile.meta.color_scheme = req.color_scheme;
+        }
         profiles::write_meta(&profile.dir, &profile.meta)
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -2394,6 +2427,15 @@ async fn api_update_profile(
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             // A running session keeps its proxy until it is restarted.
             info!(profile = %profile.meta.name, proxy = ?profile.meta.proxy, "Profile proxy changed");
+        }
+    }
+    if let Some(scheme) = req.color_scheme {
+        if Some(scheme) != profile.meta.color_scheme {
+            profile.meta.color_scheme = Some(scheme);
+            profiles::write_meta(&profile.dir, &profile.meta)
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            info!(profile = %profile.meta.name, color_scheme = ?scheme, "Profile appearance changed");
         }
     }
     Ok(Json(profile_info(&state, &profile).await))
