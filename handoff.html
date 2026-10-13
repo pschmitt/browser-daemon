@@ -815,7 +815,9 @@ const handlers = {
   loaded: () => {
     E.dot.className = "live";
     refreshInfo();
-    if (fitLayout && target && target.engine !== "firefox") applyMetrics();
+    // Only if the page lost the size (it normally keeps it across loads): setting it
+    // again resizes the window and restarts the stream, which flickers.
+    if (fitLayout && target && target.engine !== "firefox") applyMetrics({ ifDrifted: true });
   },
   dialog: async ({ type, message, defaultValue }) => {
     if (type === "prompt") {
@@ -860,6 +862,9 @@ async function doConnect({ quiet = false } = {}) {
     document.body.dataset.engine = target.engine || "chromium";
     await drv.ready;
     await drv.start();
+    // The first fit needs the session (has it a display of its own?): without it the
+    // page was emulated at this size inside the old window, then resized again later.
+    if (sess?.id !== target.sessionId) sess = (await sessionApi("GET", "").catch(() => null))?.session ?? sess;
     await applyMetrics();
     setState("live");
     refreshInfo();
@@ -874,7 +879,8 @@ async function doConnect({ quiet = false } = {}) {
 }
 
 // The remote page gets the size of this screen (like a real phone) or its own desktop size.
-async function applyMetrics() {
+let applied = null;
+async function applyMetrics({ ifDrifted = false } = {}) {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   let w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
@@ -882,6 +888,11 @@ async function applyMetrics() {
   // Native: the smallest screen among the session's Native viewers, so all see everything.
   reportViewerSize(layoutMode === "native" ? [w, h] : null);
   if (layoutMode === "native" && viewers.native) { w = Math.min(w, viewers.native[0]); h = Math.min(h, viewers.native[1]); }
+  if (ifDrifted && applied?.drv === drv && applied.page === pageId && applied.mode === layoutMode) {
+    const size = await drv.evaluate("[innerWidth, innerHeight]").catch(() => null);
+    if (size && size[0] === applied.w && size[1] === applied.h) return;
+  }
+  applied = { drv, page: pageId, mode: layoutMode, w, h };
   // Chromium on a display of its own, at density 1: the window takes this size.
   const fitWindow = layoutMode !== "window" && !!sess?.display && !sess.display_shared
     && target?.engine !== "firefox" && Math.min(dpr, 2) <= 1.05;
