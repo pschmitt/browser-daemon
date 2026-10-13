@@ -305,10 +305,17 @@ details.adv summary::-webkit-details-marker { display: none; }
 details.adv summary .chev { margin-left: auto; transition: transform .15s; }
 details.adv[open] summary .chev { transform: rotate(180deg); }
 details.adv .adv-body { padding: 2px 13px 14px; display: flex; flex-direction: column; gap: 14px; }
-.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
-.kv div { padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); min-width: 0; }
+.kv { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.kv > div { position: relative; padding: 10px 36px 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); min-width: 0; }
 .kv dt { font-size: 11.5px; color: var(--faint); font-weight: 600; margin-bottom: 3px; }
 .kv dd { margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* IDs and paths wrap: shown whole rather than cut off. */
+.kv dd:has(> .mono) { white-space: normal; overflow-wrap: anywhere; }
+.kv .kv-copy { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s, background .12s; }
+.kv > div:hover .kv-copy, .kv .kv-copy:focus-visible { opacity: 1; }
+.kv .kv-copy:hover { background: var(--hover); color: var(--fg); }
+@media (hover: none) { .kv .kv-copy { opacity: 1; } }
+@media (max-width: 520px) { .kv { grid-template-columns: 1fr; } }
 pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); font: 12px/1.5 var(--mono); max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
 .endpoint { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .endpoint .lbl { font-size: 12px; font-weight: 700; color: var(--muted); width: 110px; flex: none; }
@@ -1430,6 +1437,7 @@ const ACT = {
   },
   'vacuum': () => vacuum(),
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
+  'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
   'app-menu': (el) => openMenu(el, [
     { icon: 'plug', label: 'Connect & API', run: openConnect },
     { icon: 'handoff', label: 'Open handoff', run: () => { location.href = '/handoff/'; } },
@@ -1528,7 +1536,7 @@ function copyText(text, btn) {
   const done = () => {
     if (btn && btn.tagName === 'BUTTON' && !btn.closest('#menu')) {
       const old = btn.innerHTML;
-      btn.innerHTML = icon('check', 'sm') + 'Copied';
+      btn.innerHTML = icon('check', 'sm') + (btn.classList.contains('kv-copy') ? '' : 'Copied');
       setTimeout(() => { btn.innerHTML = old; }, 1300);
     } else {
       showToast('Copied to clipboard', 'success', 1800);
@@ -1770,7 +1778,8 @@ async function newTab(s) {
 function showDetails(title, pairs, raw) {
   $('detailsTitle').textContent = title;
   $('detailsGrid').innerHTML = pairs.filter(([, v]) => v !== undefined && v !== null && v !== '')
-    .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd title="${esc(String(v).replace(/<[^>]+>/g, ''))}">${v}</dd></div>`).join('');
+    .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd title="${esc(String(v).replace(/<[^>]+>/g, ''))}">${v}</dd>`
+      + `<button class="kv-copy" data-act="copy-kv" title="Copy ${esc(k)}" aria-label="Copy ${esc(k)}">${icon('copy', 'sm')}</button></div>`).join('');
   $('detailsJson').textContent = JSON.stringify(raw, null, 2);
   openModal('detailsModal');
 }
