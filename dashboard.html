@@ -726,6 +726,25 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 /* ================================================================ basics */
 const $ = (id) => document.getElementById(id);
 const enc = encodeURIComponent;
+const SEARCH_ENGINES = {
+  duckduckgo: { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
+  google: { name: "Google", url: "https://www.google.com/search?q=" },
+  startpage: { name: "Startpage", url: "https://www.startpage.com/do/search?q=" },
+  brave: { name: "Brave Search", url: "https://search.brave.com/search?q=" },
+  bing: { name: "Bing", url: "https://www.bing.com/search?q=" },
+  kagi: { name: "Kagi", url: "https://kagi.com/search?q=" },
+};
+// Shared with the handoff view (same origin, same key).
+const SEARCH_KEY = "browserd.search";
+function searchEngine() {
+  let id = null;
+  try { id = localStorage.getItem(SEARCH_KEY); } catch { /* storage unavailable */ }
+  return { id: SEARCH_ENGINES[id] ? id : "duckduckgo", ...SEARCH_ENGINES[SEARCH_ENGINES[id] ? id : "duckduckgo"] };
+}
+function setSearchEngine(id) {
+  try { localStorage.setItem(SEARCH_KEY, id); } catch { /* storage unavailable */ }
+}
+
 
 function getAuthHeaders() {
   const h = {};
@@ -1371,6 +1390,10 @@ const ACT = {
     { icon: 'plug', label: 'Connect & API', run: openConnect },
     { icon: 'handoff', label: 'Open handoff', run: () => { location.href = '/handoff/'; } },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
+    { icon: 'globe', label: 'Search engine', meta: searchEngine().name, run: () => openMenu(el, [
+      { label: 'Search engine' },
+      ...Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ label: e.name, on: id === searchEngine().id, run: () => setSearchEngine(id) })),
+    ]) },
     !isStandalone && { icon: 'install', label: 'Install app', run: triggerPwaInstall },
     { icon: 'info-c', label: 'About', run: () => {
       $('aboutVersion').textContent = ov?.local_node?.version || 'Unavailable';
@@ -1584,10 +1607,10 @@ function setRecordingPaused(s, paused) {
 }
 
 async function newTab(s) {
-  const url = await ask({ title: s ? 'Open a new tab' : 'Open a URL', text: s ? `In ${s.profile || 'the throwaway session'} on ${s.node_name}` : `On ${filter === 'all' ? localName() : filter} (reuses a running session or starts one)`, input: '', placeholder: 'duckduckgo.com or search terms', ok: 'Open' });
+  const url = await ask({ title: s ? 'Open a new tab' : 'Open a URL', text: s ? `In ${s.profile || 'the throwaway session'} on ${s.node_name}` : `On ${filter === 'all' ? localName() : filter} (reuses a running session or starts one)`, input: '', placeholder: `Address, or search ${searchEngine().name}`, ok: 'Open' });
   if (url === null || url === undefined) return;
-  let target = url || 'https://duckduckgo.com';
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = target.includes('.') && !target.includes(' ') ? 'https://' + target : 'https://duckduckgo.com/?q=' + enc(target);
+  let target = url || 'about:blank';
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = target.includes('.') && !target.includes(' ') ? 'https://' + target : searchEngine().url + enc(target);
   const node = s ? s.node_name : (filter === 'all' ? localName() : filter);
   const qs = `url=${enc(target)}` + (s ? `&session_id=${enc(s.id)}` : '');
   try {

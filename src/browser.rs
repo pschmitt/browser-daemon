@@ -155,6 +155,12 @@ impl ActiveBrowser {
                     cmd.env("DISPLAY", display);
                 }
 
+                // A persistent profile keeps the previous run's port file when
+                // Chromium was killed; reading it would point at a dead port.
+                match fs::remove_file(user_data_dir.join("DevToolsActivePort")).await {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+                    _ => {}
+                }
                 let child = cmd.spawn()?;
                 let (port, ws_path) = match wait_for_devtools_port(&user_data_dir).await {
                     Ok(res) => res,
