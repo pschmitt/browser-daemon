@@ -498,6 +498,7 @@ class CdpDriver {
     await this.cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: CLIPBOARD_HOOK }).catch(() => {});
     this.evaluate(CLIPBOARD_HOOK).catch(() => {});
     const beat = () => this.cdp.send("Runtime.evaluate", { expression: "globalThis.__bdPasskeyAlive = Date.now()" });
+    this.passkeyBeatNow = beat;
     beat();
     this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
   }
@@ -517,7 +518,14 @@ class CdpDriver {
   // has been still for a moment, a screenshot (which honours the density) replaces
   // the frame: motion comes from the screencast, sharp text from the screenshot.
   // The user is interacting: frames from now on are real, not capture echoes.
-  inputSeen() { this.echoUntil = 0; this.lastInput = performance.now(); }
+  inputSeen() {
+    this.echoUntil = 0;
+    const now = performance.now();
+    // Input means someone is watching: tell the page's passkey hook right away
+    // (the 3 s heartbeat timer can be slowed down by the viewer's browser).
+    if (this.passkeyBeatNow && now - (this.lastInput || -1e9) > 1000) this.passkeyBeatNow();
+    this.lastInput = now;
+  }
   scheduleSharp(meta) {
     clearTimeout(this.sharpTimer);
     const seq = this.sharpSeq = (this.sharpSeq || 0) + 1;
@@ -635,7 +643,8 @@ class CdpDriver {
       try { req = JSON.parse(p.payload); } catch { return; }
       // Only a sign-in the user started here: an agent driving the page through its own
       // connection (its own passkey already injected) must not be held up.
-      if (!(performance.now() - (this.lastInput || -1e9) < 5000)) { this.passkeyAnswer(req.id); return; }
+      // 15 s: a click may load another page first, which then asks (Google does).
+      if (!(performance.now() - (this.lastInput || -1e9) < 15000)) { this.passkeyAnswer(req.id); return; }
       h.passkey(req).then((ok) => this.passkeyAnswer(req.id, ok), () => this.passkeyAnswer(req.id, false));
       return;
     }
