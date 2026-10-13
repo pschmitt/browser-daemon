@@ -393,6 +393,14 @@ function speakerIcon() {
 
 // The session's window while Native/Phone has resized it, and its own size to go back to.
 const winFit = { session: null, own: null, fitted: false };
+// Height of the browser's toolbars above the page, per session. Only plausible
+// measurements count: under Native/Phone emulation outer and inner sizes are both
+// the emulated ones, and the difference (0) would put the toolbars into the video.
+const chromeHeights = {};
+function chromeHeight(sessionId, measured) {
+  if (measured > 0 && measured < 400) chromeHeights[sessionId] = measured;
+  return chromeHeights[sessionId] ?? 87;
+}
 
 const CDP_BUTTONS = ["left", "middle", "right"], CDP_MASKS = [1, 4, 2];
 
@@ -453,7 +461,7 @@ class CdpDriver {
     if (!winFit.fitted) winFit.own = { width: r.bounds.width, height: r.bounds.height };
     // Within the session's screen (at least 3840x2160, less a margin for the
     // parked X pointer).
-    const width = Math.min(w, 3776), height = Math.min(h + (this.chromeH ?? 87), 2096);
+    const width = Math.min(w, 3776), height = Math.min(h + chromeHeight(target?.sessionId, this.chromeH), 2096);
     await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
     winFit.fitted = true;
   }
@@ -2179,7 +2187,8 @@ async function startVideo() {
   if (!d || !target?.sessionId) return;
   const m = await d.evaluate("[innerWidth, innerHeight, outerHeight - innerHeight]").catch(() => null);
   if (!m || d !== drv) return;
-  const region = { x: 0, y: Math.max(0, d.chromeH ?? m[2]), w: m[0], h: m[1] };
+  // Window layout: no emulation, so the live value (follows bars that come and go).
+  const region = { x: 0, y: chromeHeight(target.sessionId, fitLayout ? d.chromeH : m[2]), w: m[0], h: m[1] };
   const same = video.ws && video.session === target.sessionId && video.region
     && ["x", "y", "w", "h"].every((k) => video.region[k] === region[k]);
   // Same display and area (e.g. another tab): keep the stream, pause this driver's screencast.
