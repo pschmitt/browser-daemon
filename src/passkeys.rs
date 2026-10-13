@@ -20,6 +20,17 @@ pub struct Request {
     pub id: Uuid,
     pub page_id: String,
     pub rp_id: String,
+    /// "inject" (put the passkey into the page) or "find" (only say which vault
+    /// entry would be used, or that the vault is locked).
+    #[serde(default = "inject")]
+    pub kind: String,
+    /// The vault entry (id) to use, when the user picked one of several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+}
+
+fn inject() -> String {
+    "inject".into()
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -27,13 +38,16 @@ pub struct Outcome {
     pub ok: bool,
     #[serde(default)]
     pub error: Option<String>,
+    /// What a "find" found (no secrets): {locked} or {name, user, ...}.
+    #[serde(default)]
+    pub info: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Serialize, Debug, PartialEq)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Status {
     Pending { note: Option<String> },
-    Ready,
+    Ready { info: Option<serde_json::Value> },
     Failed { error: String },
 }
 
@@ -57,7 +71,13 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(330);
 
 impl Broker {
     /// Queue a request for the helper; its progress is read with `status`.
-    pub fn start(&self, page_id: String, rp_id: String) -> Result<Uuid, String> {
+    pub fn start(
+        &self,
+        page_id: String,
+        rp_id: String,
+        kind: &str,
+        entry: Option<String>,
+    ) -> Result<Uuid, String> {
         let helper = *self.helper_seen.lock().unwrap();
         if helper.is_none_or(|t| t.elapsed() > HELPER_GONE) {
             return Err("No passkey helper is running for this node".into());
@@ -66,6 +86,8 @@ impl Broker {
             id: Uuid::new_v4(),
             page_id,
             rp_id,
+            kind: kind.into(),
+            entry,
         };
         let mut tracked = self.tracked.lock().unwrap();
         tracked.retain(|_, t| t.since.elapsed() < 2 * ANSWER_TIMEOUT);
@@ -94,14 +116,27 @@ impl Broker {
         Some(t.status.clone())
     }
 
-    /// The helper's long poll: the next request, or None after `wait`.
-    pub async fn next(&self, wait: Duration) -> Option<Request> {
+    /// The helper's long poll: the next request, or None after `wait`. A helper
+    /// that predates "find" requests (it would inject instead) gets none of them.
+    pub async fn next(&self, wait: Duration, finds: bool) -> Option<Request> {
         let deadline = Instant::now() + wait;
         loop {
             *self.helper_seen.lock().unwrap() = Some(Instant::now());
             let woken = self.wake.notified();
-            if let Some(req) = self.queue.lock().unwrap().pop_front() {
-                return Some(req);
+            let popped = self.queue.lock().unwrap().pop_front();
+            if let Some(req) = popped {
+                if req.kind == "inject" || finds {
+                    return Some(req);
+                }
+                self.complete(
+                    req.id,
+                    Outcome {
+                        ok: false,
+                        error: Some("The passkey helper is too old to look entries up".into()),
+                        info: None,
+                    },
+                );
+                continue;
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() || tokio::time::timeout(left, woken).await.is_err() {
@@ -128,7 +163,7 @@ impl Broker {
         match self.tracked.lock().unwrap().get_mut(&id) {
             Some(t) if matches!(t.status, Status::Pending { .. }) => {
                 t.status = if outcome.ok {
-                    Status::Ready
+                    Status::Ready { info: outcome.info }
                 } else {
                     Status::Failed {
                         error: outcome.error.unwrap_or_else(|| "The helper failed".into()),
@@ -150,12 +185,15 @@ mod tests {
     async fn request_reaches_helper_and_back() {
         let b = Arc::new(Broker::default());
         assert!(
-            b.start("p".into(), "x.test".into()).is_err(),
+            b.start("p".into(), "x.test".into(), "inject", None)
+                .is_err(),
             "no helper yet"
         );
-        assert!(b.next(Duration::from_millis(10)).await.is_none());
-        let id = b.start("p".into(), "x.test".into()).unwrap();
-        let req = b.next(Duration::from_secs(1)).await.unwrap();
+        assert!(b.next(Duration::from_millis(10), true).await.is_none());
+        let id = b
+            .start("p".into(), "x.test".into(), "inject", None)
+            .unwrap();
+        let req = b.next(Duration::from_secs(1), true).await.unwrap();
         assert_eq!(req.rp_id, "x.test");
         assert!(b.note(id, "unlock".into()));
         assert_eq!(
@@ -168,9 +206,10 @@ mod tests {
             id,
             Outcome {
                 ok: true,
-                error: None
+                error: None,
+                info: None,
             }
         ));
-        assert_eq!(b.status(id), Some(Status::Ready));
+        assert_eq!(b.status(id), Some(Status::Ready { info: None }));
     }
 }

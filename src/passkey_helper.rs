@@ -66,7 +66,7 @@ async fn poll(
     info!(node = %node, "Serving passkeys");
     loop {
         let res = client
-            .get(format!("{node}/api/passkey-helper/next"))
+            .get(format!("{node}/api/passkey-helper/next?finds=true"))
             .header("X-Browser-Cluster-Secret", &secret)
             .send()
             .await;
@@ -90,20 +90,29 @@ async fn poll(
                 continue;
             }
         };
-        info!(node = %node, rp_id = %req.rp_id, page = %req.page_id, "Passkey requested");
+        info!(node = %node, rp_id = %req.rp_id, page = %req.page_id, kind = %req.kind, "Passkey requested");
         let (node, secret, client, args) =
             (node.clone(), secret.clone(), client.clone(), args.clone());
         tokio::spawn(async move {
-            let outcome = match serve(&node, &secret, &req, &client, &args).await {
-                Ok(()) => Outcome {
+            let result = if req.kind == "find" {
+                find(&req, &args).await.map(Some)
+            } else {
+                serve(&node, &secret, &req, &client, &args)
+                    .await
+                    .map(|()| None)
+            };
+            let outcome = match result {
+                Ok(info) => Outcome {
                     ok: true,
                     error: None,
+                    info,
                 },
                 Err(e) => {
                     warn!(rp_id = %req.rp_id, error = %e, "Passkey not served");
                     Outcome {
                         ok: false,
                         error: Some(e),
+                        info: None,
                     }
                 }
             };
@@ -115,6 +124,30 @@ async fn poll(
                 .await;
         });
     }
+}
+
+/// Which vault entry would serve `rp_id` (name and user only), or that the vault
+/// is locked. Never asks for an unlock: that only happens once the user approves.
+async fn find(req: &Request, args: &HelperArgs) -> Result<serde_json::Value, String> {
+    if !unlocked(&args.rbw).await {
+        return Ok(serde_json::json!({ "locked": true }));
+    }
+    let out = Command::new(&args.rbw)
+        .args(["passkey", "find", "--rp-id", &req.rp_id])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("Could not run rbw: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err
+            .lines()
+            .rfind(|l| !l.trim().is_empty())
+            .unwrap_or("rbw failed")
+            .trim()
+            .to_string());
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("Unexpected rbw output: {e}"))
 }
 
 async fn unlocked(rbw: &PathBuf) -> bool {
@@ -162,6 +195,9 @@ async fn serve(
             return Err("The vault was not unlocked in time".into());
         }
     }
+    // A picked entry (its vault id) narrows the search; otherwise rbw finds the one
+    // entry holding a passkey for the site.
+    let entry: Vec<&str> = req.entry.as_deref().into_iter().collect();
     let mut child = Command::new(&args.rbw)
         .args([
             "passkey",
@@ -177,6 +213,7 @@ async fn serve(
             "--timeout",
             "30",
         ])
+        .args(&entry)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(false)

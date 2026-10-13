@@ -4225,6 +4225,12 @@ async fn api_session_rename(
 struct PasskeyRequest {
     page_id: String,
     rp_id: String,
+    /// true: only look up which vault entry would be used (or that it's locked).
+    #[serde(default)]
+    find: bool,
+    /// Vault entry id, when several entries hold a passkey for the site.
+    #[serde(default)]
+    entry: Option<String>,
 }
 
 /// A passkey approved in the live view: the helper puts it into the page.
@@ -4244,10 +4250,17 @@ async fn api_session_passkey(
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
     session.activity.touch();
-    info!(session_id = %id, rp_id = %req.rp_id, "Passkey approved in the live view");
+    if !req.find {
+        info!(session_id = %id, rp_id = %req.rp_id, "Passkey approved in the live view");
+    }
     let request = state
         .passkeys
-        .start(req.page_id, req.rp_id)
+        .start(
+            req.page_id,
+            req.rp_id,
+            if req.find { "find" } else { "inject" },
+            req.entry,
+        )
         .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
     Ok(Json(serde_json::json!({ "request": request })))
 }
@@ -4284,15 +4297,29 @@ async fn api_passkey_helper_note(
     })
 }
 
+#[derive(Deserialize)]
+struct HelperPoll {
+    /// The helper handles "find" requests (newer helpers say so).
+    #[serde(default)]
+    finds: bool,
+}
+
 async fn api_passkey_helper_next(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(poll): Query<HelperPoll>,
 ) -> Result<Response, ApiError> {
     state.check_auth(&headers)?;
-    Ok(match state.passkeys.next(Duration::from_secs(25)).await {
-        Some(req) => Json(req).into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
-    })
+    Ok(
+        match state
+            .passkeys
+            .next(Duration::from_secs(25), poll.finds)
+            .await
+        {
+            Some(req) => Json(req).into_response(),
+            None => StatusCode::NO_CONTENT.into_response(),
+        },
+    )
 }
 
 async fn api_passkey_helper_done(

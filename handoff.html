@@ -99,6 +99,10 @@
   #passkeyDialog::backdrop { background: rgba(0, 0, 0, .5); }
   #passkeyDialog h2 { margin: 0 0 6px; font-size: 16px; }
   #passkeyDialog p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
+  #passkeyDialog .pk-info { color: var(--fg); padding: 8px 10px; border-radius: 9px; background: var(--btn); }
+  #passkeyDialog .pk-entry { width: 100%; height: 38px; margin: -6px 0 14px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; }
+  #passkeyDialog .pk-info.locked { color: #f59e0b; background: rgba(245, 158, 11, .14); }
+  #passkeyDialog .pk-info.bad { color: var(--bad); background: color-mix(in oklab, var(--bad) 14%, transparent); }
   #lastTabDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(360px, calc(100vw - 32px)); }
   #lastTabDialog::backdrop { background: rgba(0, 0, 0, .5); }
   #lastTabDialog h2 { margin: 0 0 6px; font-size: 16px; }
@@ -315,7 +319,9 @@
 <dialog id="passkeyDialog">
   <form method="dialog">
     <h2>Sign in with a passkey?</h2>
-    <p><b id="passkeyRp"></b> asks for a passkey. Yours can come from the vault (rbw); if it is locked, your phone asks to unlock it.</p>
+    <p><b id="passkeyRp"></b> asks for a passkey. Yours can come from the vault (rbw).</p>
+    <p id="passkeyInfo" class="pk-info"></p>
+    <select id="passkeyEntry" class="pk-entry" aria-label="Vault entry" hidden></select>
     <div class="ltd-actions">
       <button value="vault">Use the passkey from the vault</button>
       <button value="cancel">Cancel</button>
@@ -934,33 +940,66 @@ async function fetchTargets() {
 }
 
 let passkeyPending = null;
-async function askPasskey({ rpId }) {
-  const dlg = $("passkeyDialog");
-  $("passkeyRp").textContent = rpId;
-  dlg.showModal();
-  const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
-  if (choice !== "vault" || !target?.sessionId) return false;
-  toast(`Getting the passkey for ${rpId}…`, 0);
+// A request to the passkey helper (via the node): started, then polled with short
+// calls. The helper may wait minutes for the phone unlock, and a request held open
+// that long gets dropped (Firefox gave up on it after ~2 s). onNote: progress notes.
+async function passkeyHelper(rpId, find, onNote = () => {}, entry = null) {
   const call = async (url, opts = {}) => {
     const res = await fetch(url, { ...opts, headers: authHeaders(opts.body ? { "Content-Type": "application/json" } : {}) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || res.statusText);
     return body;
   };
+  const { request } = await call(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
+    { method: "POST", body: JSON.stringify({ page_id: pageId, rp_id: rpId, find, entry }) });
+  for (const until = Date.now() + 340000; Date.now() < until;) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const st = await call(`/api/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
+    if (st.state === "ready") return st.info;
+    if (st.state === "failed") throw new Error(st.error);
+    if (st.note) onNote(st.note);
+  }
+  throw new Error("The passkey helper did not answer");
+}
+// Before approving: is rbw locked, and which entry would sign in?
+async function showPasskeyEntry(rpId, dlg) {
+  const info = $("passkeyInfo"), pick = $("passkeyEntry"), use = dlg.querySelector('button[value="vault"]');
+  const set = (text, cls = "") => { if (dlg.open) { info.textContent = text; info.className = "pk-info " + cls; } };
+  const label = (e) => { const who = e.user || e.passkey_user; return `${e.name || "?"}${who ? ` (${who})` : ""}`; };
+  set("Checking the vault…");
+  pick.hidden = true;
+  pick.innerHTML = "";
+  use.disabled = false;
   try {
-    // Short calls only: the helper may wait minutes for the phone unlock, and a request
-    // held open that long gets dropped (Firefox gave up on it after ~2 s).
-    const { request } = await call(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
-      { method: "POST", body: JSON.stringify({ page_id: pageId, rp_id: rpId }) });
-    let shown = "";
-    for (const until = Date.now() + 340000; Date.now() < until;) {
-      await new Promise((r) => setTimeout(r, 1000));
-      const st = await call(`/api/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
-      if (st.state === "ready") { toast(`Signing in to ${rpId} with your passkey`); return true; }
-      if (st.state === "failed") throw new Error(st.error);
-      if (st.note && st.note !== shown) { shown = st.note; toast(`${rpId}: ${st.note}`, 0); }
+    const found = await passkeyHelper(rpId, true);
+    if (found?.locked) set("rbw is locked: approving asks your phone to unlock it first.", "locked");
+    else if (!Array.isArray(found) || !found.length) { set(`No passkey for ${rpId} in the vault.`, "bad"); use.disabled = true; }
+    else if (found.length === 1) set(`Entry: ${label(found[0])}`);
+    else {
+      // Several entries hold a passkey for this site: the user picks one.
+      set(`${found.length} entries hold a passkey for ${rpId}:`);
+      for (const e of found) pick.add(new Option(label(e), e.id));
+      pick.hidden = false;
     }
-    throw new Error("The passkey helper did not answer");
+  } catch (err) {
+    set(err.message, "bad");
+    if (/no passkey|no matching|no entry|No passkey helper/i.test(err.message)) use.disabled = true;
+  }
+}
+async function askPasskey({ rpId }) {
+  const dlg = $("passkeyDialog");
+  $("passkeyRp").textContent = rpId;
+  dlg.showModal();
+  showPasskeyEntry(rpId, dlg);
+  const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
+  if (choice !== "vault" || !target?.sessionId) return false;
+  toast(`Getting the passkey for ${rpId}…`, 0);
+  try {
+    let shown = "";
+    const entry = $("passkeyEntry").hidden ? null : $("passkeyEntry").value || null;
+    await passkeyHelper(rpId, false, (note) => { if (note !== shown) { shown = note; toast(`${rpId}: ${note}`, 0); } }, entry);
+    toast(`Signing in to ${rpId} with your passkey`);
+    return true;
   } catch (err) {
     toast(`No passkey: ${err.message}`, 5000);
     return false;
