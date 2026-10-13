@@ -77,6 +77,13 @@
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
   #view:focus { outline: none; }
+  #lastTabDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(360px, calc(100vw - 32px)); }
+  #lastTabDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #lastTabDialog h2 { margin: 0 0 6px; font-size: 16px; }
+  #lastTabDialog p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
+  .ltd-actions { display: flex; flex-direction: column; gap: 8px; }
+  .ltd-actions button { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
+  .ltd-actions button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
   #capture.on { color: var(--accent); }
   #stage.dropping::after { content: "Drop to send to the page"; position: absolute; inset: 10px; display: grid; place-items: center; z-index: 30;
     border: 2px dashed var(--accent); border-radius: 14px; background: rgba(124, 108, 240, .14); color: var(--fg); font-weight: 700; font-size: 15px; pointer-events: none; }
@@ -254,6 +261,17 @@
 </div>
 <div id="bottom"></div>
 <input id="kb" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-hidden="true" tabindex="-1">
+<dialog id="lastTabDialog">
+  <form method="dialog">
+    <h2>Close the last tab?</h2>
+    <p>This is the session's only tab.</p>
+    <div class="ltd-actions">
+      <button value="stop" class="danger">Stop the session</button>
+      <button value="keep">Keep it running with a blank tab</button>
+      <button value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
 <div id="tabsModal" class="tabs-modal-overlay">
   <div class="tabs-modal-card">
     <div class="tabs-modal-header">
@@ -1213,8 +1231,49 @@ async function openNewTab() {
   }
 }
 
+// Closing the session's only tab would leave a browser without tabs: ask what to do.
+function askLastTab() {
+  const dlg = $("lastTabDialog");
+  return new Promise((resolve) => {
+    dlg.returnValue = "cancel";
+    dlg.addEventListener("close", () => resolve(dlg.returnValue || "cancel"), { once: true });
+    dlg.showModal();
+  });
+}
+
 async function closeTab(id) {
   const isCurrent = id === pageId;
+  const siblings = (await fetchTargets().catch(() => [])).filter((p) => p.sessionId === target?.sessionId);
+  if (siblings.length <= 1 && siblings.some((p) => p.id === id)) {
+    const choice = await askLastTab();
+    if (choice === "cancel") return;
+    if (choice === "stop") {
+      try {
+        stopping = true;
+        await sessionApi("DELETE", "");
+        if (drv) drv.close();
+        location.href = "/";
+      } catch (err) {
+        stopping = false;
+        alert("Could not stop the session: " + err.message);
+      }
+      return;
+    }
+    // Keep the session: open a blank tab first, then close this one.
+    try {
+      const qs = new URLSearchParams({ url: "about:blank", session_id: target.sessionId });
+      const res = await fetch("/json/new?" + qs.toString(), { method: "PUT", headers: authHeaders() });
+      if (!res.ok) throw new Error(res.statusText);
+      const created = await res.json();
+      await fetch("/json/close/" + encodeURIComponent(id), { method: "PUT", headers: authHeaders() });
+      await switchTab(created.id);
+      E.urlInput.value = "";
+      E.urlInput.focus();
+    } catch (err) {
+      alert("Failed to close tab: " + err.message);
+    }
+    return;
+  }
   if (isCurrent && !confirm("Close the current tab?")) return;
   try {
     const res = await fetch("/json/close/" + encodeURIComponent(id), {
