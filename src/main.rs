@@ -456,6 +456,7 @@ impl AppState {
             guard.remove(id)
         };
 
+        let _ = fs::remove_dir_all(upload_dir(id)).await;
         if let Some(session) = removed {
             let mut b_guard = session.browser.lock().await;
             if let Some(mut b) = b_guard.take() {
@@ -1012,6 +1013,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_session).delete(api_delete_session),
         )
         .route("/api/sessions/{id}/record", post(api_session_start_record))
+        .route(
+            "/api/sessions/{id}/files",
+            put(api_session_upload_file)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
         .route(
             "/api/sessions/{id}/stop-record",
             post(api_session_stop_record),
@@ -3487,6 +3493,69 @@ async fn api_session_idle_timeout(
     })))
 }
 
+/// Largest file handoff can drop into a page.
+const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
+
+/// Files dropped into a session's pages, removed when the session stops.
+fn upload_dir(session: &Uuid) -> PathBuf {
+    std::env::temp_dir()
+        .join("browser-daemon-uploads")
+        .join(session.to_string())
+}
+
+/// A file name that is safe as a single path component, keeping it readable.
+fn upload_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let clean: String = base
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect::<String>()
+        .trim()
+        .trim_start_matches('.')
+        .to_string();
+    if clean.is_empty() {
+        "upload".to_string()
+    } else {
+        clean.chars().take(200).collect()
+    }
+}
+
+#[derive(Deserialize)]
+struct UploadParams {
+    name: String,
+}
+
+/// Store a file on this node so a page of the session can receive it (handoff drops it
+/// with CDP drag events, which take local paths). Returns the file's path.
+async fn api_session_upload_file(
+    AxumPath(id): AxumPath<Uuid>,
+    Query(params): Query<UploadParams>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    session.activity.touch();
+    // One directory per upload: the same name can be dropped twice.
+    let dir = upload_dir(&id).join(Uuid::new_v4().to_string());
+    let path = dir.join(upload_file_name(&params.name));
+    let io = |e: std::io::Error| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    fs::create_dir_all(&dir).await.map_err(io)?;
+    fs::write(&path, &body).await.map_err(io)?;
+    info!(session_id = %id, path = %path.display(), bytes = body.len(), "Stored dropped file");
+    Ok(Json(serde_json::json!({
+        "path": path,
+        "size_bytes": body.len(),
+    })))
+}
+
 async fn api_session_pause_record(
     AxumPath(id): AxumPath<Uuid>,
     State(state): State<AppState>,
@@ -3816,6 +3885,16 @@ async fn compute_dir_size(path: PathBuf) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upload_names_stay_in_their_directory() {
+        assert_eq!(upload_file_name("report.pdf"), "report.pdf");
+        assert_eq!(upload_file_name("../../etc/passwd"), "passwd");
+        assert_eq!(upload_file_name("C:\\Users\\me\\a b.txt"), "a b.txt");
+        assert_eq!(upload_file_name(".."), "upload");
+        assert_eq!(upload_file_name(".bashrc"), "bashrc");
+        assert_eq!(upload_file_name("a\nb"), "ab");
+    }
 
     #[test]
     fn peer_profile_urls_encode_the_name() {

@@ -77,10 +77,13 @@
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
   #view:focus { outline: none; }
+  #capture.on { color: var(--accent); }
+  #stage.dropping::after { content: "Drop to send to the page"; position: absolute; inset: 10px; display: grid; place-items: center; z-index: 30;
+    border: 2px dashed var(--accent); border-radius: 14px; background: rgba(124, 108, 240, .14); color: var(--fg); font-weight: 700; font-size: 15px; pointer-events: none; }
   #clipToast.show { opacity: 1; transform: translate(-50%, 0); }
   .sm-narrow { display: none; }
   @media (max-width: 640px) {
-    #fwd, #reload { display: none; }
+    #fwd, #reload, #capture { display: none; }
     .sm-narrow { display: flex; }
     .rec-pill { padding: 0; width: 28px; justify-content: center; margin: 0 2px; }
     #recPillText { display: none; }
@@ -203,6 +206,7 @@
     <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
     <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
   </form>
+  <button class="ib" id="capture" aria-label="Capture keyboard" title="Capture keyboard and mouse (fullscreen; hold Esc to release)" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
   <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
@@ -279,6 +283,7 @@ const E = {
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
+  capture: $("capture"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn"),
   sessBtn: $("sessBtn"), sessMenu: $("sessMenu"), recPill: $("recPill")
 };
@@ -382,6 +387,11 @@ class CdpDriver {
   }
   mouseMove(x, y, down) { this.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: down ? "left" : "none", buttons: down ? 1 : 0 }); }
   mouseUp(x, y, clickCount) { this.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount }); }
+  // Drop local files (paths on the browser's host) onto the page, like a desktop drag.
+  async dropFiles(x, y, files) {
+    const data = { items: [], files, dragOperationsMask: 1 };
+    for (const type of ["dragEnter", "dragOver", "drop"]) await this.cdp.call("Input.dispatchDragEvent", { type, x, y, data });
+  }
   // Ctrl/Cmd shortcut; `command` makes headless Chromium run the editing command.
   shortcut(key, shift, command) {
     const code = "Key" + key.toUpperCase(), vk = key.toUpperCase().charCodeAt(0);
@@ -537,6 +547,7 @@ class BidiDriver {
   mouseDown(x, y) { this.pointer([{ type: "pointerMove", x: Math.round(x), y: Math.round(y) }, { type: "pointerDown", button: 0 }]); }
   mouseMove(x, y) { this.pointer([{ type: "pointerMove", x: Math.round(x), y: Math.round(y) }]); }
   mouseUp(x, y) { this.pointer([{ type: "pointerMove", x: Math.round(x), y: Math.round(y) }, { type: "pointerUp", button: 0 }]); }
+  async dropFiles() { throw new Error("Dropping files needs a Chromium session"); }
   pointer(actions) { this.actions([{ type: "pointer", id: "mouse", parameters: { pointerType: "mouse" }, actions }]); }
   shortcut(key, shift) {
     const mods = shift ? ["\uE009", "\uE008"] : ["\uE009"];
@@ -1509,7 +1520,9 @@ window.addEventListener("keydown", (e) => {
       refreshRemoteSelection();
       return;
     }
-    return;   // leave the rest (Ctrl+L, Ctrl+T, …) to the local browser
+    // Captured: the page gets Ctrl+T, Ctrl+W, Ctrl+L, … too. Otherwise they stay local.
+    if (captured && /^[a-z]$/.test(k)) { e.preventDefault(); drv.shortcut(k, e.shiftKey, null); }
+    return;
   }
   if (mod || e.altKey) return;
   if (e.key.length === 1) { drv.insertText(e.key); e.preventDefault(); }
@@ -1542,7 +1555,7 @@ window.addEventListener("paste", (e) => {
   else pasteToRemote();
 });
 let toastTimer = 0;
-function toast(text) {
+function toast(text, ms = 1100) {
   let el = document.getElementById("clipToast");
   if (!el) {
     el = document.createElement("div");
@@ -1552,8 +1565,81 @@ function toast(text) {
   el.textContent = text;
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 1100);
+  if (ms) toastTimer = setTimeout(() => el.classList.remove("show"), ms);
 }
+
+/* ---------------------------------------------------------------- capture */
+// Fullscreen plus the Keyboard Lock API (Chromium): browser shortcuts such as Ctrl+W or
+// Ctrl+T reach the remote page, and Esc has to be held to leave. Without Keyboard Lock
+// (Firefox, Safari) this is plain fullscreen.
+let captured = false;
+E.capture.hidden = !document.fullscreenEnabled;
+E.capture.onclick = async () => {
+  if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+  try {
+    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+    if (navigator.keyboard?.lock) {
+      await navigator.keyboard.lock();
+      captured = true;
+    }
+    E.capture.classList.add("on");
+    E.view.focus({ preventScroll: true });
+    toast(captured ? "Keyboard captured: hold Esc to release" : "Fullscreen: press Esc to leave");
+  } catch (err) {
+    toast("Could not capture: " + err.message);
+  }
+};
+document.addEventListener("fullscreenchange", () => {
+  if (document.fullscreenElement) return;
+  captured = false;
+  navigator.keyboard?.unlock?.();
+  E.capture.classList.remove("on");
+});
+
+/* ---------------------------------------------------------------- drag & drop files */
+// Files dropped on the picture are stored on the browser's host, then dropped onto the
+// page at the same spot (file inputs and drop zones both take them).
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+E.stage.addEventListener("dragenter", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  E.stage.classList.add("dropping");
+});
+E.stage.addEventListener("dragover", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = "copy";
+});
+E.stage.addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) { dragDepth = 0; E.stage.classList.remove("dropping"); }
+});
+E.stage.addEventListener("drop", async (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  E.stage.classList.remove("dropping");
+  const files = [...e.dataTransfer.files];
+  const p = toPage(e);
+  if (!files.length || !drv || !target?.sessionId) return;
+  if (!p) { toast("Drop onto the page"); return; }
+  const label = files.length === 1 ? files[0].name : `${files.length} files`;
+  try {
+    toast(`Sending ${label}…`, 0);
+    const paths = [];
+    for (const f of files) {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/files?name=${encodeURIComponent(f.name)}`,
+        { method: "PUT", headers: authHeaders({ "Content-Type": "application/octet-stream" }), body: f });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      paths.push((await res.json()).path);
+    }
+    await drv.dropFiles(Math.round(p.x), Math.round(p.y), paths);
+    toast(`Dropped ${label}`);
+  } catch (err) {
+    toast(`Could not drop ${label}: ${err.message}`, 4000);
+  }
+});
 
 /* ---------------------------------------------------------------- page picker (no ?page=) */
 async function pickPage() {
