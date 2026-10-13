@@ -380,6 +380,9 @@ const CDP_KEYS = {
   ArrowLeft: [37], ArrowUp: [38], ArrowRight: [39], ArrowDown: [40], Home: [36], End: [35], PageUp: [33], PageDown: [34],
 };
 
+// The session's window while Native/Phone has resized it, and its own size to go back to.
+const winFit = { session: null, own: null, fitted: false };
+
 class CdpDriver {
   constructor(url, h) {
     this.h = h;
@@ -426,8 +429,31 @@ class CdpDriver {
     }, 300);
   }
 
-  async applyMetrics({ w, h, dpr, mode }) {
-    this.lastMetrics = { w, h, dpr, mode };
+  // The browser window itself follows the client's size (own display, density 1):
+  // emulation alone would be scaled into the old window, which the H.264 stream
+  // captures as is (letterboxed, small). Back to its own size otherwise.
+  // The window is shared by the session's tabs (drivers), so its state is kept per session.
+  async fitWindow(w, h) {
+    const r = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
+    if (!r?.windowId) return;
+    if (winFit.session !== target?.sessionId) Object.assign(winFit, { session: target?.sessionId, own: null, fitted: false });
+    if (!winFit.fitted) winFit.own = { width: r.bounds.width, height: r.bounds.height };
+    // Within the session's screen (at least 3840x2160, less a margin for the
+    // parked X pointer).
+    const width = Math.min(w, 3776), height = Math.min(h + (this.chromeH ?? 87), 2096);
+    await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
+    winFit.fitted = true;
+  }
+  async unfitWindow() {
+    if (!winFit.fitted || winFit.session !== target?.sessionId) return;
+    const r = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
+    if (!r?.windowId) return;
+    winFit.fitted = false;
+    await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: winFit.own }).catch(() => {});
+  }
+  async applyMetrics({ w, h, dpr, mode, fitWindow }) {
+    this.lastMetrics = { w, h, dpr, mode, fitWindow };
+    if (fitWindow) await this.fitWindow(w, h); else await this.unfitWindow();
     // Native and Phone: the screen's density (up to 2x), sharpened by screenshots.
     // Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
     const fit = mode === "phone" || mode === "native";
@@ -826,7 +852,11 @@ async function applyMetrics() {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
-  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mode: layoutMode });
+  const dpr = devicePixelRatio || 1;
+  // Chromium on a display of its own, at density 1: the window takes this size.
+  const fitWindow = layoutMode !== "window" && !!sess?.display && !sess.display_shared
+    && target?.engine !== "firefox" && Math.min(dpr, 2) <= 1.05;
+  await drv.applyMetrics({ w, h, dpr, mode: layoutMode, fitWindow });
   // The page area changed (or video no longer fits the mode): follow with the stream.
   if (canVideo()) startVideo(); else if (video.ws) stopVideo(true);
   renderLayout();
@@ -2043,8 +2073,10 @@ function streamPref() {
   try { return localStorage.getItem("handoff.stream") || "video"; } catch { return "video"; }
 }
 function canVideo() {
+  // Native/Phone in Firefox: its viewport cannot be matched by a window size here.
   return !!(sess?.video && window.VideoDecoder && drv && streamPref() === "video"
-    && !(fitLayout && Math.min(devicePixelRatio || 1, 2) > 1.05));
+    && !(fitLayout && Math.min(devicePixelRatio || 1, 2) > 1.05)
+    && !(fitLayout && target?.engine === "firefox"));
 }
 // fallback: hand the picture back to the screencast.
 function stopVideo(fallback = false) {

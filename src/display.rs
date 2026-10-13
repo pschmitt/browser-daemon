@@ -18,6 +18,9 @@ const LAST_DISPLAY: u32 = 399;
 /// press, which over the page would cancel drags (text selection). Firefox's outer
 /// window is ~55x34 px larger than the size it is given.
 const MARGIN: u32 = 64;
+/// Smallest screen: room for the handoff view's Native mode, which resizes the
+/// window to the viewer's screen (and a common monitor size for pages to see).
+const MIN_SCREEN: (u32, u32) = (3840, 2160);
 
 #[derive(Clone, Debug)]
 pub struct DisplayConfig {
@@ -52,7 +55,10 @@ fn in_use(n: u32) -> bool {
 impl VirtualDisplay {
     /// Start an Xvfb for a `width`x`height` window on the first free display.
     pub async fn start(cfg: &DisplayConfig, width: u32, height: u32) -> std::io::Result<Self> {
-        let (sw, sh) = (width + MARGIN, height + MARGIN);
+        let (sw, sh) = (
+            (width + MARGIN).max(MIN_SCREEN.0),
+            (height + MARGIN).max(MIN_SCREEN.1),
+        );
         for n in FIRST_DISPLAY..=LAST_DISPLAY {
             if stale_lock(n) {
                 debug!(display = n, "Removing a stale X lock");
