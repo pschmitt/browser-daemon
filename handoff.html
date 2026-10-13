@@ -331,7 +331,11 @@ class CdpDriver {
   }
   isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
   close() { this.cdp.close(); }
-  async start() { await this.cdp.call("Page.enable"); }
+  async start() {
+    await this.cdp.call("Page.enable");
+    // Chromium only paints (and screencasts) the tab in front of its window.
+    await this.cdp.call("Page.bringToFront").catch(() => {});
+  }
   async applyMetrics({ w, h, dpr, mobile }) {
     // Cap the screencast scale factor (4K JPEG encoding on CPU is slow).
     const scale = Math.min(dpr, 1.25);
@@ -1204,10 +1208,12 @@ async function closeTab(id) {
 async function loadTabs() {
   try {
     const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
-    const pages = list.filter((x) => x.type === "page");
+    // The tabs of this browser only; the node's other sessions are in the drawer's picker.
+    const all = list.filter((x) => x.type === "page");
+    const pages = all.filter((x) => !target?.sessionId || x.sessionId === target.sessionId);
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
     renderTabStrip(pages);
-    renderTabsModal(pages);
+    renderTabsModal(all);
   } catch { /* ignore */ }
 }
 
