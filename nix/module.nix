@@ -253,6 +253,9 @@ in
       pkgs.noto-fonts-cjk-sans
     ];
 
+    # `browser-daemon tui` for the people on the host.
+    environment.systemPackages = [ cfg.package ];
+
     systemd.services.browser-daemon-xvfb = {
       description = "Xvfb virtual display for browser-daemon";
       wantedBy = [ "multi-user.target" ];

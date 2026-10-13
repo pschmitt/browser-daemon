@@ -1904,10 +1904,22 @@ $('endpointsList').addEventListener('click', (e) => {
 /* ---------------------------------------------------------------- live data */
 let overviewWs = null, wsReconnectTimer = null;
 
+// ?play=<recording id> (e.g. from `browser-daemon tui`): open that recording once it is listed.
+let pendingPlay = new URLSearchParams(location.search).get('play');
 function applyOverview(data) {
   if (!data || !data.local_node) return;
   ov = data;
   currentOverview = data;
+  if (pendingPlay) {
+    const r = (data.recordings || []).find((x) => x.id === pendingPlay);
+    if (r) {
+      pendingPlay = null;
+      const u = new URL(location.href);
+      u.searchParams.delete('play');
+      history.replaceState(null, '', u.toString());
+      setTimeout(() => openPlayerModal(r.id, r.node_name), 0);
+    }
+  }
   sparkHistory.push(0);                       // filled in by renderStats for the current filter
   if (sparkHistory.length > 40) sparkHistory.shift();
   render();

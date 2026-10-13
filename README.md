@@ -62,21 +62,78 @@ Enable the service in your NixOS configuration:
 }
 ```
 
+## Terminal UI
+
+`browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, refreshed every few seconds.
+
+- Sessions: take over in the browser, stop, start or stop recording, start a throwaway session, show the WebSocket URL.
+- Profiles: launch (or take over a running one), cycle the proxy, delete.
+- Recordings: play in the dashboard, delete.
+
+It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file`, the NixOS module's secret when readable, or otherwise the dashboard of that node. Press `?` for the keys.
+
 ## CLI Usage
 
 ```text
-Usage: browser-daemon [OPTIONS]
+Usage: browser-daemon [OPTIONS] [COMMAND]
+
+Commands:
+  tui   Terminal UI for the mesh: sessions, profiles, recordings and nodes
+  help  Print this message or the help of the given subcommand(s)
 
 Options:
-  -b, --bind <BIND>                      [default: 127.0.0.1:3001]
-      --chromium <CHROMIUM>              [default: chromium]
+  -b, --bind <BIND>
+          [default: 127.0.0.1:3001]
+      --chromium <CHROMIUM>
+          [default: chromium]
+      --firefox <FIREFOX>
+          
       --display <DISPLAY>
-      --max-sessions <MAX_SESSIONS>      [default: 8]
-      --profile-dir <PROFILE_DIR>        [default: /var/lib/browser-daemon/profiles]
-      --default-width <DEFAULT_WIDTH>    [default: 1600]
-      --default-height <DEFAULT_HEIGHT>  [default: 1000]
-  -h, --help                             Print help
-  -V, --version                          Print version
+          
+      --max-sessions <MAX_SESSIONS>
+          [default: 8]
+      --profile-dir <PROFILE_DIR>
+          [default: /var/lib/browser-daemon/profiles]
+      --default-width <DEFAULT_WIDTH>
+          [default: 1600]
+      --default-height <DEFAULT_HEIGHT>
+          [default: 1000]
+      --node-name <NODE_NAME>
+          
+      --public-url <PUBLIC_URL>
+          
+      --peer <PEERS>
+          
+      --cluster-secret <CLUSTER_SECRET>
+          Shared cluster secret for peer-to-peer authentication
+      --cluster-secret-file <CLUSTER_SECRET_FILE>
+          Path to file containing shared cluster secret
+      --recordings-dir <RECORDINGS_DIR>
+          [default: /var/lib/browser-daemon/recordings]
+      --record-sessions
+          
+      --recording-max-storage-mb <RECORDING_MAX_STORAGE_MB>
+          [default: 2048]
+      --recording-max-age-hours <RECORDING_MAX_AGE_HOURS>
+          [default: 168]
+      --recording-max-count <RECORDING_MAX_COUNT>
+          [default: 100]
+      --max-session-memory-mb <MAX_SESSION_MEMORY_MB>
+          Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N)
+      --idle-timeout-minutes <IDLE_TIMEOUT_MINUTES>
+          Stop sessions nobody used for this many minutes (0 = never) [default: 30]
+      --chromium-adblock <CHROMIUM_ADBLOCK>
+          Unpacked ad blocker extension (uBlock Origin Lite) for Chromium
+      --firefox-adblock <FIREFOX_ADBLOCK>
+          Ad blocker add-on (uBlock Origin .xpi) for Firefox
+      --adblock-default <ADBLOCK_DEFAULT>
+          Block ads in new sessions unless they opt out [default: true] [possible values: true, false]
+      --proxies-file <PROXIES_FILE>
+          JSON list of upstream proxies sessions can use: [{"id", "name", "url"}]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 ```
 
 ## License

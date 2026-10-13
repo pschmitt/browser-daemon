@@ -5,6 +5,7 @@ mod profiles;
 mod proxies;
 mod proxy;
 mod recorder;
+mod tui;
 
 use axum::body::Bytes;
 use axum::extract::ws::WebSocketUpgrade;
@@ -49,6 +50,9 @@ static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Native NixOS remote browser daemon")]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     #[arg(short, long, default_value = "127.0.0.1:3001")]
     pub bind: SocketAddr,
 
@@ -138,6 +142,12 @@ pub struct Args {
         help = "JSON list of upstream proxies sessions can use: [{\"id\", \"name\", \"url\"}]"
     )]
     pub proxies_file: Option<PathBuf>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    /// Terminal UI for the mesh: sessions, profiles, recordings and nodes.
+    Tui(tui::TuiArgs),
 }
 
 #[derive(Clone)]
@@ -885,14 +895,18 @@ fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = Args::parse();
+    // The TUI owns the terminal: no log output.
+    if let Some(Command::Tui(tui_args)) = args.command.take() {
+        return tui::run(tui_args).await;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "browser_daemon=info,tower_http=info".into()),
         )
         .init();
-
-    let args = Args::parse();
 
     let node_name = args.node_name.unwrap_or_else(|| {
         std::env::var("HOSTNAME")
