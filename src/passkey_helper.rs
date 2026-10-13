@@ -165,6 +165,10 @@ async fn serve(
             node,
             "--page-id",
             &req.page_id,
+            // The page only goes on once the passkey is in place, so its assertion
+            // follows within seconds; a stuck attempt must not lock the entry long.
+            "--timeout",
+            "30",
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -181,6 +185,7 @@ async fn serve(
         tokio::select! {
             line = out.next_line() => match line {
                 Ok(Some(l)) if l.starts_with("Passkey ready") => {
+                    info!(rp_id = %rp, "Passkey ready in the page");
                     // The rest (assertion, counter sync) finishes on its own.
                     tokio::spawn(async move {
                         while let Ok(Some(l)) = out.next_line().await {

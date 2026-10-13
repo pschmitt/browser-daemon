@@ -424,6 +424,31 @@ const CDP_BUTTONS = ["left", "middle", "right"], CDP_MASKS = [1, 4, 2];
 // vault's passkey in place the request goes on; cancelled (or failed) it is rejected
 // like a cancelled browser dialog, since Chromium's own dialog can't be reached from
 // the view. Autofill (conditional) requests and anything without a view pass through.
+// Runs in the remote page: what a page puts on the clipboard (a "copy" button:
+// navigator.clipboard.writeText, or a copy event as with execCommand("copy")) is
+// handed to the live view too, which puts it on the local clipboard.
+const CLIPBOARD_HOOK = `(() => {
+  if (globalThis.__bdClipHooked || typeof globalThis.__bdClipboard !== "function") return;
+  globalThis.__bdClipHooked = true;
+  const send = (text) => { if (typeof text === "string" && text) try { globalThis.__bdClipboard(text); } catch {} };
+  const cb = navigator.clipboard;
+  if (cb && cb.writeText) {
+    const writeText = cb.writeText.bind(cb);
+    cb.writeText = (text) => { send(String(text)); return writeText(text).catch(() => {}); };
+  }
+  if (cb && cb.write) {
+    const write = cb.write.bind(cb);
+    cb.write = async (items) => {
+      for (const item of items || []) {
+        if (item.types && item.types.includes("text/plain")) send(await (await item.getType("text/plain")).text());
+      }
+      return write(items).catch(() => {});
+    };
+  }
+  addEventListener("copy", (e) => {
+    send(e.defaultPrevented && e.clipboardData ? e.clipboardData.getData("text/plain") : String(getSelection()));
+  });
+})()`;
 const PASSKEY_HOOK = `(() => {
   const c = navigator.credentials;
   if (!c || c.__bdHooked) return;
@@ -463,6 +488,9 @@ class CdpDriver {
     await this.cdp.call("Runtime.addBinding", { name: "__bdPasskey" }).catch(() => {});
     await this.cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: PASSKEY_HOOK }).catch(() => {});
     this.evaluate(PASSKEY_HOOK).catch(() => {});
+    await this.cdp.call("Runtime.addBinding", { name: "__bdClipboard" }).catch(() => {});
+    await this.cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: CLIPBOARD_HOOK }).catch(() => {});
+    this.evaluate(CLIPBOARD_HOOK).catch(() => {});
     const beat = () => this.cdp.send("Runtime.evaluate", { expression: "globalThis.__bdPasskeyAlive = Date.now()" });
     beat();
     this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
@@ -591,6 +619,11 @@ class CdpDriver {
   }
   onEvent(method, p) {
     const h = this.h;
+    if (method === "Runtime.bindingCalled" && p.name === "__bdClipboard") {
+      // Only right after input in this view (the user pressed the page's copy button).
+      if (performance.now() - (this.lastInput || -1e9) < 5000) h.clipboard(p.payload);
+      return;
+    }
     if (method === "Runtime.bindingCalled" && p.name === "__bdPasskey") {
       let req;
       try { req = JSON.parse(p.payload); } catch { return; }
@@ -675,11 +708,14 @@ class CdpDriver {
     this.cdp.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base, commands: command ? [command] : [] });
     this.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
   }
-  pressKey(key) {
+  // mods: { ctrl, shift, alt, meta } held with it (Ctrl+Backspace, Shift+Arrow, ...).
+  pressKey(key, mods = {}) {
     this.inputSeen();
     const [vk, text] = CDP_KEYS[key];
-    this.cdp.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, text });
-    this.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+    const modifiers = (mods.alt ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.meta ? 4 : 0) | (mods.shift ? 8 : 0);
+    const plain = !(mods.ctrl || mods.alt || mods.meta);
+    this.cdp.send("Input.dispatchKeyEvent", { type: text && plain ? "keyDown" : "rawKeyDown", key, code: key, modifiers, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, text: plain ? text : undefined });
+    this.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code: key, modifiers, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
   }
   async navigate(url) {
     const res = await this.cdp.call("Page.navigate", { url });
@@ -845,9 +881,14 @@ class BidiDriver {
       ...mods.reverse().map((value) => ({ type: "keyUp", value })),
     ] }]);
   }
-  pressKey(key) {
+  pressKey(key, mods = {}) {
     const v = BIDI_KEYS[key];
-    this.actions([{ type: "key", id: "kbd", actions: [{ type: "keyDown", value: v }, { type: "keyUp", value: v }] }]);
+    // WebDriver modifier keys: Control, Shift, Alt, Meta.
+    const held = [mods.ctrl && "\uE009", mods.shift && "\uE008", mods.alt && "\uE00A", mods.meta && "\uE03D"].filter(Boolean);
+    this.actions([{ type: "key", id: "kbd", actions: [
+      ...held.map((value) => ({ type: "keyDown", value })), { type: "keyDown", value: v }, { type: "keyUp", value: v },
+      ...held.reverse().map((value) => ({ type: "keyUp", value })),
+    ] }]);
   }
   async navigate(url) { this.kick(); await this.rpc("browsingContext.navigate", { context: this.ctx, url, wait: "none" }); }
   // History restores from the back/forward cache fire no load event: re-read the URL.
@@ -892,6 +933,28 @@ async function fetchTargets() {
   return list.filter((x) => x.type === "page");
 }
 
+let passkeyPending = null;
+async function askPasskey({ rpId }) {
+  const dlg = $("passkeyDialog");
+  $("passkeyRp").textContent = rpId;
+  dlg.showModal();
+  const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
+  if (choice !== "vault" || !target?.sessionId) return false;
+  toast(`Getting the passkey for ${rpId}… If rbw is locked, confirm the unlock on your phone.`, 0);
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`, {
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ page_id: pageId, rp_id: rpId }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    toast(`Signing in to ${rpId} with your passkey`);
+    return true;
+  } catch (err) {
+    toast(`No passkey: ${err.message}`, 5000);
+    return false;
+  }
+}
+
 const handlers = {
   frame: (data, m, mime) => {
     hadFrame = true;
@@ -927,27 +990,14 @@ const handlers = {
   },
   gone: (why) => setState("bad", stopping ? "Session stopped" : why),
   // The page asks for a passkey (started from this view): from the vault, or the browser's own way.
-  passkey: async ({ rpId }) => {
-    const dlg = $("passkeyDialog");
-    $("passkeyRp").textContent = rpId;
-    if (dlg.open) dlg.close();
-    dlg.showModal();
-    const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
-    if (choice !== "vault" || !target?.sessionId) return false;
-    toast(`Getting the passkey for ${rpId}…`, 0);
-    try {
-      const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`, {
-        method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ page_id: pageId, rp_id: rpId }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-      toast(`Signing in to ${rpId} with your passkey`);
-      return true;
-    } catch (err) {
-      toast(`No passkey: ${err.message}`, 5000);
-      return false;
-    }
+  // A request while one is pending (the user clicked again) shares its outcome:
+  // closing the open prompt would count as Cancel.
+  clipboard: (text) => {
+    navigator.clipboard?.writeText(text)
+      .then(() => toast("Copied to your clipboard"))
+      .catch(() => toast("The page copied text, but this browser blocked the clipboard", 3000));
   },
+  passkey: (req) => (passkeyPending ||= askPasskey(req).finally(() => { passkeyPending = null; })),
   close: (d) => {
     if (d !== drv) return;   // a replaced driver shutting down
     setState("bad", "The browser session ended");
@@ -999,6 +1049,9 @@ async function doConnect({ quiet = false } = {}) {
 }
 
 // The remote page gets the size of this screen (like a real phone) or its own desktop size.
+// The page's size on screen. Not innerWidth: a mobile page laid out wider than the
+// screen (Phone) reports its layout width there, e.g. 1120 for 412 px on screen.
+const VIEW_SIZE = "[Math.round(visualViewport.width * visualViewport.scale), Math.round(visualViewport.height * visualViewport.scale)]";
 let applied = null, metricsYielding = false;
 // This view itself runs on a phone (touch, small screen): Phone then uses its real size.
 const onPhone = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 600;
@@ -1027,7 +1080,7 @@ async function applyMetrics({ ifDrifted = false } = {}) {
     else { w = Math.min(w, viewers.native[0]); h = Math.min(h, viewers.native[1]); }
   }
   if (ifDrifted && applied?.drv === drv && applied.page === pageId && applied.mode === layoutMode) {
-    const size = await drv.evaluate("[innerWidth, innerHeight]").catch(() => null);
+    const size = await drv.evaluate(VIEW_SIZE).catch(() => null);
     if (size && size[0] === applied.w && size[1] === applied.h) return;
   }
   applied = { drv, page: pageId, mode: layoutMode, w, h };
@@ -1427,7 +1480,7 @@ E.kb.addEventListener("keydown", (e) => {
 E.kb.addEventListener("blur", () => { if (!manualKb) E.keys.classList.remove("show"); });
 
 const KEYS = CDP_KEYS;
-function pressKey(key) { if (drv) drv.pressKey(key); }
+function pressKey(key, mods) { if (drv) drv.pressKey(key, mods); }
 
 /* ---------------------------------------------------------------- toolbar & omnibox */
 // Virtual keyboard buttons must not take focus from the local input, or the keyboard would close.
@@ -2091,6 +2144,14 @@ const localTyping = () => !drv || document.activeElement === E.kb || document.ac
 const SHORTCUTS = { a: "selectAll", z: "undo", y: "redo" };
 window.addEventListener("keydown", (e) => {
   if (localTyping()) return;
+  // Named keys go with whatever modifiers are held: Ctrl+Backspace/Delete (words),
+  // Ctrl+arrows, Shift+arrows (select), Ctrl+Home/End, ...
+  if (KEYS[e.key] && (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) && drv) {
+    e.preventDefault();
+    pressKey(e.key, { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey });
+    refreshRemoteSelection(250);
+    return;
+  }
   const mod = e.ctrlKey || e.metaKey;
   if (mod && !e.altKey) {
     const k = e.key.toLowerCase();
@@ -2369,7 +2430,7 @@ function stopVideo(fallback = false) {
 async function startVideo() {
   const d = drv;
   if (!d || !target?.sessionId) return;
-  const m = await d.evaluate("[innerWidth, innerHeight, outerWidth === innerWidth ? outerHeight - innerHeight : null]").catch(() => null);
+  const m = await d.evaluate(`[...${VIEW_SIZE}, outerWidth === innerWidth ? outerHeight - innerHeight : null]`).catch(() => null);
   if (!m || d !== drv) return;
   // Window layout: no emulation, so the live value (follows bars that come and go).
   const region = { x: 0, y: chromeHeight(target.sessionId, fitLayout ? d.chromeH : m[2]), w: m[0], h: m[1] };
