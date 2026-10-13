@@ -318,7 +318,7 @@
     <p><b id="passkeyRp"></b> asks for a passkey. Yours can come from the vault (rbw); if it is locked, your phone asks to unlock it.</p>
     <div class="ltd-actions">
       <button value="vault">Use the passkey from the vault</button>
-      <button value="page">Let the browser handle it</button>
+      <button value="cancel">Cancel</button>
     </div>
   </form>
 </dialog>
@@ -420,15 +420,16 @@ function chromeHeight(sessionId, measured) {
 
 const CDP_BUTTONS = ["left", "middle", "right"], CDP_MASKS = [1, 4, 2];
 // Runs in the remote page: holds a passkey sign-in (navigator.credentials.get) while a
-// live view is attached (its heartbeat is fresh) until the view answers: then the
-// request goes on, served by the vault's passkey if the user chose it. Autofill
-// (conditional) requests and anything without a view pass straight through.
+// live view is attached (its heartbeat is fresh) until the view answers: with the
+// vault's passkey in place the request goes on; cancelled (or failed) it is rejected
+// like a cancelled browser dialog, since Chromium's own dialog can't be reached from
+// the view. Autofill (conditional) requests and anything without a view pass through.
 const PASSKEY_HOOK = `(() => {
   const c = navigator.credentials;
   if (!c || c.__bdHooked) return;
   Object.defineProperty(c, "__bdHooked", { value: true });
   const get = c.get.bind(c), waiting = new Map();
-  globalThis.__bdPasskeyAnswer = (id) => { const go = waiting.get(id); waiting.delete(id); go?.(); };
+  globalThis.__bdPasskeyAnswer = (id, ok = true) => { const go = waiting.get(id); waiting.delete(id); go?.(ok); };
   c.get = function (opts) {
     const pk = opts && opts.publicKey;
     const viewed = Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
@@ -438,7 +439,7 @@ const PASSKEY_HOOK = `(() => {
       waiting.set(id, go);
       setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
       try { globalThis.__bdPasskey(JSON.stringify({ id, rpId: pk.rpId || location.hostname })); } catch { globalThis.__bdPasskeyAnswer(id); }
-    }).then(() => get(opts));
+    }).then((ok) => ok ? get(opts) : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
   };
 })()`;
 
@@ -467,8 +468,8 @@ class CdpDriver {
     this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
   }
   // A passkey request held by the page's hook: go on (with or without the vault's passkey).
-  passkeyAnswer(id) {
-    this.cdp.send("Runtime.evaluate", { expression: `globalThis.__bdPasskeyAnswer?.(${JSON.stringify(id)})` });
+  passkeyAnswer(id, ok = true) {
+    this.cdp.send("Runtime.evaluate", { expression: `globalThis.__bdPasskeyAnswer?.(${JSON.stringify(id)}, ${ok})` });
   }
   // H.264 stream active: no screencast meanwhile; back to it when the stream ends.
   async setVideo(on) {
@@ -569,7 +570,7 @@ class CdpDriver {
       // Only a sign-in the user started here: an agent driving the page through its own
       // connection (its own passkey already injected) must not be held up.
       if (!(performance.now() - (this.lastInput || -1e9) < 5000)) { this.passkeyAnswer(req.id); return; }
-      h.passkey(req).finally(() => this.passkeyAnswer(req.id));
+      h.passkey(req).then((ok) => this.passkeyAnswer(req.id, ok), () => this.passkeyAnswer(req.id, false));
       return;
     }
     if (method === "Page.screencastFrame") {
@@ -905,7 +906,7 @@ const handlers = {
     if (dlg.open) dlg.close();
     dlg.showModal();
     const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
-    if (choice !== "vault" || !target?.sessionId) return;
+    if (choice !== "vault" || !target?.sessionId) return false;
     toast(`Getting the passkey for ${rpId}…`, 0);
     try {
       const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`, {
@@ -914,8 +915,10 @@ const handlers = {
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
       toast(`Signing in to ${rpId} with your passkey`);
+      return true;
     } catch (err) {
       toast(`No passkey: ${err.message}`, 5000);
+      return false;
     }
   },
   close: (d) => {
