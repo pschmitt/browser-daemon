@@ -539,6 +539,10 @@ class CdpDriver {
   }
   wheel(x, y, dx, dy) {
     this.inputSeen(); this.cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy }); }
+  // A finger on the page: it decides between scrolling and dragging (sliders), as on a phone.
+  // type: touchStart, touchMove, touchEnd or touchCancel (the last two take no point).
+  touch(type, x, y) {
+    this.inputSeen(); this.cdp.send("Input.dispatchTouchEvent", { type, touchPoints: x === undefined ? [] : [{ x, y }] }); }
   insertText(text) {
     this.inputSeen(); this.cdp.send("Input.insertText", { text }); }
   // Desktop mouse: real presses and drags, so text can be selected.
@@ -943,7 +947,7 @@ async function refreshInfo() {
   } catch { /* page navigating */ }
 }
 
-/* ---------------------------------------------------------------- touch: tap = click, drag = scroll */
+/* ---------------------------------------------------------------- touch: tap = click, drag = finger */
 function toPage(e) {
   const r = E.view.getBoundingClientRect();
   const s = Math.min(r.width / E.view.width, r.height / E.view.height);
@@ -1011,7 +1015,8 @@ function flushWheel() {
 
 let touch = null;
 // A mouse drives the remote mouse directly (drag selects text, double-click selects a word);
-// touch keeps tap = click and drag = scroll; hold, then drag = mouse drag; hold = right-click.
+// touch keeps tap = click and drag = a real finger drag (scrolls, or moves sliders; Firefox: scroll);
+// hold, then drag = mouse drag; hold = right-click.
 let mouse = null, lastDown = { t: 0, x: 0, y: 0, n: 0 };
 E.view.addEventListener("pointerdown", (e) => {
   if (!e.isPrimary) return;
@@ -1072,9 +1077,23 @@ E.view.addEventListener("pointermove", (e) => {
     });
     return;
   }
-  if (!touch.moved && Math.hypot(e.clientX - touch.x, e.clientY - touch.y) > 9) touch.moved = true;
+  if (!touch.moved && Math.hypot(e.clientX - touch.x, e.clientY - touch.y) > 9) {
+    touch.moved = true;
+    // Chromium takes the finger itself; Firefox scrolls by wheel.
+    const start = drv?.touch && toPage({ clientX: touch.x, clientY: touch.y });
+    if (start) { touch.raw = start; drv.touch("touchStart", start.x, start.y); }
+  }
   if (touch.moved) {
     const p = toPage(e);
+    if (touch.raw) {
+      if (!p) return;
+      touch.raw = p;
+      if (!moveRaf) moveRaf = requestAnimationFrame(() => {
+        moveRaf = 0;
+        if (touch?.raw && drv) drv.touch("touchMove", touch.raw.x, touch.raw.y);
+      });
+      return;
+    }
     if (p) queueWheel(p.x, p.y, 0, (touch.lastY - e.clientY) * p.scale);
     touch.lastY = e.clientY;
   }
@@ -1103,6 +1122,10 @@ E.view.addEventListener("pointerup", (e) => {
   }
   const wasTap = !touch.moved;
   const editable = touch.editable;
+  if (touch.raw && drv) {
+    drv.touch("touchMove", touch.raw.x, touch.raw.y);
+    drv.touch("touchEnd");
+  }
   touch = null;
   flushWheel();
   if (!wasTap || refitting) return;       // the picture is about to change size: a tap would land wrong
@@ -1120,6 +1143,7 @@ E.view.addEventListener("pointerup", (e) => {
 E.view.addEventListener("pointercancel", () => {
   // A drag in progress lets go where it is, rather than leaving the button down.
   if (touch?.drag && drv) drv.mouseUp(Math.round(touch.drag.x), Math.round(touch.drag.y), 1, 0);
+  if (touch?.raw && drv) drv.touch("touchCancel");
   if (mouse && drv && lastMove) drv.mouseUp(Math.round(lastMove.x), Math.round(lastMove.y), mouse.clicks, mouse.button);
   clearTimeout(touch?.holdTimer);
   touch = null; mouse = null; flushWheel();
