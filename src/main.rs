@@ -4,6 +4,8 @@ mod bidi;
 mod browser;
 mod display;
 mod idle;
+mod passkey_helper;
+mod passkeys;
 mod profiles;
 mod proxies;
 mod proxy;
@@ -227,6 +229,8 @@ pub enum DisplayMode {
 pub enum Command {
     /// Terminal UI for the mesh: sessions, profiles, recordings and nodes.
     Tui(tui::TuiArgs),
+    /// Serve passkeys approved in live views from the local rbw vault.
+    PasskeyHelper(passkey_helper::HelperArgs),
 }
 
 #[derive(Clone)]
@@ -387,6 +391,8 @@ pub struct AppState {
     pub audible_pages: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
     /// Live views per session, for the size Native viewers share.
     pub viewers: Arc<viewers::Viewers>,
+    /// Passkeys approved in live views, on their way to the passkey helper.
+    pub passkeys: Arc<passkeys::Broker>,
 }
 
 #[derive(Default)]
@@ -1075,8 +1081,18 @@ fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
     // The TUI owns the terminal: no log output.
-    if let Some(Command::Tui(tui_args)) = args.command.take() {
-        return tui::run(tui_args).await;
+    match args.command.take() {
+        Some(Command::Tui(tui_args)) => return tui::run(tui_args).await,
+        Some(Command::PasskeyHelper(helper_args)) => {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "browser_daemon=info".into()),
+                )
+                .init();
+            return passkey_helper::run(helper_args).await;
+        }
+        None => {}
     }
 
     tracing_subscriber::fmt()
@@ -1254,6 +1270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tab_order: Arc::new(std::sync::Mutex::new(TabOrder::default())),
         audible_pages: Arc::default(),
         viewers: Arc::default(),
+        passkeys: Arc::default(),
     };
     audible::spawn_monitor(state.clone());
 
@@ -1327,6 +1344,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/proxies", get(api_list_proxies))
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
+        .route("/api/sessions/{id}/passkey", post(api_session_passkey))
+        .route("/api/passkey-helper/next", get(api_passkey_helper_next))
+        .route("/api/passkey-helper/{req}", post(api_passkey_helper_done))
         .route("/api/sessions/{id}/record", post(api_session_start_record))
         .route(
             "/api/sessions/{id}/files",
@@ -4119,6 +4139,63 @@ async fn handle_viewers_ws(
             }
         }
         state.viewers.leave(session, id);
+    })
+}
+
+#[derive(Deserialize)]
+struct PasskeyRequest {
+    page_id: String,
+    rp_id: String,
+}
+
+/// A passkey approved in the live view: the helper puts it into the page.
+/// Answers once the passkey is ready (or why it isn't).
+async fn api_session_passkey(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PasskeyRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    session.activity.touch();
+    info!(session_id = %id, rp_id = %req.rp_id, "Passkey approved in the live view");
+    state
+        .passkeys
+        .submit(req.page_id, req.rp_id)
+        .await
+        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, &e))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn api_passkey_helper_next(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    state.check_auth(&headers)?;
+    Ok(match state.passkeys.next(Duration::from_secs(25)).await {
+        Some(req) => Json(req).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
+}
+
+async fn api_passkey_helper_done(
+    AxumPath(req): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(outcome): Json<passkeys::Outcome>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    Ok(if state.passkeys.complete(req, outcome) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::GONE
     })
 }
 

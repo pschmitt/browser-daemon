@@ -96,6 +96,10 @@
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
   #view:focus { outline: none; }
+  #passkeyDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(380px, calc(100vw - 32px)); }
+  #passkeyDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #passkeyDialog h2 { margin: 0 0 6px; font-size: 16px; }
+  #passkeyDialog p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
   #lastTabDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(360px, calc(100vw - 32px)); }
   #lastTabDialog::backdrop { background: rgba(0, 0, 0, .5); }
   #lastTabDialog h2 { margin: 0 0 6px; font-size: 16px; }
@@ -307,6 +311,16 @@
     </div>
   </form>
 </dialog>
+<dialog id="passkeyDialog">
+  <form method="dialog">
+    <h2>Sign in with a passkey?</h2>
+    <p><b id="passkeyRp"></b> asks for a passkey. Yours can come from the vault (rbw); if it is locked, your phone asks to unlock it.</p>
+    <div class="ltd-actions">
+      <button value="vault">Use the passkey from the vault</button>
+      <button value="page">Let the browser handle it</button>
+    </div>
+  </form>
+</dialog>
 <div id="tabsModal" class="tabs-modal-overlay">
   <div class="tabs-modal-card">
     <div class="tabs-modal-header">
@@ -403,6 +417,28 @@ function chromeHeight(sessionId, measured) {
 }
 
 const CDP_BUTTONS = ["left", "middle", "right"], CDP_MASKS = [1, 4, 2];
+// Runs in the remote page: holds a passkey sign-in (navigator.credentials.get) while a
+// live view is attached (its heartbeat is fresh) until the view answers: then the
+// request goes on, served by the vault's passkey if the user chose it. Autofill
+// (conditional) requests and anything without a view pass straight through.
+const PASSKEY_HOOK = `(() => {
+  const c = navigator.credentials;
+  if (!c || c.__bdHooked) return;
+  Object.defineProperty(c, "__bdHooked", { value: true });
+  const get = c.get.bind(c), waiting = new Map();
+  globalThis.__bdPasskeyAnswer = (id) => { const go = waiting.get(id); waiting.delete(id); go?.(); };
+  c.get = function (opts) {
+    const pk = opts && opts.publicKey;
+    const viewed = Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
+    if (!pk || opts.mediation === "conditional" || !viewed || typeof globalThis.__bdPasskey !== "function") return get(opts);
+    const id = Math.random().toString(36).slice(2);
+    return new Promise((go) => {
+      waiting.set(id, go);
+      setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
+      try { globalThis.__bdPasskey(JSON.stringify({ id, rpId: pk.rpId || location.hostname })); } catch { globalThis.__bdPasskeyAnswer(id); }
+    }).then(() => get(opts));
+  };
+})()`;
 
 class CdpDriver {
   constructor(url, h) {
@@ -411,7 +447,7 @@ class CdpDriver {
     this.ready = this.cdp.ready;
   }
   isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
-  close() { this.cdp.close(); }
+  close() { clearInterval(this.passkeyBeat); this.cdp.close(); }
   async start() {
     await this.cdp.call("Page.enable");
     // Chromium only paints (and screencasts) the tab in front of its window.
@@ -419,6 +455,18 @@ class CdpDriver {
     // Toolbar height, measured before any emulation: where the page starts on the
     // display (for the H.264 stream's capture region).
     this.chromeH = await this.evaluate("outerHeight - innerHeight").catch(() => null);
+    // Passkey requests started from this view are offered from the vault (see PASSKEY_HOOK).
+    await this.cdp.call("Runtime.enable").catch(() => {});
+    await this.cdp.call("Runtime.addBinding", { name: "__bdPasskey" }).catch(() => {});
+    await this.cdp.call("Page.addScriptToEvaluateOnNewDocument", { source: PASSKEY_HOOK }).catch(() => {});
+    this.evaluate(PASSKEY_HOOK).catch(() => {});
+    const beat = () => this.cdp.send("Runtime.evaluate", { expression: "globalThis.__bdPasskeyAlive = Date.now()" });
+    beat();
+    this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
+  }
+  // A passkey request held by the page's hook: go on (with or without the vault's passkey).
+  passkeyAnswer(id) {
+    this.cdp.send("Runtime.evaluate", { expression: `globalThis.__bdPasskeyAnswer?.(${JSON.stringify(id)})` });
   }
   // H.264 stream active: no screencast meanwhile; back to it when the stream ends.
   async setVideo(on) {
@@ -432,7 +480,7 @@ class CdpDriver {
   // has been still for a moment, a screenshot (which honours the density) replaces
   // the frame: motion comes from the screencast, sharp text from the screenshot.
   // The user is interacting: frames from now on are real, not capture echoes.
-  inputSeen() { this.echoUntil = 0; }
+  inputSeen() { this.echoUntil = 0; this.lastInput = performance.now(); }
   scheduleSharp(meta) {
     clearTimeout(this.sharpTimer);
     const seq = this.sharpSeq = (this.sharpSeq || 0) + 1;
@@ -502,6 +550,15 @@ class CdpDriver {
   }
   onEvent(method, p) {
     const h = this.h;
+    if (method === "Runtime.bindingCalled" && p.name === "__bdPasskey") {
+      let req;
+      try { req = JSON.parse(p.payload); } catch { return; }
+      // Only a sign-in the user started here: an agent driving the page through its own
+      // connection (its own passkey already injected) must not be held up.
+      if (!(performance.now() - (this.lastInput || -1e9) < 5000)) { this.passkeyAnswer(req.id); return; }
+      h.passkey(req).finally(() => this.passkeyAnswer(req.id));
+      return;
+    }
     if (method === "Page.screencastFrame") {
       const ack = () => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId });
       // An unchanged frame (e.g. the repaint a sharpening screenshot causes) must not
@@ -828,6 +885,26 @@ const handlers = {
     return { accept: window.confirm(message || "Leave this page?") };
   },
   gone: (why) => setState("bad", stopping ? "Session stopped" : why),
+  // The page asks for a passkey (started from this view): from the vault, or the browser's own way.
+  passkey: async ({ rpId }) => {
+    const dlg = $("passkeyDialog");
+    $("passkeyRp").textContent = rpId;
+    if (dlg.open) dlg.close();
+    dlg.showModal();
+    const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
+    if (choice !== "vault" || !target?.sessionId) return;
+    toast(`Getting the passkey for ${rpId}…`, 0);
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`, {
+        method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ page_id: pageId, rp_id: rpId }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+      toast(`Signing in to ${rpId} with your passkey`);
+    } catch (err) {
+      toast(`No passkey: ${err.message}`, 5000);
+    }
+  },
   close: (d) => {
     if (d !== drv) return;   // a replaced driver shutting down
     setState("bad", "The browser session ended");
