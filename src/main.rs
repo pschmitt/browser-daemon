@@ -16,6 +16,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -3548,6 +3549,12 @@ async fn api_session_upload_file(
     let path = dir.join(upload_file_name(&params.name));
     let io = |e: std::io::Error| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
     fs::create_dir_all(&dir).await.map_err(io)?;
+    // Dropped files can be private: keep them away from other users of the host.
+    let root = upload_dir(&id);
+    let root = root.parent().unwrap_or(&root);
+    fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
+        .await
+        .map_err(io)?;
     fs::write(&path, &body).await.map_err(io)?;
     info!(session_id = %id, path = %path.display(), bytes = body.len(), "Stored dropped file");
     Ok(Json(serde_json::json!({
