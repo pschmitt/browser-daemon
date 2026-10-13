@@ -7,6 +7,19 @@
 let
   cfg = config.services.browser-daemon;
   adblockPkgs = pkgs.callPackage ./adblock.nix { };
+  # The screen is larger than any session window (up to 4K), and the X pointer is
+  # parked in the margin outside all of them. Headful Chromium reports the real
+  # pointer as a mouse move whenever it handles a mouse press; with the pointer
+  # over a window that move cancels drags, so text could not be selected in handoff.
+  screenWidth = lib.max cfg.defaultWidth 3840 + 16;
+  screenHeight = lib.max cfg.defaultHeight 2160 + 16;
+  parkPointer = pkgs.writeShellScript "browser-daemon-park-pointer" ''
+    for _ in $(seq 50); do
+      DISPLAY=${cfg.display} ${lib.getExe pkgs.xdotool} mousemove ${toString (screenWidth - 1)} ${toString (screenHeight - 1)} && exit 0
+      sleep 0.1
+    done
+    exit 1
+  '';
 in
 {
   options.services.browser-daemon = {
@@ -217,7 +230,8 @@ in
       description = "Xvfb virtual display for browser-daemon";
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
-        ExecStart = "${cfg.xvfbPackage}/bin/Xvfb ${cfg.display} -screen 0 ${toString cfg.defaultWidth}x${toString cfg.defaultHeight}x24 -nolisten tcp -noreset";
+        ExecStart = "${cfg.xvfbPackage}/bin/Xvfb ${cfg.display} -screen 0 ${toString screenWidth}x${toString screenHeight}x24 -nolisten tcp -noreset";
+        ExecStartPost = parkPointer;
         Restart = "always";
         RestartSec = 2;
         User = cfg.user;
