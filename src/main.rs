@@ -264,6 +264,33 @@ pub struct AppState {
     pub adblock_default: bool,
     /// Serializes profile creation and renames so names stay unique.
     pub profiles_lock: Arc<Mutex<()>>,
+    /// First-seen order of tabs: Chromium lists them most recently used first,
+    /// which reshuffles the tab bar whenever another tab is brought to the front.
+    pub tab_order: Arc<std::sync::Mutex<TabOrder>>,
+}
+
+#[derive(Default)]
+pub struct TabOrder {
+    next: u64,
+    seen: HashMap<String, u64>,
+}
+
+impl TabOrder {
+    fn rank(&mut self, id: &str) -> u64 {
+        if let Some(n) = self.seen.get(id) {
+            return *n;
+        }
+        self.next += 1;
+        self.seen.insert(id.to_string(), self.next);
+        self.next
+    }
+
+    /// Sort tabs into a stable order and forget tabs that are gone.
+    fn sort(&mut self, targets: &mut [DevToolsTarget]) {
+        targets.sort_by_cached_key(|t| self.rank(&t.id));
+        let live: std::collections::HashSet<&str> = targets.iter().map(|t| t.id.as_str()).collect();
+        self.seen.retain(|id, _| live.contains(id.as_str()));
+    }
 }
 
 impl AppState {
@@ -1044,6 +1071,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         idle_timeout_secs: args.idle_timeout_minutes * 60,
         adblock_default: args.adblock_default,
         profiles_lock: Arc::new(Mutex::new(())),
+        tab_order: Arc::new(std::sync::Mutex::new(TabOrder::default())),
     };
 
     // Stop sessions that nobody has used for a while.
@@ -1295,6 +1323,9 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
         }
     }
 
+    if let Ok(mut order) = state.tab_order.lock() {
+        order.sort(&mut all_targets);
+    }
     all_targets
 }
 
@@ -1549,6 +1580,9 @@ async fn json_new(
                 warn!(session_id = %session.id, error = %e, "Could not close the blank start tab");
             }
         }
+        if let Ok(mut order) = state.tab_order.lock() {
+            order.rank(&ctx.id);
+        }
         return Ok(Json(firefox_target(&session, ctx)));
     }
 
@@ -1613,6 +1647,9 @@ async fn json_new(
     target.session_id = Some(session.id);
     target.profile = session.profile.clone();
     target.engine = Some(BrowserEngine::Chromium);
+    if let Ok(mut order) = state.tab_order.lock() {
+        order.rank(&target.id);
+    }
 
     Ok(Json(target))
 }
@@ -4090,6 +4127,40 @@ async fn compute_dir_size(path: PathBuf) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_order_is_first_seen_not_most_recent() {
+        let tab = |id: &str| DevToolsTarget {
+            id: id.into(),
+            title: None,
+            target_type: "page".into(),
+            url: String::new(),
+            devtools_frontend_url: None,
+            web_socket_debugger_url: None,
+            session_id: None,
+            profile: None,
+            engine: None,
+        };
+        let mut order = TabOrder::default();
+        let mut list = vec![tab("a"), tab("b"), tab("c")];
+        order.sort(&mut list);
+        // Chromium reports "c" first once it is brought to the front.
+        let mut list = vec![tab("c"), tab("a"), tab("b")];
+        order.sort(&mut list);
+        assert_eq!(
+            list.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        // Closed tabs are forgotten; new ones go last.
+        order.rank("d");
+        let mut list = vec![tab("d"), tab("c"), tab("a")];
+        order.sort(&mut list);
+        assert_eq!(
+            list.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            ["a", "c", "d"]
+        );
+        assert!(!order.seen.contains_key("b"));
+    }
 
     #[test]
     fn upload_names_stay_in_their_directory() {

@@ -642,7 +642,10 @@ let connecting = false;
 // Once a picture is up, reconnects keep it visible instead of the overlay.
 let hadFrame = false;
 // quiet: switching tabs keeps the last picture up instead of the "Connecting" overlay.
-async function connect({ quiet = false } = {}) {
+function connect(opts) {
+  return connecting ? busy : track(doConnect(opts));
+}
+async function doConnect({ quiet = false } = {}) {
   if (connecting) return;
   connecting = true;
   // Detach the old driver first: its close event must not look like the session ending.
@@ -1110,6 +1113,8 @@ E.urlBar.onsubmit = async (e) => {
   E.urlInput.blur();
   E.dot.className = "wait";
 
+  // Typed right after "New tab": wait for the switch, or this would go to the old tab.
+  await busy;
   if (drv) {
     try {
       await drv.navigate(dest);
@@ -1122,8 +1127,15 @@ E.urlBar.onsubmit = async (e) => {
 
 /* ---------------------------------------------------------------- tabs & sessions */
 // Opens a blank tab and focuses its URL bar, like a browser's new-tab button.
+// Settles once a tab switch or (re)connect in progress is done.
+let busy = Promise.resolve();
+const track = (p) => { busy = p.catch(() => {}); return p; };
+
 // Switch to another tab without reloading this page.
-async function switchTab(id, { push = true } = {}) {
+function switchTab(id, opts) {
+  return track(doSwitchTab(id, opts));
+}
+async function doSwitchTab(id, { push = true } = {}) {
   if (!id || id === pageId) return;
   if (push) {
     const u = new URL(location.href);
@@ -1145,7 +1157,7 @@ async function switchTab(id, { push = true } = {}) {
       return;
     } catch { /* fall back to a fresh connection */ }
   }
-  connect({ quiet: true });
+  await connect({ quiet: true });
 }
 addEventListener("popstate", () => {
   const id = new URLSearchParams(location.search).get("page");
