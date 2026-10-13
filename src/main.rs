@@ -4231,6 +4231,12 @@ struct PasskeyRequest {
     /// Vault entry id, when several entries hold a passkey for the site.
     #[serde(default)]
     entry: Option<String>,
+    /// Sign the request's challenge (base64url) instead of injecting the passkey
+    /// (Firefox: the page answers navigator.credentials.get() with the result).
+    #[serde(default)]
+    challenge: Option<String>,
+    #[serde(default)]
+    allow: Vec<String>,
 }
 
 /// A passkey approved in the live view: the helper puts it into the page.
@@ -4253,14 +4259,33 @@ async fn api_session_passkey(
     if !req.find {
         info!(session_id = %id, rp_id = %req.rp_id, "Passkey approved in the live view");
     }
+    let kind = match (req.find, &req.challenge) {
+        (true, _) => "find",
+        (false, Some(_)) => "assert",
+        (false, None) => "inject",
+    };
+    // The origin to sign for comes from the browser's own page list, never from
+    // the page: a page must not obtain an assertion for another site.
+    let origin = if kind == "assert" {
+        let targets = get_local_targets(&state).await;
+        let page = targets
+            .iter()
+            .find(|t| t.id == req.page_id && t.session_id == Some(id))
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found in this session"))?;
+        let url = url::Url::parse(&page.url)
+            .map_err(|_| api_error(StatusCode::BAD_REQUEST, "The page has no web origin"))?;
+        Some(url.origin().ascii_serialization())
+    } else {
+        None
+    };
+    let signing = passkeys::Signing {
+        origin,
+        challenge: req.challenge,
+        allow: req.allow,
+    };
     let request = state
         .passkeys
-        .start(
-            req.page_id,
-            req.rp_id,
-            if req.find { "find" } else { "inject" },
-            req.entry,
-        )
+        .start(req.page_id, req.rp_id, kind, req.entry, signing)
         .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
     Ok(Json(serde_json::json!({ "request": request })))
 }

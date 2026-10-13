@@ -460,17 +460,43 @@ const PASSKEY_HOOK = `(() => {
   if (!c || c.__bdHooked) return;
   Object.defineProperty(c, "__bdHooked", { value: true });
   const get = c.get.bind(c), waiting = new Map();
-  globalThis.__bdPasskeyAnswer = (id, ok = true) => { const go = waiting.get(id); waiting.delete(id); go?.(ok); };
+  const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf)))
+    .replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
+  const bytes = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4); return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0)).buffer; };
+  // A signed assertion (from the vault, signed outside the browser) as the
+  // PublicKeyCredential the page asked for.
+  const credential = (a) => {
+    const r = a.response, own = (o, props) => { for (const [k, v] of Object.entries(props)) Object.defineProperty(o, k, { value: v, enumerable: true }); return o; };
+    const response = own(Object.create(AuthenticatorAssertionResponse.prototype), {
+      clientDataJSON: bytes(r.clientDataJSON), authenticatorData: bytes(r.authenticatorData),
+      signature: bytes(r.signature), userHandle: r.userHandle ? bytes(r.userHandle) : null,
+    });
+    const cred = own(Object.create(PublicKeyCredential.prototype), {
+      id: a.id, rawId: bytes(a.rawId), type: "public-key", response, authenticatorAttachment: a.authenticatorAttachment || "platform",
+    });
+    Object.defineProperty(cred, "getClientExtensionResults", { value: () => ({}) });
+    Object.defineProperty(cred, "toJSON", { value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
+    return cred;
+  };
+  // answer: true = let the browser handle it (its authenticator has the passkey now),
+  // false = cancelled, an object = the signed assertion to resolve with.
+  globalThis.__bdPasskeyAnswer = (id, answer = true) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
   c.get = function (opts) {
     const pk = opts && opts.publicKey;
     const viewed = Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
     if (!pk || opts.mediation === "conditional" || !viewed || typeof globalThis.__bdPasskey !== "function") return get(opts);
     const id = Math.random().toString(36).slice(2);
+    let req;
+    try {
+      req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)) };
+    } catch { return get(opts); }
     return new Promise((go) => {
       waiting.set(id, go);
       setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
-      try { globalThis.__bdPasskey(JSON.stringify({ id, rpId: pk.rpId || location.hostname })); } catch { globalThis.__bdPasskeyAnswer(id); }
-    }).then((ok) => ok ? get(opts) : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
+      try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
+    }).then((answer) => answer === true ? get(opts)
+      : answer && typeof answer === "object" ? credential(answer)
+      : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
   };
 })()`;
 
@@ -503,8 +529,8 @@ class CdpDriver {
     this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
   }
   // A passkey request held by the page's hook: go on (with or without the vault's passkey).
-  passkeyAnswer(id, ok = true) {
-    this.cdp.send("Runtime.evaluate", { expression: `globalThis.__bdPasskeyAnswer?.(${JSON.stringify(id)}, ${ok})` });
+  passkeyAnswer(id, answer = true) {
+    this.cdp.send("Runtime.evaluate", { expression: `globalThis.__bdPasskeyAnswer?.(${JSON.stringify(id)}, ${JSON.stringify(answer)})` });
   }
   // H.264 stream active: no screencast meanwhile; back to it when the stream ends.
   async setVideo(on) {
@@ -638,16 +664,7 @@ class CdpDriver {
       if (performance.now() - (this.lastInput || -1e9) < 5000) h.clipboard(p.payload);
       return;
     }
-    if (method === "Runtime.bindingCalled" && p.name === "__bdPasskey") {
-      let req;
-      try { req = JSON.parse(p.payload); } catch { return; }
-      // Only a sign-in the user started here: an agent driving the page through its own
-      // connection (its own passkey already injected) must not be held up.
-      // 15 s: a click may load another page first, which then asks (Google does).
-      if (!(performance.now() - (this.lastInput || -1e9) < 15000)) { this.passkeyAnswer(req.id); return; }
-      h.passkey(req).then((ok) => this.passkeyAnswer(req.id, ok), () => this.passkeyAnswer(req.id, false));
-      return;
-    }
+    if (method === "Runtime.bindingCalled" && p.name === "__bdPasskey") { passkeyRequested(this, p.payload); return; }
     if (method === "Page.screencastFrame") {
       const ack = () => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId });
       // An unchanged frame (e.g. the repaint a sharpening screenshot causes) must not
@@ -771,7 +788,7 @@ class BidiDriver {
       .then(() => this.rpc("session.new", { capabilities: {} }));
   }
   isOpen() { return this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING; }
-  close() { try { this.ws.close(); } catch { /* already closed */ } }
+  close() { clearInterval(this.passkeyBeat); try { this.ws.close(); } catch { /* already closed */ } }
   rpc(method, params = {}) {
     return new Promise((res, rej) => {
       if (this.ws.readyState !== 1) return rej(new Error("closed"));
@@ -786,6 +803,10 @@ class BidiDriver {
     m.type === "success" ? p.res(m.result) : p.rej(new Error(m.message || m.error || "error"));
   }
   onEvent(method, p) {
+    if (method === "script.message") {
+      if (p.channel === "bd-passkey" && (!p.source?.context || p.source.context === this.ctx)) passkeyRequested(this, p.data?.value);
+      return;
+    }
     if (p.context && p.context !== this.ctx) return;
     const h = this.h;
     this.kick();
@@ -805,6 +826,7 @@ class BidiDriver {
     this.lastFrame = "";
     await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [ctx] });
     await this.rpc("browsingContext.activate", { context: ctx }).catch(() => {});
+    await this.installPasskeyHook();
     await this.measure();
     this.kick();
   }
@@ -812,6 +834,7 @@ class BidiDriver {
   async start() {
     this.chromeH = await this.evaluate("outerWidth === innerWidth ? outerHeight - innerHeight : null").catch(() => null);
     await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [this.ctx] });
+    await this.installPasskeyHook();
     await this.rpc("browsingContext.activate", { context: this.ctx }).catch(() => {});
     await this.measure();
     this.loop();
@@ -860,7 +883,37 @@ class BidiDriver {
     if (r.type === "exception") throw new Error(r.exceptionDetails?.text || "exception");
     return r.result && r.result.type === "string" ? JSON.parse(r.result.value) : undefined;
   }
-  actions(actions) { this.kick(); this.send("input.performActions", { context: this.ctx, actions }); }
+  actions(actions) { this.kick(); this.inputSeen(); this.send("input.performActions", { context: this.ctx, actions }); }
+  inputSeen() {
+    const now = performance.now();
+    if (this.passkeyBeatNow && now - (this.lastInput || -1e9) > 1000) this.passkeyBeatNow();
+    this.lastInput = now;
+  }
+  // Passkey requests from the page (see PASSKEY_HOOK) reach the view over a BiDi
+  // channel; the vault's passkey is signed outside the browser (Firefox has no
+  // authenticator the view could fill) and handed back as the assertion.
+  // Per tab (switchTo calls it again); the channel subscription and heartbeat once.
+  async installPasskeyHook() {
+    const fn = `(send) => { globalThis.__bdPasskey = (s) => send(s); ${PASSKEY_HOOK}; }`;
+    const args = [{ type: "channel", value: { channel: "bd-passkey" } }];
+    this.hooked ||= new Set();
+    if (!this.hooked.has(this.ctx)) {
+      this.hooked.add(this.ctx);
+      await this.rpc("script.addPreloadScript", { functionDeclaration: fn, arguments: args, contexts: [this.ctx] }).catch(() => {});
+      await this.rpc("script.callFunction", { functionDeclaration: fn, arguments: args, target: { context: this.ctx }, awaitPromise: false }).catch(() => {});
+    }
+    if (this.passkeyBeat) return;
+    await this.rpc("session.subscribe", { events: ["script.message"] }).catch(() => {});
+    const beat = () => this.send("script.evaluate", { expression: "globalThis.__bdPasskeyAlive = Date.now()", target: { context: this.ctx }, awaitPromise: false });
+    this.passkeyBeatNow = beat;
+    beat();
+    this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
+  }
+  passkeyAnswer(id, answer = true) {
+    this.send("script.evaluate", {
+      expression: `globalThis.__bdPasskeyAnswer?.(${JSON.stringify(id)}, ${JSON.stringify(answer)})`, target: { context: this.ctx }, awaitPromise: false,
+    });
+  }
   click(x, y, touch) {
     x = Math.round(x); y = Math.round(y);
     this.actions([{ type: "pointer", id: touch ? "touch" : "mouse", parameters: { pointerType: touch ? "touch" : "mouse" }, actions: [
@@ -948,11 +1001,21 @@ async function fetchTargets() {
   return list.filter((x) => x.type === "page");
 }
 
+// A passkey request from the page's hook (either driver). Only a sign-in the user
+// started here is held: an agent driving the page through its own connection (its
+// own passkey already injected) must not be held up. 15 s: a click may load another
+// page first, which then asks (Google does).
+function passkeyRequested(d, payload) {
+  let req;
+  try { req = JSON.parse(payload); } catch { return; }
+  if (!(performance.now() - (d.lastInput || -1e9) < 15000)) { d.passkeyAnswer(req.id, true); return; }
+  d.h.passkey(req).then((answer) => d.passkeyAnswer(req.id, answer), () => d.passkeyAnswer(req.id, false));
+}
 let passkeyPending = null;
 // A request to the passkey helper (via the node): started, then polled with short
 // calls. The helper may wait minutes for the phone unlock, and a request held open
 // that long gets dropped (Firefox gave up on it after ~2 s). onNote: progress notes.
-async function passkeyHelper(rpId, find, onNote = () => {}, entry = null) {
+async function passkeyHelper(rpId, find, onNote = () => {}, entry = null, signing = {}) {
   const call = async (url, opts = {}) => {
     const res = await fetch(url, { ...opts, headers: authHeaders(opts.body ? { "Content-Type": "application/json" } : {}) });
     const body = await res.json().catch(() => ({}));
@@ -960,7 +1023,7 @@ async function passkeyHelper(rpId, find, onNote = () => {}, entry = null) {
     return body;
   };
   const { request } = await call(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
-    { method: "POST", body: JSON.stringify({ page_id: pageId, rp_id: rpId, find, entry }) });
+    { method: "POST", body: JSON.stringify({ page_id: pageId, rp_id: rpId, find, entry, ...signing }) });
   for (const until = Date.now() + 340000; Date.now() < until;) {
     await new Promise((r) => setTimeout(r, 1000));
     const st = await call(`/api/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
@@ -995,7 +1058,7 @@ async function showPasskeyEntry(rpId, dlg) {
     if (/no passkey|no matching|no entry|No passkey helper/i.test(err.message)) use.disabled = true;
   }
 }
-async function askPasskey({ rpId }) {
+async function askPasskey({ rpId, challenge, allow }) {
   const dlg = $("passkeyDialog");
   $("passkeyRp").textContent = rpId;
   dlg.showModal();
@@ -1006,9 +1069,13 @@ async function askPasskey({ rpId }) {
   try {
     let shown = "";
     const entry = $("passkeyEntry").hidden ? null : $("passkeyEntry").value || null;
-    await passkeyHelper(rpId, false, (note) => { if (note !== shown) { shown = note; toast(`${rpId}: ${note}`, 0); } }, entry);
+    const onNote = (note) => { if (note !== shown) { shown = note; toast(`${rpId}: ${note}`, 0); } };
+    // Chromium: the passkey goes into its authenticator and the page's request goes on.
+    // Firefox: the request is signed outside the browser and the page gets the result.
+    const signed = target?.engine === "firefox";
+    const result = await passkeyHelper(rpId, false, onNote, entry, signed ? { challenge, allow } : {});
     toast(`Signing in to ${rpId} with your passkey`);
-    return true;
+    return signed ? result : true;
   } catch (err) {
     toast(`No passkey: ${err.message}`, 5000);
     return false;

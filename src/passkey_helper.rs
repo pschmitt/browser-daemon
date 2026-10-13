@@ -94,12 +94,12 @@ async fn poll(
         let (node, secret, client, args) =
             (node.clone(), secret.clone(), client.clone(), args.clone());
         tokio::spawn(async move {
-            let result = if req.kind == "find" {
-                find(&req, &args).await.map(Some)
-            } else {
-                serve(&node, &secret, &req, &client, &args)
+            let result = match req.kind.as_str() {
+                "find" => find(&req, &args).await.map(Some),
+                "assert" => assert(&node, &secret, &req, &client, &args).await.map(Some),
+                _ => serve(&node, &secret, &req, &client, &args)
                     .await
-                    .map(|()| None)
+                    .map(|()| None),
             };
             let outcome = match result {
                 Ok(info) => Outcome {
@@ -162,7 +162,8 @@ async fn unlocked(rbw: &PathBuf) -> bool {
 
 /// Ready once `rbw passkey inject` has the passkey in the page; rbw keeps
 /// running in the background until the assertion and the vault sync are done.
-async fn serve(
+/// rbw unlocked, asking the phone first (and telling the view so) if needed.
+async fn ensure_unlocked(
     node: &str,
     secret: &str,
     req: &Request,
@@ -195,6 +196,62 @@ async fn serve(
             return Err("The vault was not unlocked in time".into());
         }
     }
+    Ok(())
+}
+
+/// Sign the page's request (rbw passkey assert); the view hands the assertion to
+/// the page, which answers navigator.credentials.get() with it. Any browser.
+async fn assert(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    args: &HelperArgs,
+) -> Result<serde_json::Value, String> {
+    let origin = req.origin.as_deref().ok_or("No page origin")?;
+    let challenge = req.challenge.as_deref().ok_or("No challenge")?;
+    ensure_unlocked(node, secret, req, client, args).await?;
+    let mut cmd = Command::new(&args.rbw);
+    cmd.args([
+        "passkey",
+        "assert",
+        "--rp-id",
+        &req.rp_id,
+        "--origin",
+        origin,
+        "--challenge",
+        challenge,
+    ]);
+    for id in &req.allow {
+        cmd.args(["--allow", id]);
+    }
+    cmd.args(req.entry.as_deref());
+    let out = cmd
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("Could not run rbw: {e}"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err
+            .lines()
+            .rfind(|l| !l.trim().is_empty())
+            .unwrap_or("rbw failed")
+            .trim()
+            .to_string());
+    }
+    info!(rp_id = %req.rp_id, "Passkey assertion signed");
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("Unexpected rbw output: {e}"))
+}
+
+async fn serve(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    args: &HelperArgs,
+) -> Result<(), String> {
+    ensure_unlocked(node, secret, req, client, args).await?;
     // A picked entry (its vault id) narrows the search; otherwise rbw finds the one
     // entry holding a passkey for the site.
     let entry: Vec<&str> = req.entry.as_deref().into_iter().collect();

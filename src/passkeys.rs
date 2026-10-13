@@ -20,13 +20,30 @@ pub struct Request {
     pub id: Uuid,
     pub page_id: String,
     pub rp_id: String,
-    /// "inject" (put the passkey into the page) or "find" (only say which vault
-    /// entry would be used, or that the vault is locked).
+    /// "inject" (put the passkey into the page; Chromium), "assert" (sign the
+    /// request's challenge for the page to answer itself; any browser) or "find"
+    /// (only say which vault entry would be used, or that the vault is locked).
     #[serde(default = "inject")]
     pub kind: String,
     /// The vault entry (id) to use, when the user picked one of several.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
+    /// "assert": the page's origin, as the browser reports it (not page script).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// "assert": the request's challenge (base64url) and allowed credential ids.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub challenge: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+}
+
+/// What an "assert" request needs besides the site.
+#[derive(Default)]
+pub struct Signing {
+    pub origin: Option<String>,
+    pub challenge: Option<String>,
+    pub allow: Vec<String>,
 }
 
 fn inject() -> String {
@@ -77,6 +94,7 @@ impl Broker {
         rp_id: String,
         kind: &str,
         entry: Option<String>,
+        signing: Signing,
     ) -> Result<Uuid, String> {
         let helper = *self.helper_seen.lock().unwrap();
         if helper.is_none_or(|t| t.elapsed() > HELPER_GONE) {
@@ -88,6 +106,9 @@ impl Broker {
             rp_id,
             kind: kind.into(),
             entry,
+            origin: signing.origin,
+            challenge: signing.challenge,
+            allow: signing.allow,
         };
         let mut tracked = self.tracked.lock().unwrap();
         tracked.retain(|_, t| t.since.elapsed() < 2 * ANSWER_TIMEOUT);
@@ -125,7 +146,7 @@ impl Broker {
             let woken = self.wake.notified();
             let popped = self.queue.lock().unwrap().pop_front();
             if let Some(req) = popped {
-                if req.kind == "inject" || finds {
+                if req.kind != "find" || finds {
                     return Some(req);
                 }
                 self.complete(
@@ -185,13 +206,25 @@ mod tests {
     async fn request_reaches_helper_and_back() {
         let b = Arc::new(Broker::default());
         assert!(
-            b.start("p".into(), "x.test".into(), "inject", None)
-                .is_err(),
+            b.start(
+                "p".into(),
+                "x.test".into(),
+                "inject",
+                None,
+                Signing::default()
+            )
+            .is_err(),
             "no helper yet"
         );
         assert!(b.next(Duration::from_millis(10), true).await.is_none());
         let id = b
-            .start("p".into(), "x.test".into(), "inject", None)
+            .start(
+                "p".into(),
+                "x.test".into(),
+                "inject",
+                None,
+                Signing::default(),
+            )
             .unwrap();
         let req = b.next(Duration::from_secs(1), true).await.unwrap();
         assert_eq!(req.rp_id, "x.test");
