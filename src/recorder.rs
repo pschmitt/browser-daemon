@@ -233,8 +233,10 @@ fn is_real_title(title: &str) -> bool {
     !title.is_empty() && title != "about:blank"
 }
 
-/// CDP request ids at or above this ask for `document.title`.
-const TITLE_REQUEST_ID: u64 = 1 << 40;
+// CDP request ids must fit an int32 (Chromium rejects larger ones), so the ranges
+// for our own requests sit high but below 2^31.
+/// CDP request ids from here up to LAYOUT_REQUEST_ID ask for `document.title`.
+const TITLE_REQUEST_ID: u64 = 1 << 28;
 /// Re-read the title this often: single-page apps retitle without navigating.
 const TITLE_REFRESH: Duration = Duration::from_secs(5);
 /// Recordings are for replaying what happened, not for smooth video: 4 frames a second.
@@ -242,8 +244,8 @@ const TITLE_REFRESH: Duration = Duration::from_secs(5);
 /// every rendered frame, ~70% of a core on an animated page however few frames it
 /// delivers; four screenshots a second cost ~15%.
 const RECORD_FRAME_INTERVAL: Duration = Duration::from_millis(250);
-const LAYOUT_REQUEST_ID: u64 = 1 << 41;
-const SHOT_REQUEST_ID: u64 = 1 << 42;
+const LAYOUT_REQUEST_ID: u64 = 1 << 29;
+const SHOT_REQUEST_ID: u64 = 1 << 30;
 /// Recorded frames are scaled to fit this box.
 const RECORD_MAX: (f64, f64) = (1024.0, 640.0);
 
