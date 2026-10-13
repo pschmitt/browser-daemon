@@ -13,6 +13,14 @@ let
   # over a window that move cancels drags, so text could not be selected in handoff.
   screenWidth = lib.max cfg.defaultWidth 3840 + 16;
   screenHeight = lib.max cfg.defaultHeight 2160 + 16;
+  pulseDir = "/run/browser-daemon-pulse";
+  # A bare PulseAudio for the browsers: an idle default sink, and the daemon
+  # adds a null sink per session through pactl.
+  pulseConfig = pkgs.writeText "browser-daemon-pulse.pa" ''
+    load-module module-native-protocol-unix socket=${pulseDir}/native auth-anonymous=1
+    load-module module-null-sink sink_name=browserd_idle sink_properties=device.description=browser-daemon
+    set-default-sink browserd_idle
+  '';
   parkPointer = pkgs.writeShellScript "browser-daemon-park-pointer" ''
     for _ in $(seq 50); do
       DISPLAY=${cfg.display} ${lib.getExe pkgs.xdotool} mousemove ${toString (screenWidth - 1)} ${toString (screenHeight - 1)} && exit 0
@@ -186,6 +194,16 @@ in
       };
     };
 
+    audio = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Give sessions audio: a PulseAudio server for the browsers, streamed to handoff on /audio.";
+      };
+      pulseaudioPackage = lib.mkPackageOption pkgs "pulseaudio" { };
+      ffmpegPackage = lib.mkPackageOption pkgs "ffmpeg" { };
+    };
+
     proxies = lib.mkOption {
       type = lib.types.listOf (
         lib.types.submodule {
@@ -256,108 +274,154 @@ in
     # `browser-daemon tui` for the people on the host.
     environment.systemPackages = [ cfg.package ];
 
-    systemd.services.browser-daemon-xvfb = {
-      description = "Xvfb virtual display for browser-daemon";
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig = {
-        ExecStart = "${cfg.xvfbPackage}/bin/Xvfb ${cfg.display} -screen 0 ${toString screenWidth}x${toString screenHeight}x24 -nolisten tcp -noreset";
-        ExecStartPost = parkPointer;
-        Restart = "always";
-        RestartSec = 2;
-        User = cfg.user;
-        Group = cfg.group;
+    systemd.services = {
+      browser-daemon-pulse = lib.mkIf cfg.audio.enable {
+        description = "PulseAudio for browser-daemon sessions";
+        wantedBy = [ "multi-user.target" ];
+        environment = {
+          HOME = pulseDir;
+          PULSE_RUNTIME_PATH = pulseDir;
+          PULSE_STATE_PATH = "${pulseDir}/state";
+        };
+        serviceConfig = {
+          ExecStart = lib.concatStringsSep " " [
+            "${cfg.audio.pulseaudioPackage}/bin/pulseaudio"
+            "--daemonize=no"
+            "--exit-idle-time=-1"
+            "--use-pid-file=no"
+            "--realtime=no"
+            "--high-priority=no"
+            "--log-target=stderr"
+            "-n"
+            "-F"
+            "${pulseConfig}"
+          ];
+          Restart = "always";
+          RestartSec = 2;
+          User = cfg.user;
+          Group = cfg.group;
+          RuntimeDirectory = "browser-daemon-pulse";
+          RuntimeDirectoryMode = "0750";
+        };
       };
-    };
 
-    systemd.services.browser-daemon = {
-      description = "Native remote browser daemon";
-      wantedBy = [ "multi-user.target" ];
-      wants = [ "browser-daemon-xvfb.service" ];
-      after = [ "browser-daemon-xvfb.service" ];
-      path = [
-        pkgs.gnutar
-        pkgs.gzip
-      ];
-      serviceConfig = {
-        ExecStart = lib.concatStringsSep " " (
-          [
-            "${cfg.package}/bin/browser-daemon"
-            "--bind"
-            cfg.bind
-            "--chromium"
-            (lib.getExe cfg.chromiumPackage)
-            "--display"
-            cfg.display
-            "--profile-dir"
-            "${cfg.dataDir}/profiles"
-            "--recordings-dir"
-            cfg.recordingsDir
-            "--recording-max-storage-mb"
-            (toString cfg.recordingMaxStorageMB)
-            "--recording-max-age-hours"
-            (toString cfg.recordingMaxAgeHours)
-            "--recording-max-count"
-            (toString cfg.recordingMaxCount)
-            "--max-sessions"
-            (toString cfg.maxSessions)
-            "--default-width"
-            (toString cfg.defaultWidth)
-            "--default-height"
-            (toString cfg.defaultHeight)
-            "--node-name"
-            cfg.nodeName
-            "--idle-timeout-minutes"
-            (toString cfg.idleTimeoutMinutes)
-            "--adblock-default"
-            (lib.boolToString cfg.adblock.default)
-          ]
-          ++ lib.optionals cfg.adblock.enable [
-            "--chromium-adblock"
-            "${cfg.adblock.chromiumExtension}"
-            "--firefox-adblock"
-            "${cfg.adblock.firefoxAddon}"
-          ]
-          ++ lib.optionals (cfg.proxies != [ ]) [
-            "--proxies-file"
-            "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" cfg.proxies}"
-          ]
-          ++ lib.optionals (cfg.publicUrl != null) [
-            "--public-url"
-            cfg.publicUrl
-          ]
-          ++ lib.concatMap (p: [
-            "--peer"
-            p
-          ]) cfg.peers
-          ++ lib.optionals (cfg.clusterSecretFile != null) [
-            "--cluster-secret-file"
-            (toString cfg.clusterSecretFile)
-          ]
-          ++ lib.optionals (cfg.clusterSecret != null) [
-            "--cluster-secret"
-            cfg.clusterSecret
-          ]
-          ++ lib.optionals cfg.recordSessions [
-            "--record-sessions"
-          ]
-          ++ lib.optionals (cfg.firefoxPackage != null) [
-            "--firefox"
-            (lib.getExe cfg.firefoxPackage)
-          ]
-          ++ lib.optionals (cfg.sessionMemoryMaxMB != null) [
-            "--max-session-memory-mb"
-            (toString cfg.sessionMemoryMaxMB)
-          ]
-        );
-        Restart = "always";
-        RestartSec = 2;
-        User = cfg.user;
-        Group = cfg.group;
-        StateDirectory = "browser-daemon";
-        WorkingDirectory = cfg.dataDir;
-        MemoryMax = lib.mkIf (cfg.memoryMax != null) cfg.memoryMax;
-        MemoryHigh = lib.mkIf (cfg.memoryHigh != null) cfg.memoryHigh;
-        CPUQuota = lib.mkIf (cfg.cpuQuota != null) cfg.cpuQuota;
+      browser-daemon-xvfb = {
+        description = "Xvfb virtual display for browser-daemon";
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          ExecStart = "${cfg.xvfbPackage}/bin/Xvfb ${cfg.display} -screen 0 ${toString screenWidth}x${toString screenHeight}x24 -nolisten tcp -noreset";
+          ExecStartPost = parkPointer;
+          Restart = "always";
+          RestartSec = 2;
+          User = cfg.user;
+          Group = cfg.group;
+        };
+      };
+
+      browser-daemon = {
+        description = "Native remote browser daemon";
+        wantedBy = [ "multi-user.target" ];
+        wants = [
+          "browser-daemon-xvfb.service"
+        ]
+        ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
+        after = [
+          "browser-daemon-xvfb.service"
+        ]
+        ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
+        path = [
+          pkgs.gnutar
+          pkgs.gzip
+        ];
+        serviceConfig = {
+          ExecStart = lib.concatStringsSep " " (
+            [
+              "${cfg.package}/bin/browser-daemon"
+              "--bind"
+              cfg.bind
+              "--chromium"
+              (lib.getExe cfg.chromiumPackage)
+              "--display"
+              cfg.display
+              "--profile-dir"
+              "${cfg.dataDir}/profiles"
+              "--recordings-dir"
+              cfg.recordingsDir
+              "--recording-max-storage-mb"
+              (toString cfg.recordingMaxStorageMB)
+              "--recording-max-age-hours"
+              (toString cfg.recordingMaxAgeHours)
+              "--recording-max-count"
+              (toString cfg.recordingMaxCount)
+              "--max-sessions"
+              (toString cfg.maxSessions)
+              "--default-width"
+              (toString cfg.defaultWidth)
+              "--default-height"
+              (toString cfg.defaultHeight)
+              "--node-name"
+              cfg.nodeName
+              "--idle-timeout-minutes"
+              (toString cfg.idleTimeoutMinutes)
+              "--adblock-default"
+              (lib.boolToString cfg.adblock.default)
+            ]
+            ++ lib.optionals cfg.adblock.enable [
+              "--chromium-adblock"
+              "${cfg.adblock.chromiumExtension}"
+              "--firefox-adblock"
+              "${cfg.adblock.firefoxAddon}"
+            ]
+            ++ lib.optionals cfg.audio.enable [
+              "--pulse-server"
+              "${pulseDir}/native"
+              "--pactl"
+              "${cfg.audio.pulseaudioPackage}/bin/pactl"
+              "--ffmpeg"
+              (lib.getExe cfg.audio.ffmpegPackage)
+            ]
+            ++ lib.optionals (cfg.proxies != [ ]) [
+              "--proxies-file"
+              "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" cfg.proxies}"
+            ]
+            ++ lib.optionals (cfg.publicUrl != null) [
+              "--public-url"
+              cfg.publicUrl
+            ]
+            ++ lib.concatMap (p: [
+              "--peer"
+              p
+            ]) cfg.peers
+            ++ lib.optionals (cfg.clusterSecretFile != null) [
+              "--cluster-secret-file"
+              (toString cfg.clusterSecretFile)
+            ]
+            ++ lib.optionals (cfg.clusterSecret != null) [
+              "--cluster-secret"
+              cfg.clusterSecret
+            ]
+            ++ lib.optionals cfg.recordSessions [
+              "--record-sessions"
+            ]
+            ++ lib.optionals (cfg.firefoxPackage != null) [
+              "--firefox"
+              (lib.getExe cfg.firefoxPackage)
+            ]
+            ++ lib.optionals (cfg.sessionMemoryMaxMB != null) [
+              "--max-session-memory-mb"
+              (toString cfg.sessionMemoryMaxMB)
+            ]
+          );
+          Restart = "always";
+          RestartSec = 2;
+          User = cfg.user;
+          Group = cfg.group;
+          StateDirectory = "browser-daemon";
+          WorkingDirectory = cfg.dataDir;
+          MemoryMax = lib.mkIf (cfg.memoryMax != null) cfg.memoryMax;
+          MemoryHigh = lib.mkIf (cfg.memoryHigh != null) cfg.memoryHigh;
+          CPUQuota = lib.mkIf (cfg.cpuQuota != null) cfg.cpuQuota;
+        };
       };
     };
   };

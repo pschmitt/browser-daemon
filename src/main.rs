@@ -1,3 +1,4 @@
+mod audio;
 mod bidi;
 mod browser;
 mod idle;
@@ -143,6 +144,18 @@ pub struct Args {
         help = "JSON list of upstream proxies sessions can use: [{\"id\", \"name\", \"url\"}]"
     )]
     pub proxies_file: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "PulseAudio socket for session audio (per-session sinks, streamed on /audio)"
+    )]
+    pub pulse_server: Option<PathBuf>,
+
+    #[arg(long, default_value = "pactl")]
+    pub pactl: PathBuf,
+
+    #[arg(long, default_value = "ffmpeg")]
+    pub ffmpeg: PathBuf,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -165,6 +178,8 @@ pub struct ManagedSession {
     pub activity: Arc<idle::Activity>,
     pub adblock: bool,
     pub relay: Arc<relay::Relay>,
+    /// PulseAudio sink the browser plays into.
+    pub audio_sink: Option<String>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -210,6 +225,7 @@ impl ManagedSession {
             tabs_count,
             adblock: self.adblock,
             proxy: self.relay.current(),
+            audio: self.audio_sink.is_some(),
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -237,6 +253,9 @@ pub struct SessionSummary {
     /// Id of the proxy the session's traffic goes through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
+    /// Its audio can be listened to on /audio.
+    #[serde(default)]
+    pub audio: bool,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -474,6 +493,7 @@ impl AppState {
             )),
             adblock: browser.adblock,
             relay: browser.relay.clone(),
+            audio_sink: browser.audio.as_ref().map(|s| s.name.clone()),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -1025,6 +1045,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chromium_adblock,
         firefox_adblock: args.firefox_adblock,
         proxies,
+        audio: args.pulse_server.clone().map(|server| audio::AudioConfig {
+            server,
+            pactl: args.pactl.clone(),
+            ffmpeg: args.ffmpeg.clone(),
+        }),
     });
 
     let recorder_config = Arc::new(RecorderConfig {
@@ -1130,6 +1155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/chromium", get(handle_chromium_ws))
         .route("/firefox", get(handle_firefox_ws))
         .route("/devtools/page/{page_id}", get(handle_page_ws))
+        .route("/audio", get(handle_audio_ws))
         // REST Management APIs for sessions and profiles
         .route(
             "/api/sessions",
@@ -3694,6 +3720,67 @@ async fn api_list_proxies(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     Ok(Json(state.proxy_infos()))
+}
+
+#[derive(Deserialize)]
+struct AudioParams {
+    session_id: Uuid,
+}
+
+/// Stream a session's audio as Opus in WebM, one encoder per listener. Like the
+/// page WebSocket, the unguessable session id plus the mesh or Authelia in
+/// front are the access control.
+async fn handle_audio_ws(
+    ws: WebSocketUpgrade,
+    Query(params): Query<AudioParams>,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(cfg) = state.config.audio.clone() else {
+        return (StatusCode::NOT_FOUND, "This node has no audio").into_response();
+    };
+    let sink = state
+        .sessions
+        .read()
+        .await
+        .get(&params.session_id)
+        .and_then(|s| s.audio_sink.clone());
+    let Some(sink) = sink else {
+        return (StatusCode::NOT_FOUND, "No audio for this session").into_response();
+    };
+    ws.on_upgrade(move |mut socket| async move {
+        use axum::extract::ws::Message;
+        use tokio::io::AsyncReadExt;
+        let mut child = match audio::encoder(&cfg, &sink) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(sink = %sink, error = %e, "Could not start the audio encoder");
+                return;
+            }
+        };
+        let Some(mut out) = child.stdout.take() else {
+            return;
+        };
+        info!(session_id = %params.session_id, "Audio listener attached");
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            tokio::select! {
+                n = out.read(&mut buf) => match n {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if socket.send(Message::Binary(buf[..n].to_vec().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                },
+                msg = socket.recv() => match msg {
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                    _ => {}
+                },
+            }
+        }
+        let _ = child.kill().await;
+        info!(session_id = %params.session_id, "Audio listener left");
+    })
 }
 
 #[derive(Deserialize)]

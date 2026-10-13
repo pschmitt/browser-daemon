@@ -84,7 +84,7 @@
   .ltd-actions { display: flex; flex-direction: column; gap: 8px; }
   .ltd-actions button { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
   .ltd-actions button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
-  #capture.on { color: var(--accent); }
+  #capture.on, #audioBtn.on { color: var(--accent); }
   #stage.dropping::after { content: "Drop to send to the page"; position: absolute; inset: 10px; display: grid; place-items: center; z-index: 30;
     border: 2px dashed var(--accent); border-radius: 14px; background: rgba(124, 108, 240, .14); color: var(--fg); font-weight: 700; font-size: 15px; pointer-events: none; }
   #clipToast.show { opacity: 1; transform: translate(-50%, 0); }
@@ -222,6 +222,7 @@
   <button class="ib" id="capture" aria-label="Capture keyboard" title="Capture keyboard and mouse (fullscreen; hold Esc to release)" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
   <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
+  <button class="ib" id="audioBtn" aria-label="Sound" title="Play the page's sound" aria-pressed="false" hidden></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
 </div>
@@ -309,7 +310,7 @@ const E = {
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
-  capture: $("capture"),
+  capture: $("capture"), audioBtn: $("audioBtn"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn"),
   sessBtn: $("sessBtn"), sessMenu: $("sessMenu"), recPill: $("recPill")
 };
@@ -1896,6 +1897,70 @@ async function refreshSession() {
   } catch { /* session gone: the driver reports it */ }
 }
 
+/* ---------------------------------------------------------------- audio */
+// The session's sound: Opus in WebM from /audio, played through MediaSource and kept
+// close to live (a phone that stalls must not drift seconds behind the picture).
+const AUDIO_ICONS = {
+  off: '<svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5z"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5"/></svg>',
+  on: '<svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 19V5L7.5 9.5z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>',
+};
+const audio = { el: null, ws: null, ms: null, sb: null, queue: [], session: null };
+function renderAudioButton() {
+  const on = !!audio.el;
+  E.audioBtn.innerHTML = on ? AUDIO_ICONS.on : AUDIO_ICONS.off;
+  E.audioBtn.classList.toggle("on", on);
+  E.audioBtn.title = on ? "Mute the page's sound" : "Play the page's sound";
+  E.audioBtn.setAttribute("aria-pressed", String(on));
+}
+function stopAudio() {
+  try { audio.ws?.close(); } catch { /* closed */ }
+  if (audio.el) { audio.el.pause(); URL.revokeObjectURL(audio.el.src); audio.el.removeAttribute("src"); }
+  Object.assign(audio, { el: null, ws: null, ms: null, sb: null, queue: [], session: null });
+  renderAudioButton();
+}
+function pumpAudio() {
+  const { sb, el, queue } = audio;
+  if (!sb || sb.updating) return;
+  const b = sb.buffered;
+  if (b.length) {
+    const end = b.end(b.length - 1);
+    if (end - el.currentTime > 0.6) el.currentTime = end - 0.15;   // fell behind: jump to live
+    if (el.currentTime - b.start(0) > 20) { sb.remove(b.start(0), el.currentTime - 10); return; }
+  }
+  if (!queue.length) return;
+  const chunk = queue.length === 1 ? queue[0] : new Blob(queue).arrayBuffer();
+  audio.queue = [];
+  Promise.resolve(chunk).then((buf) => { try { audio.sb === sb && sb.appendBuffer(buf); } catch { stopAudio(); } });
+}
+// Must run inside the click: browsers only allow playback started by a gesture.
+function startAudio() {
+  const sessionId = target?.sessionId;
+  const type = 'audio/webm; codecs="opus"';
+  if (!sessionId || !window.MediaSource || !MediaSource.isTypeSupported(type)) {
+    toast("This browser cannot play the stream", 3000);
+    return;
+  }
+  const el = new Audio();
+  const ms = new MediaSource();
+  el.src = URL.createObjectURL(ms);
+  Object.assign(audio, { el, ms, queue: [], session: sessionId });
+  el.play().catch(() => {});
+  ms.addEventListener("sourceopen", () => {
+    audio.sb = ms.addSourceBuffer(type);
+    audio.sb.mode = "sequence";
+    audio.sb.addEventListener("updateend", pumpAudio);
+    const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+    const ws = new WebSocket(`${scheme}${location.host}/audio?session_id=${encodeURIComponent(sessionId)}`);
+    ws.binaryType = "arraybuffer";
+    ws.onmessage = (e) => { audio.queue.push(e.data); pumpAudio(); };
+    ws.onclose = () => { if (audio.ws === ws) { stopAudio(); toast("Sound stopped", 2000); } };
+    audio.ws = ws;
+  }, { once: true });
+  renderAudioButton();
+}
+E.audioBtn.onclick = () => (audio.el ? stopAudio() : startAudio());
+renderAudioButton();
+
 function renderSession() {
   if (!sess) return;
   E.sessBtn.hidden = false;
@@ -1909,6 +1974,9 @@ function renderSession() {
     + (rec ? (paused ? " · recording paused" : " · recording") : "")
     + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : "");
   if (document.activeElement !== $("smProxy")) $("smProxy").value = sess.proxy || "none";
+  E.audioBtn.hidden = !sess.audio;
+  // Another session (switched from the drawer): its sound, not the old one's.
+  if (audio.el && audio.session !== target?.sessionId) stopAudio();
   const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
   const html = !rec ? btn("record", "rec", "Start recording", "rec")
     : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec");

@@ -7,6 +7,7 @@ use tokio::process::{Child, Command};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::audio::{AudioConfig, Sink};
 use crate::bidi::BidiHub;
 use crate::profiles::Profile;
 use crate::proxies::{self, Proxy};
@@ -51,6 +52,8 @@ pub struct BrowserConfig {
     pub firefox_adblock: Option<PathBuf>,
     /// Upstream proxies sessions can choose from.
     pub proxies: Vec<Proxy>,
+    /// PulseAudio for session audio; none: browsers play into the void.
+    pub audio: Option<AudioConfig>,
 }
 
 impl BrowserConfig {
@@ -77,6 +80,8 @@ pub struct ActiveBrowser {
     pub adblock: bool,
     /// Local SOCKS relay all of the browser's traffic goes through.
     pub relay: Arc<Relay>,
+    /// The session's audio sink, when the node has audio.
+    pub audio: Option<Sink>,
 }
 
 impl ActiveBrowser {
@@ -91,8 +96,18 @@ impl ActiveBrowser {
         adblock: bool,
         proxy: Option<&Proxy>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let relay = Relay::start(proxy.cloned()).await?;
         let id = Uuid::new_v4();
+        let relay = Relay::start(proxy.cloned()).await?;
+        let audio = match config.audio {
+            Some(ref cfg) => match Sink::create(cfg, id).await {
+                Ok(sink) => Some(sink),
+                Err(e) => {
+                    warn!(session_id = %id, error = %e, "No audio for this session");
+                    None
+                }
+            },
+            None => None,
+        };
         let adblock = adblock && config.adblock_available(engine);
         let width = width.unwrap_or(config.default_width);
         let height = height.unwrap_or(config.default_height);
@@ -162,6 +177,9 @@ impl ActiveBrowser {
                     cmd.arg(format!("--js-flags=--max-old-space-size={}", mem_mb));
                 }
 
+                if let Some(ref sink) = audio {
+                    cmd.envs(sink.env());
+                }
                 if let Some(ref display) = config.display {
                     cmd.env("DISPLAY", display);
                 }
@@ -196,6 +214,7 @@ impl ActiveBrowser {
                     created_at: Instant::now(),
                     adblock,
                     relay: relay.clone(),
+                    audio,
                 })
             }
             BrowserEngine::Firefox => {
@@ -240,6 +259,9 @@ impl ActiveBrowser {
                     .stdout(std::process::Stdio::null())
                     .kill_on_drop(true);
 
+                if let Some(ref sink) = audio {
+                    cmd.envs(sink.env());
+                }
                 if let Some(ref display) = config.display {
                     cmd.env("DISPLAY", display);
                 }
@@ -300,6 +322,7 @@ impl ActiveBrowser {
                     created_at: Instant::now(),
                     adblock,
                     relay: relay.clone(),
+                    audio,
                 })
             }
         }
