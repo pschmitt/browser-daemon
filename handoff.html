@@ -407,9 +407,10 @@ function speakerIcon() {
 
 // The session's window while Native/Phone has resized it, and its own size to go back to.
 const winFit = { session: null, own: null, fitted: false };
-// Height of the browser's toolbars above the page, per session. Only plausible
-// measurements count: under Native/Phone emulation outer and inner sizes are both
-// the emulated ones, and the difference (0) would put the toolbars into the video.
+// Height of the browser's toolbars above the page, per session. Measured only where
+// outer and inner width agree (null otherwise): a page emulated at another size than
+// its window (another viewer's Native, an automation client's viewport) gives
+// nonsense, e.g. 0 (toolbars in the video) or 300 (page cut off).
 const chromeHeights = {};
 function chromeHeight(sessionId, measured) {
   if (measured > 0 && measured < 400) chromeHeights[sessionId] = measured;
@@ -454,7 +455,7 @@ class CdpDriver {
     await this.cdp.call("Page.bringToFront").catch(() => {});
     // Toolbar height, measured before any emulation: where the page starts on the
     // display (for the H.264 stream's capture region).
-    this.chromeH = await this.evaluate("outerHeight - innerHeight").catch(() => null);
+    this.chromeH = await this.evaluate("outerWidth === innerWidth ? outerHeight - innerHeight : null").catch(() => null);
     // Passkey requests started from this view are offered from the vault (see PASSKEY_HOOK).
     await this.cdp.call("Runtime.enable").catch(() => {});
     await this.cdp.call("Runtime.addBinding", { name: "__bdPasskey" }).catch(() => {});
@@ -520,9 +521,11 @@ class CdpDriver {
     winFit.fitted = false;
     await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: winFit.own }).catch(() => {});
   }
-  async applyMetrics({ w, h, dpr, mode, fitWindow }) {
+  // passive: the page's size belongs to someone else (an automation client, or the
+  // session's Native/Phone viewers): only undo this view's own earlier sizing.
+  async applyMetrics({ w, h, dpr, mode, fitWindow, passive = false }) {
     this.lastMetrics = { w, h, dpr, mode, fitWindow };
-    if (fitWindow) await this.fitWindow(w, h); else await this.unfitWindow();
+    if (fitWindow) await this.fitWindow(w, h); else if (!passive || this.emulating) await this.unfitWindow();
     // Native and Phone: the screen's density (up to 2x), sharpened by screenshots.
     // Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
     const fit = mode === "phone" || mode === "native";
@@ -534,10 +537,12 @@ class CdpDriver {
     this.lastCast = "";
     this.echoUntil = 0;
     if (fit) {
+      this.emulating = true;
       const phone = mode === "phone";
       await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: scale, mobile: phone, screenWidth: w, screenHeight: h });
       await this.cdp.call("Emulation.setTouchEmulationEnabled", phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false }).catch(() => {});
-    } else {
+    } else if (!passive || this.emulating) {
+      this.emulating = false;
       await this.cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
       await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
     }
@@ -718,7 +723,7 @@ class BidiDriver {
   }
   async setVideo(on) { this.video = on; if (!on) this.kick(); }
   async start() {
-    this.chromeH = await this.evaluate("outerHeight - innerHeight").catch(() => null);
+    this.chromeH = await this.evaluate("outerWidth === innerWidth ? outerHeight - innerHeight : null").catch(() => null);
     await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [this.ctx] });
     await this.rpc("browsingContext.activate", { context: this.ctx }).catch(() => {});
     await this.measure();
@@ -956,24 +961,36 @@ async function doConnect({ quiet = false } = {}) {
 }
 
 // The remote page gets the size of this screen (like a real phone) or its own desktop size.
-let applied = null;
+let applied = null, metricsYielding = false;
 async function applyMetrics({ ifDrifted = false } = {}) {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   let w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
   const dpr = devicePixelRatio || 1;
-  // Native: the smallest screen among the session's Native viewers, so all see everything.
-  reportViewerSize(layoutMode === "native" ? [w, h] : null);
-  if (layoutMode === "native" && viewers.native) { w = Math.min(w, viewers.native[0]); h = Math.min(h, viewers.native[1]); }
+  // An automation client attached (an agent's session handed over) sets the page size
+  // itself: emulating another one would fight it and flicker. Show its size instead.
+  const yielding = layoutMode !== "window" && (sess?.client_count || 0) > 0;
+  if (yielding !== metricsYielding) {
+    metricsYielding = yielding;
+    if (yielding) toast(`${layoutMode === "phone" ? "Phone" : "Native"} is paused while an automation client controls this page`, 4000);
+  }
+  // Who sizes the page, when several clients look at it: an automation client if one is
+  // attached; otherwise the Native/Phone viewers together (the smallest width and
+  // height among them, so all see everything); Window viewers only watch.
+  const fitting = layoutMode !== "window" && !yielding;
+  if (fitting) reportViewerSize([w, h]);
+  if (fitting && viewers.native) { w = Math.min(w, viewers.native[0]); h = Math.min(h, viewers.native[1]); }
   if (ifDrifted && applied?.drv === drv && applied.page === pageId && applied.mode === layoutMode) {
     const size = await drv.evaluate("[innerWidth, innerHeight]").catch(() => null);
     if (size && size[0] === applied.w && size[1] === applied.h) return;
   }
   applied = { drv, page: pageId, mode: layoutMode, w, h };
   // Chromium on a display of its own, at density 1: the window takes this size.
-  const fitWindow = layoutMode !== "window" && !!sess?.display && !sess.display_shared
+  const fitWindow = layoutMode !== "window" && !yielding && !!sess?.display && !sess.display_shared
     && target?.engine !== "firefox" && Math.min(dpr, 2) <= 1.05;
-  await drv.applyMetrics({ w, h, dpr, mode: layoutMode, fitWindow });
+  await drv.applyMetrics({ w, h, dpr, mode: fitting ? layoutMode : "window", fitWindow, passive: !fitting });
+  // Only now: the others re-apply their size on hearing it, after this view let go of its own.
+  if (!fitting) reportViewerSize(null);
   // The page area changed (or video no longer fits the mode): follow with the stream.
   if (canVideo()) startVideo(); else if (video.ws) stopVideo(true);
   renderLayout();
@@ -2289,7 +2306,7 @@ function stopVideo(fallback = false) {
 async function startVideo() {
   const d = drv;
   if (!d || !target?.sessionId) return;
-  const m = await d.evaluate("[innerWidth, innerHeight, outerHeight - innerHeight]").catch(() => null);
+  const m = await d.evaluate("[innerWidth, innerHeight, outerWidth === innerWidth ? outerHeight - innerHeight : null]").catch(() => null);
   if (!m || d !== drv) return;
   // Window layout: no emulation, so the live value (follows bars that come and go).
   const region = { x: 0, y: chromeHeight(target.sessionId, fitLayout ? d.chromeH : m[2]), w: m[0], h: m[1] };
@@ -2435,8 +2452,8 @@ E.audioBtn.onclick = () => {
 renderAudioButton();
 
 /* ---------------------------------------------------------------- shared Native size */
-// Every view of a session tells the node its screen size while in Native layout and
-// gets back the smallest width and height among those views.
+// Every view of a session tells the node its screen size while in Native or Phone
+// layout and gets back the smallest width and height among those views.
 const viewers = { ws: null, session: null, native: null, own: null, sent: undefined, count: 1 };
 function connectViewers() {
   const sessionId = target?.sessionId;
@@ -2451,9 +2468,10 @@ function connectViewers() {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
     viewers.count = m.viewers || 1;
-    const changed = JSON.stringify(m.native) !== JSON.stringify(viewers.native);
     viewers.native = m.native;
-    if (changed && layoutMode === "native") applyMetrics();
+    // Every change among the viewers: a view that just let go of its size may have
+    // cleared the page's emulation, so the remaining Native/Phone viewers set it again.
+    if (layoutMode !== "window") applyMetrics();
   };
   // Dropped (node restart, network): the next session refresh reconnects it.
   ws.onclose = () => { if (viewers.ws === ws) Object.assign(viewers, { ws: null, native: null }); };
@@ -2541,6 +2559,8 @@ function renderSession() {
   if (audio.el && audio.session !== target?.sessionId) stopAudio();
   if (sess.audio && audioWanted && !audio.el) startAudio();
   connectViewers();
+  // An automation client came or went: Native/Phone pause or resume.
+  if (layoutMode !== "window" && ((sess.client_count || 0) > 0) !== metricsYielding) applyMetrics();
   $("smStreamRow").hidden = !sess.video || !window.VideoDecoder;
   if (canVideo() && !video.ws) startVideo();
   const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
