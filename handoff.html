@@ -2066,7 +2066,7 @@ async function startVideo() {
   if (same) { await d.setVideo(true); return; }
   stopVideo();
   const decoder = new VideoDecoder({
-    output: (frame) => drawVideoFrame(frame, region),
+    output: (frame) => drawVideoFrame(frame),
     error: (e) => { console.warn("video decoder:", e); if (video.decoder === decoder) stopVideo(true); },
   });
   decoder.configure({ codec: "avc1.640033", optimizeForLatency: true });
@@ -2093,9 +2093,10 @@ async function startVideo() {
   ws.onclose = () => { if (video.ws === ws) stopVideo(true); };
   await d.setVideo(true);
 }
-function drawVideoFrame(frame, region) {
+function drawVideoFrame(frame) {
   try {
-    meta = { deviceWidth: region.w, deviceHeight: region.h, pageScaleFactor: 1, offsetTop: 0 };
+    // The server rounds the region to even sizes: one frame pixel is one page pixel.
+    meta = { deviceWidth: frame.displayWidth, deviceHeight: frame.displayHeight, pageScaleFactor: 1, offsetTop: 0 };
     hadFrame = true;
     endSwitching();
     if (E.view.width !== frame.displayWidth || E.view.height !== frame.displayHeight) {

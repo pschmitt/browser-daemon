@@ -1,8 +1,7 @@
 //! Live view as H.264 video: a session's own X display is captured with ffmpeg
-//! (x11grab), unchanged frames are dropped (mpdecimate), and the stream is encoded
-//! on the GPU (VAAPI) or with x264, tuned for latency (no B-frames, one access
-//! unit at a time). Far cheaper than a JPEG screencast: on fnuc an animated page
-//! went from ~147% of a core to ~13% (VAAPI) or ~67% (x264).
+//! (x11grab) and encoded on the GPU (VAAPI) or with x264, tuned for latency (no
+//! B-frames, one frame in flight). Far cheaper than a JPEG screencast: on fnuc an
+//! animated page went from ~147% of a core to ~13% (VAAPI) or ~67% (x264).
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -51,9 +50,6 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
         .args(["-video_size", &format!("{}x{}", r.w, r.h)])
         .arg("-i")
         .arg(format!("{display}+{},{}", r.x, r.y));
-    // Drop frames that did not change, so a still page costs next to nothing, but
-    // keep ~2 fps when still, so a client that lost a frame catches up.
-    let decimate = "mpdecimate=hi=768:lo=320:frac=0.33:max=15";
     match cfg.encoder {
         Encoder::Vaapi(ref device) => {
             cmd.arg("-vaapi_device")
@@ -64,20 +60,22 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
                 // scale_vaapi, they make it convert the gamut as well.
                 .args([
                     "-vf",
-                    &format!(
-                        "{decimate},hwupload,scale_vaapi=format=nv12:out_range=limited\
-                         :out_color_matrix=bt470bg,\
-                         setparams=color_primaries=bt709:color_trc=iec61966-2-1"
-                    ),
+                    "hwupload,scale_vaapi=format=nv12:out_range=limited\
+                     :out_color_matrix=bt470bg,\
+                     setparams=color_primaries=bt709:color_trc=iec61966-2-1",
                 ])
-                .args(["-fps_mode", "vfr"])
                 .args(["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "22"])
                 // One frame in flight: the default depth held each frame ~270 ms.
                 .args(["-async_depth", "1"])
                 .args(["-bf", "0", "-g", "120", "-aud", "1"]);
         }
         Encoder::X264 => {
-            cmd.args(["-vf", decimate, "-fps_mode", "vfr"])
+            // Drop frames that did not change (still: 92% -> 48% of a core), but
+            // keep ~2 fps, so a client that lost a frame catches up. Not worth it
+            // for VAAPI: comparing frames costs more (33%) than encoding them on
+            // the GPU (9%), and unchanged frames are ~60 bytes.
+            cmd.args(["-vf", "mpdecimate=hi=768:lo=320:frac=0.33:max=15"])
+                .args(["-fps_mode", "vfr"])
                 .args([
                     "-c:v",
                     "libx264",
