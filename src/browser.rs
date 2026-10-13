@@ -75,6 +75,8 @@ impl BrowserConfig {
 
 pub struct ActiveBrowser {
     pub id: Uuid,
+    /// The window size it was launched with.
+    pub window_size: (u32, u32),
     pub engine: BrowserEngine,
     pub port: u16,
     pub ws_path: String,
@@ -266,6 +268,7 @@ impl ActiveBrowser {
                     relay: relay.clone(),
                     audio,
                     display: session_display,
+                    window_size: (width, height),
                 })
             }
             BrowserEngine::Firefox => {
@@ -401,6 +404,7 @@ impl ActiveBrowser {
                     relay: relay.clone(),
                     audio,
                     display: session_display,
+                    window_size: (width, height),
                 })
             }
         }

@@ -609,7 +609,9 @@ async fn record_session_loop(
                                     || method == "Page.navigatedWithinDocument"
                                     || (method == "Page.frameNavigated"
                                         && val.pointer("/params/frame/parentId").is_none());
-                                if navigated || last_title_request.elapsed() >= TITLE_REFRESH {
+                                // A resize (window, emulation) changes what the screenshots clip.
+                                let resized = method == "Page.frameResized";
+                                if navigated || resized || last_title_request.elapsed() >= TITLE_REFRESH {
                                     next_title_id += 1;
                                     let title_cmd = serde_json::json!({
                                         "id": next_title_id,

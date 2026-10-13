@@ -259,6 +259,9 @@ pub struct ManagedSession {
     pub display: Option<String>,
     /// Size of the session's own display (per-session mode only).
     pub display_size: Option<(u32, u32)>,
+    /// The browser window's size at launch, which it returns to when no live
+    /// view sizes it.
+    pub window_size: (u32, u32),
     pub video: bool,
     pub color_scheme: ColorScheme,
     /// Sound is playing (kept current by the audible monitor).
@@ -298,6 +301,7 @@ impl ManagedSession {
         SessionSummary {
             id: self.id,
             name: self.name.read().unwrap().clone(),
+            window_size: Some(self.window_size),
             engine: self.engine,
             port: self.port,
             ws_path: self.ws_path.clone(),
@@ -329,6 +333,9 @@ pub struct SessionSummary {
     pub id: Uuid,
     #[serde(default)]
     pub name: String,
+    /// The browser window's size at launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_size: Option<(u32, u32)>,
     #[serde(default)]
     pub engine: BrowserEngine,
     pub port: u16,
@@ -623,6 +630,7 @@ impl AppState {
                 .map(|d| d.name.clone())
                 .or_else(|| self.config.display.clone()),
             display_size: browser.display.as_ref().map(|d| (d.width, d.height)),
+            window_size: browser.window_size,
             video: browser.display.is_some() && self.config.video.is_some(),
             color_scheme,
             audible: Arc::new(AtomicBool::new(false)),
@@ -4137,8 +4145,11 @@ async fn handle_audio_ws(
 
 #[derive(Deserialize)]
 struct ViewerReport {
-    /// [width, height] while in Native layout, null otherwise.
+    /// [width, height] while in Native/Phone layout, null otherwise.
     native: Option<(u32, u32)>,
+    /// This viewer's size wins over the others' (and over automation clients).
+    #[serde(default)]
+    force: bool,
 }
 
 /// One live view of a session: it reports its size in Native layout and gets
@@ -4168,7 +4179,7 @@ async fn handle_viewers_ws(
                 msg = socket.recv() => match msg {
                     Some(Ok(Message::Text(t))) => {
                         if let Ok(r) = serde_json::from_str::<ViewerReport>(&t) {
-                            state.viewers.set(session, id, r.native);
+                            state.viewers.set(session, id, r.native, r.force);
                         }
                     }
                     None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,

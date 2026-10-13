@@ -270,6 +270,7 @@
     <button type="button" data-layout="native" title="The remote page gets this screen's size and pixel density, and follows resizes">Native</button>
     <button type="button" data-layout="phone" title="A phone: this screen's size with touch input">Phone</button>
   </div>
+  <button class="sm-item" id="forceBtn" role="menuitemcheckbox" aria-checked="false" title="This screen's size wins over other viewers and over an attached automation client"></button>
   <button class="sm-item" id="audioBtn" role="menuitemcheckbox" aria-checked="false" hidden></button>
   <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
   <label class="sm-item sm-search" id="smStreamRow" hidden><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/></svg>Picture<select id="smStream" aria-label="Picture"><option value="video">Video (H.264)</option><option value="jpeg">Images (JPEG)</option></select></label>
@@ -513,6 +514,13 @@ class CdpDriver {
     const width = Math.min(w, 3776), height = Math.min(h + chromeHeight(target?.sessionId, this.chromeH), 2096);
     await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
     winFit.fitted = true;
+  }
+  // Back to the size the browser was launched with, if it isn't already.
+  async restoreWindow([width, height]) {
+    const r = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
+    if (!r?.windowId || (r.bounds.width === width && r.bounds.height === height)) return;
+    winFit.fitted = false;
+    await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
   }
   async unfitWindow() {
     if (!winFit.fitted || winFit.session !== target?.sessionId) return;
@@ -969,7 +977,7 @@ async function applyMetrics({ ifDrifted = false } = {}) {
   const dpr = devicePixelRatio || 1;
   // An automation client attached (an agent's session handed over) sets the page size
   // itself: emulating another one would fight it and flicker. Show its size instead.
-  const yielding = layoutMode !== "window" && (sess?.client_count || 0) > 0;
+  const yielding = layoutMode !== "window" && !forceSize && (sess?.client_count || 0) > 0;
   if (yielding !== metricsYielding) {
     metricsYielding = yielding;
     if (yielding) toast(`${layoutMode === "phone" ? "Phone" : "Native"} is paused while an automation client controls this page`, 4000);
@@ -979,7 +987,11 @@ async function applyMetrics({ ifDrifted = false } = {}) {
   // height among them, so all see everything); Window viewers only watch.
   const fitting = layoutMode !== "window" && !yielding;
   if (fitting) reportViewerSize([w, h]);
-  if (fitting && viewers.native) { w = Math.min(w, viewers.native[0]); h = Math.min(h, viewers.native[1]); }
+  // ...unless a viewer forces its size (this one: its own; another: take that one's).
+  if (fitting && viewers.native && !forceSize) {
+    if (viewers.forced) [w, h] = viewers.native;
+    else { w = Math.min(w, viewers.native[0]); h = Math.min(h, viewers.native[1]); }
+  }
   if (ifDrifted && applied?.drv === drv && applied.page === pageId && applied.mode === layoutMode) {
     const size = await drv.evaluate("[innerWidth, innerHeight]").catch(() => null);
     if (size && size[0] === applied.w && size[1] === applied.h) return;
@@ -991,6 +1003,9 @@ async function applyMetrics({ ifDrifted = false } = {}) {
   await drv.applyMetrics({ w, h, dpr, mode: fitting ? layoutMode : "window", fitWindow, passive: !fitting });
   // Only now: the others re-apply their size on hearing it, after this view let go of its own.
   if (!fitting) reportViewerSize(null);
+  // Nobody sizes the page: the window goes back to its launch size (a Native view
+  // that went away would otherwise leave it at its own screen's size for good).
+  if (!fitting && !yielding && viewers.heard && !viewers.native && sess?.window_size) drv.restoreWindow?.(sess.window_size);
   // The page area changed (or video no longer fits the mode): follow with the stream.
   if (canVideo()) startVideo(); else if (video.ws) stopVideo(true);
   renderLayout();
@@ -1876,7 +1891,18 @@ function renderLayout() {
     b.classList.toggle("on", on);
     b.setAttribute("aria-checked", String(on));
   });
+  const fb = $("forceBtn");
+  fb.hidden = layoutMode === "window";
+  fb.innerHTML = `<svg viewBox="0 0 24 24"><path d="${forceSize ? "M4 12l5 5L20 6" : "M4 4h16v16H4z"}"/></svg>Use my screen's size`;
+  fb.setAttribute("aria-checked", String(forceSize));
 }
+// Force: this view sizes the page, whoever else is watching or driving it.
+let forceSize = false;
+$("forceBtn").addEventListener("click", () => {
+  forceSize = !forceSize;
+  renderLayout();
+  applyMetrics();
+});
 renderLayout();
 $("smLayout").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-layout]");
@@ -2454,12 +2480,12 @@ renderAudioButton();
 /* ---------------------------------------------------------------- shared Native size */
 // Every view of a session tells the node its screen size while in Native or Phone
 // layout and gets back the smallest width and height among those views.
-const viewers = { ws: null, session: null, native: null, own: null, sent: undefined, count: 1 };
+const viewers = { ws: null, session: null, native: null, forced: false, heard: false, own: null, sent: undefined, count: 1 };
 function connectViewers() {
   const sessionId = target?.sessionId;
   if (viewers.ws && viewers.session === sessionId) return;
   try { viewers.ws?.close(); } catch { /* closed */ }
-  Object.assign(viewers, { ws: null, session: sessionId, native: null, sent: undefined, count: 1 });
+  Object.assign(viewers, { ws: null, session: sessionId, native: null, forced: false, heard: false, sent: undefined, count: 1 });
   if (!sessionId) return;
   const scheme = location.protocol === "https:" ? "wss://" : "ws://";
   const ws = new WebSocket(`${scheme}${location.host}/viewers?session_id=${encodeURIComponent(sessionId)}`);
@@ -2469,17 +2495,19 @@ function connectViewers() {
     try { m = JSON.parse(e.data); } catch { return; }
     viewers.count = m.viewers || 1;
     viewers.native = m.native;
+    viewers.forced = !!m.forced;
+    viewers.heard = true;
     // Every change among the viewers: a view that just let go of its size may have
     // cleared the page's emulation, so the remaining Native/Phone viewers set it again.
     if (layoutMode !== "window") applyMetrics();
   };
   // Dropped (node restart, network): the next session refresh reconnects it.
-  ws.onclose = () => { if (viewers.ws === ws) Object.assign(viewers, { ws: null, native: null }); };
+  ws.onclose = () => { if (viewers.ws === ws) Object.assign(viewers, { ws: null, native: null, forced: false, heard: false }); };
   viewers.ws = ws;
 }
 function reportViewerSize(native) {
   viewers.own = native;
-  const msg = JSON.stringify({ native });
+  const msg = JSON.stringify({ native, force: forceSize && !!native });
   if (viewers.ws?.readyState !== WebSocket.OPEN || msg === viewers.sent) return;
   viewers.sent = msg;
   viewers.ws.send(msg);

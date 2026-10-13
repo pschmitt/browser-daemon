@@ -1,6 +1,7 @@
-//! Live views of one session in Native layout share a size: the smallest
-//! width and height among them, so each viewer sees the whole page instead of
-//! fighting the others over the window.
+//! Live views of one session in Native or Phone layout share a size: the
+//! smallest width and height among them, so each viewer sees the whole page
+//! instead of fighting the others over the window. A viewer may force its own
+//! size instead (the latest one to force wins).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,8 +11,10 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use uuid::Uuid;
 
 struct Viewer {
-    /// Screen size while in Native layout; None in the other layouts.
+    /// Screen size while in Native/Phone layout; None in Window layout.
     native: Option<(u32, u32)>,
+    /// When it started forcing its size (an increasing number), if it does.
+    forced: Option<u64>,
     tx: UnboundedSender<String>,
 }
 
@@ -28,20 +31,37 @@ impl Viewers {
         let (tx, rx) = unbounded_channel();
         let mut sessions = self.sessions.lock().unwrap();
         let viewers = sessions.entry(session).or_default();
-        viewers.insert(id, Viewer { native: None, tx });
+        viewers.insert(
+            id,
+            Viewer {
+                native: None,
+                forced: None,
+                tx,
+            },
+        );
         broadcast(viewers);
         (id, rx)
     }
 
-    pub fn set(&self, session: Uuid, id: u64, native: Option<(u32, u32)>) {
+    pub fn set(&self, session: Uuid, id: u64, native: Option<(u32, u32)>, force: bool) {
+        let stamp = self.next.fetch_add(1, Ordering::Relaxed);
         let mut sessions = self.sessions.lock().unwrap();
         let Some(viewers) = sessions.get_mut(&session) else {
             return;
         };
-        match viewers.get_mut(&id) {
-            Some(v) if v.native != native => v.native = native,
-            _ => return,
+        let Some(v) = viewers.get_mut(&id) else {
+            return;
+        };
+        let forced = match (force && native.is_some(), v.forced) {
+            (true, Some(t)) => Some(t),
+            (true, None) => Some(stamp),
+            (false, _) => None,
+        };
+        if v.native == native && v.forced == forced {
+            return;
         }
+        v.native = native;
+        v.forced = forced;
         broadcast(viewers);
     }
 
@@ -65,8 +85,14 @@ fn smallest(sizes: impl Iterator<Item = (u32, u32)>) -> Option<(u32, u32)> {
 }
 
 fn broadcast(viewers: &HashMap<u64, Viewer>) {
-    let size = smallest(viewers.values().filter_map(|v| v.native));
-    let msg = serde_json::json!({ "native": size, "viewers": viewers.len() }).to_string();
+    let forcing = viewers
+        .values()
+        .filter_map(|v| Some((v.forced?, v.native?)))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, size)| size);
+    let size = forcing.or_else(|| smallest(viewers.values().filter_map(|v| v.native)));
+    let msg = serde_json::json!({ "native": size, "forced": forcing.is_some(), "viewers": viewers.len() })
+        .to_string();
     for v in viewers.values() {
         let _ = v.tx.send(msg.clone());
     }
@@ -91,8 +117,8 @@ mod tests {
         let s = Uuid::new_v4();
         let (a, mut ra) = v.join(s);
         let (b, _rb) = v.join(s);
-        v.set(s, a, Some((1920, 1080)));
-        v.set(s, b, Some((800, 1200)));
+        v.set(s, a, Some((1920, 1080)), false);
+        v.set(s, b, Some((800, 1200)), false);
         let last = |r: &mut UnboundedReceiver<String>| {
             let mut m = None;
             while let Ok(x) = r.try_recv() {
@@ -100,6 +126,14 @@ mod tests {
             }
             serde_json::from_str::<serde_json::Value>(&m.unwrap()).unwrap()
         };
+        assert_eq!(last(&mut ra)["native"], serde_json::json!([800, 1080]));
+        v.set(s, a, Some((1920, 1080)), true);
+        assert_eq!(
+            last(&mut ra)["native"],
+            serde_json::json!([1920, 1080]),
+            "forced wins"
+        );
+        v.set(s, a, Some((1920, 1080)), false);
         assert_eq!(last(&mut ra)["native"], serde_json::json!([800, 1080]));
         v.leave(s, b);
         let after = last(&mut ra);
