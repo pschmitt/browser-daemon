@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::audio::{AudioConfig, Sink};
 use crate::bidi::BidiHub;
+use crate::display::{DisplayConfig, VirtualDisplay};
 use crate::profiles::Profile;
 use crate::proxies::{self, Proxy};
 use crate::relay::Relay;
@@ -54,6 +55,8 @@ pub struct BrowserConfig {
     pub proxies: Vec<Proxy>,
     /// PulseAudio for session audio; none: browsers play into the void.
     pub audio: Option<AudioConfig>,
+    /// Give every session its own Xvfb instead of the shared `display`.
+    pub session_displays: Option<DisplayConfig>,
 }
 
 impl BrowserConfig {
@@ -82,6 +85,8 @@ pub struct ActiveBrowser {
     pub relay: Arc<Relay>,
     /// The session's audio sink, when the node has audio.
     pub audio: Option<Sink>,
+    /// The session's own X display, in per-session display mode.
+    pub display: Option<VirtualDisplay>,
 }
 
 impl ActiveBrowser {
@@ -111,6 +116,15 @@ impl ActiveBrowser {
         let adblock = adblock && config.adblock_available(engine);
         let width = width.unwrap_or(config.default_width);
         let height = height.unwrap_or(config.default_height);
+        let session_display = match config.session_displays {
+            Some(ref dcfg) => Some(VirtualDisplay::start(dcfg, width, height).await?),
+            None => None,
+        };
+        // The X display the browser runs on: its own, or the shared one.
+        let display_name = session_display
+            .as_ref()
+            .map(|d| d.name.clone())
+            .or_else(|| config.display.clone());
 
         let (user_data_dir, temp_dir, profile_name, profile_id) = match profile {
             Some(profile) => {
@@ -146,6 +160,8 @@ impl ActiveBrowser {
                     .arg(format!("--user-data-dir={}", user_data_dir.display()))
                     .arg("--disable-blink-features=AutomationControlled")
                     .arg(format!("--window-size={},{}", width, height))
+                    // Top-left: with a display of its own, the screen is the window.
+                    .arg("--window-position=0,0")
                     // Window pixels = CSS pixels: Xvfb's DPI otherwise yields an odd
                     // device pixel ratio (1.046875) and slightly blurry frames.
                     .arg("--force-device-scale-factor=1")
@@ -183,7 +199,7 @@ impl ActiveBrowser {
                 if let Some(ref sink) = audio {
                     cmd.envs(sink.env());
                 }
-                if let Some(ref display) = config.display {
+                if let Some(ref display) = display_name {
                     cmd.env("DISPLAY", display);
                 }
 
@@ -218,6 +234,7 @@ impl ActiveBrowser {
                     adblock,
                     relay: relay.clone(),
                     audio,
+                    display: session_display,
                 })
             }
             BrowserEngine::Firefox => {
@@ -243,7 +260,7 @@ impl ActiveBrowser {
 
                 // Headful on the virtual display, like Chromium; headless only without one.
                 let mut cmd = Command::new(firefox_bin);
-                if config.display.is_none() {
+                if display_name.is_none() {
                     cmd.arg("--headless");
                 }
                 cmd.arg("--new-instance")
@@ -265,7 +282,7 @@ impl ActiveBrowser {
                 if let Some(ref sink) = audio {
                     cmd.envs(sink.env());
                 }
-                if let Some(ref display) = config.display {
+                if let Some(ref display) = display_name {
                     cmd.env("DISPLAY", display);
                 }
 
@@ -326,6 +343,7 @@ impl ActiveBrowser {
                     adblock,
                     relay: relay.clone(),
                     audio,
+                    display: session_display,
                 })
             }
         }
@@ -337,6 +355,9 @@ impl ActiveBrowser {
             warn!(session_id = %self.id, error = %e, "Failed to send kill to child process");
         }
         let _ = tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await;
+        if let Some(ref mut display) = self.display {
+            display.stop().await;
+        }
     }
 }
 

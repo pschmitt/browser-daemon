@@ -51,6 +51,19 @@ in
       description = "Firefox package to spawn for sessions. Set to null to disable Firefox engine.";
     };
 
+    displayMode = lib.mkOption {
+      type = lib.types.enum [
+        "shared"
+        "per-session"
+      ];
+      default = "shared";
+      description = ''
+        Where browser windows live: one shared Xvfb (`display`), or an Xvfb per
+        session, sized to its window, which video streaming needs (each session's
+        screen can then be captured on its own).
+      '';
+    };
+
     xvfbPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.xorg-server;
@@ -305,7 +318,7 @@ in
         };
       };
 
-      browser-daemon-xvfb = {
+      browser-daemon-xvfb = lib.mkIf (cfg.displayMode == "shared") {
         description = "Xvfb virtual display for browser-daemon";
         wantedBy = [ "multi-user.target" ];
         serviceConfig = {
@@ -321,14 +334,12 @@ in
       browser-daemon = {
         description = "Native remote browser daemon";
         wantedBy = [ "multi-user.target" ];
-        wants = [
-          "browser-daemon-xvfb.service"
-        ]
-        ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
-        after = [
-          "browser-daemon-xvfb.service"
-        ]
-        ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
+        wants =
+          lib.optional (cfg.displayMode == "shared") "browser-daemon-xvfb.service"
+          ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
+        after =
+          lib.optional (cfg.displayMode == "shared") "browser-daemon-xvfb.service"
+          ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
         path = [
           pkgs.gnutar
           pkgs.gzip
@@ -371,6 +382,14 @@ in
               "${cfg.adblock.chromiumExtension}"
               "--firefox-adblock"
               "${cfg.adblock.firefoxAddon}"
+            ]
+            ++ lib.optionals (cfg.displayMode == "per-session") [
+              "--display-mode"
+              "per-session"
+              "--xvfb"
+              "${cfg.xvfbPackage}/bin/Xvfb"
+              "--xdotool"
+              (lib.getExe pkgs.xdotool)
             ]
             ++ lib.optionals cfg.audio.enable [
               "--pulse-server"

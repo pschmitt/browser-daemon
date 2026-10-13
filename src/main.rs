@@ -1,6 +1,7 @@
 mod audio;
 mod bidi;
 mod browser;
+mod display;
 mod idle;
 mod profiles;
 mod proxies;
@@ -156,6 +157,30 @@ pub struct Args {
 
     #[arg(long, default_value = "ffmpeg")]
     pub ffmpeg: PathBuf,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DisplayMode::Shared,
+        help = "X display per session (own Xvfb, needed for video streaming) or one shared --display"
+    )]
+    pub display_mode: DisplayMode,
+
+    #[arg(
+        long,
+        default_value = "Xvfb",
+        help = "Xvfb binary for --display-mode per-session"
+    )]
+    pub xvfb: PathBuf,
+
+    #[arg(long, help = "xdotool, to park the X pointer on per-session displays")]
+    pub xdotool: Option<PathBuf>,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisplayMode {
+    Shared,
+    PerSession,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -180,6 +205,8 @@ pub struct ManagedSession {
     pub relay: Arc<relay::Relay>,
     /// PulseAudio sink the browser plays into.
     pub audio_sink: Option<String>,
+    /// The session's own X display (per-session display mode).
+    pub display: Option<String>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
 }
@@ -226,6 +253,7 @@ impl ManagedSession {
             adblock: self.adblock,
             proxy: self.relay.current(),
             audio: self.audio_sink.is_some(),
+            display: self.display.clone(),
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
@@ -256,6 +284,9 @@ pub struct SessionSummary {
     /// Its audio can be listened to on /audio.
     #[serde(default)]
     pub audio: bool,
+    /// Its own X display, when the node runs one per session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
     #[serde(default)]
     pub idle_seconds: u64,
     /// 0: never stopped for inactivity.
@@ -494,6 +525,7 @@ impl AppState {
             adblock: browser.adblock,
             relay: browser.relay.clone(),
             audio_sink: browser.audio.as_ref().map(|s| s.name.clone()),
+            display: browser.display.as_ref().map(|d| d.name.clone()),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
         };
@@ -1045,6 +1077,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         chromium_adblock,
         firefox_adblock: args.firefox_adblock,
         proxies,
+        session_displays: (args.display_mode == DisplayMode::PerSession).then(|| {
+            display::DisplayConfig {
+                xvfb: args.xvfb.clone(),
+                xdotool: args.xdotool.clone(),
+            }
+        }),
         audio: args.pulse_server.clone().map(|server| audio::AudioConfig {
             server,
             pactl: args.pactl.clone(),
