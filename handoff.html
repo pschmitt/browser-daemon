@@ -940,15 +940,27 @@ async function askPasskey({ rpId }) {
   dlg.showModal();
   const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
   if (choice !== "vault" || !target?.sessionId) return false;
-  toast(`Getting the passkey for ${rpId}… If rbw is locked, confirm the unlock on your phone.`, 0);
+  toast(`Getting the passkey for ${rpId}…`, 0);
+  const call = async (url, opts = {}) => {
+    const res = await fetch(url, { ...opts, headers: authHeaders(opts.body ? { "Content-Type": "application/json" } : {}) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    return body;
+  };
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`, {
-      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ page_id: pageId, rp_id: rpId }),
-    });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
-    toast(`Signing in to ${rpId} with your passkey`);
-    return true;
+    // Short calls only: the helper may wait minutes for the phone unlock, and a request
+    // held open that long gets dropped (Firefox gave up on it after ~2 s).
+    const { request } = await call(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
+      { method: "POST", body: JSON.stringify({ page_id: pageId, rp_id: rpId }) });
+    let shown = "";
+    for (const until = Date.now() + 340000; Date.now() < until;) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const st = await call(`/api/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
+      if (st.state === "ready") { toast(`Signing in to ${rpId} with your passkey`); return true; }
+      if (st.state === "failed") throw new Error(st.error);
+      if (st.note && st.note !== shown) { shown = st.note; toast(`${rpId}: ${st.note}`, 0); }
+    }
+    throw new Error("The passkey helper did not answer");
   } catch (err) {
     toast(`No passkey: ${err.message}`, 5000);
     return false;

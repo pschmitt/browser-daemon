@@ -94,7 +94,7 @@ async fn poll(
         let (node, secret, client, args) =
             (node.clone(), secret.clone(), client.clone(), args.clone());
         tokio::spawn(async move {
-            let outcome = match serve(&node, &req, &client, &args).await {
+            let outcome = match serve(&node, &secret, &req, &client, &args).await {
                 Ok(()) => Outcome {
                     ok: true,
                     error: None,
@@ -131,6 +131,7 @@ async fn unlocked(rbw: &PathBuf) -> bool {
 /// running in the background until the assertion and the vault sync are done.
 async fn serve(
     node: &str,
+    secret: &str,
     req: &Request,
     client: &reqwest::Client,
     args: &HelperArgs,
@@ -143,6 +144,12 @@ async fn serve(
             .send()
             .await
             .map_err(|e| format!("Could not ask for an unlock: {e}"))?;
+        let _ = client
+            .post(format!("{node}/api/passkey-helper/{}/note", req.id))
+            .header("X-Browser-Cluster-Secret", secret)
+            .json(&serde_json::json!({ "note": "rbw is locked: confirm the unlock on your phone" }))
+            .send()
+            .await;
         let mut ok = false;
         for _ in 0..60 {
             tokio::time::sleep(Duration::from_secs(5)).await;

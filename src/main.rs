@@ -1373,8 +1373,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/sessions/{id}/name", post(api_session_rename))
+        .route("/api/passkey/{req}", get(api_passkey_status))
         .route("/api/passkey-helper/next", get(api_passkey_helper_next))
         .route("/api/passkey-helper/{req}", post(api_passkey_helper_done))
+        .route(
+            "/api/passkey-helper/{req}/note",
+            post(api_passkey_helper_note),
+        )
         .route("/api/sessions/{id}/record", post(api_session_start_record))
         .route(
             "/api/sessions/{id}/files",
@@ -4223,7 +4228,7 @@ struct PasskeyRequest {
 }
 
 /// A passkey approved in the live view: the helper puts it into the page.
-/// Answers once the passkey is ready (or why it isn't).
+/// Answers right away with the request's id; its progress is at /api/passkey/{id}.
 async fn api_session_passkey(
     AxumPath(id): AxumPath<Uuid>,
     State(state): State<AppState>,
@@ -4240,12 +4245,43 @@ async fn api_session_passkey(
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
     session.activity.touch();
     info!(session_id = %id, rp_id = %req.rp_id, "Passkey approved in the live view");
+    let request = state
+        .passkeys
+        .start(req.page_id, req.rp_id)
+        .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
+    Ok(Json(serde_json::json!({ "request": request })))
+}
+
+async fn api_passkey_status(
+    AxumPath(req): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
     state
         .passkeys
-        .submit(req.page_id, req.rp_id)
-        .await
-        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, &e))?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+        .status(req)
+        .map(Json)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "No such passkey request"))
+}
+
+#[derive(Deserialize)]
+struct PasskeyNote {
+    note: String,
+}
+
+async fn api_passkey_helper_note(
+    AxumPath(req): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(n): Json<PasskeyNote>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    Ok(if state.passkeys.note(req, n.note) {
+        StatusCode::NO_CONTENT
+    } else {
+        StatusCode::GONE
+    })
 }
 
 async fn api_passkey_helper_next(

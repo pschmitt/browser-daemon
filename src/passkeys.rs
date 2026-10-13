@@ -2,13 +2,17 @@
 //! running as the vault's user (`browser-daemon passkey-helper`) polls for
 //! approved requests and injects the passkey into the page with
 //! `rbw passkey inject`, unlocking rbw from the phone first if needed.
+//!
+//! The view doesn't wait on one long request (browsers and proxies drop those):
+//! it starts a request and polls its status, which the helper may annotate
+//! ("confirm the unlock on your phone") before finishing it.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{oneshot, Notify};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -25,10 +29,23 @@ pub struct Outcome {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Serialize, Debug, PartialEq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Status {
+    Pending { note: Option<String> },
+    Ready,
+    Failed { error: String },
+}
+
+struct Tracked {
+    status: Status,
+    since: Instant,
+}
+
 #[derive(Default)]
 pub struct Broker {
     queue: Mutex<VecDeque<Request>>,
-    waiting: Mutex<HashMap<Uuid, oneshot::Sender<Outcome>>>,
+    tracked: Mutex<HashMap<Uuid, Tracked>>,
     helper_seen: Mutex<Option<Instant>>,
     wake: Notify,
 }
@@ -39,8 +56,8 @@ const HELPER_GONE: Duration = Duration::from_secs(90);
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(330);
 
 impl Broker {
-    /// Hand a request to the helper and wait until the passkey is in place.
-    pub async fn submit(&self, page_id: String, rp_id: String) -> Result<(), String> {
+    /// Queue a request for the helper; its progress is read with `status`.
+    pub fn start(&self, page_id: String, rp_id: String) -> Result<Uuid, String> {
         let helper = *self.helper_seen.lock().unwrap();
         if helper.is_none_or(|t| t.elapsed() > HELPER_GONE) {
             return Err("No passkey helper is running for this node".into());
@@ -50,20 +67,31 @@ impl Broker {
             page_id,
             rp_id,
         };
-        let (tx, rx) = oneshot::channel();
-        self.waiting.lock().unwrap().insert(req.id, tx);
-        self.queue.lock().unwrap().push_back(req.clone());
+        let mut tracked = self.tracked.lock().unwrap();
+        tracked.retain(|_, t| t.since.elapsed() < 2 * ANSWER_TIMEOUT);
+        tracked.insert(
+            req.id,
+            Tracked {
+                status: Status::Pending { note: None },
+                since: Instant::now(),
+            },
+        );
+        let id = req.id;
+        self.queue.lock().unwrap().push_back(req);
         self.wake.notify_waiters();
-        let outcome = tokio::time::timeout(ANSWER_TIMEOUT, rx).await;
-        self.waiting.lock().unwrap().remove(&req.id);
-        self.queue.lock().unwrap().retain(|r| r.id != req.id);
-        match outcome {
-            Ok(Ok(Outcome { ok: true, .. })) => Ok(()),
-            Ok(Ok(Outcome { error, .. })) => {
-                Err(error.unwrap_or_else(|| "The helper failed".into()))
-            }
-            _ => Err("The passkey helper did not answer".into()),
+        Ok(id)
+    }
+
+    pub fn status(&self, id: Uuid) -> Option<Status> {
+        let mut tracked = self.tracked.lock().unwrap();
+        let t = tracked.get_mut(&id)?;
+        if matches!(t.status, Status::Pending { .. }) && t.since.elapsed() > ANSWER_TIMEOUT {
+            t.status = Status::Failed {
+                error: "The passkey helper did not answer".into(),
+            };
+            self.queue.lock().unwrap().retain(|r| r.id != id);
         }
+        Some(t.status.clone())
     }
 
     /// The helper's long poll: the next request, or None after `wait`.
@@ -82,10 +110,33 @@ impl Broker {
         }
     }
 
+    /// The helper tells the user something while the request is pending.
+    pub fn note(&self, id: Uuid, note: String) -> bool {
+        match self.tracked.lock().unwrap().get_mut(&id) {
+            Some(Tracked {
+                status: Status::Pending { note: n },
+                ..
+            }) => {
+                *n = Some(note);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn complete(&self, id: Uuid, outcome: Outcome) -> bool {
-        match self.waiting.lock().unwrap().remove(&id) {
-            Some(tx) => tx.send(outcome).is_ok(),
-            None => false,
+        match self.tracked.lock().unwrap().get_mut(&id) {
+            Some(t) if matches!(t.status, Status::Pending { .. }) => {
+                t.status = if outcome.ok {
+                    Status::Ready
+                } else {
+                    Status::Failed {
+                        error: outcome.error.unwrap_or_else(|| "The helper failed".into()),
+                    }
+                };
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -99,25 +150,27 @@ mod tests {
     async fn request_reaches_helper_and_back() {
         let b = Arc::new(Broker::default());
         assert!(
-            b.submit("p".into(), "x.test".into()).await.is_err(),
+            b.start("p".into(), "x.test".into()).is_err(),
             "no helper yet"
         );
         assert!(b.next(Duration::from_millis(10)).await.is_none());
-        let helper = {
-            let b = b.clone();
-            tokio::spawn(async move {
-                let req = b.next(Duration::from_secs(5)).await.unwrap();
-                assert_eq!(req.rp_id, "x.test");
-                b.complete(
-                    req.id,
-                    Outcome {
-                        ok: true,
-                        error: None,
-                    },
-                )
+        let id = b.start("p".into(), "x.test".into()).unwrap();
+        let req = b.next(Duration::from_secs(1)).await.unwrap();
+        assert_eq!(req.rp_id, "x.test");
+        assert!(b.note(id, "unlock".into()));
+        assert_eq!(
+            b.status(id),
+            Some(Status::Pending {
+                note: Some("unlock".into())
             })
-        };
-        assert_eq!(b.submit("p".into(), "x.test".into()).await, Ok(()));
-        assert!(helper.await.unwrap());
+        );
+        assert!(b.complete(
+            id,
+            Outcome {
+                ok: true,
+                error: None
+            }
+        ));
+        assert_eq!(b.status(id), Some(Status::Ready));
     }
 }
