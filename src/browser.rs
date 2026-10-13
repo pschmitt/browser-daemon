@@ -165,6 +165,8 @@ impl ActiveBrowser {
                 cmd.arg("--remote-debugging-port=0")
                     .arg(format!("--user-data-dir={}", user_data_dir.display()))
                     .arg("--disable-blink-features=AutomationControlled")
+                    // Keeps Chromium from showing a bar about the unsupported flag above.
+                    .arg("--test-type")
                     .arg(format!("--window-size={},{}", width, height))
                     // Top-left: with a display of its own, the screen is the window.
                     .arg("--window-position=0,0")
