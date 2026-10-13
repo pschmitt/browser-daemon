@@ -124,6 +124,7 @@
   }
   #sessMenu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
   .sm-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 2px; font-weight: 700; font-size: 14px; }
+  #smTitle { cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sm-engine { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; background: var(--btn); color: var(--muted); }
   .sm-status { padding: 0 10px 8px; font-size: 12px; color: var(--muted); }
   .sm-rec { display: flex; gap: 6px; padding: 2px 4px; }
@@ -256,7 +257,7 @@
 </div>
 <div id="sessPop" role="menu" hidden></div>
 <div id="sessMenu" role="menu" hidden>
-  <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle">Session</span></div>
+  <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle" title="Rename this session" role="button" tabindex="0">Session</span></div>
   <div class="sm-status" id="smStatus"></div>
   <div class="sm-rec" id="smRec"></div>
   <hr>
@@ -2254,6 +2255,22 @@ async function refreshSession() {
   } catch { /* session gone: the driver reports it */ }
 }
 
+// Tapping the session's name renames it (empty: a made-up name again).
+$("smTitle").addEventListener("click", async () => {
+  if (!sess || !target?.sessionId) return;
+  const name = window.prompt("Session name (empty for a made-up one)", sess.name || "");
+  if (name === null) return;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/name`, {
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ name: name.trim() }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    refreshSession();
+  } catch (err) {
+    toast(`Could not rename: ${err.message}`, 4000);
+  }
+});
+
 /* ---------------------------------------------------------------- video */
 // The live view as H.264 from the session's own display (/video), decoded with
 // WebCodecs: far cheaper for the node than a JPEG screencast. Falls back to the
@@ -2486,7 +2503,7 @@ async function openSessPop() {
       const href = `${base}/handoff/?session=${encodeURIComponent(x.id)}`;
       const eng = x.engine === "firefox" ? "firefox" : "chromium";
       return `<a href="${esc(href)}" role="menuitem"><span class="sp-eng ${eng}" title="${eng === "firefox" ? "Firefox" : "Chromium"}">${eng === "firefox" ? "FF" : "CR"}</span>`
-        + `<span class="sp-t"><b>${x.audible ? speakerIcon().outerHTML : ""}${esc(x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${fmtAge(x.uptime_seconds || 0)}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
+        + `<span class="sp-t"><b>${x.audible ? speakerIcon().outerHTML : ""}${esc(x.name || x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${x.name ? esc(x.profile || "Throwaway") + " · " : ""}${fmtAge(x.uptime_seconds || 0)}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
     }).join("") : '<div class="sp-empty">No other sessions are running.</div>') + '<hr><a href="/" role="menuitem"><span class="sp-eng">⌂</span><span class="sp-t"><b>Dashboard</b></span></a>';
   } catch (err) {
     pop.innerHTML = `<div class="sp-empty">Could not load sessions (${esc(err.message)}).</div>`;
@@ -2521,8 +2538,9 @@ function renderSession() {
   E.recPill.classList.toggle("paused", paused);
   $("recPillText").textContent = paused ? "PAUSED" : "REC";
   $("smEngine").textContent = sess.engine || "chromium";
-  $("smTitle").textContent = sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent session" : "Throwaway session";
-  $("smStatus").textContent = `Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
+  $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
+  $("smStatus").textContent = (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
+    + ` · Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
     + (rec ? (paused ? " · recording paused" : " · recording") : "")
     + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : "");
   if (document.activeElement !== $("smProxy")) $("smProxy").value = sess.proxy || "none";

@@ -4,6 +4,7 @@ mod bidi;
 mod browser;
 mod display;
 mod idle;
+mod names;
 mod passkey_helper;
 mod passkeys;
 mod profiles;
@@ -236,6 +237,8 @@ pub enum Command {
 #[derive(Clone)]
 pub struct ManagedSession {
     pub id: Uuid,
+    /// Given at creation or generated ("quiet-otter"); can be changed later.
+    pub name: Arc<std::sync::RwLock<String>>,
     pub engine: BrowserEngine,
     pub port: u16,
     pub ws_path: String,
@@ -291,6 +294,7 @@ impl ManagedSession {
 
         SessionSummary {
             id: self.id,
+            name: self.name.read().unwrap().clone(),
             engine: self.engine,
             port: self.port,
             ws_path: self.ws_path.clone(),
@@ -320,6 +324,8 @@ impl ManagedSession {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub id: Uuid,
+    #[serde(default)]
+    pub name: String,
     #[serde(default)]
     pub engine: BrowserEngine,
     pub port: u16,
@@ -593,6 +599,7 @@ impl AppState {
 
         let session = ManagedSession {
             id: browser.id,
+            name: Arc::new(std::sync::RwLock::new(names::generate(browser.id))),
             engine: browser.engine,
             port: browser.port,
             ws_path: browser.ws_path.clone(),
@@ -732,6 +739,8 @@ pub struct LaunchParams {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreateSessionRequest {
+    /// Optional; generated when absent or empty.
+    pub name: Option<String>,
     #[serde(default)]
     pub engine: BrowserEngine,
     pub profile: Option<String>,
@@ -1345,6 +1354,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/proxies", get(api_list_proxies))
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
+        .route("/api/sessions/{id}/name", post(api_session_rename))
         .route("/api/passkey-helper/next", get(api_passkey_helper_next))
         .route("/api/passkey-helper/{req}", post(api_passkey_helper_done))
         .route("/api/sessions/{id}/record", post(api_session_start_record))
@@ -2292,6 +2302,9 @@ async fn api_create_session(
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
+    if let Some(name) = req.name.as_deref().and_then(names::clean) {
+        *session.name.write().unwrap() = name;
+    }
 
     let rec = state
         .active_recordings
@@ -4140,6 +4153,31 @@ async fn handle_viewers_ws(
         }
         state.viewers.leave(session, id);
     })
+}
+
+#[derive(Deserialize)]
+struct RenameRequest {
+    /// Empty: back to the generated name.
+    name: String,
+}
+
+async fn api_session_rename(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RenameRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    let name = names::clean(&req.name).unwrap_or_else(|| names::generate(id));
+    *session.name.write().unwrap() = name.clone();
+    Ok(Json(serde_json::json!({ "name": name })))
 }
 
 #[derive(Deserialize)]

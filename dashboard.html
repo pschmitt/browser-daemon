@@ -572,6 +572,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <form class="sheet" id="newSessionForm">
     <div class="sheet-head"><h2>New browser session</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
+      <div class="field"><span class="field-label">Name</span><input class="input" id="sessionName" placeholder="Optional, e.g. Drive upload (a name is made up otherwise)" autocomplete="off" spellcheck="false" maxlength="64"></div>
       <div class="field"><span class="field-label">Node</span><div class="seg" id="sessionNodes"></div></div>
       <div class="field"><span class="field-label">Engine</span>
         <div class="seg" id="sessionEngines">
@@ -1276,6 +1277,7 @@ function sessionCard(s) {
   const n = s.client_count || 0;
   const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
+    fact('', icon('folder', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
     s.audible && fact('accent', icon('speaker', 'sm'), 'Playing', 'Playing sound'),
     s.is_recording && (s.recording_paused
       ? fact('', icon('pause', 'sm'), 'REC paused', 'Recording paused')
@@ -1290,7 +1292,7 @@ function sessionCard(s) {
     <div class="scard-head">
       <div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>
       <div style="min-width:0;flex:1">
-        <div class="scard-title"><span class="ellipsis">${s.profile ? esc(s.profile) : '<em>Throwaway</em>'}</span></div>
+        <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span></div>
         <div class="scard-sub">${nodeChip(s.node_name)}<span data-up title="Uptime"></span></div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
@@ -1477,6 +1479,7 @@ const ACT = {
         ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
         : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
       { icon: 'copy', label: 'Copy WebSocket URL', run: () => copyText(wsUrl) },
+      { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
       '-',
       { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
@@ -1602,6 +1605,7 @@ function openNewSession(prefill = {}) {
   sessionProxy = null;
   sessionScheme = null;
   $('sessionProfileName').value = '';
+  $('sessionName').value = '';
   setEngine(prefill.engine || 'chromium');
   openModal('newSessionModal');
   setTimeout(() => $('sessionProfiles').focus(), 40);
@@ -1713,6 +1717,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
   btn.disabled = true;
   const node = sessionNode;
   const payload = {
+    name: $('sessionName').value.trim() || null,
     engine: sessionEngine,
     profile: (sessionProfile?.new ? $('sessionProfileName').value.trim() : sessionProfile?.name) || null,
     proxy: sessionProxy,
@@ -1758,7 +1763,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
 });
 
 async function stopSession(s) {
-  const ok = await ask({ title: 'Stop this session?', text: `${s.profile || 'Throwaway session'} on ${s.node_name} will be closed${s.profile ? ' (the profile stays on disk)' : ''}.`, ok: 'Stop session', danger: true });
+  const ok = await ask({ title: 'Stop this session?', text: `${sessName(s)} on ${s.node_name} will be closed${s.profile ? ' (the profile stays on disk)' : ''}.`, ok: 'Stop session', danger: true });
   if (ok) act('Stopping session', () => request('DELETE', api(s.node_name, `/sessions/${enc(s.id)}`)), 'Session stopped');
 }
 
@@ -1767,6 +1772,14 @@ function toggleRecording(s) {
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),
     s.is_recording ? 'Recording saved' : 'Recording started');
 }
+// Sessions are named at creation (or get a made-up name like "quiet-otter").
+const sessName = (s) => s.name || s.profile || 'Throwaway session';
+async function renameSession(s) {
+  const v = await ask({ title: 'Rename session', text: 'Leave empty for a made-up name.', input: s.name || '', ok: 'Rename' });
+  if (v === null || v === undefined) return;
+  act('Renaming', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/name`), { name: v.trim() }), 'Renamed');
+}
+
 async function setIdleTimeout(s) {
   const cur = s.idle_timeout_seconds ? Math.round(s.idle_timeout_seconds / 60) : 0;
   const v = await ask({
@@ -1788,7 +1801,7 @@ function setRecordingPaused(s, paused) {
 }
 
 async function newTab(s) {
-  const url = await ask({ title: 'Open a new tab', text: `In ${s.profile || 'the throwaway session'} on ${s.node_name}`, input: '', placeholder: `Address, or search ${searchEngine().name}`, ok: 'Open' });
+  const url = await ask({ title: 'Open a new tab', text: `In ${sessName(s)} on ${s.node_name}`, input: '', placeholder: `Address, or search ${searchEngine().name}`, ok: 'Open' });
   if (url === null || url === undefined) return;
   let target = url || 'about:blank';
   if (!/^[a-z][a-z0-9+.-]*:/i.test(target)) target = target.includes('.') && !target.includes(' ') ? 'https://' + target : searchEngine().url + enc(target);
@@ -1809,8 +1822,8 @@ function showDetails(title, pairs, raw) {
   openModal('detailsModal');
 }
 function showSessionDetails(s) {
-  showDetails(s.profile || 'Throwaway session', [
-    ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
+  showDetails(sessName(s), [
+    ['Name', esc(sessName(s))], ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
     ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Kept alive' : 'Ends with last client'],
     ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);

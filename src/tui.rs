@@ -65,14 +65,7 @@ enum Pending {
 impl Pending {
     fn question(&self) -> String {
         match self {
-            Pending::StopSession(s) => format!(
-                "Stop {} on {}?",
-                s.session
-                    .profile
-                    .as_deref()
-                    .unwrap_or("this throwaway session"),
-                s.node_name
-            ),
+            Pending::StopSession(s) => format!("Stop {} on {}?", s.session.name, s.node_name),
             Pending::DeleteProfile(p) => format!(
                 "Delete profile {} on {}? Cookies and logins are wiped.",
                 p.profile.name, p.node_name
@@ -658,6 +651,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                     ""
                 };
                 Row::new(vec![
+                    Cell::from(ss.name.clone()),
                     Cell::from(ss.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
                     Cell::from(s.node_name.clone()),
                     Cell::from(ss.engine.to_string()),
@@ -676,6 +670,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             let table = Table::new(
                 rows,
                 [
+                    Constraint::Fill(2),
                     Constraint::Fill(3),
                     Constraint::Length(9),
                     Constraint::Length(9),
@@ -687,7 +682,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                 ],
             )
             .header(header(&[
-                "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Clients", "",
+                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Clients", "",
             ]))
             .row_highlight_style(highlight)
             .block(block);
