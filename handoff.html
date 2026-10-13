@@ -789,10 +789,14 @@ class BidiDriver {
   }
   isOpen() { return this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING; }
   close() { clearInterval(this.passkeyBeat); try { this.ws.close(); } catch { /* already closed */ } }
+  // A command Firefox never answers (setViewport on a loading Google page did) must
+  // not leave the view hanging at "Connecting": give up after 15 s.
   rpc(method, params = {}) {
     return new Promise((res, rej) => {
       if (this.ws.readyState !== 1) return rej(new Error("closed"));
-      const id = ++this.id; this.pending.set(id, { res, rej });
+      const id = ++this.id;
+      const timer = setTimeout(() => { if (this.pending.delete(id)) rej(new Error(`${method} timed out`)); }, 15000);
+      this.pending.set(id, { res: (v) => { clearTimeout(timer); res(v); }, rej: (e) => { clearTimeout(timer); rej(e); } });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -868,11 +872,16 @@ class BidiDriver {
       if (wait > 0) await sleep(wait);
     }
   }
-  async applyMetrics({ w, h, dpr, mode }) {
+  // passive: the size belongs to someone else (see the CDP driver); only undo our own.
+  async applyMetrics({ w, h, dpr, mode, passive = false }) {
     this.quality = mode === "native" ? 0.85 : 0.65;
-    await this.rpc("browsingContext.setViewport", mode !== "window"
-      ? { context: this.ctx, viewport: { width: w, height: h }, devicePixelRatio: Math.min(dpr, 2) }
-      : { context: this.ctx, viewport: null, devicePixelRatio: null });
+    const fit = mode !== "window";
+    if (fit || !passive || this.emulating) {
+      this.emulating = fit;
+      await this.rpc("browsingContext.setViewport", fit
+        ? { context: this.ctx, viewport: { width: w, height: h }, devicePixelRatio: Math.min(dpr, 2) }
+        : { context: this.ctx, viewport: null, devicePixelRatio: null }).catch(() => {});
+    }
     await this.measure();
     this.kick();
   }
