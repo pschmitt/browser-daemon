@@ -51,22 +51,28 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
         .args(["-video_size", &format!("{}x{}", r.w, r.h)])
         .arg("-i")
         .arg(format!("{display}+{},{}", r.x, r.y));
-    // Drop frames that did not change: a still page then costs next to nothing.
-    let decimate = "mpdecimate=hi=768:lo=320:frac=0.33";
+    // Drop frames that did not change, so a still page costs next to nothing, but
+    // never more than `max` in a row: VAAPI keeps frames in its pipeline until more
+    // arrive, so without a trickle the last change (or a still page's only frame)
+    // would never come out. ~5 fps when still for VAAPI, ~2 fps for x264.
+    let decimate = |max: u32| format!("mpdecimate=hi=768:lo=320:frac=0.33:max={max}");
     match cfg.encoder {
         Encoder::Vaapi(ref device) => {
             cmd.arg("-vaapi_device")
                 .arg(device)
                 .args([
                     "-vf",
-                    &format!("{decimate},hwupload,scale_vaapi=format=nv12:out_range=full"),
+                    &format!(
+                        "{},hwupload,scale_vaapi=format=nv12:out_range=full",
+                        decimate(6)
+                    ),
                 ])
                 .args(["-fps_mode", "vfr"])
                 .args(["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "22"])
                 .args(["-bf", "0", "-g", "120", "-aud", "1"]);
         }
         Encoder::X264 => {
-            cmd.args(["-vf", decimate, "-fps_mode", "vfr"])
+            cmd.args(["-vf", &decimate(15), "-fps_mode", "vfr"])
                 .args([
                     "-c:v",
                     "libx264",

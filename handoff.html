@@ -2049,7 +2049,7 @@ function canVideo() {
 // fallback: hand the picture back to the screencast.
 function stopVideo(fallback = false) {
   const { ws, decoder } = video;
-  Object.assign(video, { ws: null, decoder: null, region: null, session: null, waitingKey: true });
+  Object.assign(video, { ws: null, decoder: null, region: null, session: null, waitingKey: true, keyWait: 0 });
   try { ws?.close(); } catch { /* closed */ }
   try { if (decoder && decoder.state !== "closed") decoder.close(); } catch { /* closed */ }
   if (fallback && drv) drv.setVideo(false);
@@ -2074,12 +2074,17 @@ async function startVideo() {
   const qs = new URLSearchParams({ session_id: target.sessionId, ...Object.fromEntries(Object.entries(region).map(([k, v]) => [k, Math.round(v)])) });
   const ws = new WebSocket(`${scheme}${location.host}/video?${qs}`);
   ws.binaryType = "arraybuffer";
-  Object.assign(video, { ws, decoder, region, session: target.sessionId, waitingKey: true });
+  Object.assign(video, { ws, decoder, region, session: target.sessionId, waitingKey: true, keyWait: 0 });
   ws.onmessage = (e) => {
     if (video.ws !== ws || decoder.state !== "configured") return;
     const b = new Uint8Array(e.data);
     const key = b[0] === 1;
-    if (video.waitingKey && !key) return;
+    if (video.waitingKey && !key) {
+      // No keyframe for a while (one got lost): a fresh encoder starts with one.
+      video.keyWait ||= performance.now();
+      if (performance.now() - video.keyWait > 2000) { stopVideo(); startVideo(); }
+      return;
+    }
     video.waitingKey = false;
     // Behind (slow device): skip to the next keyframe rather than lag further.
     if (decoder.decodeQueueSize > 3 && !key) return;
