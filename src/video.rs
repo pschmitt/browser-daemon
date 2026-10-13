@@ -58,15 +58,16 @@ pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<C
         Encoder::Vaapi(ref device) => {
             cmd.arg("-vaapi_device")
                 .arg(device)
-                // Converted on the GPU with BT.601 and tagged as such (sRGB transfer,
-                // as captured, so browsers do not re-gamma it): left alone, the stream
-                // says "RGB matrix, full range" and colours wash out.
+                // Converted on the GPU with BT.601 and tagged as such: left alone, the
+                // stream says "RGB matrix, full range" and colours wash out. Primaries
+                // and transfer (sRGB, as captured) are only tagged: given to
+                // scale_vaapi, they make it convert the gamut as well.
                 .args([
                     "-vf",
                     &format!(
                         "{decimate},hwupload,scale_vaapi=format=nv12:out_range=limited\
-                         :out_color_matrix=bt470bg:out_color_primaries=bt709\
-                         :out_color_transfer=iec61966-2-1"
+                         :out_color_matrix=bt470bg,\
+                         setparams=color_primaries=bt709:color_trc=iec61966-2-1"
                     ),
                 ])
                 .args(["-fps_mode", "vfr"])
