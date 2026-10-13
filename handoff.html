@@ -84,13 +84,17 @@
   .ltd-actions { display: flex; flex-direction: column; gap: 8px; }
   .ltd-actions button { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
   .ltd-actions button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
-  #capture.on, #audioBtn.on { color: var(--accent); }
+  #audioBtn.on { color: var(--accent); }
+  .sm-seg { display: flex; gap: 4px; padding: 4px; margin: 2px 4px 4px; border-radius: 10px; background: var(--btn); }
+  .sm-seg button { flex: 1; height: 30px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+  .sm-seg button.on { background: var(--bar); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+  .sm-label { padding: 6px 10px 0; font-size: 11.5px; font-weight: 600; color: var(--muted); }
   #stage.dropping::after { content: "Drop to send to the page"; position: absolute; inset: 10px; display: grid; place-items: center; z-index: 30;
     border: 2px dashed var(--accent); border-radius: 14px; background: rgba(124, 108, 240, .14); color: var(--fg); font-weight: 700; font-size: 15px; pointer-events: none; }
   #clipToast.show { opacity: 1; transform: translate(-50%, 0); }
   .sm-narrow { display: none; }
   @media (max-width: 640px) {
-    #fwd, #reload, #capture { display: none; }
+    #fwd, #reload { display: none; }
     .sm-narrow { display: flex; }
     .rec-pill { padding: 0; width: 28px; justify-content: center; margin: 0 2px; }
     #recPillText { display: none; }
@@ -140,6 +144,9 @@
   #switching { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center;
     background: rgba(0, 0, 0, .45); color: #fff; font-weight: 600; font-size: 14px; pointer-events: none; animation: fade-in .15s ease-out; }
   #switching[hidden] { display: none; }
+  #switching.cached { inset: 10px 10px auto auto; flex-direction: row; gap: 8px; padding: 6px 12px 6px 8px; border-radius: 99px;
+    background: rgba(0, 0, 0, .6); font-size: 12px; }
+  #switching.cached .spin { width: 14px; height: 14px; border-width: 2px; }
   #switching span { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; }
   @keyframes fade-in { from { opacity: 0; } }
   .spin { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
@@ -219,8 +226,6 @@
     <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
     <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
   </form>
-  <button class="ib" id="capture" aria-label="Capture keyboard" title="Capture keyboard and mouse (fullscreen; hold Esc to release)" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg></button>
-  <button class="ib" id="layout" aria-label="Mobile layout" title="Mobile layout"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg></button>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
   <button class="ib" id="audioBtn" aria-label="Sound" title="Play the page's sound" aria-pressed="false" hidden></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
@@ -235,6 +240,13 @@
     <button class="sm-item" id="smFwd"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>Forward</button>
     <button class="sm-item" id="smReload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>Reload</button>
   </div>
+  <div class="sm-label">Screen</div>
+  <div class="sm-seg" role="radiogroup" aria-label="Screen" id="smLayout">
+    <button type="button" data-layout="window" title="The remote browser keeps its own window size">Window</button>
+    <button type="button" data-layout="native" title="The remote page gets this screen's size and pixel density, and follows resizes">Native</button>
+    <button type="button" data-layout="phone" title="A phone: this screen's size with touch input">Phone</button>
+  </div>
+  <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search with<select id="smSearch" aria-label="Search engine"></select></label>
   <a class="sm-item" href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Back to dashboard</a>
@@ -310,8 +322,8 @@ const E = {
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
-  capture: $("capture"), audioBtn: $("audioBtn"),
-  kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), layout: $("layout"), kbbtn: $("kbbtn"),
+  audioBtn: $("audioBtn"),
+  kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), kbbtn: $("kbbtn"),
   sessBtn: $("sessBtn"), sessMenu: $("sessMenu"), recPill: $("recPill")
 };
 const ctx = E.view.getContext("2d", { alpha: false, desynchronized: true }) || E.view.getContext("2d");
@@ -362,12 +374,13 @@ class CdpDriver {
     // Chromium only paints (and screencasts) the tab in front of its window.
     await this.cdp.call("Page.bringToFront").catch(() => {});
   }
-  async applyMetrics({ w, h, dpr, mobile }) {
+  async applyMetrics({ w, h, dpr, mode }) {
     // Cap the screencast scale factor (4K JPEG encoding on CPU is slow).
     const scale = Math.min(dpr, 1.25);
-    if (mobile) {
-      await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(dpr, 2), mobile: true, screenWidth: w, screenHeight: h });
-      await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }).catch(() => {});
+    if (mode === "phone" || mode === "native") {
+      const phone = mode === "phone";
+      await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: Math.min(dpr, 2), mobile: phone, screenWidth: w, screenHeight: h });
+      await this.cdp.call("Emulation.setTouchEmulationEnabled", phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false }).catch(() => {});
     } else {
       await this.cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
       await this.cdp.call("Emulation.setTouchEmulationEnabled", { enabled: false }).catch(() => {});
@@ -546,8 +559,8 @@ class BidiDriver {
       if (wait > 0) await sleep(wait);
     }
   }
-  async applyMetrics({ w, h, dpr, mobile }) {
-    await this.rpc("browsingContext.setViewport", mobile
+  async applyMetrics({ w, h, dpr, mode }) {
+    await this.rpc("browsingContext.setViewport", mode !== "window"
       ? { context: this.ctx, viewport: { width: w, height: h }, devicePixelRatio: Math.min(dpr, 2) }
       : { context: this.ctx, viewport: null, devicePixelRatio: null });
     await this.measure();
@@ -614,7 +627,16 @@ class BidiDriver {
 
 /* ---------------------------------------------------------------- state */
 let drv = null, target = null, meta = { deviceWidth: 1280, deviceHeight: 800 }, currentUrl = "";
-let mobileLayout = (localStorage.getItem("handoff.mobile") ?? (matchMedia("(pointer: coarse)").matches ? "1" : "0")) === "1";
+// Screen: "window" (the browser's own size), "native" (this screen's size and pixel
+// density, following resizes) or "phone" (this screen's size, touch input).
+const LAYOUTS = ["window", "native", "phone"];
+let layoutMode = (() => {
+  let v = null;
+  try { v = localStorage.getItem("handoff.layout") ?? { 1: "phone", 0: "window" }[localStorage.getItem("handoff.mobile")]; } catch { /* storage unavailable */ }
+  return LAYOUTS.includes(v) ? v : matchMedia("(pointer: coarse)").matches ? "phone" : "window";
+})();
+let mobileLayout = layoutMode === "phone";
+let fitLayout = layoutMode !== "window";
 let refitting = false, manualKb = false, mirror = "", composing = false, resyncTimer = null, probeSeq = 0;
 
 function setState(kind, text) {
@@ -635,7 +657,14 @@ async function fetchTargets() {
 }
 
 const handlers = {
-  frame: (data, m) => { hadFrame = true; endSwitching(); return drawFrame(data, m); },
+  frame: (data, m) => {
+    hadFrame = true;
+    // Only frames of the settled tab are remembered: a late frame of the old tab must
+    // not end up as the new tab's picture.
+    if ($("switching").hidden) rememberFrame(pageId, data, m);
+    endSwitching();
+    return drawFrame(data, m);
+  },
   loading: () => { E.dot.className = "wait"; },
   navigated: (url) => {
     if (url && url !== "about:blank") {
@@ -647,7 +676,7 @@ const handlers = {
   loaded: () => {
     E.dot.className = "live";
     refreshInfo();
-    if (mobileLayout && target && target.engine !== "firefox") applyMetrics();
+    if (fitLayout && target && target.engine !== "firefox") applyMetrics();
   },
   dialog: async ({ type, message, defaultValue }) => {
     if (type === "prompt") {
@@ -710,13 +739,13 @@ async function applyMetrics() {
   if (!drv) return;
   const r = E.stage.getBoundingClientRect();
   const w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
-  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mobile: mobileLayout });
-  renderLayoutButton();
+  await drv.applyMetrics({ w, h, dpr: devicePixelRatio || 1, mode: layoutMode });
+  renderLayout();
 }
 
 function sizeCanvas() {
-  E.stage.classList.toggle("fixed", mobileLayout);
-  if (mobileLayout && meta.deviceWidth > 0 && meta.deviceHeight > 0) {
+  E.stage.classList.toggle("fixed", fitLayout);
+  if (fitLayout && meta.deviceWidth > 0 && meta.deviceHeight > 0) {
     const stageRect = E.stage.getBoundingClientRect();
     if (stageRect.width > 0 && Math.abs(stageRect.width - meta.deviceWidth) < 25) {
       E.view.style.width = meta.deviceWidth + "px";
@@ -1156,10 +1185,20 @@ E.urlBar.onsubmit = async (e) => {
 // Opens a blank tab and focuses its URL bar, like a browser's new-tab button.
 // Settles once a tab switch or (re)connect in progress is done.
 let busy = Promise.resolve();
-// Shown from a tab switch until the new tab's first frame (slow on remote nodes).
+// The last picture of each tab seen, shown at once when switching back to it.
+const frameCache = new Map();
+function rememberFrame(id, data, m) {
+  if (!id) return;
+  frameCache.delete(id);
+  frameCache.set(id, { data, m });
+  if (frameCache.size > 12) frameCache.delete(frameCache.keys().next().value);
+}
+// Shown from a tab switch until the new tab's first frame (slow on remote nodes):
+// over its last picture when there is one, else over the old tab's, dimmed.
 let switchingTimer = 0;
-function startSwitching(title) {
-  $("switchingText").textContent = title ? `Loading ${title}…` : "Loading tab…";
+function startSwitching(title, cached) {
+  $("switchingText").textContent = cached ? "Updating…" : title ? `Loading ${title}…` : "Loading tab…";
+  $("switching").classList.toggle("cached", !!cached);
   $("switching").hidden = false;
   clearTimeout(switchingTimer);
   // Pages that never repaint send no new frame: do not leave the veil up forever.
@@ -1186,14 +1225,16 @@ async function doSwitchTab(id, { push = true } = {}) {
   pageId = id;
   currentUrl = "";
   const label = document.querySelector(`.tab-strip-item[href*="page=${CSS.escape(id)}"]`)?.textContent.replace(/[✕×]/g, "").trim();
-  startSwitching(label);
+  const cached = frameCache.get(id);
+  startSwitching(label, !!cached);
+  if (cached) drawFrame(cached.data, cached.m);
   loadTabs();
   const next = (await fetchTargets().catch(() => [])).find((t) => t.id === id);
   if (drv instanceof BidiDriver && drv.isOpen() && next && target && next.sessionId === target.sessionId) {
     try {
       target = next;
       await drv.switchTo(id);
-      if (mobileLayout) await applyMetrics();
+      if (fitLayout) await applyMetrics();
       E.dot.className = "live";
       refreshInfo();
       return;
@@ -1505,25 +1546,25 @@ E.tabsModal.onclick = (e) => {
 async function navigateHistory(d) {
   if (drv) await drv.history(d).catch(() => {});
 }
-// The button shows what it switches to: a monitor in mobile layout, a phone in desktop layout.
-const LAYOUT_ICONS = {
-  mobile: '<svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>',
-  desktop: '<svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8M12 16.5V20"/></svg>',
-};
-function renderLayoutButton() {
-  const label = mobileLayout ? "Switch to desktop layout" : "Switch to mobile layout";
-  E.layout.innerHTML = mobileLayout ? LAYOUT_ICONS.desktop : LAYOUT_ICONS.mobile;
-  E.layout.title = label;
-  E.layout.setAttribute("aria-label", label);
-  E.layout.setAttribute("aria-pressed", String(mobileLayout));
+function renderLayout() {
+  document.querySelectorAll("#smLayout button").forEach((b) => {
+    const on = b.dataset.layout === layoutMode;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", String(on));
+  });
 }
-renderLayoutButton();
-E.layout.onclick = async () => {
-  mobileLayout = !mobileLayout;
-  localStorage.setItem("handoff.mobile", mobileLayout ? "1" : "0");
+renderLayout();
+$("smLayout").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-layout]");
+  if (!b || b.dataset.layout === layoutMode) return;
+  layoutMode = b.dataset.layout;
+  mobileLayout = layoutMode === "phone";
+  fitLayout = layoutMode !== "window";
+  try { localStorage.setItem("handoff.layout", layoutMode); } catch { /* storage unavailable */ }
+  renderLayout();
   await applyMetrics();
   sizeCanvas();
-};
+});
 E.kbbtn.onclick = () => {
   manualKb = !manualKb;
   E.kbbtn.classList.toggle("on", manualKb);
@@ -1606,7 +1647,7 @@ new ResizeObserver(() => {
   const r = E.stage.getBoundingClientRect();
   if (Math.abs(r.width - fitSize.w) < 10 && Math.abs(r.height - fitSize.h) < 30) return;
   fitSize = { w: r.width, h: r.height };
-  if (!drv || !mobileLayout) return;
+  if (!drv || !fitLayout) return;
   refitting = true;                        // until the first frame of the new size arrives
   clearTimeout(fitTimer);
   fitTimer = setTimeout(() => applyMetrics().then(keepFocusVisible).catch(() => {}).finally(() => setTimeout(() => { refitting = false; }, 1500)), 250);
@@ -1740,8 +1781,10 @@ function toast(text, ms = 1100) {
 // Ctrl+T reach the remote page, and Esc has to be held to leave. Without Keyboard Lock
 // (Firefox, Safari) this is plain fullscreen.
 let captured = false;
-E.capture.hidden = !document.fullscreenEnabled;
-E.capture.onclick = async () => {
+// Desktop only: phones have neither keyboard shortcuts nor Keyboard Lock.
+$("smCapture").hidden = !document.fullscreenEnabled || matchMedia("(pointer: coarse)").matches;
+$("smCapture").onclick = async () => {
+  toggleSessMenu(false);
   if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
   try {
     await document.documentElement.requestFullscreen({ navigationUI: "hide" });
@@ -1749,7 +1792,7 @@ E.capture.onclick = async () => {
       await navigator.keyboard.lock();
       captured = true;
     }
-    E.capture.classList.add("on");
+    $("smCaptureText").textContent = "Leave fullscreen";
     E.view.focus({ preventScroll: true });
     toast(captured ? "Keyboard captured: hold Esc to release" : "Fullscreen: press Esc to leave");
   } catch (err) {
@@ -1760,7 +1803,7 @@ document.addEventListener("fullscreenchange", () => {
   if (document.fullscreenElement) return;
   captured = false;
   navigator.keyboard?.unlock?.();
-  E.capture.classList.remove("on");
+  $("smCaptureText").textContent = "Capture keyboard (fullscreen)";
 });
 
 /* ---------------------------------------------------------------- drag & drop files */
@@ -1810,7 +1853,7 @@ E.stage.addEventListener("drop", async (e) => {
 
 /* ---------------------------------------------------------------- page picker (no ?page=) */
 async function pickPage() {
-  E.sessBtn.hidden = E.kbbtn.hidden = E.layout.hidden = E.reload.hidden = E.back.hidden = E.fwd.hidden = true;
+  E.sessBtn.hidden = E.kbbtn.hidden = E.reload.hidden = E.back.hidden = E.fwd.hidden = true;
   if (E.tabStrip) E.tabStrip.hidden = true;
   if (E.urlBar) E.urlBar.hidden = true;
   E.overlay.classList.remove("show");
