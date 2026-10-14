@@ -101,6 +101,12 @@
   #passkeyDialog p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
   #passkeyDialog .pk-info { color: var(--fg); padding: 8px 10px; border-radius: 9px; background: var(--btn); }
   #passkeyDialog .pk-entry { width: 100%; height: 38px; margin: -6px 0 14px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; }
+  /* The main action stands out; while the vault is checked it is visibly unavailable. */
+  #passkeyDialog button[value="vault"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #passkeyDialog button:disabled { background: var(--btn); border-color: var(--line); color: var(--muted); opacity: .5; cursor: not-allowed; }
+  #passkeyDialog .pk-info.checking::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 8px; vertical-align: -1px;
+    border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: pk-spin .8s linear infinite; }
+  @keyframes pk-spin { to { transform: rotate(360deg); } }
   #passkeyDialog .pk-info.locked { color: #f59e0b; background: rgba(245, 158, 11, .14); }
   #passkeyDialog .pk-info.bad { color: var(--bad); background: color-mix(in oklab, var(--bad) 14%, transparent); }
   #lastTabDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(360px, calc(100vw - 32px)); }
@@ -1067,7 +1073,7 @@ async function showPasskeyEntry(rpId, dlg) {
   use.hidden = false;
   const set = (text, cls = "") => { if (dlg.open) { info.textContent = text; info.className = "pk-info " + cls; } };
   const label = (e) => { const who = e.user || e.passkey_user; return `${e.name || "?"}${who ? ` (${who})` : ""}`; };
-  set("Checking the vault…");
+  set("Checking the vault…", "checking");
   pick.hidden = true;
   pick.innerHTML = "";
   // Not before the lookup: rbw would have to guess the entry (and fails with several).
