@@ -1045,6 +1045,9 @@ async function passkeyHelper(rpId, find, onNote = () => {}, entry = null, signin
 // Before approving: is rbw locked, and which entry would sign in?
 async function showPasskeyEntry(rpId, dlg) {
   const info = $("passkeyInfo"), pick = $("passkeyEntry"), use = dlg.querySelector('button[value="vault"]');
+  const cancel = dlg.querySelector('button[value="cancel"]');
+  cancel.textContent = "Cancel";
+  use.hidden = false;
   const set = (text, cls = "") => { if (dlg.open) { info.textContent = text; info.className = "pk-info " + cls; } };
   const label = (e) => { const who = e.user || e.passkey_user; return `${e.name || "?"}${who ? ` (${who})` : ""}`; };
   set("Checking the vault…");
@@ -1055,7 +1058,15 @@ async function showPasskeyEntry(rpId, dlg) {
   try {
     const found = await passkeyHelper(rpId, true);
     if (found?.locked) { set("rbw is locked: approving asks your phone to unlock it first.", "locked"); use.disabled = false; }
-    else if (!Array.isArray(found) || !found.length) set(`No passkey for ${rpId} in the vault.`, "bad");
+    else if (!Array.isArray(found) || !found.length) {
+      // Nothing to approve: say so and get out of the way. The site hears "cancelled"
+      // and usually offers another way to sign in (password, code, ...).
+      set(`No passkey for ${rpId} in your vault: sign in another way.`, "bad");
+      use.hidden = true;
+      cancel.textContent = "OK";
+      cancel.focus();
+      setTimeout(() => { if (dlg.open && $("passkeyRp").textContent === rpId) dlg.close("cancel"); }, 6000);
+    }
     else if (found.length === 1) { set(`Entry: ${label(found[0])}`); use.disabled = false; }
     else {
       use.disabled = false;
