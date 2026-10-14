@@ -271,6 +271,23 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
   background: var(--raised); border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden;
   animation: rise .18s ease-out;
 }
+.bk-new { display: flex; gap: 8px; }
+.bk-new .btn { flex: none; }
+.bk-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 42vh; overflow-y: auto; }
+.bk-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); min-height: 52px; }
+.bk-row:last-child { border-bottom: 0; }
+.bk-row.confirming { background: var(--bad-soft); }
+.bk-main { flex: 1; min-width: 0; }
+.bk-main b { display: flex; align-items: center; gap: 7px; font-weight: 600; text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-main > span { display: block; font-size: 12px; color: var(--muted); }
+.bk-main .chip { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 6px; background: var(--hover); color: var(--muted); }
+.bk-acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.bk-ask { font-size: 12.5px; color: var(--fg); margin-right: 2px; }
+.bk-empty { padding: 22px 14px; text-align: center; font-size: 13px; color: var(--muted); }
+.bk-more { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.btn.danger-ghost { color: var(--bad); }
+.btn.danger-ghost:hover { background: var(--bad-soft); }
+.sheet-head + .sheet-body { padding-top: 4px; }
 .sheet.wide { max-width: 680px; }
 @keyframes rise { from { transform: translateY(10px); opacity: .6; } to { transform: none; opacity: 1; } }
 .sheet-head { display: flex; align-items: center; gap: 10px; padding: 16px 18px 12px; }
@@ -723,6 +740,26 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn primary" data-close>Close</button></div>
   </div>
+</div>
+
+<!-- Backups & data -->
+<div class="modal" id="backupsModal">
+  <form class="sheet" id="backupsForm" autocomplete="off">
+    <div class="sheet-head"><h2 id="backupsTitle">Backups</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <div class="hint" id="backupsNote" hidden></div>
+      <div class="bk-new"><input class="input" id="backupLabel" maxlength="60" placeholder="Label (optional), e.g. logged in" spellcheck="false"><button type="submit" class="btn primary" id="backupNow"><svg class="i"><use href="#i-archive"/></svg>Back up now</button></div>
+      <div class="bk-list" id="backupsList"></div>
+      <div class="bk-more">
+        <span class="field-label">Archive file</span>
+        <div class="bk-acts"><button type="button" class="btn sm" id="backupExport" data-bk="export"><svg class="i sm"><use href="#i-download"/></svg>Export</button><button type="button" class="btn sm" id="backupImport" data-bk="import"><svg class="i sm"><use href="#i-upload"/></svg>Import…</button></div>
+      </div>
+      <div class="bk-more">
+        <span class="field-label">Danger zone</span>
+        <div class="bk-acts" id="backupClear"></div>
+      </div>
+    </div>
+  </form>
 </div>
 
 <!-- Details -->
@@ -1588,12 +1625,8 @@ const ACT = {
       { icon: 'home', label: 'Homepage…', meta: p.homepage ? hostOf(p.homepage) : 'blank', run: () => setProfileHomepage(p) },
       { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
       !p.session && others.length && { icon: 'transfer', label: 'Move to another node…', run: () => openTransfer(p) },
-      !p.session && { icon: 'archive', label: 'Back up now…', run: () => backupProfile(p) },
-      { icon: 'history', label: 'Backups', run: () => openBackups(el, p) },
-      !p.session && { icon: 'download', label: 'Export archive', run: () => { location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); } },
-      !p.session && { icon: 'upload', label: 'Import archive…', run: () => restoreProfile(p) },
+      { icon: 'archive', label: 'Backups & data…', run: () => openBackups(p) },
       '-',
-      { icon: 'trash', label: 'Clear data…', danger: true, run: () => clearProfile(p) },
       { icon: 'trash', label: 'Delete', danger: true, run: () => deleteProfile(p) },
     ]);
   },
@@ -2128,49 +2161,83 @@ async function cloneProfile(p) {
   if (!name) return;
   act('Duplicating profile', () => request('POST', api(p.node_name, `/profiles/${enc(p.key)}/clone`), { target_name: profileTargetName(p, name) }), `Created ${name}`);
 }
-async function clearProfile(p) {
-  const ok = await ask({
-    title: `Clear data of ${p.display}?`,
-    text: (p.session ? 'This profile is in use: its session will be stopped. ' : '') + 'Cookies, logins, history and storage are wiped; the profile keeps its name, proxy, appearance and homepage. A backup is taken first, so you can restore it.',
-    ok: 'Clear data', danger: true,
-  });
-  if (ok) act('Clearing profile data', () => request('POST', api(p.node_name, `/profiles/${enc(p.key)}/clear`) + (p.session ? '?force=true' : '')), `${p.display} cleared`);
-}
-/* Server-side backups, kept on the profile's node. */
+/* Backups & data: one sheet per profile. Backups live on the profile's node. */
+let bk = null; // { key, list, confirm: backup id | 'clear' | null }
 const backupPath = (p, rest = '') => api(p.node_name, `/profiles/${enc(p.key)}/backups${rest}`);
-async function backupProfile(p) {
-  const label = await ask({ title: `Back up ${p.display}`, text: `Stores a snapshot on ${p.node_name}. Optional label:`, input: '', ok: 'Back up', placeholder: 'e.g. logged in' });
-  if (label === null) return;
-  act('Backing up profile', () => request('POST', backupPath(p), label ? { label } : {}), `${p.display} backed up`);
+const bkProfile = () => byKey.profiles.get(bk?.key);
+async function openBackups(p) {
+  bk = { key: p.key, list: null, confirm: null };
+  renderBackups();
+  openModal('backupsModal');
+  await loadBackups();
 }
-async function openBackups(el, p) {
-  let list;
-  try { list = await request('GET', backupPath(p)); } catch (e) { showToast('Could not list backups', 'danger', 6000, null, e.message); return; }
-  if (!list.length) { showToast(`No backups of ${p.display}`, 'info'); return; }
-  setTimeout(() => openMenu(el, [
-    { label: `Backups of ${p.display}` },
-    ...list.map((b) => ({
-      icon: 'history',
-      label: (b.label || 'backup').replace(/^auto-/, 'auto · '),
-      meta: `${absTime(b.created_at_secs)} · ${formatBytes(b.size_bytes)}`,
-      run: () => setTimeout(() => openMenu(el, [
-        { label: `${b.label || 'backup'} · ${absTime(b.created_at_secs)}` },
-        { icon: 'history', label: 'Restore…', run: () => restoreBackup(p, b) },
-        { icon: 'trash', label: 'Delete', danger: true, run: () => act('Deleting backup', () => request('DELETE', backupPath(p, `/${enc(b.id)}`)), 'Backup deleted') },
-      ]), 0),
-    })),
-  ]), 0);
+async function loadBackups() {
+  const p = bkProfile(); if (!p) return;
+  try { bk.list = await request('GET', backupPath(p)); } catch (e) { bk.list = []; showToast('Could not list backups', 'danger', 6000, null, e.message); }
+  renderBackups();
 }
-async function restoreBackup(p, b) {
-  const ok = await ask({
-    title: `Restore ${p.display}?`,
-    text: `Replaces the profile's data with the backup from ${absTime(b.created_at_secs)}.` + (p.session ? ' Its session will be stopped.' : '') + ' The current data is backed up first.',
-    ok: 'Restore', danger: true,
-  });
-  if (ok) act('Restoring profile', () => request('POST', backupPath(p, `/${enc(b.id)}/restore`) + (p.session ? '?force=true' : '')), `${p.display} restored`);
+function renderBackups() {
+  const p = bkProfile();
+  if (!bk || !p) { closeModal('backupsModal'); return; }
+  const busy = !!p.session;
+  $('backupsTitle').textContent = `${p.display} · backups`;
+  $('backupsNote').hidden = !busy;
+  $('backupsNote').textContent = `In use by a session: stop it to back up or import. Restoring and clearing stop it for you.`;
+  $('backupNow').disabled = busy;
+  $('backupLabel').disabled = busy;
+  $('backupImport').disabled = busy;
+  $('backupExport').disabled = busy;
+  const list = bk.list;
+  $('backupsList').innerHTML = list === null ? '<div class="bk-empty">Loading…</div>'
+    : !list.length ? `<div class="bk-empty">No backups yet. “Back up now” stores a snapshot on ${esc(p.node_name)}.</div>`
+    : list.map((b) => {
+      const confirming = bk.confirm === b.id;
+      const name = b.automatic ? b.label.replace(/^auto-/, '').replace(/-/g, ' ') : (b.label || '').replace(/-/g, ' ');
+      return `<div class="bk-row${confirming ? ' confirming' : ''}"><div class="bk-main"><b>${name ? esc(name) : 'Backup'}${b.automatic ? '<span class="chip">auto</span>' : ''}</b>`
+        + `<span title="${esc(absTime(b.created_at_secs))}">${esc(relTime(b.created_at_secs))} · ${esc(formatBytes(b.size_bytes))}</span></div>`
+        + (confirming
+          ? `<div class="bk-acts"><span class="bk-ask">Replace current data?</span><button class="btn danger sm" data-bk="restore-go" data-id="${esc(b.id)}">Restore</button><button class="btn sm" data-bk="cancel">Cancel</button></div>`
+          : `<div class="bk-acts"><button class="btn sm" data-bk="restore" data-id="${esc(b.id)}">${icon('history', 'sm')}Restore</button><button class="btn icon sm ghost" data-bk="delete" data-id="${esc(b.id)}" aria-label="Delete backup" title="Delete backup">${icon('trash', 'sm')}</button></div>`)
+        + `</div>`;
+    }).join('');
+  const clearing = bk.confirm === 'clear';
+  $('backupClear').innerHTML = clearing
+    ? `<span class="bk-ask">Wipe cookies, logins and storage? A backup is taken first.</span><button class="btn danger sm" data-bk="clear-go">Clear data</button><button class="btn sm" data-bk="cancel">Cancel</button>`
+    : `<button class="btn sm danger-ghost" data-bk="clear">${icon('trash', 'sm')}Clear data…</button>`;
 }
+async function bkRun(label, fn, okText) {
+  const p = bkProfile(); if (!p) return;
+  bk.confirm = null;
+  renderBackups();
+  const t = createProgressToast('bk-' + hashOf(label + Date.now()), label, 'Working…');
+  t.update(40, 'Working…');
+  try { await fn(p); t.done(okText, ''); } catch (e) { t.error(label + ' failed', e.message || String(e)); }
+  refreshData();
+  await loadBackups();
+}
+$('backupsModal').addEventListener('click', (e) => {
+  if (e.target.id === 'backupsModal' || e.target.closest('[data-close]')) { closeModal('backupsModal'); return; }
+  const btn = e.target.closest('[data-bk]'); if (!btn || btn.disabled) return;
+  const id = btn.dataset.id;
+  switch (btn.dataset.bk) {
+    case 'restore': bk.confirm = id; renderBackups(); break;
+    case 'clear': bk.confirm = 'clear'; renderBackups(); break;
+    case 'cancel': bk.confirm = null; renderBackups(); break;
+    case 'delete': bkRun('Deleting backup', (p) => request('DELETE', backupPath(p, `/${enc(id)}`)), 'Backup deleted'); break;
+    case 'restore-go': bkRun('Restoring backup', (p) => request('POST', backupPath(p, `/${enc(id)}/restore`) + (p.session ? '?force=true' : '')), 'Profile restored'); break;
+    case 'clear-go': bkRun('Clearing data', (p) => request('POST', api(p.node_name, `/profiles/${enc(p.key)}/clear`) + (p.session ? '?force=true' : '')), 'Data cleared'); break;
+    case 'export': { const p = bkProfile(); if (p) location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); break; }
+    case 'import': { const p = bkProfile(); if (p) restoreProfile(p, loadBackups); break; }
+  }
+});
+$('backupsForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const label = $('backupLabel').value.trim();
+  $('backupLabel').value = '';
+  bkRun('Backing up profile', (p) => request('POST', backupPath(p), label ? { label } : {}), 'Profile backed up');
+});
 // Replace a stopped profile's data with an exported archive from disk.
-function restoreProfile(p) {
+function restoreProfile(p, after) {
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.tar.gz,.tgz,application/gzip';
   inp.addEventListener('change', async () => {
@@ -2187,7 +2254,7 @@ function restoreProfile(p) {
         try { msg = JSON.parse(text).error || msg; } catch { /* plain text */ }
         throw new Error(msg);
       }
-    }, `${p.display} imported`);
+    }, `${p.display} imported`).then(() => after?.());
   });
   inp.click();
 }
