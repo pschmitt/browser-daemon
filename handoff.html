@@ -1933,7 +1933,6 @@ async function closeTab(id) {
     }
     return;
   }
-  if (isCurrent && !confirm("Close the current tab?")) return;
   try {
     const res = await fetch("/json/close/" + encodeURIComponent(id), {
       method: "PUT",
