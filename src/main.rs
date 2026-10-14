@@ -1,5 +1,6 @@
 mod audible;
 mod audio;
+mod backups;
 mod bidi;
 mod browser;
 mod clients;
@@ -1031,6 +1032,18 @@ pub struct TransferProfileRequest {
 }
 
 #[derive(Deserialize, Debug, Default)]
+pub struct ClearProfileParams {
+    pub force: Option<bool>,
+    /// Take a safety backup first (the default).
+    pub backup: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Default)]
+pub struct CreateBackupRequest {
+    pub label: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Default)]
 pub struct DeleteProfileParams {
     pub force: Option<bool>,
 }
@@ -1531,6 +1544,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(api_import_profile).layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
         .route("/api/profiles/{name}/clear", post(api_clear_profile))
+        .route(
+            "/api/profiles/{name}/backups",
+            get(api_list_backups).post(api_create_backup),
+        )
+        .route(
+            "/api/profiles/{name}/backups/{backup}",
+            delete(api_delete_backup),
+        )
+        .route(
+            "/api/profiles/{name}/backups/{backup}/restore",
+            post(api_restore_backup),
+        )
         .route("/api/profiles/{name}/transfer", post(api_transfer_profile))
         // Recording APIs
         .route("/api/recordings", get(api_list_recordings))
@@ -1582,6 +1607,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/peers/{peer}/profiles/{name}/clear",
             post(api_peer_clear_profile),
+        )
+        .route(
+            "/api/peers/{peer}/profiles/{name}/backups",
+            get(api_peer_backups).post(api_peer_backups),
+        )
+        .route(
+            "/api/peers/{peer}/profiles/{name}/backups/{backup}",
+            delete(api_peer_backups),
+        )
+        .route(
+            "/api/peers/{peer}/profiles/{name}/backups/{backup}/restore",
+            post(api_peer_backups),
         )
         .route(
             "/api/peers/{peer}/profiles/{name}/transfer",
@@ -2804,6 +2841,7 @@ async fn api_delete_profile(
         ));
     }
 
+    backups::remove_all(&state.config.profiles_dir, profile.meta.id).await;
     info!(profile = %profile.meta.name, id = %profile.meta.id, "Profile removed");
     Ok((
         StatusCode::OK,
@@ -2813,25 +2851,142 @@ async fn api_delete_profile(
     ))
 }
 
-/// Wipe a profile's cookies, logins and storage but keep the profile itself
-/// (its name, engine, proxy, appearance and homepage).
-async fn api_clear_profile(
+/// Make sure no browser holds the profile: refuse while a session uses it,
+/// unless `force` stops that session.
+async fn release_profile(
+    state: &AppState,
+    profile: &Profile,
+    force: bool,
+    action: &str,
+) -> Result<(), ApiError> {
+    let Some(session) = profile_session(state, profile.meta.id).await else {
+        return Ok(());
+    };
+    if !force {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("Profile is currently in use by active session {}. Pass ?force=true to terminate session and {action}.", session.id),
+        ));
+    }
+    info!(profile = %profile.meta.name, session_id = %session.id, "Force terminating session before {action}");
+    state.terminate_session(&session.id).await;
+    Ok(())
+}
+
+/// Back the profile up before a destructive action, keeping only the newest few.
+async fn auto_backup(state: &AppState, profile: &Profile, what: &str) -> Result<(), ApiError> {
+    let dir = &state.config.profiles_dir;
+    backups::create(
+        dir,
+        profile,
+        Some(&format!("{}{what}", backups::AUTO_PREFIX)),
+    )
+    .await
+    .map_err(|e| {
+        error!(profile = %profile.meta.name, error = %e, "Safety backup failed");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Safety backup failed, nothing was changed: {e}"),
+        )
+    })?;
+    backups::prune_auto(dir, profile.meta.id).await;
+    Ok(())
+}
+
+async fn api_list_backups(
     AxumPath(key): AxumPath<String>,
-    Query(params): Query<DeleteProfileParams>,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let profile = lookup_profile(&state, &key).await?;
+    Ok(Json(
+        backups::list(&state.config.profiles_dir, profile.meta.id).await,
+    ))
+}
+
+async fn api_create_backup(
+    AxumPath(key): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<CreateBackupRequest>>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let profile = lookup_profile(&state, &key).await?;
     if let Some(session) = profile_session(&state, profile.meta.id).await {
-        if !params.force.unwrap_or(false) {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                format!("Profile is currently in use by active session {}. Pass ?force=true to terminate session and clear.", session.id),
-            ));
-        }
-        info!(profile = %profile.meta.name, session_id = %session.id, "Force terminating session before clearing profile");
-        state.terminate_session(&session.id).await;
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!(
+                "Cannot back up an active profile (in use by session {})",
+                session.id
+            ),
+        ));
+    }
+    let label = body.and_then(|Json(b)| b.label);
+    let info = backups::create(&state.config.profiles_dir, &profile, label.as_deref())
+        .await
+        .map_err(|e| {
+            error!(profile = %profile.meta.name, error = %e, "Backup failed");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e)
+        })?;
+    info!(profile = %profile.meta.name, backup = %info.id, size_bytes = info.size_bytes, "Profile backed up");
+    Ok((StatusCode::CREATED, Json(info)))
+}
+
+async fn api_delete_backup(
+    AxumPath((key, backup)): AxumPath<(String, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let profile = lookup_profile(&state, &key).await?;
+    if !backups::delete(&state.config.profiles_dir, profile.meta.id, &backup).await {
+        return Err(api_error(StatusCode::NOT_FOUND, "Backup not found"));
+    }
+    Ok(Json(
+        serde_json::json!({ "status": "deleted", "backup": backup }),
+    ))
+}
+
+async fn api_restore_backup(
+    AxumPath((key, backup)): AxumPath<(String, String)>,
+    Query(params): Query<DeleteProfileParams>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let _guard = state.profiles_lock.lock().await;
+    let profile = lookup_profile(&state, &key).await?;
+    let dir = &state.config.profiles_dir;
+    if backups::get(dir, profile.meta.id, &backup).await.is_none() {
+        return Err(api_error(StatusCode::NOT_FOUND, "Backup not found"));
+    }
+    release_profile(&state, &profile, params.force.unwrap_or(false), "restore").await?;
+    auto_backup(&state, &profile, "pre-restore").await?;
+    backups::restore(dir, &profile, &backup)
+        .await
+        .map_err(|e| {
+            error!(profile = %profile.meta.name, backup = %backup, error = %e, "Restore failed");
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, e)
+        })?;
+    info!(profile = %profile.meta.name, backup = %backup, "Profile restored from backup");
+    Ok(Json(profile_info(&state, &profile).await))
+}
+
+/// Wipe a profile's cookies, logins and storage but keep the profile itself
+/// (its name, engine, proxy, appearance and homepage).
+async fn api_clear_profile(
+    AxumPath(key): AxumPath<String>,
+    Query(params): Query<ClearProfileParams>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let profile = lookup_profile(&state, &key).await?;
+    release_profile(&state, &profile, params.force.unwrap_or(false), "clear").await?;
+    // A safety net: clearing cannot be undone otherwise.
+    if params.backup.unwrap_or(true) {
+        auto_backup(&state, &profile, "pre-clear").await?;
     }
 
     let io_err = |e: std::io::Error| {
@@ -4079,30 +4234,95 @@ async fn api_peer_clear_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
     AxumPath((peer, name)): AxumPath<(String, String)>,
-    Query(params): Query<DeleteProfileParams>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
+    forward_profile_request(
+        &state,
+        &headers,
+        reqwest::Method::POST,
+        &peer,
+        &name,
+        &["clear"],
+        query,
+        None,
+    )
+    .await
+}
+
+/// Backup routes on a peer: the request's path below the profile is replayed there.
+async fn api_peer_backups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    AxumPath(params): AxumPath<HashMap<String, String>>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    body: Bytes,
+) -> impl IntoResponse {
+    let (Some(peer), Some(name)) = (params.get("peer"), params.get("name")) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let mut tail = vec!["backups"];
+    if let Some(backup) = params.get("backup") {
+        tail.push(backup);
+        if uri.path().ends_with("/restore") {
+            tail.push("restore");
+        }
+    }
+    let method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
+    forward_profile_request(
+        &state,
+        &headers,
+        method,
+        peer,
+        name,
+        &tail,
+        query,
+        (!body.is_empty()).then_some(body),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn forward_profile_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: reqwest::Method,
+    peer: &str,
+    name: &str,
+    tail: &[&str],
+    query: Option<String>,
+    body: Option<Bytes>,
+) -> Response {
+    if let Err(e) = state.check_auth(headers) {
         return e.into_response();
     }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
+    let Some(peer_url) = get_peer_url(state, peer).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+        )
+            .into_response();
     };
-    let mut url = peer_profile_url(&peer_url, &name, Some("clear"));
-    if params.force.unwrap_or(false) {
-        url.push_str("?force=true");
+    let mut url = peer_profile_url(&peer_url, name, None);
+    if let Ok(mut parsed) = url::Url::parse(&url) {
+        if let Ok(mut segments) = parsed.path_segments_mut() {
+            segments.extend(tail);
+        }
+        url = parsed.to_string();
     }
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .send()
-        .await;
-    proxy_response(res).await
+    if let Some(q) = query.filter(|q| !q.is_empty()) {
+        url.push('?');
+        url.push_str(&q);
+    }
+    let mut req = state.peer_request(state.http_client.request(method, &url));
+    if let Some(body) = body {
+        req = req
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body);
+    }
+    proxy_response(req.send().await).await
 }
 
 async fn api_peer_export_profile(

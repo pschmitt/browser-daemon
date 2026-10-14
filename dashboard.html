@@ -509,6 +509,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
   <symbol id="i-transfer" viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2"/></symbol>
   <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
   <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
@@ -1586,8 +1588,10 @@ const ACT = {
       { icon: 'home', label: 'Homepage…', meta: p.homepage ? hostOf(p.homepage) : 'blank', run: () => setProfileHomepage(p) },
       { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
       !p.session && others.length && { icon: 'transfer', label: 'Move to another node…', run: () => openTransfer(p) },
-      !p.session && { icon: 'download', label: 'Back up (download archive)', run: () => { location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); } },
-      !p.session && { icon: 'upload', label: 'Restore from archive…', run: () => restoreProfile(p) },
+      !p.session && { icon: 'archive', label: 'Back up now…', run: () => backupProfile(p) },
+      { icon: 'history', label: 'Backups', run: () => openBackups(el, p) },
+      !p.session && { icon: 'download', label: 'Export archive', run: () => { location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); } },
+      !p.session && { icon: 'upload', label: 'Import archive…', run: () => restoreProfile(p) },
       '-',
       { icon: 'trash', label: 'Clear data…', danger: true, run: () => clearProfile(p) },
       { icon: 'trash', label: 'Delete', danger: true, run: () => deleteProfile(p) },
@@ -2127,20 +2131,53 @@ async function cloneProfile(p) {
 async function clearProfile(p) {
   const ok = await ask({
     title: `Clear data of ${p.display}?`,
-    text: (p.session ? 'This profile is in use: its session will be stopped. ' : '') + 'Cookies, logins, history and storage are wiped; the profile keeps its name, proxy, appearance and homepage. Back it up first if you may want them back.',
+    text: (p.session ? 'This profile is in use: its session will be stopped. ' : '') + 'Cookies, logins, history and storage are wiped; the profile keeps its name, proxy, appearance and homepage. A backup is taken first, so you can restore it.',
     ok: 'Clear data', danger: true,
   });
   if (ok) act('Clearing profile data', () => request('POST', api(p.node_name, `/profiles/${enc(p.key)}/clear`) + (p.session ? '?force=true' : '')), `${p.display} cleared`);
 }
-// Replace a stopped profile's data with a previously downloaded archive.
+/* Server-side backups, kept on the profile's node. */
+const backupPath = (p, rest = '') => api(p.node_name, `/profiles/${enc(p.key)}/backups${rest}`);
+async function backupProfile(p) {
+  const label = await ask({ title: `Back up ${p.display}`, text: `Stores a snapshot on ${p.node_name}. Optional label:`, input: '', ok: 'Back up', placeholder: 'e.g. logged in' });
+  if (label === null) return;
+  act('Backing up profile', () => request('POST', backupPath(p), label ? { label } : {}), `${p.display} backed up`);
+}
+async function openBackups(el, p) {
+  let list;
+  try { list = await request('GET', backupPath(p)); } catch (e) { showToast('Could not list backups', 'danger', 6000, null, e.message); return; }
+  if (!list.length) { showToast(`No backups of ${p.display}`, 'info'); return; }
+  setTimeout(() => openMenu(el, [
+    { label: `Backups of ${p.display}` },
+    ...list.map((b) => ({
+      icon: 'history',
+      label: (b.label || 'backup').replace(/^auto-/, 'auto · '),
+      meta: `${absTime(b.created_at_secs)} · ${formatBytes(b.size_bytes)}`,
+      run: () => setTimeout(() => openMenu(el, [
+        { label: `${b.label || 'backup'} · ${absTime(b.created_at_secs)}` },
+        { icon: 'history', label: 'Restore…', run: () => restoreBackup(p, b) },
+        { icon: 'trash', label: 'Delete', danger: true, run: () => act('Deleting backup', () => request('DELETE', backupPath(p, `/${enc(b.id)}`)), 'Backup deleted') },
+      ]), 0),
+    })),
+  ]), 0);
+}
+async function restoreBackup(p, b) {
+  const ok = await ask({
+    title: `Restore ${p.display}?`,
+    text: `Replaces the profile's data with the backup from ${absTime(b.created_at_secs)}.` + (p.session ? ' Its session will be stopped.' : '') + ' The current data is backed up first.',
+    ok: 'Restore', danger: true,
+  });
+  if (ok) act('Restoring profile', () => request('POST', backupPath(p, `/${enc(b.id)}/restore`) + (p.session ? '?force=true' : '')), `${p.display} restored`);
+}
+// Replace a stopped profile's data with an exported archive from disk.
 function restoreProfile(p) {
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.tar.gz,.tgz,application/gzip';
   inp.addEventListener('change', async () => {
     const file = inp.files[0]; if (!file) return;
-    const ok = await ask({ title: `Restore ${p.display}?`, text: `Replaces all data of the profile on ${p.node_name} with the contents of ${file.name}.`, ok: 'Restore', danger: true });
+    const ok = await ask({ title: `Import ${file.name}?`, text: `Replaces all data of ${p.display} on ${p.node_name} with the archive's contents.`, ok: 'Import', danger: true });
     if (!ok) return;
-    act('Restoring profile', async () => {
+    act('Importing archive', async () => {
       const res = await fetch(api(p.node_name, `/profiles/${enc(profileTargetName(p, p.display))}/import`) + '?overwrite=true', {
         method: 'POST', headers: { ...getAuthHeaders(), 'Content-Type': 'application/gzip' }, body: file,
       });
@@ -2150,7 +2187,7 @@ function restoreProfile(p) {
         try { msg = JSON.parse(text).error || msg; } catch { /* plain text */ }
         throw new Error(msg);
       }
-    }, `${p.display} restored`);
+    }, `${p.display} imported`);
   });
   inp.click();
 }

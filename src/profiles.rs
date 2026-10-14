@@ -83,7 +83,10 @@ pub async fn list(profiles_dir: &Path) -> Vec<Profile> {
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
         let dir = entry.path();
-        if !entry.file_type().await.is_ok_and(|t| t.is_dir()) {
+        // Hidden directories are staging areas (restores), not profiles.
+        if entry.file_name().to_string_lossy().starts_with('.')
+            || !entry.file_type().await.is_ok_and(|t| t.is_dir())
+        {
             continue;
         }
         if let Some(meta) = read_meta(&dir).await {
