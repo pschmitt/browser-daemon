@@ -1835,7 +1835,7 @@ function renderAbout() {
 // A connected automation client, for the hover: origin with address, since when, User-Agent.
 function clientInfo(c) {
   const where = c.addr && c.addr !== c.from ? `${c.from} (${c.addr})` : c.from;
-  const since = c.since ? `connected ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${formatUptime(Math.max(0, Date.now() / 1000 - c.since))} ago)` : '';
+  const since = c.since ? `connected ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since)))} ago)` : '';
   return [`${c.kind} from ${where}`, since, c.user_agent].filter(Boolean).join('\n');
 }
 
