@@ -769,6 +769,13 @@ pub struct LaunchParams {
     pub color_scheme: Option<ColorScheme>,
     /// Attach without counting as a client (handoff page).
     pub observer: Option<bool>,
+    /// Who connects, as the agent's browser MCP reports it (shown on the dashboard):
+    /// the agent ("claude-code 2.1.296"), its conversation id, its working directory
+    /// and the machine it runs on.
+    pub agent: Option<String>,
+    pub conversation: Option<String>,
+    pub cwd: Option<String>,
+    pub machine: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1400,6 +1407,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/sessions/{id}/name", post(api_session_rename))
+        .route("/api/agent-topic", post(api_agent_topic))
         .route("/api/passkey/{req}", get(api_passkey_status))
         .route("/api/passkey-helper/next", get(api_passkey_helper_next))
         .route("/api/passkey-helper/{req}", post(api_passkey_helper_done))
@@ -1995,7 +2003,12 @@ async fn json_activate(
 
 /// Registers a connecting automation client with its session; `client_gone` with
 /// the returned id when it disconnects.
-async fn client_arrived(state: &AppState, session: &ManagedSession, headers: &HeaderMap) -> u64 {
+async fn client_arrived(
+    state: &AppState,
+    session: &ManagedSession,
+    headers: &HeaderMap,
+    params: &LaunchParams,
+) -> u64 {
     let ua = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -2022,6 +2035,11 @@ async fn client_arrived(state: &AppState, session: &ManagedSession, headers: &He
         addr: addr.map(|a| a.to_string()),
         user_agent: ua,
         since: clients::now_secs(),
+        agent_name: clients::clean(params.agent.as_deref()),
+        conversation: clients::clean(params.conversation.as_deref()),
+        cwd: clients::clean(params.cwd.as_deref()),
+        machine: clients::clean(params.machine.as_deref()),
+        topic: None,
     })
 }
 
@@ -2064,7 +2082,7 @@ async fn handle_chromium_ws(
 
     ws.on_upgrade(move |socket| async move {
         session.client_count.fetch_add(1, Ordering::SeqCst);
-        let client = client_arrived(&state, &session, &headers).await;
+        let client = client_arrived(&state, &session, &headers, &params).await;
         session.activity.touch();
 
         let ws_path = session.ws_path.trim_start_matches('/');
@@ -2149,7 +2167,7 @@ async fn handle_firefox_ws(
     ws.on_upgrade(move |socket| async move {
         let client = if counted {
             session.client_count.fetch_add(1, Ordering::SeqCst);
-            Some(client_arrived(&state, &session, &headers).await)
+            Some(client_arrived(&state, &session, &headers, &params).await)
         } else {
             None
         };
@@ -4309,6 +4327,35 @@ async fn devtools_frontend(
         resp.headers_mut().insert(header::CONTENT_TYPE, ct);
     }
     resp
+}
+
+#[derive(Deserialize)]
+struct AgentTopic {
+    conversation: String,
+    topic: String,
+}
+
+/// An agent labels its browser connections with what it is doing (its
+/// `browser-agent-topic` command). No cluster secret: only a conversation that is
+/// connected can be labelled, and the label is all that changes.
+async fn api_agent_topic(
+    State(state): State<AppState>,
+    Json(req): Json<AgentTopic>,
+) -> Result<impl IntoResponse, ApiError> {
+    let topic = clients::clean(Some(&req.topic));
+    let conversation = req.conversation.trim();
+    if conversation.len() < 8 {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Missing conversation id",
+        ));
+    }
+    let sessions: Vec<ManagedSession> = state.sessions.read().await.values().cloned().collect();
+    let labelled: usize = sessions
+        .iter()
+        .map(|s| s.clients.set_topic(conversation, topic.as_deref()))
+        .sum();
+    Ok(Json(serde_json::json!({ "clients": labelled })))
 }
 
 #[derive(Deserialize)]

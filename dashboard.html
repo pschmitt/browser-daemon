@@ -1311,7 +1311,7 @@ function sessionCard(s) {
       : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
-    agents.length && fact('accent', icon('bot', 'sm'), agents.length === 1 ? `Agent · ${agents[0].from}` : `${agents.length} agents`,
+    agents.length && fact('accent', icon('bot', 'sm'), agents.length === 1 ? agentLabel(agents[0]) : `${agents.length} agents`,
       `An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`),
     others.length && fact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
       `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
@@ -1832,11 +1832,24 @@ function renderAbout() {
   }).join('') : '<dt>Version</dt><dd>Unavailable</dd>';
 }
 
-// A connected automation client, for the hover: origin with address, since when, User-Agent.
+// The agent without its version ("claude-code (work)"), as its browser MCP reported it.
+const agentName = (c) => (c.agent_name || '').replace(/ \d[\w.-]*/, '');
+// The tag: which agent and what it does (its topic), else from where.
+function agentLabel(c) {
+  if (!c.agent_name) return `Agent · ${c.from}`;
+  return c.topic ? `${agentName(c)}: ${c.topic}` : `${agentName(c)} · ${c.from}`;
+}
+// A connected automation client, for the hover: the agent and its conversation (when
+// its MCP says), origin with address, since when, User-Agent.
 function clientInfo(c) {
   const where = c.addr && c.addr !== c.from ? `${c.from} (${c.addr})` : c.from;
   const since = c.since ? `connected ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since)))} ago)` : '';
-  return [`${c.kind} from ${where}`, since, c.user_agent].filter(Boolean).join('\n');
+  return [
+    c.agent_name && (c.topic ? `${c.agent_name}: ${c.topic}` : c.agent_name),
+    c.conversation && `conversation ${c.conversation}`,
+    (c.cwd || c.machine) && `in ${c.cwd || '?'}${c.machine ? ` on ${c.machine}` : ''}`,
+    `${c.kind} from ${where}`, since, c.user_agent,
+  ].filter(Boolean).join('\n');
 }
 
 // Sessions are named at creation (or get a made-up name like "quiet-otter").

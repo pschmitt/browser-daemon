@@ -27,6 +27,19 @@ pub struct ClientInfo {
     pub user_agent: Option<String>,
     /// Unix seconds.
     pub since: u64,
+    /// What the agent's browser MCP reports (see the browser-mcp wrapper): the
+    /// agent and version, its conversation id, working directory and machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// What it is doing, as the agent says (browser-agent-topic).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
 }
 
 #[derive(Default)]
@@ -44,6 +57,20 @@ impl Clients {
 
     pub fn remove(&self, id: u64) {
         self.list.lock().unwrap().remove(&id);
+    }
+
+    /// Label the clients of `conversation`; how many there were.
+    pub fn set_topic(&self, conversation: &str, topic: Option<&str>) -> usize {
+        let mut list = self.list.lock().unwrap();
+        let mut n = 0;
+        for c in list
+            .values_mut()
+            .filter(|c| c.conversation.as_deref() == Some(conversation))
+        {
+            c.topic = topic.map(str::to_string);
+            n += 1;
+        }
+        n
     }
 
     pub fn list(&self) -> Vec<ClientInfo> {
@@ -104,6 +131,17 @@ pub async fn describe_origin(
         }
     }
     addr.to_string()
+}
+
+/// A reported value: trimmed, at most 200 characters, None if empty.
+pub fn clean(value: Option<&str>) -> Option<String> {
+    let v: String = value?
+        .trim()
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(200)
+        .collect();
+    (!v.is_empty()).then_some(v)
 }
 
 pub fn now_secs() -> u64 {
