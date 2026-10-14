@@ -1311,7 +1311,7 @@ function sessionCard(s) {
       : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
-    agents.length && fact('accent', icon('bot', 'sm'), agents.length === 1 ? `Agent · ${agents[0].kind} · ${agents[0].from}` : `${agents.length} agents`,
+    agents.length && fact('accent', icon('bot', 'sm'), agents.length === 1 ? `Agent · ${agents[0].from}` : `${agents.length} agents`,
       `An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`),
     others.length && fact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
       `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
