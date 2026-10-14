@@ -108,6 +108,7 @@ impl ActiveBrowser {
         adblock: bool,
         proxy: Option<&Proxy>,
         color_scheme: ColorScheme,
+        start_tab: bool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = Uuid::new_v4();
         let relay = Relay::start(proxy.cloned()).await?;
@@ -189,8 +190,14 @@ impl ActiveBrowser {
                     .arg("--disable-renderer-backgrounding")
                     .arg("--force-color-profile=srgb")
                     .arg("--password-store=basic")
-                    .arg("about:blank")
                     .kill_on_drop(true);
+                // No start tab for an agent opening its own (Playwright): it would sit
+                // there unused. Chromium then opens the window with the first tab.
+                if start_tab {
+                    cmd.arg("about:blank");
+                } else {
+                    cmd.arg("--no-startup-window");
+                }
 
                 if let (true, Some(ext)) = (adblock, &config.chromium_adblock) {
                     // Unbranded Chromium still honours --load-extension; the

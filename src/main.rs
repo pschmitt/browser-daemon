@@ -530,6 +530,7 @@ impl AppState {
         adblock: Option<bool>,
         proxy: Option<&str>,
         color_scheme: Option<ColorScheme>,
+        start_tab: bool,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
@@ -601,6 +602,7 @@ impl AppState {
             adblock,
             proxy,
             color_scheme,
+            start_tab,
         )
         .await
         {
@@ -1827,6 +1829,7 @@ async fn json_new(
                 None,
                 None,
                 None,
+                true,
             )
             .await
             .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
@@ -2049,6 +2052,15 @@ async fn handle_chromium_ws(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
+    // Playwright never takes over tabs it didn't open: it opens its own and the start
+    // tab would just sit there. Other clients (Puppeteer scripts take the first tab)
+    // keep it.
+    let agent_opens_own_tab = clients::kind_of(
+        headers
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()),
+    )
+    .0 == "Playwright";
     let session = if let Some(sid) = params.session_id {
         let guard = state.sessions.read().await;
         match guard.get(&sid).cloned() {
@@ -2072,6 +2084,7 @@ async fn handle_chromium_ws(
                 params.adblock,
                 params.proxy.as_deref(),
                 params.color_scheme,
+                !agent_opens_own_tab,
             )
             .await
         {
@@ -2150,6 +2163,7 @@ async fn handle_firefox_ws(
                 params.adblock,
                 params.proxy.as_deref(),
                 params.color_scheme,
+                true,
             )
             .await
         {
@@ -2409,6 +2423,7 @@ async fn api_create_session(
             req.adblock,
             req.proxy.as_deref(),
             req.color_scheme,
+            true,
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
