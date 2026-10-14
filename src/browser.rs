@@ -324,6 +324,8 @@ impl ActiveBrowser {
                     ("browser.sessionstore.resume_from_crash", "false"),
                     // 2 = block: sites can't ask to show notifications.
                     ("permissions.default.desktop-notification", "2"),
+                    // Same for location requests (a popup the view can't answer).
+                    ("permissions.default.geo", "2"),
                     // No translation offers (a toolbar prompt the view can't reach).
                     ("browser.translations.enable", "false"),
                     ("browser.translations.automaticallyPopup", "false"),
@@ -459,6 +461,11 @@ fn chromium_preferences(existing: &str) -> String {
             "profile.default_content_setting_values.notifications",
             2.into(),
         ),
+        // 2 = block: no "know your location" prompt either.
+        (
+            "profile.default_content_setting_values.geolocation",
+            2.into(),
+        ),
     ] {
         let mut node = &mut prefs;
         let mut keys = path.split('.').peekable();
@@ -563,6 +570,10 @@ mod tests {
         assert_eq!(out["translate"]["enabled"], false);
         assert_eq!(
             out["profile"]["default_content_setting_values"]["notifications"],
+            2
+        );
+        assert_eq!(
+            out["profile"]["default_content_setting_values"]["geolocation"],
             2
         );
         let fresh: serde_json::Value = serde_json::from_str(&chromium_preferences("")).unwrap();
