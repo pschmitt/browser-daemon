@@ -281,11 +281,15 @@
     <button type="button" data-layout="phone" title="A phone: this screen's size with touch input">Phone</button>
   </div>
   <button class="sm-item" id="forceBtn" role="menuitemcheckbox" aria-checked="false" title="This screen's size wins over other viewers and over an attached automation client"></button>
+  <div class="sm-label">View</div>
   <button class="sm-item" id="audioBtn" role="menuitemcheckbox" aria-checked="false" hidden></button>
   <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
   <label class="sm-item sm-search" id="smStreamRow" hidden><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/></svg>Picture<select id="smStream" aria-label="Picture"><option value="video">Video (H.264)</option><option value="jpeg">Images (JPEG)</option></select></label>
+  <div class="sm-label">Browser</div>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search with<select id="smSearch" aria-label="Search engine"></select></label>
+  <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
+  <hr>
   <a class="sm-item" href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Back to dashboard</a>
   <button class="sm-item danger" id="smStop"><svg viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span id="smStopText">Stop session</span></button>
 </div>
@@ -2613,6 +2617,15 @@ async function refreshSession() {
   } catch { /* session gone: the driver reports it */ }
 }
 
+// Chromium's DevTools for the tab in view (served by the node from the browser's own
+// copy), connected through the same page proxy as this view, as an observer.
+$("smDevtools").addEventListener("click", () => {
+  if (!target?.sessionId || !pageId) return;
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const page = `${location.host}/devtools/page/${encodeURIComponent(pageId)}?observer=true`;
+  window.open(`/devtools/frontend/${encodeURIComponent(target.sessionId)}/inspector.html?${scheme}=${encodeURIComponent(page)}`, "_blank", "noopener");
+});
+
 // Tapping the session's name renames it (empty: a made-up name again).
 $("smTitle").addEventListener("click", async () => {
   if (!sess || !target?.sessionId) return;
@@ -2899,6 +2912,7 @@ function renderSession() {
   E.recPill.classList.toggle("paused", paused);
   $("recPillText").textContent = paused ? "PAUSED" : "REC";
   $("smEngine").textContent = sess.engine || "chromium";
+  $("smDevtools").hidden = (sess.engine || "chromium") !== "chromium";
   $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
   $("smStatus").textContent = (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
     + ` · Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`

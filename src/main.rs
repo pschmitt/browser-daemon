@@ -1357,6 +1357,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/chromium", get(handle_chromium_ws))
         .route("/firefox", get(handle_firefox_ws))
         .route("/devtools/page/{page_id}", get(handle_page_ws))
+        .route(
+            "/devtools/frontend/{session_id}/{*path}",
+            get(devtools_frontend),
+        )
         .route("/audio", get(handle_audio_ws))
         .route("/video", get(handle_video_ws))
         .route("/viewers", get(handle_viewers_ws))
@@ -4194,6 +4198,52 @@ async fn handle_viewers_ws(
         }
         state.viewers.leave(session, id);
     })
+}
+
+/// Chromium's own DevTools frontend for a session (bundled with the browser, served
+/// on its debugging port), for the live view's DevTools button. It connects to a page
+/// through /devtools/page/{id} like the view does.
+async fn devtools_frontend(
+    AxumPath((session_id, path)): AxumPath<(Uuid, String)>,
+    State(state): State<AppState>,
+) -> Response {
+    let port = state
+        .sessions
+        .read()
+        .await
+        .get(&session_id)
+        .filter(|s| s.engine == BrowserEngine::Chromium)
+        .map(|s| s.port);
+    let Some(port) = port else {
+        return (StatusCode::NOT_FOUND, "No Chromium session with this id").into_response();
+    };
+    if path.split('/').any(|seg| seg == ".." || seg.is_empty()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let res = match state
+        .http_client
+        .get(format!("http://127.0.0.1:{port}/devtools/{path}"))
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+    };
+    let status = StatusCode::from_u16(res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = res
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| HeaderValue::from_bytes(v.as_bytes()).ok());
+    let body = match res.bytes().await {
+        Ok(b) => b,
+        Err(_) => return StatusCode::BAD_GATEWAY.into_response(),
+    };
+    let mut resp = (status, body).into_response();
+    if let Some(ct) = content_type {
+        resp.headers_mut().insert(header::CONTENT_TYPE, ct);
+    }
+    resp
 }
 
 #[derive(Deserialize)]
