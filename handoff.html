@@ -323,7 +323,7 @@
     <p id="passkeyInfo" class="pk-info"></p>
     <select id="passkeyEntry" class="pk-entry" aria-label="Vault entry" hidden></select>
     <div class="ltd-actions">
-      <button value="vault">Use the passkey from the vault</button>
+      <button value="vault">Use passkey</button>
       <button value="cancel">Cancel</button>
     </div>
   </form>
@@ -1050,13 +1050,15 @@ async function showPasskeyEntry(rpId, dlg) {
   set("Checking the vault…");
   pick.hidden = true;
   pick.innerHTML = "";
-  use.disabled = false;
+  // Not before the lookup: rbw would have to guess the entry (and fails with several).
+  use.disabled = true;
   try {
     const found = await passkeyHelper(rpId, true);
-    if (found?.locked) set("rbw is locked: approving asks your phone to unlock it first.", "locked");
-    else if (!Array.isArray(found) || !found.length) { set(`No passkey for ${rpId} in the vault.`, "bad"); use.disabled = true; }
-    else if (found.length === 1) set(`Entry: ${label(found[0])}`);
+    if (found?.locked) { set("rbw is locked: approving asks your phone to unlock it first.", "locked"); use.disabled = false; }
+    else if (!Array.isArray(found) || !found.length) set(`No passkey for ${rpId} in the vault.`, "bad");
+    else if (found.length === 1) { set(`Entry: ${label(found[0])}`); use.disabled = false; }
     else {
+      use.disabled = false;
       // Several entries hold a passkey for this site: the user picks one.
       set(`${found.length} entries hold a passkey for ${rpId}:`);
       for (const e of found) pick.add(new Option(label(e), e.id));
@@ -1064,7 +1066,8 @@ async function showPasskeyEntry(rpId, dlg) {
     }
   } catch (err) {
     set(err.message, "bad");
-    if (/no passkey|no matching|no entry|No passkey helper/i.test(err.message)) use.disabled = true;
+    // The lookup itself failed (e.g. an old helper): rbw may still find the entry.
+    use.disabled = /no passkey|no matching|no entry|No passkey helper/i.test(err.message);
   }
 }
 async function askPasskey({ rpId, challenge, allow }) {
