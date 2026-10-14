@@ -353,7 +353,7 @@ impl BidiHub {
         Ok(())
     }
 
-    /// The tab worth recording: the last one navigated, else the first one.
+    /// The tab worth recording: the last one navigated, else the visible one.
     pub async fn active_context(&self) -> Option<String> {
         let last = self.last_active.lock().await.clone();
         let tree = self
@@ -365,10 +365,30 @@ impl BidiHub {
             .iter()
             .filter_map(|c| c["context"].as_str().map(str::to_string))
             .collect();
-        match last {
-            Some(l) if ids.contains(&l) => Some(l),
-            _ => ids.into_iter().next(),
+        if let Some(l) = last.filter(|l| ids.contains(l)) {
+            return Some(l);
         }
+        // Nothing navigated since this hub started (a daemon restart adopted the
+        // browser): the foreground tab is the one that is visible.
+        for id in &ids {
+            let visible = self
+                .call(
+                    "script.evaluate",
+                    json!({
+                        "expression": "document.visibilityState === 'visible'",
+                        "target": { "context": id },
+                        "awaitPromise": false
+                    }),
+                )
+                .await
+                .ok()
+                .and_then(|r| r["result"]["value"].as_bool())
+                .unwrap_or(false);
+            if visible {
+                return Some(id.clone());
+            }
+        }
+        ids.into_iter().next()
     }
 
     pub async fn screenshot_jpeg(&self, context: &str) -> Result<String, String> {
