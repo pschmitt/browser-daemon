@@ -1527,6 +1527,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
     state.adopt_sessions().await;
+    {
+        let mut keep = std::collections::HashSet::new();
+        for session in state.sessions.read().await.values() {
+            if let Some(b) = session.browser.lock().await.as_ref() {
+                keep.insert(b.proc.pid);
+                if let Some(d) = b.display.as_ref() {
+                    keep.insert(d.identity().0);
+                }
+            }
+        }
+        let swept = proc::sweep_orphans(&keep);
+        if swept > 0 {
+            warn!(
+                count = swept,
+                "Killed browsers and displays no session record claimed"
+            );
+        }
+    }
     if let Some(ref cfg) = state.config.audio {
         let keep: std::collections::HashSet<String> = state
             .sessions
@@ -2793,7 +2811,7 @@ async fn shutdown_on_signal(state: AppState) {
         for handle in recs.values() {
             handle.stop();
         }
-        recs.keys().copied().collect()
+        recs.values().map(|h| h.recording_id).collect()
     };
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline && !ids.is_empty() {

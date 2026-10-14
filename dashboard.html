@@ -106,18 +106,17 @@ header.top {
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; letter-spacing: -.01em; flex: none; }
 .brand img { width: 28px; height: 28px; border-radius: 8px; }
-.node-picker {
-  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; min-width: 0;
-  border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
-  font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: border-color .15s, background .15s;
+.node-filter {
+  display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 8px 0 11px; margin-left: auto; flex: none;
+  border-radius: 999px; border: 1px solid color-mix(in oklab, var(--node, var(--ok)) 45%, var(--line)); background: color-mix(in oklab, var(--node, var(--ok)) 12%, transparent);
+  color: var(--fg); font-size: 12.5px; font-weight: 600; cursor: pointer;
 }
-.node-picker:hover, .node-picker[aria-expanded="true"] { border-color: var(--line-strong); background: var(--raised); }
-.node-picker .dot { color: var(--node, var(--ok)); }
-.node-picker.degraded .dot { color: var(--warn); }
-.np-label { overflow: hidden; text-overflow: ellipsis; }
-.np-health { font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 2px 7px; border-radius: 999px; background: var(--hover); font-variant-numeric: tabular-nums; }
-.node-picker.degraded .np-health { color: var(--warn); background: color-mix(in oklab, var(--warn) 14%, transparent); }
-.np-caret { color: var(--faint); margin-left: -2px; }
+.node-filter:hover { background: color-mix(in oklab, var(--node, var(--ok)) 20%, transparent); }
+.node-filter .dot { color: var(--node, var(--ok)); }
+.node-filter.off .dot { color: var(--bad); }
+.node-filter[hidden] { display: none; }
+.node-filter + .view-actions { margin-left: 8px; }
+.views .count.warn { background: color-mix(in oklab, var(--warn) 22%, transparent); color: var(--warn); }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex: none; }
 .menu button.on { background: var(--hover); }
 .menu .lead { display: inline-flex; width: 16px; justify-content: center; flex: none; }
@@ -447,7 +446,6 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 @media (max-width: 760px) {
   header.top { flex-wrap: wrap; gap: 10px; padding-left: 14px; padding-right: 14px; }
   .brand span { display: none; }
-  .np-health { display: none; }
   .top-actions .label { display: none; }
   .top-actions .btn.primary { width: 34px; padding: 0; }
   main { padding: 16px 14px 60px; }
@@ -552,12 +550,6 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 
 <header class="top">
   <a class="brand" href="/" title="Browser Daemon"><img src="/favicon.svg" alt=""><span>Browser Daemon</span></a>
-  <button class="node-picker" id="nodePicker" data-act="node-menu" aria-haspopup="menu" title="Filter by node and manage the mesh">
-    <span class="dot" id="nodePickerDot"></span>
-    <span class="np-label" id="nodePickerLabel">All nodes</span>
-    <span class="np-health" id="nodePickerHealth">–</span>
-    <svg class="i sm np-caret"><use href="#i-caret"/></svg>
-  </button>
   <div class="top-actions">
     <button class="btn primary" id="newSessionAction" data-act="new-session" title="Launch a new browser session"><svg class="i"><use href="#i-plus"/></svg><span class="label">New session</span></button>
     <button class="btn icon ghost" data-act="app-menu" title="More" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button>
@@ -602,6 +594,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <button data-act="view" data-view="engines" role="tab"><svg class="i sm"><use href="#i-globe"/></svg>Engines <span class="count" id="countEngines">0</span></button>
       <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes <span class="count" id="countNodes">0</span></button>
     </nav>
+    <button class="node-filter" id="nodeFilterChip" data-act="filter" data-node="all" title="Showing one node only: click to show all nodes" hidden>
+      <span class="dot"></span>Only <b id="nodeFilterName"></b><svg class="i sm"><use href="#i-x"/></svg>
+    </button>
     <div class="view-actions" id="viewActions"></div>
   </div>
 
@@ -1120,7 +1115,7 @@ function openMenu(anchor, items, { align = 'right' } = {}) {
   menu.style.top = top + 'px';
   menu.querySelector('button')?.focus({ preventScroll: true });
 }
-function closeMenu() { $('menu').classList.remove('open'); $('nodePicker').setAttribute('aria-expanded', 'false'); }
+function closeMenu() { $('menu').classList.remove('open'); }
 $('menu').addEventListener('click', (e) => {
   const b = e.target.closest('[data-mi]');
   if (!b) return;
@@ -1226,34 +1221,19 @@ function render() {
   renderEngines();
 }
 
+// The node filter lives on the Nodes tab; this shows when one is active (and
+// lets it be dropped from any tab), and flags offline nodes on the tab itself.
 function renderHeader() {
-  const online = ov.online_nodes, total = ov.total_nodes;
   const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter);
-  const np = $('nodePicker');
-  np.classList.toggle('degraded', !sel && online < total);
-  np.style.setProperty('--node', sel ? nodeColor(sel.name) : '');
-  $('nodePickerDot').classList.toggle('off', !!sel && sel.status !== 'online');
-  $('nodePickerLabel').textContent = sel ? sel.name : 'All nodes';
-  $('nodePickerHealth').textContent = `${online}/${total} online`;
-}
-
-function openNodeMenu(anchor) {
-  const counts = new Map();
-  for (const s of ov.sessions) counts.set(s.node_name, (counts.get(s.node_name) || 0) + 1);
-  const plural = (n) => `${n} session${n === 1 ? '' : 's'}`;
-  anchor.setAttribute('aria-expanded', 'true');
-  openMenu(anchor, [
-    { label: 'Show' },
-    { lead: icon('server', 'sm'), label: 'All nodes', meta: plural(ov.sessions.length), on: filter === 'all', run: () => { filter = 'all'; render(); } },
-    ...nodes.map((n) => ({
-      lead: `<span class="dot ${n.status === 'online' ? '' : 'off'}"></span>`, style: `--node:${nodeColor(n.name)}`,
-      label: n.name + (n.isLocal ? ' (local)' : ''),
-      meta: n.status === 'online' ? plural(counts.get(n.name) || 0) : 'offline',
-      on: filter === n.name, run: () => { filter = n.name; render(); },
-    })),
-    '-',
-    { icon: 'server', label: `Manage nodes… (${ov.online_nodes}/${ov.total_nodes} online)`, run: () => setView('nodes') },
-  ], { align: 'left' });
+  const chip = $('nodeFilterChip');
+  chip.hidden = !sel;
+  if (sel) {
+    chip.style.setProperty('--node', nodeColor(sel.name));
+    chip.classList.toggle('off', sel.status !== 'online');
+    $('nodeFilterName').textContent = sel.name;
+  }
+  $('countNodes').classList.toggle('warn', ov.online_nodes < ov.total_nodes);
+  $('countNodes').title = `${ov.online_nodes}/${ov.total_nodes} online`;
 }
 
 function renderStats() {
@@ -1531,7 +1511,8 @@ function setView(v) {
 
 /* ================================================================ actions */
 const ACT = {
-  'filter': (el) => { filter = el.dataset.node; render(); },
+  // The node's button toggles; the chip passes 'all'.
+  'filter': (el) => { el.blur(); filter = el.dataset.node === filter ? 'all' : el.dataset.node; render(); },
   'select-all-recordings': () => {
     const list = visibleRecordings();
     const allSelected = list.length > 0 && list.every((r) => selectedRecordings.has(keyOf.recording(r)));
@@ -1549,7 +1530,6 @@ const ACT = {
     if (el.classList.contains('stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
   'nodes': () => setView('nodes'),
-  'node-menu': (el) => { if (ov) openNodeMenu(el); },
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
   'take-over-latest': () => {
@@ -2341,6 +2321,7 @@ function renderNodes() {
           ${online ? `<div class="bars"><span><b>${n.active_sessions}</b>/${n.max_sessions} sessions</span><span><b>${n.profiles_count}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.join(' · ')}</span>` : ''}</div>` : ''}
         </div>
         <div style="display:flex;gap:6px;flex:none">
+          <button class="btn sm${filter === n.name ? ' primary' : ''}" data-act="filter" data-node="${esc(n.name)}" title="${filter === n.name ? 'Showing only this node: click to show all' : 'Show only this node on the other tabs'}">${icon('layers', 'sm')}${filter === n.name ? 'Showing only' : 'Show only'}</button>
           ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}">${icon('plus', 'sm')}Session</button>` : ''}
           ${!n.isLocal ? `<button class="btn icon sm ghost" data-node-remove="${esc(n.name)}" title="Remove peer">${icon('trash', 'sm')}</button>` : ''}
         </div>
