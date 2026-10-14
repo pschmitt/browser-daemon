@@ -1760,7 +1760,7 @@ async function loadEngineDefaults(engine) {
     const res = await fetch("/api/settings", { headers: authHeaders() });
     if (!res.ok) return;
     const d = (await res.json()).engines?.[engine || "chromium"];
-    if (touchesChoice === null && d) { showTouches = !!d.show_touches; renderTouches(); }
+    if (touchesChoice === null && (d || sess?.show_touches !== undefined)) { showTouches = sess?.show_touches ?? !!d.show_touches; renderTouches(); }
   } catch { /* older node */ }
 }
 function renderTouches() {

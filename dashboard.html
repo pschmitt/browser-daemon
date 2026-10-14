@@ -657,6 +657,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
             <div class="field"><label for="sessionHeight">Height</label><input class="input" type="number" id="sessionHeight" value="1080" min="240" max="2160"></div>
           </div>
           </div>
+          <label class="switch"><input type="checkbox" id="sessionTouches"><span class="track"></span><span class="txt"><b>Show touches</b><span>Live views mark taps and clicks</span></span></label>
           <div class="adv-group">Browser</div>
           <div class="field"><span class="field-label">Appearance</span><select class="input" id="sessionScheme" aria-label="Appearance"></select></div>
           <div class="field" id="sessionProxyField"><span class="field-label">Proxy</span><select class="input" id="sessionProxies" aria-label="Proxy"></select><span class="hint" id="sessionProxyHint"></span></div>
@@ -1674,9 +1675,12 @@ function setEngine(engine) {
   $('sessionSubmit').disabled = !supported;
   // Ad blocking as the engine's default on that node (Engines tab), until changed here.
   if (!adblockTouched) $('sessionAdblock').checked = engineDefaults(sessionNode, engine).adblock ?? true;
+  if (!touchesTouched) $('sessionTouches').checked = !!engineDefaults(sessionNode, engine).show_touches;
   renderProfilePicker();
 }
 let adblockTouched = false;
+let touchesTouched = false;
+$('sessionTouches').addEventListener('change', () => { touchesTouched = true; });
 $('sessionAdblock').addEventListener('change', () => { adblockTouched = true; });
 const engineDefaults = (node, engine) => nodes.find((n) => n.name === node)?.settings?.engines?.[engine] || {};
 
@@ -1687,6 +1691,7 @@ function openNewSession(prefill = {}) {
   sessionProxy = null;
   sessionScheme = null;
   adblockTouched = false;
+  touchesTouched = false;
   setScreen(prefill.screen || 'window');
   $('sessionProfileName').value = '';
   $('sessionName').value = '';
@@ -1812,10 +1817,11 @@ function renderAdvSummary() {
   if (sessionScheme) parts.push(sessionScheme);
   if (sessionProxy) parts.push(sessionProxy === 'none' ? 'direct' : proxyName(sessionNode, sessionProxy));
   if (adblockTouched && !$('sessionAdblock').checked) parts.push('ads not blocked');
+  if (touchesTouched && $('sessionTouches').checked) parts.push('touches shown');
   $('advSummary').textContent = '· ' + parts.join(' · ');
 }
 ['sessionName', 'sessionWidth', 'sessionHeight'].forEach((id) => $(id).addEventListener('input', renderAdvSummary));
-['sessionPersistent', 'sessionRecord', 'sessionAdblock', 'sessionScheme', 'sessionProxies'].forEach((id) => $(id).addEventListener('change', () => setTimeout(renderAdvSummary)));
+['sessionPersistent', 'sessionRecord', 'sessionAdblock', 'sessionTouches', 'sessionScheme', 'sessionProxies'].forEach((id) => $(id).addEventListener('change', () => setTimeout(renderAdvSummary)));
 $('sizePresets').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-w]');
   if (!b) return;
@@ -1844,6 +1850,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     record: $('sessionRecord').checked,
     // Untouched: the node applies the engine's default.
     adblock: adblockTouched ? $('sessionAdblock').checked : undefined,
+    show_touches: touchesTouched ? $('sessionTouches').checked : undefined,
     screen: sessionScreen,
   };
   // Window: the size chosen here; Phone: the node starts it at a phone's size; Native: the node's default.

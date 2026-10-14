@@ -270,6 +270,8 @@ pub struct ManagedSession {
     pub color_scheme: ColorScheme,
     /// How live views size the page when they open (each view may switch).
     pub screen: Arc<std::sync::RwLock<ScreenMode>>,
+    /// Whether live views mark taps and clicks when they open; None: the engine's default.
+    pub show_touches: Arc<std::sync::RwLock<Option<bool>>>,
     /// Sound is playing (kept current by the audible monitor).
     pub audible: Arc<AtomicBool>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
@@ -327,6 +329,7 @@ impl ManagedSession {
             video: self.video,
             color_scheme: self.color_scheme,
             screen: *self.screen.read().unwrap(),
+            show_touches: *self.show_touches.read().unwrap(),
             audible: self.audible.load(Ordering::Relaxed),
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
@@ -350,6 +353,9 @@ pub struct SessionSummary {
     /// How live views size the page when they open.
     #[serde(default)]
     pub screen: ScreenMode,
+    /// Live views mark taps and clicks when they open (absent: the engine's default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_touches: Option<bool>,
     #[serde(default)]
     pub engine: BrowserEngine,
     pub port: u16,
@@ -665,6 +671,7 @@ impl AppState {
             video: browser.display.is_some() && self.config.video.is_some(),
             color_scheme,
             screen: Arc::default(),
+            show_touches: Arc::default(),
             audible: Arc::new(AtomicBool::new(false)),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
@@ -840,6 +847,8 @@ pub struct CreateSessionRequest {
     /// How live views size the page; Phone also launches at a phone's size.
     #[serde(default)]
     pub screen: ScreenMode,
+    /// Live views mark taps and clicks when they open; defaults to the engine's setting.
+    pub show_touches: Option<bool>,
 }
 
 /// Chromium writes into unpacked extensions and shows a blocking "Error
@@ -2502,6 +2511,7 @@ async fn api_create_session(
         *session.name.write().unwrap() = name;
     }
     *session.screen.write().unwrap() = req.screen;
+    *session.show_touches.write().unwrap() = req.show_touches;
 
     let rec = state
         .active_recordings
