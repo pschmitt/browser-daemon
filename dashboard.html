@@ -1308,7 +1308,7 @@ function sessionCard(s) {
   const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const clientsFact = (cls, ico, text, title) => `<span class="fact clickable ${cls}" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
-    fact('', icon('folder', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
+    fact('', icon(s.profile ? 'folder' : 'trash', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
     s.audible && fact('accent', icon('speaker', 'sm'), 'Playing', 'Playing sound'),
     s.is_recording && (s.recording_paused
       ? fact('', icon('pause', 'sm'), 'REC paused', 'Recording paused')
