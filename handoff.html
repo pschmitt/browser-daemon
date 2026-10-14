@@ -1402,7 +1402,7 @@ async function refreshInfo() {
 // menu stayed open and nothing in it could be picked. While one is open, the view's mouse
 // and keys go to the display instead (X, via xdotool on the node). Without the video it
 // can't be seen here, so it is just closed.
-const xPop = { open: false, timer: 0, queue: Promise.resolve(), move: null, moveTimer: 0 };
+const xPop = { open: false, timer: 0, queue: Promise.resolve(), move: null, moveTimer: 0, tabsBefore: null };
 const videoShown = () => !!(video.ws && video.region && video.session === target.sessionId);
 function xSend(input) {
   const sid = target.sessionId;
@@ -1435,9 +1435,24 @@ function checkPopups(delay = 200) {
     if (sid !== target.sessionId) return;
     const was = xPop.open;
     xPop.open = popups.length > 0 && videoShown();
+    if (xPop.open && !was) xPop.tabsBefore = new Set((await fetchTargets().catch(() => [])).map((t) => t.id));
     if (popups.length && !xPop.open) xSend({ type: "key", key: "Escape" });
     if ((was || popups.length) && !xPop.open) xSend({ type: "park" });
+    if (was && !xPop.open) setTimeout(followFrontTab, 400);
   }, delay);
+}
+// A menu entry may have put another tab in front (View page source, Open link in new
+// window, ...): the page here went hidden. Follow the tab that came up meanwhile, as for
+// a popup the page opened. Tabs opened in the background leave this one visible.
+async function followFrontTab() {
+  const before = xPop.tabsBefore, opener = pageId;
+  if (!drv || !before) return;
+  if ((await drv.evaluate("document.visibilityState").catch(() => null)) !== "hidden") return;
+  const tabs = await fetchTargets().catch(() => []);
+  const fresh = tabs.filter((t) => t.sessionId === target?.sessionId && !before.has(t.id));
+  if (!fresh.length || pageId !== opener) return;
+  toast("Switched to the new tab");
+  switchTab(fresh[fresh.length - 1].id);
 }
 
 /* ---------------------------------------------------------------- touch: tap = click, drag = finger */
