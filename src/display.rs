@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
 use tracing::{debug, info, warn};
 
@@ -111,17 +112,7 @@ impl VirtualDisplay {
         let Some(ref xdotool) = cfg.xdotool else {
             return;
         };
-        let ok = Command::new(xdotool)
-            .env("DISPLAY", &self.name)
-            .args([
-                "mousemove",
-                &(self.width - 1).to_string(),
-                &(self.height - 1).to_string(),
-            ])
-            .output()
-            .await
-            .is_ok_and(|o| o.status.success());
-        if !ok {
+        if !park(xdotool, &self.name, (self.width, self.height)).await {
             warn!(display = %self.name, "Could not park the X pointer");
         }
     }
@@ -133,5 +124,261 @@ impl VirtualDisplay {
         let n = self.name.trim_start_matches(':');
         let _ = std::fs::remove_file(format!("/tmp/.X{n}-lock"));
         let _ = std::fs::remove_file(format!("/tmp/.X11-unix/X{n}"));
+    }
+}
+
+/// Move the X pointer into the screen's margin, off the window.
+async fn park(xdotool: &Path, display: &str, (width, height): (u32, u32)) -> bool {
+    xdotool_run(
+        xdotool,
+        display,
+        &[
+            "mousemove".into(),
+            (width - 1).to_string(),
+            (height - 1).to_string(),
+        ],
+    )
+    .await
+    .is_some()
+}
+
+async fn xdotool_run(xdotool: &Path, display: &str, args: &[String]) -> Option<String> {
+    let out = tokio::time::timeout(
+        Duration::from_secs(3),
+        Command::new(xdotool)
+            .env("DISPLAY", display)
+            .args(args)
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// A native popup window on a session's display: the browser's context menu, a
+/// `<select>` list, ... Input sent over CDP or BiDi goes to the page and passes
+/// these by, so a view has to send its input to the display while one is open.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Popup {
+    pub x: i64,
+    pub y: i64,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// The popups open on `display` (`screen` is its size): visible windows without
+/// a title, other than the root window. Browser windows have a title.
+pub async fn popups(xdotool: &Path, display: &str, screen: (u32, u32)) -> Vec<Popup> {
+    let args = ["search", "--onlyvisible", "--name", ""].map(String::from);
+    let Some(ids) = xdotool_run(xdotool, display, &args).await else {
+        return Vec::new(); // no match: xdotool exits 1
+    };
+    let mut out = Vec::new();
+    for id in ids.split_whitespace() {
+        let name = xdotool_run(xdotool, display, &["getwindowname".into(), id.into()]).await;
+        if name.is_none_or(|n| !n.trim().is_empty()) {
+            continue;
+        }
+        let geometry = xdotool_run(
+            xdotool,
+            display,
+            &["getwindowgeometry".into(), "--shell".into(), id.into()],
+        )
+        .await;
+        if let Some(p) = geometry.as_deref().and_then(parse_geometry) {
+            if (p.w, p.h) != screen && p.w > 1 && p.h > 1 {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// `getwindowgeometry --shell` output: WINDOW=, X=, Y=, WIDTH=, HEIGHT=, SCREEN=.
+fn parse_geometry(text: &str) -> Option<Popup> {
+    let get = |key: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+            .map(str::trim)
+    };
+    Some(Popup {
+        x: get("X")?.parse().ok()?,
+        y: get("Y")?.parse().ok()?,
+        w: get("WIDTH")?.parse().ok()?,
+        h: get("HEIGHT")?.parse().ok()?,
+    })
+}
+
+/// Input for a session's display (screen coordinates), sent while a popup is open.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum XInput {
+    Move {
+        x: u32,
+        y: u32,
+    },
+    Down {
+        x: u32,
+        y: u32,
+        button: u8,
+    },
+    Up {
+        x: u32,
+        y: u32,
+        button: u8,
+    },
+    /// A DOM key name (Escape, Enter, ArrowDown, ...) or a letter or digit.
+    Key {
+        key: String,
+    },
+    /// Pointer back into the margin, once the popup is gone.
+    Park,
+}
+
+/// The X keysym for a DOM key name; None for keys a popup has no use for.
+fn keysym(key: &str) -> Option<String> {
+    let named = match key {
+        "Escape" => "Escape",
+        "Enter" => "Return",
+        "Tab" => "Tab",
+        "Backspace" => "BackSpace",
+        "ArrowUp" => "Up",
+        "ArrowDown" => "Down",
+        "ArrowLeft" => "Left",
+        "ArrowRight" => "Right",
+        "Home" => "Home",
+        "End" => "End",
+        "PageUp" => "Prior",
+        "PageDown" => "Next",
+        " " => "space",
+        _ => {
+            let mut chars = key.chars();
+            return match (chars.next(), chars.next()) {
+                (Some(c), None) if c.is_ascii_alphanumeric() => Some(c.to_string()),
+                _ => None,
+            };
+        }
+    };
+    Some(named.into())
+}
+
+/// The xdotool arguments for `input` on a `screen`-sized display.
+fn input_args(input: &XInput, screen: (u32, u32)) -> Option<Vec<String>> {
+    let inside = |x: u32, y: u32| x < screen.0 && y < screen.1;
+    let button = |b: u8| match b {
+        0 => Some("1"),
+        1 => Some("2"),
+        2 => Some("3"),
+        _ => None,
+    };
+    let at = |x: u32, y: u32| vec!["mousemove".into(), x.to_string(), y.to_string()];
+    Some(match *input {
+        XInput::Move { x, y } if inside(x, y) => at(x, y),
+        XInput::Down { x, y, button: b } if inside(x, y) => {
+            let mut a = at(x, y);
+            a.extend(["mousedown".into(), button(b)?.into()]);
+            a
+        }
+        XInput::Up { x, y, button: b } if inside(x, y) => {
+            let mut a = at(x, y);
+            a.extend(["mouseup".into(), button(b)?.into()]);
+            a
+        }
+        XInput::Key { ref key } => vec!["key".into(), keysym(key)?],
+        XInput::Park => at(screen.0 - 1, screen.1 - 1),
+        _ => return None,
+    })
+}
+
+/// Send `input` to `display`; false when it was refused or failed.
+pub async fn send_input(xdotool: &Path, display: &str, screen: (u32, u32), input: &XInput) -> bool {
+    let Some(args) = input_args(input, screen) else {
+        return false;
+    };
+    xdotool_run(xdotool, display, &args).await.is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn geometry_from_xdotool() {
+        let text = "WINDOW=2097164\nX=118\nY=195\nWIDTH=297\nHEIGHT=349\nSCREEN=0\n";
+        assert_eq!(
+            parse_geometry(text),
+            Some(Popup {
+                x: 118,
+                y: 195,
+                w: 297,
+                h: 349
+            })
+        );
+        assert_eq!(parse_geometry("WINDOW=1\n"), None);
+    }
+
+    #[test]
+    fn input_is_checked() {
+        let screen = (3840, 2160);
+        assert_eq!(
+            input_args(
+                &XInput::Down {
+                    x: 10,
+                    y: 20,
+                    button: 2
+                },
+                screen
+            ),
+            Some(
+                vec!["mousemove", "10", "20", "mousedown", "3"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            )
+        );
+        assert_eq!(input_args(&XInput::Move { x: 4000, y: 1 }, screen), None);
+        assert_eq!(
+            input_args(
+                &XInput::Up {
+                    x: 1,
+                    y: 1,
+                    button: 7
+                },
+                screen
+            ),
+            None
+        );
+        assert_eq!(
+            input_args(
+                &XInput::Key {
+                    key: "ArrowDown".into()
+                },
+                screen
+            ),
+            Some(vec!["key".into(), "Down".into()])
+        );
+        assert_eq!(
+            input_args(
+                &XInput::Key {
+                    key: "ctrl+alt+Delete".into()
+                },
+                screen
+            ),
+            None
+        );
+        assert_eq!(
+            input_args(
+                &XInput::Key {
+                    key: "--help".into()
+                },
+                screen
+            ),
+            None
+        );
     }
 }

@@ -1416,6 +1416,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/sessions/{id}/name", post(api_session_rename))
+        .route("/api/sessions/{id}/popups", get(api_session_popups))
+        .route("/api/sessions/{id}/x-input", post(api_session_x_input))
         .route("/api/agent-topic", post(api_agent_topic))
         .route("/api/passkey/{req}", get(api_passkey_status))
         .route("/api/passkey-helper/next", get(api_passkey_helper_next))
@@ -4446,6 +4448,57 @@ async fn api_session_rename(
     let name = names::clean(&req.name).unwrap_or_else(|| names::generate(id));
     *session.name.write().unwrap() = name.clone();
     Ok(Json(serde_json::json!({ "name": name })))
+}
+
+/// The session's display and its size, with the xdotool to drive it.
+async fn session_x(state: &AppState, id: Uuid) -> Result<(PathBuf, String, (u32, u32)), ApiError> {
+    let xdotool = state
+        .config
+        .session_displays
+        .as_ref()
+        .and_then(|d| d.xdotool.clone())
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "This node has no xdotool"))?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    match (session.display.clone(), session.display_size) {
+        (Some(display), Some(size)) => Ok((xdotool, display, size)),
+        _ => Err(api_error(
+            StatusCode::NOT_FOUND,
+            "No display of its own for this session",
+        )),
+    }
+}
+
+/// Native popups open on the session's display (context menu, `<select>` list).
+async fn api_session_popups(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let (xdotool, display, size) = session_x(&state, id).await?;
+    let popups = display::popups(&xdotool, &display, size).await;
+    Ok(Json(serde_json::json!({ "popups": popups })))
+}
+
+/// Mouse or key input for the session's display, for a view while a popup is open.
+async fn api_session_x_input(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<display::XInput>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let (xdotool, display, size) = session_x(&state, id).await?;
+    if !display::send_input(&xdotool, &display, size, &input).await {
+        return Err(api_error(StatusCode::BAD_REQUEST, "Input refused"));
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]

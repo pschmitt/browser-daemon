@@ -1396,6 +1396,50 @@ async function refreshInfo() {
   } catch { /* page navigating */ }
 }
 
+/* ---------------------------------------------------------------- native popups */
+// The browser's own popups (its context menu, a <select> list) are windows of their own
+// on the session's display, and input over CDP or BiDi goes to the page, past them: the
+// menu stayed open and nothing in it could be picked. While one is open, the view's mouse
+// and keys go to the display instead (X, via xdotool on the node). Without the video it
+// can't be seen here, so it is just closed.
+const xPop = { open: false, timer: 0, queue: Promise.resolve(), move: null, moveTimer: 0 };
+const videoShown = () => !!(video.ws && video.region && video.session === target.sessionId);
+function xSend(input) {
+  const sid = target.sessionId;
+  xPop.queue = xPop.queue.then(() => fetch(`/api/sessions/${encodeURIComponent(sid)}/x-input`, {
+    method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(input),
+  })).catch(() => {});
+}
+// A point of the page (from toPage) on the display: the video shows the region at 1:1.
+const xAt = (p) => ({ x: Math.max(0, Math.round(p.x + video.region.x)), y: Math.max(0, Math.round(p.y + video.region.y)) });
+function xMove(p) {
+  xPop.move = p;
+  if (xPop.moveTimer) return;
+  xPop.moveTimer = setTimeout(() => {
+    xPop.moveTimer = 0;
+    if (xPop.open && xPop.move && videoShown()) xSend({ type: "move", ...xAt(xPop.move) });
+  }, 40);
+}
+// Is a popup open? Asked a moment after input that may have opened or closed one.
+function checkPopups(delay = 200) {
+  clearTimeout(xPop.timer);
+  xPop.timer = setTimeout(async () => {
+    const sid = target.sessionId;
+    if (!sid) return;
+    await xPop.queue;
+    let popups;
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/popups`, { headers: authHeaders() });
+      popups = res.ok ? (await res.json()).popups || [] : [];
+    } catch { return; }
+    if (sid !== target.sessionId) return;
+    const was = xPop.open;
+    xPop.open = popups.length > 0 && videoShown();
+    if (popups.length && !xPop.open) xSend({ type: "key", key: "Escape" });
+    if ((was || popups.length) && !xPop.open) xSend({ type: "park" });
+  }, delay);
+}
+
 /* ---------------------------------------------------------------- touch: tap = click, drag = finger */
 function toPage(e) {
   const r = E.view.getBoundingClientRect();
@@ -1473,6 +1517,12 @@ E.view.addEventListener("pointerdown", (e) => {
     if (e.button > 2 || !drv || refitting || mouse) return;
     const p = toPage(e);
     if (!p) return;
+    if (xPop.open && videoShown()) {
+      E.view.setPointerCapture(e.pointerId);
+      mouse = { clicks: 1, button: e.button, x: true };
+      xSend({ type: "down", ...xAt(p), button: e.button });
+      return;
+    }
     if (e.button === 1) e.preventDefault();   // no local autoscroll
     E.view.setPointerCapture(e.pointerId);
     E.view.focus({ preventScroll: true });
@@ -1501,6 +1551,12 @@ E.view.addEventListener("pointerdown", (e) => {
 let moveRaf = 0, lastMove = null;
 E.view.addEventListener("pointermove", (e) => {
   if (e.pointerType === "mouse") {
+    // Over a popup, hover matters (highlight, submenus): moves go to the display, throttled.
+    if (xPop.open && (!mouse || mouse.x)) {
+      const p = toPage(e);
+      if (p) xMove(p);
+      return;
+    }
     if (!mouse || !drv) return;   // hover moves are not forwarded: they would flood the socket
     lastMove = toPage(e);
     if (!moveRaf) moveRaf = requestAnimationFrame(() => {
@@ -1549,10 +1605,18 @@ E.view.addEventListener("pointermove", (e) => {
 });
 E.view.addEventListener("pointerup", (e) => {
   if (e.pointerType === "mouse") {
+    if (mouse?.x) {
+      const p = toPage(e) || xPop.move, { button } = mouse;
+      mouse = null;
+      if (p) xSend({ type: "up", ...xAt(p), button });
+      checkPopups();
+      return;
+    }
     if (!mouse || !drv) return;
     const p = toPage(e), { clicks, button } = mouse;
     mouse = null;
     if (p) drv.mouseUp(Math.round(p.x), Math.round(p.y), clicks, button);
+    if (button === 2 || videoShown()) checkPopups();
     // No probeFocus here: with a physical keyboard, keys go straight to the page, and the
     // probe would collapse a selection just made inside a text field.
     refreshRemoteSelection();
@@ -1566,7 +1630,9 @@ E.view.addEventListener("pointerup", (e) => {
     const p = drag ? toPage(e) || drag : toPage({ clientX: x, clientY: y });
     if (!p || !drv) return;
     if (drag) drv.mouseUp(Math.round(p.x), Math.round(p.y), 1, 0);
+    else if (xPop.open && videoShown()) { xSend({ type: "down", ...xAt(p), button: 2 }); xSend({ type: "up", ...xAt(p), button: 2 }); }
     else { drv.mouseDown(Math.round(p.x), Math.round(p.y), 1, 2); drv.mouseUp(Math.round(p.x), Math.round(p.y), 1, 2); }
+    checkPopups(250);
     return;
   }
   const wasTap = !touch.moved;
@@ -1585,8 +1651,15 @@ E.view.addEventListener("pointerup", (e) => {
   // resized the whole view each time. If the answer came in late, probeFocus() still raises it.
   if (editable) E.kb.focus({ preventScroll: true });
   tapFeedback(e.clientX, e.clientY);
+  if (xPop.open && videoShown()) {
+    xSend({ type: "down", ...xAt(p), button: 0 });
+    xSend({ type: "up", ...xAt(p), button: 0 });
+    checkPopups();
+    return;
+  }
   const px = Math.round(p.x), py = Math.round(p.y);
   drv.click(px, py, mobileLayout);
+  if (videoShown()) checkPopups();
   setTimeout(probeFocus, 160);
 });
 E.view.addEventListener("pointercancel", () => {
@@ -1707,7 +1780,14 @@ E.kb.addEventListener("keydown", (e) => {
 E.kb.addEventListener("blur", () => { if (!manualKb) E.keys.classList.remove("show"); });
 
 const KEYS = CDP_KEYS;
-function pressKey(key, mods) { if (drv) drv.pressKey(key, mods); }
+function pressKey(key, mods) {
+  if (xPop.open && !(mods?.ctrl || mods?.alt || mods?.meta)) {
+    xSend({ type: "key", key });
+    checkPopups();
+    return;
+  }
+  if (drv) drv.pressKey(key, mods);
+}
 
 /* ---------------------------------------------------------------- toolbar & omnibox */
 // Virtual keyboard buttons must not take focus from the local input, or the keyboard would close.
