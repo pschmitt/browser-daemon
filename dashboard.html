@@ -89,8 +89,13 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .chip.accent { background: var(--accent-soft); color: var(--accent); }
 .chip.chromium { background: color-mix(in oklab, var(--chromium) 15%, transparent); color: var(--chromium); }
 .chip.firefox { background: color-mix(in oklab, var(--firefox) 15%, transparent); color: var(--firefox); }
-.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 0 var(--bad); animation: pulse 1.6s infinite; flex: none; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--bad) 60%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+/* The pulse is a ring that only fades and scales: the GPU composites that without
+   repainting the card (an animated box-shadow repainted it every frame, which made
+   Android's Chrome flash half-painted tiles under the blurred header). */
+.rec-dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); flex: none; }
+.rec-dot::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--bad); animation: pulse 1.6s infinite; will-change: transform, opacity; }
+@keyframes pulse { 0% { transform: scale(1); opacity: .6; } 70% { transform: scale(2.75); opacity: 0; } 100% { transform: scale(2.75); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .rec-dot::after { animation: none; opacity: 0; } }
 
 /* ------------------------------------------------------------ header */
 header.top {
