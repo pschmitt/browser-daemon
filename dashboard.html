@@ -1464,6 +1464,12 @@ function renderViewActions(recordings = visibleRecordings()) {
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
+  if (view === 'sessions') {
+    const n = ov ? ov.sessions.filter(inFilter).length : 0;
+    const html = n ? `<button class="btn sm danger-ghost" data-act="stop-all" title="Stop every session${filter === 'all' ? '' : ` on ${esc(filter)}`}">${icon('power', 'sm')}<span class="lbl">Stop all</span></button>` : '';
+    if (actions.innerHTML !== html) actions.innerHTML = html;
+    return;
+  }
   if (view !== 'recordings') { if (actions.innerHTML) actions.innerHTML = ''; return; }
 
   const keys = recordings.map(keyOf.recording);
@@ -1512,6 +1518,7 @@ function setView(v) {
 /* ================================================================ actions */
 const ACT = {
   // The node's button toggles; the chip passes 'all'.
+  'stop-all': () => stopAllSessions(),
   'filter': (el) => { el.blur(); filter = el.dataset.node === filter ? 'all' : el.dataset.node; render(); },
   'select-all-recordings': () => {
     const list = visibleRecordings();
@@ -1920,6 +1927,23 @@ $('newSessionForm').addEventListener('submit', async (e) => {
   }
 });
 
+// Every session in view (all nodes, or the one the Nodes tab filters on).
+async function stopAllSessions() {
+  const list = ov.sessions.filter(inFilter);
+  if (!list.length) return;
+  const where = filter === 'all' ? '' : ` on ${filter}`;
+  const ok = await ask({
+    title: `Stop ${list.length} session${list.length === 1 ? '' : 's'}${where}?`,
+    text: `Every browser session${where} is closed, with whatever is open in it. Profiles stay on disk and recordings are saved.`,
+    ok: 'Stop all', danger: true,
+  });
+  if (!ok) return;
+  act('Stopping sessions', async () => {
+    const results = await Promise.allSettled(list.map((s) => request('DELETE', api(s.node_name, `/sessions/${enc(s.id)}`))));
+    const failed = results.filter((r) => r.status === 'rejected');
+    if (failed.length) throw new Error(`${failed.length} of ${list.length} could not be stopped: ${failed[0].reason?.message || failed[0].reason}`);
+  }, `${list.length} session${list.length === 1 ? '' : 's'} stopped`);
+}
 async function stopSession(s) {
   const ok = await ask({ title: 'Stop this session?', text: `${sessName(s)} on ${s.node_name} will be closed${s.profile ? ' (the profile stays on disk)' : ''}.`, ok: 'Stop session', danger: true });
   if (ok) act('Stopping session', () => request('DELETE', api(s.node_name, `/sessions/${enc(s.id)}`)), 'Session stopped');
