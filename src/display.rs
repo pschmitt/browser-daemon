@@ -314,7 +314,39 @@ pub async fn send_input(xdotool: &Path, display: &str, screen: (u32, u32), input
     let Some(args) = input_args(input, screen) else {
         return false;
     };
+    if matches!(input, XInput::Down { .. }) {
+        pin_focus(xdotool, display, screen).await;
+    }
     xdotool_run(xdotool, display, &args).await.is_some()
+}
+
+/// Give the keyboard focus to the browser's window (the largest titled one).
+/// Without a window manager the focus follows the pointer (PointerRoot): moving
+/// onto a menu took it from Firefox, which closes its popups when it loses focus.
+async fn pin_focus(xdotool: &Path, display: &str, screen: (u32, u32)) {
+    let args = ["search", "--onlyvisible", "--name", "."].map(String::from);
+    let Some(ids) = xdotool_run(xdotool, display, &args).await else {
+        return;
+    };
+    let mut best: Option<(u64, &str)> = None;
+    for id in ids.split_whitespace() {
+        let geometry = xdotool_run(
+            xdotool,
+            display,
+            &["getwindowgeometry".into(), "--shell".into(), id.into()],
+        )
+        .await;
+        let Some(p) = geometry.as_deref().and_then(parse_geometry) else {
+            continue;
+        };
+        let area = u64::from(p.w) * u64::from(p.h);
+        if (p.w, p.h) != screen && best.is_none_or(|(a, _)| area > a) {
+            best = Some((area, id));
+        }
+    }
+    if let Some((_, id)) = best {
+        xdotool_run(xdotool, display, &["windowfocus".into(), id.into()]).await;
+    }
 }
 
 #[cfg(test)]
