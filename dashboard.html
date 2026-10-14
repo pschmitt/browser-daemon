@@ -2166,7 +2166,7 @@ let bk = null; // { key, list, confirm: backup id | 'clear' | null }
 const backupPath = (p, rest = '') => api(p.node_name, `/profiles/${enc(p.key)}/backups${rest}`);
 const bkProfile = () => byKey.profiles.get(bk?.key);
 async function openBackups(p) {
-  bk = { key: p.key, list: null, confirm: null };
+  bk = { key: keyOf.profile(p), list: null, confirm: null };
   renderBackups();
   openModal('backupsModal');
   await loadBackups();
