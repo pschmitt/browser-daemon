@@ -1070,6 +1070,9 @@ pub struct PeerState {
     pub supported_engines: Vec<BrowserEngine>,
     #[serde(default)]
     pub proxies: Vec<proxies::ProxyInfo>,
+    /// Its settings (absent when unreachable, or from a node without them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<settings::NodeSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -3170,6 +3173,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         proxies,
                         version,
                         revision,
+                        settings,
                     ) = match node_info {
                         Ok(info) => (
                             info.name,
@@ -3184,6 +3188,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             info.proxies,
                             Some(info.version),
                             info.revision,
+                            Some(info.settings),
                         ),
                         Err(_) => (
                             p_name.clone(),
@@ -3196,6 +3201,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             0,
                             vec![BrowserEngine::Chromium],
                             Vec::new(),
+                            None,
                             None,
                             None,
                         ),
@@ -3253,6 +3259,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                             uptime_seconds,
                             supported_engines,
                             proxies,
+                            settings,
                             error: None,
                         },
                         node_name,
@@ -3280,6 +3287,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         uptime_seconds: 0,
                         supported_engines: vec![BrowserEngine::Chromium],
                         proxies: Vec::new(),
+                        settings: None,
                         error: Some(format!("HTTP {}", res.status())),
                     },
                     p_name,
@@ -3306,6 +3314,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                         uptime_seconds: 0,
                         supported_engines: vec![BrowserEngine::Chromium],
                         proxies: Vec::new(),
+                        settings: None,
                         error: Some(err.to_string()),
                     },
                     p_name,

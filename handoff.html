@@ -897,9 +897,14 @@ class BidiDriver {
     const fit = mode !== "window";
     if (fit || !passive || this.emulating) {
       this.emulating = fit;
-      await this.rpc("browsingContext.setViewport", fit
-        ? { context: this.ctx, viewport: { width: w, height: h }, devicePixelRatio: Math.min(dpr, 2) }
-        : { context: this.ctx, viewport: null, devicePixelRatio: null }).catch(() => {});
+      // Firefox applies the viewport at once but often never answers (seen on a display of
+      // its own): waiting out the 15 s call timeout held Phone/Native at "fitting the screen".
+      await Promise.race([
+        this.rpc("browsingContext.setViewport", fit
+          ? { context: this.ctx, viewport: { width: w, height: h }, devicePixelRatio: Math.min(dpr, 2) }
+          : { context: this.ctx, viewport: null, devicePixelRatio: null }).catch(() => {}),
+        sleep(600),
+      ]);
     }
     await this.measure();
     this.kick();
