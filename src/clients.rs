@@ -20,6 +20,9 @@ pub struct ClientInfo {
     pub agent: bool,
     /// Where it connects from: a mesh node's name, "this node", or an address.
     pub from: String,
+    /// The address it connects from, as nginx saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
     /// Unix seconds.

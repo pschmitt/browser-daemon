@@ -2011,12 +2011,14 @@ async fn client_arrived(state: &AppState, session: &ManagedSession, headers: &He
             .iter()
             .map(|(k, v)| (k.clone(), v.clone())),
     );
-    let from = clients::describe_origin(clients::remote_addr(headers), &peers).await;
+    let addr = clients::remote_addr(headers);
+    let from = clients::describe_origin(addr, &peers).await;
     info!(session_id = %session.id, kind, from = %from, "Automation client connected");
     session.clients.add(clients::ClientInfo {
         kind: kind.into(),
         agent,
         from,
+        addr: addr.map(|a| a.to_string()),
         user_agent: ua,
         since: clients::now_secs(),
     })

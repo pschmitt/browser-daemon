@@ -1312,9 +1312,9 @@ function sessionCard(s) {
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
     agents.length && fact('accent', icon('bot', 'sm'), agents.length === 1 ? `Agent · ${agents[0].kind} · ${agents[0].from}` : `${agents.length} agents`,
-      `An agent drives this session:\n${agents.map(clientLine).join('\n')}`),
+      `An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`),
     others.length && fact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
-      `Automation clients attached:\n${others.map(clientLine).join('\n')}`),
+      `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
     !clients.length && n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
     !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Stops when its last client disconnects'),
   ].filter(Boolean).join('') + '<span data-idle hidden></span>';
@@ -1832,8 +1832,12 @@ function renderAbout() {
   }).join('') : '<dt>Version</dt><dd>Unavailable</dd>';
 }
 
-// "Playwright from fnuc, since 10:42" (a connected automation client).
-const clientLine = (c) => `${c.kind} from ${c.from}${c.since ? `, since ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+// A connected automation client, for the hover: origin with address, since when, User-Agent.
+function clientInfo(c) {
+  const where = c.addr && c.addr !== c.from ? `${c.from} (${c.addr})` : c.from;
+  const since = c.since ? `connected ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${formatUptime(Math.max(0, Date.now() / 1000 - c.since))} ago)` : '';
+  return [`${c.kind} from ${where}`, since, c.user_agent].filter(Boolean).join('\n');
+}
 
 // Sessions are named at creation (or get a made-up name like "quiet-otter").
 const sessName = (s) => s.name || s.profile || 'Throwaway session';
@@ -1896,7 +1900,7 @@ function showSessionDetails(s) {
   showDetails(sessName(s), [
     ['Name', esc(sessName(s))], ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
     ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Kept alive' : 'Ends with last client'],
-    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', (s.clients || []).length ? (s.clients || []).map((c) => esc(clientLine(c))).join('<br>') : s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
+    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', (s.clients || []).length ? (s.clients || []).map((c) => esc(clientInfo(c)).replace(/\n/g, '<br>')).join('<br><br>') : s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);
 }
 
