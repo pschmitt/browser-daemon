@@ -7,7 +7,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
+
+use crate::proc::{self, Proc};
 use tracing::{debug, info, warn};
 
 /// Display numbers handed out to sessions; the shared display (:98 by default)
@@ -34,7 +36,7 @@ pub struct VirtualDisplay {
     pub name: String,
     pub width: u32,
     pub height: u32,
-    child: Child,
+    proc: Proc,
 }
 
 /// Lock file of a display whose server is gone (killed without cleaning up)?
@@ -69,15 +71,16 @@ impl VirtualDisplay {
             if in_use(n) {
                 continue;
             }
-            let mut child = Command::new(&cfg.xvfb)
-                .arg(format!(":{n}"))
+            // Outlives the daemon, like the browser on it.
+            let mut cmd = Command::new(&cfg.xvfb);
+            cmd.arg(format!(":{n}"))
                 .args(["-screen", "0", &format!("{sw}x{sh}x24")])
                 .args(["-nolisten", "tcp", "-noreset"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()?;
+                .stderr(Stdio::null());
+            proc::own_group(&mut cmd);
+            let mut child = cmd.spawn()?;
             // Ready once its socket exists; gone again means another server won the race.
             let socket = PathBuf::from(format!("/tmp/.X11-unix/X{n}"));
             let mut ready = false;
@@ -95,17 +98,35 @@ impl VirtualDisplay {
                 let _ = child.start_kill();
                 continue;
             }
+            let Some(proc) = Proc::spawned(child) else {
+                continue;
+            };
             let vd = Self {
                 name: format!(":{n}"),
                 width: sw,
                 height: sh,
-                child,
+                proc,
             };
             vd.park_pointer(cfg).await;
             info!(display = %vd.name, size = %format!("{sw}x{sh}"), "Started session display");
             return Ok(vd);
         }
         Err(std::io::Error::other("no free X display number"))
+    }
+
+    /// A display of an earlier daemon run, if its server is still there.
+    pub fn adopt(name: &str, width: u32, height: u32, pid: u32, start: u64) -> Option<Self> {
+        Some(Self {
+            name: name.to_string(),
+            width,
+            height,
+            proc: Proc::adopt(pid, start)?,
+        })
+    }
+
+    /// Pid and start time of the server, to find it again after a restart.
+    pub fn identity(&self) -> (u32, u64) {
+        (self.proc.pid, self.proc.start)
     }
 
     async fn park_pointer(&self, cfg: &DisplayConfig) {
@@ -118,8 +139,7 @@ impl VirtualDisplay {
     }
 
     pub async fn stop(&mut self) {
-        let _ = self.child.start_kill();
-        let _ = tokio::time::timeout(Duration::from_secs(2), self.child.wait()).await;
+        self.proc.terminate(Duration::from_secs(2)).await;
         // Killed, the server cannot remove its lock and socket itself.
         let n = self.name.trim_start_matches(':');
         let _ = std::fs::remove_file(format!("/tmp/.X{n}-lock"));

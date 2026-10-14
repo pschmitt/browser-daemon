@@ -9,6 +9,8 @@ mod idle;
 mod names;
 mod passkey_helper;
 mod passkeys;
+mod persist;
+mod proc;
 mod profiles;
 mod proxies;
 mod proxy;
@@ -42,7 +44,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::bidi::BidiHub;
-use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine};
+use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine, SessionState};
 use crate::profiles::{ColorScheme, Profile};
 use crate::proxy::bridge_websockets;
 use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
@@ -686,8 +688,118 @@ impl AppState {
         if record.unwrap_or(self.recorder_config.enabled) {
             self.start_recording(&session).await;
         }
+        self.persist_session(&session).await;
 
         Ok(session)
+    }
+
+    /// Save what a restarted daemon needs to adopt the session's browser.
+    pub async fn persist_session(&self, session: &ManagedSession) {
+        let recording = self
+            .active_recordings
+            .read()
+            .await
+            .contains_key(&session.id);
+        let guard = session.browser.lock().await;
+        let Some(browser) = guard.as_ref() else {
+            return;
+        };
+        let record = browser.record(SessionState {
+            name: session.name.read().unwrap().clone(),
+            persistent: session.persistent,
+            color_scheme: session.color_scheme,
+            screen: *session.screen.read().unwrap(),
+            show_touches: *session.show_touches.read().unwrap(),
+            idle_timeout_secs: session.activity.timeout_secs(),
+            shared_display: session
+                .display_size
+                .is_none()
+                .then(|| session.display.clone())
+                .flatten(),
+            video: session.video,
+            recording,
+        });
+        if let Err(e) = persist::save(self.config.state_dir(), &record).await {
+            warn!(session_id = %session.id, error = %e, "Could not save the session record");
+        }
+    }
+
+    /// Take over the sessions an earlier run left running (see `proc`).
+    pub async fn adopt_sessions(&self) {
+        for rec in persist::load_all(self.config.state_dir()).await {
+            match ActiveBrowser::adopt(&self.config, &rec).await {
+                Ok(browser) => {
+                    let session = ManagedSession {
+                        id: browser.id,
+                        name: Arc::new(std::sync::RwLock::new(rec.name.clone())),
+                        clients: Arc::default(),
+                        engine: browser.engine,
+                        port: browser.port,
+                        ws_path: browser.ws_path.clone(),
+                        profile: browser.profile_name.clone(),
+                        profile_id: browser.profile_id,
+                        persistent: rec.persistent,
+                        created_at: browser.created_at,
+                        client_count: Arc::new(AtomicUsize::new(0)),
+                        activity: Arc::new(idle::Activity::new(rec.idle_timeout_secs)),
+                        adblock: browser.adblock,
+                        relay: browser.relay.clone(),
+                        audio_sink: browser.audio.as_ref().map(|s| s.name.clone()),
+                        display: browser
+                            .display
+                            .as_ref()
+                            .map(|d| d.name.clone())
+                            .or_else(|| rec.shared_display.clone()),
+                        display_size: browser.display.as_ref().map(|d| (d.width, d.height)),
+                        window_size: browser.window_size,
+                        video: rec.video,
+                        color_scheme: rec.color_scheme,
+                        screen: Arc::new(std::sync::RwLock::new(rec.screen)),
+                        show_touches: Arc::new(std::sync::RwLock::new(rec.show_touches)),
+                        audible: Arc::new(AtomicBool::new(false)),
+                        bidi: browser.bidi.clone(),
+                        browser: Arc::new(Mutex::new(Some(browser))),
+                    };
+                    self.sessions
+                        .write()
+                        .await
+                        .insert(session.id, session.clone());
+                    if rec.recording {
+                        self.start_recording(&session).await;
+                    }
+                    info!(session_id = %rec.id, engine = %rec.engine, profile = ?rec.profile, "Adopted session of the previous run");
+                }
+                Err(e) => {
+                    warn!(session_id = %rec.id, error = %e, "Could not adopt session of the previous run; cleaning it up");
+                    self.discard_record(&rec).await;
+                }
+            }
+        }
+    }
+
+    /// Stop what a session record stands for, as far as it still exists.
+    async fn discard_record(&self, rec: &persist::SessionRecord) {
+        if let Some(mut p) = proc::Proc::adopt(rec.pid, rec.pid_start) {
+            p.terminate(Duration::from_secs(3)).await;
+        }
+        if let Some(ref d) = rec.display {
+            if let Some(mut vd) =
+                display::VirtualDisplay::adopt(&d.name, d.width, d.height, d.pid, d.pid_start)
+            {
+                vd.stop().await;
+            }
+        }
+        if let (Some(cfg), Some(a)) = (&self.config.audio, &rec.audio) {
+            // Dropped: unloads the sink.
+            drop(audio::Sink::adopt(cfg, a.sink.clone(), a.module));
+        }
+        if let Some(ref dir) = rec.temp_dir {
+            let _ = fs::remove_dir_all(dir).await;
+        }
+        if let Some(ref log) = rec.firefox_log {
+            let _ = fs::remove_file(log).await;
+        }
+        persist::remove(self.config.state_dir(), rec.id).await;
     }
 
     /// A profile by id or name; an unknown name creates a profile for `engine`.
@@ -768,15 +880,19 @@ impl AppState {
         };
 
         let _ = fs::remove_dir_all(upload_dir(id)).await;
+        let mut terminated = false;
         if let Some(session) = removed {
             let mut b_guard = session.browser.lock().await;
             if let Some(mut b) = b_guard.take() {
                 b.terminate().await;
                 info!(session_id = %id, "Session terminated");
-                return true;
+                terminated = true;
             }
         }
-        false
+        // After the browser is gone and out of the session: a periodic save can no
+        // longer write the record again.
+        persist::remove(self.config.state_dir(), *id).await;
+        terminated
     }
 }
 
@@ -1384,10 +1500,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    if let Some(ref cfg) = config.audio {
-        audio::remove_stale_sinks(cfg).await;
-    }
-
     let settings = Arc::new(settings::Store::load(&settings_path));
     let state = AppState {
         config,
@@ -1412,6 +1524,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         passkeys: Arc::default(),
         settings,
     };
+    // Sessions of the previous run keep their browsers (the service does not
+    // kill them on a restart): adopt them before anything else touches the nodes.
+    state.adopt_sessions().await;
+    if let Some(ref cfg) = state.config.audio {
+        let keep: std::collections::HashSet<String> = state
+            .sessions
+            .read()
+            .await
+            .values()
+            .filter_map(|s| s.audio_sink.clone())
+            .collect();
+        audio::remove_stale_sinks(cfg, &keep).await;
+    }
+    let saver = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let sessions: Vec<ManagedSession> =
+                saver.sessions.read().await.values().cloned().collect();
+            for session in sessions {
+                saver.persist_session(&session).await;
+            }
+        }
+    });
     audible::spawn_monitor(state.clone());
 
     // Stop sessions that nobody has used for a while.
@@ -1661,7 +1798,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_state(state.clone());
 
-    tokio::spawn(finalize_recordings_on_shutdown(state));
+    tokio::spawn(shutdown_on_signal(state));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app).await?;
 
@@ -2623,12 +2760,12 @@ async fn api_delete_session(
     }
 }
 
-/// On SIGTERM/SIGINT (a restart or deploy), stop the running recordings and
-/// wait for them to write their final metadata, so they end as completed
-/// instead of "interrupted" (which stays for a crash). Then exit: sessions
-/// die with the daemon anyway, and open live-view sockets would stall a
-/// graceful server shutdown.
-async fn finalize_recordings_on_shutdown(state: AppState) {
+/// On SIGTERM/SIGINT (a restart or deploy) the browsers keep running for the next
+/// daemon to adopt: save every session's record, hand Firefox's single WebDriver
+/// session back (it would otherwise stay taken), and let the recordings finish
+/// (the next daemon continues them in new ones, as the records say). Then exit:
+/// open live-view sockets would stall a graceful server shutdown.
+async fn shutdown_on_signal(state: AppState) {
     use tokio::signal::unix::{signal, SignalKind};
     let (Ok(mut term), Ok(mut int)) = (
         signal(SignalKind::terminate()),
@@ -2640,7 +2777,17 @@ async fn finalize_recordings_on_shutdown(state: AppState) {
         _ = term.recv() => {}
         _ = int.recv() => {}
     }
-    info!("Shutting down: finalizing recordings");
+    info!("Shutting down: sessions stay running");
+    let sessions: Vec<ManagedSession> = state.sessions.read().await.values().cloned().collect();
+    // Records first: they say which sessions were recording.
+    for session in &sessions {
+        state.persist_session(session).await;
+    }
+    for session in &sessions {
+        if let Some(ref hub) = session.bidi {
+            hub.end().await;
+        }
+    }
     let ids: Vec<Uuid> = {
         let recs = state.active_recordings.read().await;
         for handle in recs.values() {
@@ -2659,7 +2806,7 @@ async fn finalize_recordings_on_shutdown(state: AppState) {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    info!(recordings = ids.len(), "Recordings finalized, exiting");
+    info!(sessions = sessions.len(), recordings = ids.len(), "Exiting");
     std::process::exit(0);
 }
 

@@ -3,13 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::audio::{AudioConfig, Sink};
 use crate::bidi::BidiHub;
 use crate::display::{DisplayConfig, VirtualDisplay};
+use crate::persist::{AudioRecord, DisplayRecord, SessionRecord};
+use crate::proc::{self, Proc};
 use crate::profiles::{ColorScheme, Profile};
 use crate::proxies::{self, Proxy};
 use crate::relay::Relay;
@@ -65,6 +67,11 @@ pub struct BrowserConfig {
 }
 
 impl BrowserConfig {
+    /// The state directory: next to the profiles.
+    pub fn state_dir(&self) -> &Path {
+        self.profiles_dir.parent().unwrap_or(&self.profiles_dir)
+    }
+
     pub fn adblock_available(&self, engine: BrowserEngine) -> bool {
         match engine {
             BrowserEngine::Chromium => self.chromium_adblock.is_some(),
@@ -80,10 +87,14 @@ pub struct ActiveBrowser {
     pub engine: BrowserEngine,
     pub port: u16,
     pub ws_path: String,
-    pub child: Child,
+    /// The browser's main process: spawned by this daemon or adopted after a restart.
+    pub proc: Proc,
     /// Shared WebDriver BiDi session (Firefox only).
     pub bidi: Option<Arc<BidiHub>>,
-    _temp_dir: Option<tempfile::TempDir>,
+    /// User-data directory of a session without a profile, removed with it.
+    temp_dir: Option<PathBuf>,
+    /// Firefox's stderr (a file: a pipe would break when the daemon restarts).
+    firefox_log: Option<PathBuf>,
     pub profile_name: Option<String>,
     pub profile_id: Option<Uuid>,
     pub created_at: Instant,
@@ -193,8 +204,9 @@ impl ActiveBrowser {
                     .arg("--disable-backgrounding-occluded-windows")
                     .arg("--disable-renderer-backgrounding")
                     .arg("--force-color-profile=srgb")
-                    .arg("--password-store=basic")
-                    .kill_on_drop(true);
+                    .arg("--password-store=basic");
+                // Outlives the daemon: a restart adopts it again.
+                proc::own_group(&mut cmd);
                 // No start tab for an agent opening its own (Playwright): it would sit
                 // there unused. Chromium then opens the window with the first tab.
                 if start_tab {
@@ -253,7 +265,7 @@ impl ActiveBrowser {
                 let prefs_file = prefs_dir.join("Preferences");
                 let existing = fs::read_to_string(&prefs_file).await.unwrap_or_default();
                 fs::write(&prefs_file, chromium_preferences(&existing)).await?;
-                let child = cmd.spawn()?;
+                let proc = Proc::spawned(cmd.spawn()?).ok_or("Chromium exited right away")?;
                 let (port, ws_path) = match wait_for_devtools_port(&user_data_dir).await {
                     Ok(res) => res,
                     Err(e) => {
@@ -269,9 +281,10 @@ impl ActiveBrowser {
                     engine,
                     port,
                     ws_path,
-                    child,
+                    proc,
                     bidi: None,
-                    _temp_dir: temp_dir,
+                    temp_dir: temp_dir.map(tempfile::TempDir::keep),
+                    firefox_log: None,
                     profile_name,
                     profile_id,
                     created_at: Instant::now(),
@@ -334,6 +347,11 @@ impl ActiveBrowser {
                 }
                 fs::write(&user_js, proxies::firefox_user_js(&existing, &prefs)).await?;
 
+                let log = config
+                    .state_dir()
+                    .join("sessions")
+                    .join(format!("{id}.log"));
+                fs::create_dir_all(config.state_dir().join("sessions")).await?;
                 // Headful on the virtual display, like Chromium; headless only without one.
                 let mut cmd = Command::new(firefox_bin);
                 if display_name.is_none() {
@@ -351,9 +369,9 @@ impl ActiveBrowser {
                     .arg("--remote-debugging-port=0")
                     .arg(start_page)
                     .env("MOZ_ENABLE_WAYLAND", "0")
-                    .stderr(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::null())
-                    .kill_on_drop(true);
+                    .stderr(std::process::Stdio::from(std::fs::File::create(&log)?))
+                    .stdout(std::process::Stdio::null());
+                proc::own_group(&mut cmd);
 
                 if let Some(ref sink) = audio {
                     cmd.envs(sink.env());
@@ -362,17 +380,14 @@ impl ActiveBrowser {
                     cmd.env("DISPLAY", display);
                 }
 
-                let mut child = cmd.spawn()?;
-                let stderr = child
-                    .stderr
-                    .take()
-                    .ok_or("Failed to capture Firefox stderr")?;
+                let proc = Proc::spawned(cmd.spawn()?).ok_or("Firefox exited right away")?;
 
-                let port = match wait_for_firefox_bidi(stderr, Duration::from_secs(15)).await {
+                // A failure below drops `proc`, which kills Firefox.
+                let port = match wait_for_firefox_bidi(&log, Duration::from_secs(15)).await {
                     Ok(p) => p,
                     Err(e) => {
                         error!(session_id = %id, error = %e, "Firefox failed to initialize WebDriver BiDi");
-                        let _ = child.start_kill();
+                        let _ = fs::remove_file(&log).await;
                         return Err(e);
                     }
                 };
@@ -381,7 +396,7 @@ impl ActiveBrowser {
                     Ok(h) => h,
                     Err(e) => {
                         error!(session_id = %id, error = %e, "Failed to open Firefox BiDi session");
-                        let _ = child.start_kill();
+                        let _ = fs::remove_file(&log).await;
                         return Err(e);
                     }
                 };
@@ -410,9 +425,10 @@ impl ActiveBrowser {
                     engine,
                     port,
                     ws_path: "session".to_string(),
-                    child,
+                    proc,
                     bidi: Some(hub),
-                    _temp_dir: temp_dir,
+                    temp_dir: temp_dir.map(tempfile::TempDir::keep),
+                    firefox_log: Some(log),
                     profile_name,
                     profile_id,
                     created_at: Instant::now(),
@@ -428,14 +444,175 @@ impl ActiveBrowser {
 
     pub async fn terminate(&mut self) {
         info!(session_id = %self.id, engine = %self.engine, "Terminating browser instance");
-        if let Err(e) = self.child.start_kill() {
-            warn!(session_id = %self.id, error = %e, "Failed to send kill to child process");
-        }
-        let _ = tokio::time::timeout(Duration::from_secs(3), self.child.wait()).await;
+        self.proc.terminate(Duration::from_secs(3)).await;
         if let Some(ref mut display) = self.display {
             display.stop().await;
         }
+        self.cleanup_files();
     }
+
+    fn cleanup_files(&mut self) {
+        if let Some(dir) = self.temp_dir.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        if let Some(log) = self.firefox_log.take() {
+            let _ = std::fs::remove_file(log);
+        }
+    }
+
+    /// What a restarted daemon needs to adopt this browser again.
+    pub fn record(&self, state: SessionState) -> SessionRecord {
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        SessionRecord {
+            version: crate::persist::record_version(),
+            boot_id: SessionRecord::new_boot_id(),
+            id: self.id,
+            name: state.name,
+            engine: self.engine,
+            persistent: state.persistent,
+            port: self.port,
+            ws_path: self.ws_path.clone(),
+            pid: self.proc.pid,
+            pid_start: self.proc.start,
+            profile: self.profile_name.clone(),
+            profile_id: self.profile_id,
+            temp_dir: self.temp_dir.clone(),
+            firefox_log: self.firefox_log.clone(),
+            window_size: self.window_size,
+            adblock: self.adblock,
+            color_scheme: state.color_scheme,
+            screen: state.screen,
+            show_touches: state.show_touches,
+            idle_timeout_secs: state.idle_timeout_secs,
+            relay_port: self.relay.port(),
+            proxy: self.relay.current(),
+            audio: self.audio.as_ref().map(|a| AudioRecord {
+                sink: a.name.clone(),
+                module: a.module(),
+            }),
+            display: self.display.as_ref().map(|d| {
+                let (pid, pid_start) = d.identity();
+                DisplayRecord {
+                    name: d.name.clone(),
+                    width: d.width,
+                    height: d.height,
+                    pid,
+                    pid_start,
+                }
+            }),
+            shared_display: state.shared_display,
+            video: state.video,
+            created_at_secs: wall.saturating_sub(self.created_at.elapsed().as_secs()),
+            recording: state.recording,
+        }
+    }
+
+    /// Take over a browser an earlier daemon run left running. Anything that
+    /// fails drops the half-built parts, which kills the browser: one this
+    /// daemon cannot drive is of no use.
+    pub async fn adopt(
+        config: &BrowserConfig,
+        rec: &SessionRecord,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mut proc = Proc::adopt(rec.pid, rec.pid_start).ok_or("browser process is gone")?;
+        let display = match rec.display {
+            Some(ref d) => Some(
+                VirtualDisplay::adopt(&d.name, d.width, d.height, d.pid, d.pid_start)
+                    .ok_or("session display is gone")?,
+            ),
+            None => None,
+        };
+        let proxy = rec
+            .proxy
+            .as_ref()
+            .and_then(|id| config.proxies.iter().find(|p| &p.id == id))
+            .cloned();
+        let relay = Relay::start_on(rec.relay_port, proxy).await?;
+        let audio = match (&config.audio, &rec.audio) {
+            (Some(cfg), Some(a)) => Some(Sink::adopt(cfg, a.sink.clone(), a.module)),
+            _ => None,
+        };
+        let bidi = match rec.engine {
+            BrowserEngine::Chromium => {
+                let reachable = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    tokio::net::TcpStream::connect(("127.0.0.1", rec.port)),
+                )
+                .await;
+                if !matches!(reachable, Ok(Ok(_))) {
+                    return Err("browser's debugging port does not answer".into());
+                }
+                None
+            }
+            BrowserEngine::Firefox => {
+                let hub = BidiHub::connect(rec.port).await?;
+                // Add-ons installed over BiDi live until Firefox exits; installing
+                // again replaces the add-on, so this is safe either way.
+                if let (true, Some(xpi)) = (rec.adblock, &config.firefox_adblock) {
+                    let _ = hub
+                        .call(
+                            "webExtension.install",
+                            serde_json::json!({
+                                "extensionData": { "type": "archivePath", "path": xpi }
+                            }),
+                        )
+                        .await;
+                }
+                Some(hub)
+            }
+        };
+        if !proc.alive() {
+            return Err("browser process died while adopting it".into());
+        }
+        let age = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .saturating_sub(rec.created_at_secs);
+        Ok(Self {
+            id: rec.id,
+            window_size: rec.window_size,
+            engine: rec.engine,
+            port: rec.port,
+            ws_path: rec.ws_path.clone(),
+            proc,
+            bidi,
+            temp_dir: rec.temp_dir.clone(),
+            firefox_log: rec.firefox_log.clone(),
+            profile_name: rec.profile.clone(),
+            profile_id: rec.profile_id,
+            created_at: Instant::now()
+                .checked_sub(Duration::from_secs(age))
+                .unwrap_or_else(Instant::now),
+            adblock: rec.adblock,
+            relay,
+            audio,
+            display,
+        })
+    }
+}
+
+impl Drop for ActiveBrowser {
+    fn drop(&mut self) {
+        // The processes are killed by their `Proc`s.
+        self.cleanup_files();
+    }
+}
+
+/// Session state kept outside the browser, saved with it.
+pub struct SessionState {
+    pub name: String,
+    pub persistent: bool,
+    pub color_scheme: ColorScheme,
+    pub screen: crate::ScreenMode,
+    pub show_touches: Option<bool>,
+    pub idle_timeout_secs: u64,
+    pub shared_display: Option<String>,
+    pub video: bool,
+    pub recording: bool,
 }
 
 /// The profile's `Preferences` with the password manager and autofill switched
@@ -514,47 +691,56 @@ async fn wait_for_devtools_port(
 }
 
 async fn wait_for_firefox_bidi(
-    stderr: tokio::process::ChildStderr,
-    timeout_duration: Duration,
+    log: &Path,
+    timeout: Duration,
 ) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
-    use tokio::io::AsyncBufReadExt;
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        let mut reader = tokio::io::BufReader::new(stderr).lines();
-        let mut tx = Some(tx);
-        while let Ok(Some(line)) = reader.next_line().await {
-            if tx.is_some() {
-                // "ws://127.0.0.1:<port>", or "ws://localhost:<port>" (e.g. with a proxy set).
-                const MARKER: &str = "WebDriver BiDi listening on ws://";
-                if let Some(pos) = line.find(MARKER) {
-                    let authority = line[pos + MARKER.len()..]
-                        .split(|c: char| c == '/' || c.is_whitespace())
-                        .next()
-                        .unwrap_or("");
-                    let port_str = authority.rsplit(':').next().unwrap_or("");
-                    if let Ok(port) = port_str.parse::<u16>() {
-                        if port > 0 {
-                            if let Some(c) = tx.take() {
-                                let _ = c.send(port);
-                            }
-                        }
-                    }
-                }
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        if let Ok(text) = fs::read_to_string(log).await {
+            if let Some(port) = bidi_port(&text) {
+                return Ok(port);
             }
         }
-    });
-
-    match tokio::time::timeout(timeout_duration, rx).await {
-        Ok(Ok(port)) => Ok(port),
-        Ok(Err(_)) => Err("Firefox process closed stderr without advertising BiDi port".into()),
-        Err(_) => Err("Timed out waiting for Firefox WebDriver BiDi port on stderr".into()),
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    Err("Timed out waiting for Firefox WebDriver BiDi port on stderr".into())
+}
+
+/// The port from "WebDriver BiDi listening on ws://127.0.0.1:<port>" (or
+/// "ws://localhost:<port>", e.g. with a proxy set) in Firefox's output.
+fn bidi_port(output: &str) -> Option<u16> {
+    const MARKER: &str = "WebDriver BiDi listening on ws://";
+    output.lines().find_map(|line| {
+        let pos = line.find(MARKER)?;
+        let authority = line[pos + MARKER.len()..]
+            .split(|c: char| c == '/' || c.is_whitespace())
+            .next()?;
+        authority
+            .rsplit(':')
+            .next()?
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p > 0)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firefox_bidi_port_is_read_from_its_output() {
+        assert_eq!(
+            bidi_port("noise\nWebDriver BiDi listening on ws://127.0.0.1:40123\n"),
+            Some(40123)
+        );
+        assert_eq!(
+            bidi_port("WebDriver BiDi listening on ws://localhost:9222/ x"),
+            Some(9222)
+        );
+        assert_eq!(bidi_port("WebDriver BiDi listening on ws://x:0"), None);
+        assert_eq!(bidi_port("nothing yet"), None);
+    }
 
     #[test]
     fn chromium_preferences_disable_password_manager() {

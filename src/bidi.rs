@@ -77,6 +77,13 @@ pub struct BidiHub {
 }
 
 impl BidiHub {
+    /// End the WebDriver session: Firefox allows one, and it stays taken after
+    /// the socket closes, so a daemon that is exiting must give it back.
+    pub async fn end(&self) {
+        let _ =
+            tokio::time::timeout(Duration::from_secs(3), self.call("session.end", json!({}))).await;
+    }
+
     pub async fn connect(port: u16) -> Result<Arc<Self>, BoxError> {
         let url = format!("ws://127.0.0.1:{}/session", port);
         let (ws, _) = tokio_tungstenite::connect_async(&url).await?;

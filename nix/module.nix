@@ -280,6 +280,18 @@ in
       description = "Stop sessions nobody used for this many minutes (0 = never). Sessions can override it.";
     };
 
+    keepSessionsOnRestart = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Leave the browsers (and their displays) running when the service stops or
+        restarts, e.g. on a deploy: the next daemon adopts them, so sessions and
+        their tabs survive. Sets `KillMode=process`. `systemctl stop` then leaves
+        the sessions running too; stop them from the dashboard first, or turn
+        this off to have every restart end them.
+      '';
+    };
+
     memoryMax = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -482,6 +494,7 @@ in
           );
           Restart = "always";
           RestartSec = 2;
+          KillMode = lib.mkIf cfg.keepSessionsOnRestart "process";
           User = cfg.user;
           Group = cfg.group;
           StateDirectory = "browser-daemon";

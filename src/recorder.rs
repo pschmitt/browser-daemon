@@ -1008,7 +1008,9 @@ impl DisplayGrab {
         let fps = (1000 / RECORD_FRAME_INTERVAL.as_millis().max(1))
             .max(1)
             .to_string();
-        let mut child = tokio::process::Command::new(&self.ffmpeg)
+        let mut cmd = tokio::process::Command::new(&self.ffmpeg);
+        crate::proc::die_with_parent(&mut cmd);
+        let mut child = cmd
             .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
             .args(["-f", "x11grab", "-draw_mouse", "0", "-framerate", &fps])
             .args(["-video_size", &format!("{w}x{h}")])

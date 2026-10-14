@@ -66,6 +66,20 @@ impl Sink {
         })
     }
 
+    /// The sink of an earlier daemon run, by name and module index.
+    pub fn adopt(cfg: &AudioConfig, name: String, module: u32) -> Self {
+        Self {
+            name,
+            module,
+            cfg: cfg.clone(),
+        }
+    }
+
+    /// PulseAudio module index, to unload it later.
+    pub fn module(&self) -> u32 {
+        self.module
+    }
+
     /// Environment that sends a browser's audio into this sink.
     pub fn env(&self) -> [(&'static str, String); 2] {
         [
@@ -94,7 +108,7 @@ impl Drop for Sink {
 
 /// Remove per-session sinks a previous run left behind (it was killed, so their
 /// Drop never ran). Called at startup, before any session exists.
-pub async fn remove_stale_sinks(cfg: &AudioConfig) {
+pub async fn remove_stale_sinks(cfg: &AudioConfig, keep: &HashSet<String>) {
     let Ok(out) = Command::new(&cfg.pactl)
         .arg("--server")
         .arg(cfg.server_arg())
@@ -112,6 +126,13 @@ pub async fn remove_stale_sinks(cfg: &AudioConfig) {
             continue;
         };
         if !args.contains("sink_name=browserd_") || args.contains("sink_name=browserd_idle") {
+            continue;
+        }
+        // A session adopted after a daemon restart still plays into its sink.
+        if keep
+            .iter()
+            .any(|name| args.contains(&format!("sink_name={name}")))
+        {
             continue;
         }
         let _ = Command::new(&cfg.pactl)
@@ -198,8 +219,8 @@ async fn playing_sinks(cfg: &AudioConfig) -> Option<HashSet<String>> {
 /// An ffmpeg encoding `sink`'s monitor to Opus in WebM on stdout, tuned for
 /// low latency: small clusters, 20 ms frames, no input buffering.
 pub fn encoder(cfg: &AudioConfig, sink: &str) -> std::io::Result<Child> {
-    Command::new(&cfg.ffmpeg)
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+    let mut cmd = Command::new(&cfg.ffmpeg);
+    cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin"])
         .args(["-fflags", "nobuffer", "-f", "pulse"])
         .arg("-server")
         .arg(cfg.server_arg())
@@ -227,6 +248,7 @@ pub fn encoder(cfg: &AudioConfig, sink: &str) -> std::io::Result<Child> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
+        .kill_on_drop(true);
+    crate::proc::die_with_parent(&mut cmd);
+    cmd.spawn()
 }

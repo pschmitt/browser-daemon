@@ -45,6 +45,7 @@ impl Region {
 
 pub fn encoder(cfg: &VideoConfig, display: &str, r: Region) -> std::io::Result<Child> {
     let mut cmd = Command::new(&cfg.ffmpeg);
+    crate::proc::die_with_parent(&mut cmd);
     cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin"])
         .args(["-f", "x11grab", "-draw_mouse", "0", "-framerate", "30"])
         .args(["-video_size", &format!("{}x{}", r.w, r.h)])

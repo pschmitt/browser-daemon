@@ -34,7 +34,13 @@ impl Drop for Relay {
 
 impl Relay {
     pub async fn start(upstream: Option<Proxy>) -> io::Result<Arc<Self>> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        Self::start_on(0, upstream).await
+    }
+
+    /// On a given port (0: any): a browser kept running across a daemon restart
+    /// still points at the old one.
+    pub async fn start_on(port: u16, upstream: Option<Proxy>) -> io::Result<Arc<Self>> {
+        let listener = TcpListener::bind(("127.0.0.1", port)).await?;
         let port = listener.local_addr()?.port();
         let (tx, rx) = watch::channel(upstream);
         let accept = tokio::spawn(async move {
