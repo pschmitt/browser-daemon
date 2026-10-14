@@ -1240,9 +1240,11 @@ async function doConnect({ quiet = false } = {}) {
 }
 
 // The remote page gets the size of this screen (like a real phone) or its own desktop size.
-// The page's size on screen. Not innerWidth: a mobile page laid out wider than the
-// screen (Phone) reports its layout width there, e.g. 1120 for 412 px on screen.
-const VIEW_SIZE = "[Math.round(visualViewport.width * visualViewport.scale), Math.round(visualViewport.height * visualViewport.scale)]";
+// The page's size on screen, scrollbars included. A mobile page laid out wider than
+// the screen (Phone) is zoomed out: innerWidth is its layout width there (1120 for
+// 412 px on screen), so scale it down. visualViewport's own size leaves out the
+// scrollbars; pinch zoom (scale above 1) doesn't change the size on screen.
+const VIEW_SIZE = "(() => { const s = Math.min(visualViewport.scale, 1); return [Math.round(innerWidth * s), Math.round(innerHeight * s)]; })()";
 let applied = null, metricsYielding = false;
 // This view itself runs on a phone (touch, small screen): Phone then uses its real size.
 const onPhone = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 600;
