@@ -18,7 +18,7 @@ pub struct ClientInfo {
     pub kind: String,
     /// Playwright and Puppeteer: automation libraries, i.e. most likely an agent.
     pub agent: bool,
-    /// Where it connects from: a mesh node's name, "this node", or an address.
+    /// Where it connects from: a mesh node's name (this node's own included), or an address.
     pub from: String,
     /// The address it connects from, as nginx saw it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,14 +78,18 @@ pub fn remote_addr(headers: &HeaderMap) -> Option<IpAddr> {
     real.or(fwd).and_then(|s| s.trim().parse().ok())
 }
 
-/// A mesh node's name for `addr` (resolving the peers' hosts), "this node" for
-/// loopback, else the address itself.
-pub async fn describe_origin(addr: Option<IpAddr>, peers: &[(String, String)]) -> String {
+/// A mesh node's name for `addr` (resolving the nodes' hosts), `local` (this node's
+/// name) for loopback, else the address itself.
+pub async fn describe_origin(
+    addr: Option<IpAddr>,
+    local: &str,
+    peers: &[(String, String)],
+) -> String {
     let Some(addr) = addr else {
-        return "this node".into();
+        return local.into();
     };
     if addr.is_loopback() {
-        return "this node".into();
+        return local.into();
     }
     for (name, url) in peers {
         let Some(host) = url::Url::parse(url)

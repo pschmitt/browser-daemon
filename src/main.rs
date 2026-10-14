@@ -2002,7 +2002,8 @@ async fn client_arrived(state: &AppState, session: &ManagedSession, headers: &He
         .map(str::to_string);
     let (kind, agent) = clients::kind_of(ua.as_deref());
     // This node's own address too: a client may come in over it (the mesh URL).
-    let mut peers: Vec<(String, String)> = vec![("this node".into(), state.public_url.clone())];
+    let mut peers: Vec<(String, String)> =
+        vec![(state.node_name.clone(), state.public_url.clone())];
     peers.extend(
         state
             .peers
@@ -2012,7 +2013,7 @@ async fn client_arrived(state: &AppState, session: &ManagedSession, headers: &He
             .map(|(k, v)| (k.clone(), v.clone())),
     );
     let addr = clients::remote_addr(headers);
-    let from = clients::describe_origin(addr, &peers).await;
+    let from = clients::describe_origin(addr, &state.node_name, &peers).await;
     info!(session_id = %session.id, kind, from = %from, "Automation client connected");
     session.clients.add(clients::ClientInfo {
         kind: kind.into(),
