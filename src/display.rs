@@ -171,19 +171,17 @@ pub struct Popup {
     pub h: u32,
 }
 
-/// The popups open on `display` (`screen` is its size): visible windows without
-/// a title, other than the root window. Browser windows have a title.
+/// The popups open on `display` (`screen` is its size): visible windows well
+/// smaller than the browser's window (the largest one below the root). Titles
+/// don't tell: Chromium's menus have none, Firefox's are called "Firefox", and
+/// Firefox's main window has an untitled child as large as itself.
 pub async fn popups(xdotool: &Path, display: &str, screen: (u32, u32)) -> Vec<Popup> {
     let args = ["search", "--onlyvisible", "--name", ""].map(String::from);
     let Some(ids) = xdotool_run(xdotool, display, &args).await else {
         return Vec::new(); // no match: xdotool exits 1
     };
-    let mut out = Vec::new();
+    let mut windows = Vec::new();
     for id in ids.split_whitespace() {
-        let name = xdotool_run(xdotool, display, &["getwindowname".into(), id.into()]).await;
-        if name.is_none_or(|n| !n.trim().is_empty()) {
-            continue;
-        }
         let geometry = xdotool_run(
             xdotool,
             display,
@@ -191,9 +189,25 @@ pub async fn popups(xdotool: &Path, display: &str, screen: (u32, u32)) -> Vec<Po
         )
         .await;
         if let Some(p) = geometry.as_deref().and_then(parse_geometry) {
-            if (p.w, p.h) != screen && p.w > 1 && p.h > 1 {
-                out.push(p);
-            }
+            windows.push(p);
+        }
+    }
+    pick_popups(windows, screen)
+}
+
+fn pick_popups(windows: Vec<Popup>, screen: (u32, u32)) -> Vec<Popup> {
+    let area = |p: &Popup| u64::from(p.w) * u64::from(p.h);
+    let windows: Vec<Popup> = windows
+        .into_iter()
+        .filter(|p| (p.w, p.h) != screen && p.w > 1 && p.h > 1)
+        .collect();
+    let Some(main) = windows.iter().map(area).max() else {
+        return Vec::new();
+    };
+    let mut out: Vec<Popup> = Vec::new();
+    for p in windows {
+        if area(&p) * 2 < main && !out.contains(&p) {
+            out.push(p);
         }
     }
     out
@@ -320,6 +334,28 @@ mod tests {
             })
         );
         assert_eq!(parse_geometry("WINDOW=1\n"), None);
+    }
+
+    #[test]
+    fn popups_by_size() {
+        let p = |x, y, w, h| Popup { x, y, w, h };
+        let screen = (3840, 2160);
+        // Firefox: root, main window and its child, a menu (titled and its child), 1x1s.
+        let firefox = vec![
+            p(0, 0, 3840, 2160),
+            p(4, 4, 1655, 1034),
+            p(502, 402, 195, 216),
+            p(3, 3, 1, 1),
+            p(4, 4, 1655, 1034),
+            p(502, 402, 195, 216),
+        ];
+        assert_eq!(pick_popups(firefox, screen), vec![p(502, 402, 195, 216)]);
+        // Chromium without a menu: nothing.
+        assert_eq!(
+            pick_popups(vec![p(0, 0, 3840, 2160), p(0, 0, 1592, 1361)], screen),
+            vec![]
+        );
+        assert_eq!(pick_popups(vec![p(0, 0, 3840, 2160)], screen), vec![]);
     }
 
     #[test]
