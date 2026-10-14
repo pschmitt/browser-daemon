@@ -1526,7 +1526,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/profiles/{name}/clone", post(api_clone_profile))
         .route("/api/profiles/{name}/export", get(api_export_profile))
-        .route("/api/profiles/{name}/import", post(api_import_profile))
+        .route(
+            "/api/profiles/{name}/import",
+            post(api_import_profile).layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+        .route("/api/profiles/{name}/clear", post(api_clear_profile))
         .route("/api/profiles/{name}/transfer", post(api_transfer_profile))
         // Recording APIs
         .route("/api/recordings", get(api_list_recordings))
@@ -1572,7 +1576,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route(
             "/api/peers/{peer}/profiles/{name}/import",
-            post(api_peer_import_profile),
+            post(api_peer_import_profile)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+        .route(
+            "/api/peers/{peer}/profiles/{name}/clear",
+            post(api_peer_clear_profile),
         )
         .route(
             "/api/peers/{peer}/profiles/{name}/transfer",
@@ -2804,6 +2813,52 @@ async fn api_delete_profile(
     ))
 }
 
+/// Wipe a profile's cookies, logins and storage but keep the profile itself
+/// (its name, engine, proxy, appearance and homepage).
+async fn api_clear_profile(
+    AxumPath(key): AxumPath<String>,
+    Query(params): Query<DeleteProfileParams>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let profile = lookup_profile(&state, &key).await?;
+    if let Some(session) = profile_session(&state, profile.meta.id).await {
+        if !params.force.unwrap_or(false) {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                format!("Profile is currently in use by active session {}. Pass ?force=true to terminate session and clear.", session.id),
+            ));
+        }
+        info!(profile = %profile.meta.name, session_id = %session.id, "Force terminating session before clearing profile");
+        state.terminate_session(&session.id).await;
+    }
+
+    let io_err = |e: std::io::Error| {
+        error!(profile = %profile.meta.name, error = %e, "Failed to clear profile data");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to clear profile data: {e}"),
+        )
+    };
+    let mut entries = fs::read_dir(&profile.dir).await.map_err(io_err)?;
+    while let Some(entry) = entries.next_entry().await.map_err(io_err)? {
+        if entry.file_name() == profiles::META_FILE {
+            continue;
+        }
+        let path = entry.path();
+        let is_dir = entry.file_type().await.map_err(io_err)?.is_dir();
+        if is_dir {
+            fs::remove_dir_all(&path).await.map_err(io_err)?;
+        } else {
+            fs::remove_file(&path).await.map_err(io_err)?;
+        }
+    }
+
+    info!(profile = %profile.meta.name, id = %profile.meta.id, "Profile data cleared");
+    Ok(Json(profile_info(&state, &profile).await))
+}
+
 async fn export_profile_archive(state: &AppState, profile: &Profile) -> Result<Vec<u8>, ApiError> {
     if let Some(session) = profile_session(state, profile.meta.id).await {
         return Err(api_error(
@@ -4015,6 +4070,36 @@ async fn api_peer_update_profile(
     let res = state
         .peer_request(state.http_client.patch(&url))
         .json(&req)
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
+async fn api_peer_clear_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, name)): AxumPath<(String, String)>,
+    Query(params): Query<DeleteProfileParams>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let peer_url = match get_peer_url(&state, &peer).await {
+        Some(u) => u,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+            )
+                .into_response();
+        }
+    };
+    let mut url = peer_profile_url(&peer_url, &name, Some("clear"));
+    if params.force.unwrap_or(false) {
+        url.push_str("?force=true");
+    }
+    let res = state
+        .peer_request(state.http_client.post(&url))
         .send()
         .await;
     proxy_response(res).await
