@@ -1868,7 +1868,8 @@ function showClientDetails(s) {
       [`${n}User agent`, c.user_agent ? `<span class="mono">${esc(c.user_agent)}</span>` : ''],
     );
   });
-  showDetails(`${list.some((c) => c.agent) ? 'Agents' : 'Clients'} of ${sessName(s)}`, pairs, list);
+  // Raw: the client itself, or the list when several are connected.
+  showDetails(`${list.some((c) => c.agent) ? 'Agents' : 'Clients'} of ${sessName(s)}`, pairs, list.length === 1 ? list[0] : list);
 }
 
 // The agent without its version ("claude-code (work)"), as its browser MCP reported it.
