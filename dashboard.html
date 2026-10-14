@@ -1168,7 +1168,7 @@ function openNodeMenu(anchor) {
     { lead: icon('server', 'sm'), label: 'All nodes', meta: plural(ov.sessions.length), on: filter === 'all', run: () => { filter = 'all'; render(); } },
     ...nodes.map((n) => ({
       lead: `<span class="dot ${n.status === 'online' ? '' : 'off'}"></span>`, style: `--node:${nodeColor(n.name)}`,
-      label: n.name + (n.isLocal ? ' (this node)' : ''),
+      label: n.name + (n.isLocal ? ' (local)' : ''),
       meta: n.status === 'online' ? plural(counts.get(n.name) || 0) : 'offline',
       on: filter === n.name, run: () => { filter = n.name; render(); },
     })),
@@ -1828,7 +1828,7 @@ function renderAbout() {
     const odd = !n.isLocal && n.revision && local.revision && n.revision !== local.revision;
     const state = n.status && n.status !== 'online' ? ` <span style="color:var(--muted)">(${esc(n.status)})</span>` : '';
     const ver = n.version ? `v${esc(n.version)} · ${commit(n.revision)}` : '<span style="color:var(--muted)">version unknown</span>';
-    return `<dt>${esc(n.name)}${n.isLocal ? ' (this node)' : ''}</dt><dd>${ver}${odd ? ' <span style="color:var(--warn)" title="Runs another commit than this node">differs</span>' : ''}${state}</dd>`;
+    return `<dt>${esc(n.name)}${n.isLocal ? ' (local)' : ''}</dt><dd>${ver}${odd ? ' <span style="color:var(--warn)" title="Runs another commit than this node">differs</span>' : ''}${state}</dd>`;
   }).join('') : '<dt>Version</dt><dd>Unavailable</dd>';
 }
 
@@ -2022,7 +2022,7 @@ function renderNodes() {
     const online = n.status === 'online';
     return `<div class="node-card" style="--node:${nodeColor(n.name)}">
       <div class="avatar">${icon('server')}</div>
-      <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">this node</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${n.latency_ms} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
+      <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${n.latency_ms} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
         <span>${esc(n.url)}</span>
         ${online ? `<div class="bars"><span><b>${n.active_sessions}</b>/${n.max_sessions} sessions</span><span><b>${n.profiles_count}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.join(' · ')}</span>` : ''}</div>` : ''}
       </div>
