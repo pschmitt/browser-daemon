@@ -953,6 +953,28 @@ async function act(label, fn, okText) {
 /* ================================================================ modals & dialogs */
 function openModal(id) { $(id).classList.add('open'); closeMenu(); }
 function closeModal(id) { $(id).classList.remove('open'); }
+// Dialogs are history entries: Back (Android's back gesture too) closes the top one
+// instead of leaving the dashboard, e.g. for the live view it was opened from.
+// Watching the 'open' class covers every way a dialog opens and closes.
+let modalPopping = false;
+new MutationObserver((changes) => {
+  for (const { target: m, oldValue } of changes) {
+    if (!m.classList.contains('modal') || !m.id) continue;
+    const was = /\bopen\b/.test(oldValue || ''), is = m.classList.contains('open');
+    if (is && !was && history.state?.modal !== m.id) history.pushState({ modal: m.id }, '');
+    // Closed here (button, Escape, backdrop): drop its entry again.
+    if (was && !is && history.state?.modal === m.id && !modalPopping) { modalPopping = true; history.back(); }
+  }
+}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+addEventListener('popstate', () => {
+  if (modalPopping) { modalPopping = false; return; }
+  const open = [...document.querySelectorAll('.modal.open')].pop();
+  if (!open) return;
+  modalPopping = true;   // closing it below must not go back once more
+  if (open.id === 'playerModal') closePlayerModal();
+  else { open.classList.remove('open'); if (open.id === 'askModal') askResolve?.(null); }
+  setTimeout(() => { modalPopping = false; }, 0);
+});
 document.addEventListener('click', (e) => {
   const closer = e.target.closest('[data-close]');
   if (closer) { closer.closest('.modal')?.classList.remove('open'); return; }
