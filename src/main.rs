@@ -268,6 +268,8 @@ pub struct ManagedSession {
     pub window_size: (u32, u32),
     pub video: bool,
     pub color_scheme: ColorScheme,
+    /// How live views size the page when they open (each view may switch).
+    pub screen: Arc<std::sync::RwLock<ScreenMode>>,
     /// Sound is playing (kept current by the audible monitor).
     pub audible: Arc<AtomicBool>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
@@ -324,6 +326,7 @@ impl ManagedSession {
             display_shared: self.display.is_some() && self.display_size.is_none(),
             video: self.video,
             color_scheme: self.color_scheme,
+            screen: *self.screen.read().unwrap(),
             audible: self.audible.load(Ordering::Relaxed),
             idle_seconds: self.activity.idle_secs(),
             idle_timeout_seconds: self.activity.timeout_secs(),
@@ -344,6 +347,9 @@ pub struct SessionSummary {
     /// The browser window's size at launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_size: Option<(u32, u32)>,
+    /// How live views size the page when they open.
+    #[serde(default)]
+    pub screen: ScreenMode,
     #[serde(default)]
     pub engine: BrowserEngine,
     pub port: u16,
@@ -658,6 +664,7 @@ impl AppState {
             window_size: browser.window_size,
             video: browser.display.is_some() && self.config.video.is_some(),
             color_scheme,
+            screen: Arc::default(),
             audible: Arc::new(AtomicBool::new(false)),
             bidi: browser.bidi.clone(),
             browser: Arc::new(Mutex::new(Some(browser))),
@@ -795,6 +802,20 @@ pub struct LaunchParams {
     pub machine: Option<String>,
 }
 
+/// How a session's live views size the page, as the view's Screen menu: the
+/// browser's own window size, the viewer's screen, or a phone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenMode {
+    #[default]
+    Window,
+    Native,
+    Phone,
+}
+
+/// A phone's size (a common Android one), as the live view's Phone uses.
+const PHONE_SIZE: (u32, u32) = (412, 915);
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct CreateSessionRequest {
     /// Optional; generated when absent or empty.
@@ -816,6 +837,9 @@ pub struct CreateSessionRequest {
     pub proxy: Option<String>,
     /// "dark" or "light"; defaults to the profile's (dark).
     pub color_scheme: Option<ColorScheme>,
+    /// How live views size the page; Phone also launches at a phone's size.
+    #[serde(default)]
+    pub screen: ScreenMode,
 }
 
 /// Chromium writes into unpacked extensions and shows a blocking "Error
@@ -2456,13 +2480,14 @@ async fn api_create_session(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     state.check_auth(&headers)?;
+    let phone = req.screen == ScreenMode::Phone;
     let session = state
         .spawn_session(
             req.engine,
             req.profile.as_deref(),
             req.persistent,
-            req.width,
-            req.height,
+            req.width.or(phone.then_some(PHONE_SIZE.0)),
+            req.height.or(phone.then_some(PHONE_SIZE.1)),
             req.record,
             req.max_memory_mb,
             req.idle_timeout_minutes,
@@ -2476,6 +2501,7 @@ async fn api_create_session(
     if let Some(name) = req.name.as_deref().and_then(names::clean) {
         *session.name.write().unwrap() = name;
     }
+    *session.screen.write().unwrap() = req.screen;
 
     let rec = state
         .active_recordings

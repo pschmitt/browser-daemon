@@ -1269,6 +1269,7 @@ async function doConnect({ quiet = false } = {}) {
     connectStep("reading the session");
     if (sess?.id !== target.sessionId) sess = (await sessionApi("GET", "").catch(() => null))?.session ?? sess;
     loadEngineDefaults(target.engine);
+    sessionLayout();
     connectStep("fitting the screen");
     await applyMetrics();
     setState("live");
@@ -1281,6 +1282,19 @@ async function doConnect({ quiet = false } = {}) {
   } finally {
     connecting = false;
   }
+}
+
+// A session started as Native or Phone (dashboard, Advanced) opens that way, unless this
+// viewer switched for this session before; Window leaves it to the viewer's own choice.
+function sessionLayout() {
+  let own = null;
+  try { own = localStorage.getItem("handoff.layout." + target.sessionId); } catch { /* storage unavailable */ }
+  const want = LAYOUTS.includes(own) ? own : sess?.screen && sess.screen !== "window" && LAYOUTS.includes(sess.screen) ? sess.screen : null;
+  if (!want || want === layoutMode) return;
+  layoutMode = want;
+  mobileLayout = want === "phone";
+  fitLayout = want !== "window";
+  renderLayout();
 }
 
 // The remote page gets the size of this screen (like a real phone) or its own desktop size.
@@ -2401,7 +2415,10 @@ $("smLayout").addEventListener("click", async (e) => {
   layoutMode = b.dataset.layout;
   mobileLayout = layoutMode === "phone";
   fitLayout = layoutMode !== "window";
-  try { localStorage.setItem("handoff.layout", layoutMode); } catch { /* storage unavailable */ }
+  try {
+    localStorage.setItem("handoff.layout", layoutMode);
+    if (target?.sessionId) localStorage.setItem("handoff.layout." + target.sessionId, layoutMode);
+  } catch { /* storage unavailable */ }
   renderLayout();
   await applyMetrics();
   sizeCanvas();
