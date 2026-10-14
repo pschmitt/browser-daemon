@@ -181,6 +181,9 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .fact { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 99px; background: var(--hover);
   color: var(--muted); font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: default; }
 .fact .i { width: 12px; height: 12px; }
+/* Opens the details of the session's clients (agents): hover doesn't exist on phones. */
+.fact.clickable { cursor: pointer; }
+.fact.clickable:hover, .fact.clickable:focus-visible { filter: brightness(.94); outline: none; box-shadow: 0 0 0 1px currentColor inset; }
 .fact.ok { background: var(--ok-soft); color: var(--ok); }
 .fact.warn { background: var(--warn-soft); color: var(--warn); }
 .fact.bad { background: color-mix(in oklab, var(--bad) 16%, transparent); color: var(--bad); }
@@ -1303,6 +1306,7 @@ function sessionCard(s) {
   const clients = s.clients || [];
   const agents = clients.filter((c) => c.agent), others = clients.filter((c) => !c.agent);
   const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
+  const clientsFact = (cls, ico, text, title) => `<span class="fact clickable ${cls}" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
     fact('', icon('folder', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
     s.audible && fact('accent', icon('speaker', 'sm'), 'Playing', 'Playing sound'),
@@ -1311,9 +1315,9 @@ function sessionCard(s) {
       : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
-    agents.length && fact('accent', icon('bot', 'sm'), agents.length === 1 ? agentLabel(agents[0]) : `${agents.length} agents`,
+    agents.length && clientsFact('accent', icon('bot', 'sm'), agents.length === 1 ? agentLabel(agents[0]) : `${agents.length} agents`,
       `An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`),
-    others.length && fact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
+    others.length && clientsFact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
       `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
     !clients.length && n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
     !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Stops when its last client disconnects'),
@@ -1493,6 +1497,10 @@ const ACT = {
       $('aboutModal').querySelector('[data-close]').focus();
     } },
   ]),
+  'session-clients': (el) => {
+    const s = byKey.sessions.get(el.dataset.key);
+    if (s) showClientDetails(s);
+  },
   'session-menu': (el) => {
     const s = byKey.sessions.get(el.dataset.key); if (!s) return;
     const wsUrl = `${nodeBase(s.node_name).replace(/^http/, 'ws')}/${s.engine === 'firefox' ? 'firefox' : 'chromium'}?session_id=${s.id}`;
@@ -1830,6 +1838,30 @@ function renderAbout() {
     const ver = n.version ? `v${esc(n.version)} · ${commit(n.revision)}` : '<span style="color:var(--muted)">version unknown</span>';
     return `<dt>${esc(n.name)}${n.isLocal ? ' (local)' : ''}</dt><dd>${ver}${odd ? ' <span style="color:var(--warn)" title="Runs another commit than this node">differs</span>' : ''}${state}</dd>`;
   }).join('') : '<dt>Version</dt><dd>Unavailable</dd>';
+}
+
+// Everything about a session's clients (agents), one block per client: the tag's
+// hover in a dialog, for phones.
+function showClientDetails(s) {
+  const list = s.clients || [];
+  const pairs = [];
+  list.forEach((c, i) => {
+    const n = list.length > 1 ? `#${i + 1} ` : '';
+    const at = c.since ? `${new Date(c.since * 1000).toLocaleString()} (${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since)))} ago)` : '';
+    pairs.push(
+      [`${n}Agent`, esc(c.agent_name || (c.agent ? 'unnamed' : 'no, an automation client'))],
+      [`${n}Topic`, esc(c.topic || '')],
+      [`${n}Conversation`, c.conversation ? `<span class="mono">${esc(c.conversation)}</span>` : ''],
+      [`${n}Project`, c.cwd ? `<span class="mono">${esc(c.cwd)}</span>` : ''],
+      [`${n}Machine`, esc(c.machine || '')],
+      [`${n}Connects from`, esc(c.from)],
+      [`${n}Address`, c.addr ? `<span class="mono">${esc(c.addr)}</span>` : ''],
+      [`${n}Connected`, esc(at)],
+      [`${n}Client`, esc(c.kind)],
+      [`${n}User agent`, c.user_agent ? `<span class="mono">${esc(c.user_agent)}</span>` : ''],
+    );
+  });
+  showDetails(`${list.some((c) => c.agent) ? 'Agents' : 'Clients'} of ${sessName(s)}`, pairs, list);
 }
 
 // The agent without its version ("claude-code (work)"), as its browser MCP reported it.
