@@ -842,8 +842,15 @@ function favicon(url, faviconUrl) {
   const usable = host && host !== 'localhost' && !/^\d+\.\d+\.\d+\.\d+$/.test(host) && !host.endsWith('.ts.brkn.lol');
   const src = faviconUrl || (usable ? `https://icons.duckduckgo.com/ip3/${host}.ico` : '');
   const globe = icon('globe', 'sm');
-  if (!src) return globe;
-  return `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{innerHTML:'${globe.replace(/"/g, '&quot;')}'}))">`;
+  if (!src || failedFavicons.has(src)) return globe;
+  return `<img src="${esc(src)}" alt="" loading="lazy" onerror="faviconFailed(this)">`;
+}
+// Favicons that didn't load: the globe straight away next time (a redrawn card would
+// otherwise try again and flash).
+const failedFavicons = new Set();
+function faviconFailed(img) {
+  failedFavicons.add(img.getAttribute('src'));
+  img.replaceWith(Object.assign(document.createElement('span'), { innerHTML: icon('globe', 'sm') }));
 }
 
 /* ================================================================ nodes & colors */
@@ -1309,6 +1316,7 @@ function sessionCard(s) {
   const clientsFact = (cls, ico, text, title) => `<span class="fact clickable ${cls}" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
     fact('', icon(s.profile ? 'folder' : 'trash', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
+    !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Stops when its last client disconnects'),
     s.audible && fact('accent', icon('speaker', 'sm'), 'Playing', 'Playing sound'),
     s.is_recording && (s.recording_paused
       ? fact('', icon('pause', 'sm'), 'REC paused', 'Recording paused')
@@ -1320,7 +1328,6 @@ function sessionCard(s) {
     others.length && clientsFact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
       `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
     !clients.length && n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
-    !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Stops when its last client disconnects'),
   ].filter(Boolean).join('') + '<span data-idle hidden></span>';
   return `
   <article class="scard" data-key="${key}">
@@ -1875,7 +1882,9 @@ function agentLabel(c) {
 // its MCP says), origin with address, since when, User-Agent.
 function clientInfo(c) {
   const where = c.addr && c.addr !== c.from ? `${c.from} (${c.addr})` : c.from;
-  const since = c.since ? `connected ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since)))} ago)` : '';
+  // No "… ago": the card's markup must not change by itself, or it is redrawn on every
+  // refresh (images reload, failed favicons flash). The dialog says how long ago.
+  const since = c.since ? `connected ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
   return [
     c.agent_name && (c.topic ? `${c.agent_name}: ${c.topic}` : c.agent_name),
     c.conversation && `conversation ${c.conversation}`,
