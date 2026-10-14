@@ -1659,8 +1659,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .post(api_peer_json_activate)
                 .get(api_peer_json_activate),
         )
-        .with_state(state);
+        .with_state(state.clone());
 
+    tokio::spawn(finalize_recordings_on_shutdown(state));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     axum::serve(listener, app).await?;
 
@@ -2620,6 +2621,46 @@ async fn api_delete_session(
             Json(serde_json::json!({ "error": "Session not found" })),
         ))
     }
+}
+
+/// On SIGTERM/SIGINT (a restart or deploy), stop the running recordings and
+/// wait for them to write their final metadata, so they end as completed
+/// instead of "interrupted" (which stays for a crash). Then exit: sessions
+/// die with the daemon anyway, and open live-view sockets would stall a
+/// graceful server shutdown.
+async fn finalize_recordings_on_shutdown(state: AppState) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let (Ok(mut term), Ok(mut int)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+    ) else {
+        return;
+    };
+    tokio::select! {
+        _ = term.recv() => {}
+        _ = int.recv() => {}
+    }
+    info!("Shutting down: finalizing recordings");
+    let ids: Vec<Uuid> = {
+        let recs = state.active_recordings.read().await;
+        for handle in recs.values() {
+            handle.stop();
+        }
+        recs.keys().copied().collect()
+    };
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline && !ids.is_empty() {
+        let pending = recorder::list_recordings(&state.recorder_config)
+            .await
+            .iter()
+            .any(|m| m.status == "recording" && ids.contains(&m.id));
+        if !pending {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    info!(recordings = ids.len(), "Recordings finalized, exiting");
+    std::process::exit(0);
 }
 
 async fn api_list_profiles(
