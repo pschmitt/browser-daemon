@@ -1263,6 +1263,7 @@ async function doConnect({ quiet = false } = {}) {
     // page was emulated at this size inside the old window, then resized again later.
     connectStep("reading the session");
     if (sess?.id !== target.sessionId) sess = (await sessionApi("GET", "").catch(() => null))?.session ?? sess;
+    loadEngineDefaults(target.engine);
     connectStep("fitting the screen");
     await applyMetrics();
     setState("live");
@@ -1730,8 +1731,19 @@ function tapFeedback(x, y) {
 
 // Show touches & clicks (off by default): a dot follows the finger or the pressed mouse,
 // and every click ripples, so a screen recording of this view shows what was done.
-let showTouches = false;
-try { showTouches = localStorage.getItem("handoff.touches") === "1"; } catch { /* storage unavailable */ }
+// The viewer's own choice (null: none yet) wins over the engine's default on the node
+// (dashboard, Engines tab).
+let touchesChoice = null;
+try { const v = localStorage.getItem("handoff.touches"); if (v === "1" || v === "0") touchesChoice = v === "1"; } catch { /* storage unavailable */ }
+let showTouches = touchesChoice ?? false;
+async function loadEngineDefaults(engine) {
+  try {
+    const res = await fetch("/api/settings", { headers: authHeaders() });
+    if (!res.ok) return;
+    const d = (await res.json()).engines?.[engine || "chromium"];
+    if (touchesChoice === null && d) { showTouches = !!d.show_touches; renderTouches(); }
+  } catch { /* older node */ }
+}
 function renderTouches() {
   const b = $("touchesBtn");
   b.innerHTML = `<svg viewBox="0 0 24 24"><path d="${showTouches ? "M4 12l5 5L20 6" : "M4 4h16v16H4z"}"/></svg>Show touches &amp; clicks`;
@@ -1739,7 +1751,7 @@ function renderTouches() {
   if (!showTouches) $("touchDot").hidden = true;
 }
 $("touchesBtn").addEventListener("click", () => {
-  showTouches = !showTouches;
+  showTouches = touchesChoice = !showTouches;
   try { localStorage.setItem("handoff.touches", showTouches ? "1" : "0"); } catch { /* storage unavailable */ }
   renderTouches();
 });

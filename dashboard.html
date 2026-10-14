@@ -576,6 +576,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <button data-act="view" data-view="sessions" role="tab"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="count" id="countSessions">0</span></button>
       <button data-act="view" data-view="profiles" role="tab"><svg class="i sm"><use href="#i-folder"/></svg>Profiles <span class="count" id="countProfiles">0</span></button>
       <button data-act="view" data-view="recordings" role="tab"><svg class="i sm"><use href="#i-film"/></svg>Recordings <span class="count" id="countRecordings">0</span></button>
+      <button data-act="view" data-view="engines" role="tab"><svg class="i sm"><use href="#i-globe"/></svg>Engines</button>
       <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes <span class="count" id="countNodes">0</span></button>
     </nav>
     <div class="view-actions" id="viewActions"></div>
@@ -584,6 +585,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view" id="view-sessions"><div class="session-grid" id="sessionGrid"></div></section>
   <section class="view profiles" id="view-profiles" hidden></section>
   <section class="view recordings" id="view-recordings" hidden></section>
+  <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view nodes" id="view-nodes" hidden>
     <div id="nodesList" class="nodes-list"></div>
     <form id="addPeerForm" class="field add-peer"><label for="peerUrl">Add a peer</label>
@@ -1169,6 +1171,7 @@ function render() {
   renderProfiles();
   renderRecordings();
   renderNodes();
+  renderEngines();
 }
 
 function renderHeader() {
@@ -1468,7 +1471,7 @@ function setView(v) {
   view = v;
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
-  for (const name of ['sessions', 'profiles', 'recordings', 'nodes']) $('view-' + name).hidden = name !== v;
+  for (const name of ['sessions', 'profiles', 'recordings', 'engines', 'nodes']) $('view-' + name).hidden = name !== v;
   document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   renderViewActions();
 }
@@ -1657,8 +1660,13 @@ function setEngine(engine) {
   $('engineHint').style.color = supported ? '' : 'var(--bad)';
   $('sessionSubmit').dataset.unsupported = supported ? '' : '1';
   $('sessionSubmit').disabled = !supported;
+  // Ad blocking as the engine's default on that node (Engines tab), until changed here.
+  if (!adblockTouched) $('sessionAdblock').checked = engineDefaults(sessionNode, engine).adblock ?? true;
   renderProfilePicker();
 }
+let adblockTouched = false;
+$('sessionAdblock').addEventListener('change', () => { adblockTouched = true; });
+const engineDefaults = (node, engine) => nodes.find((n) => n.name === node)?.settings?.engines?.[engine] || {};
 
 function openNewSession(prefill = {}) {
   sessionNode = prefill.node || (filter !== 'all' ? filter : localName());
@@ -1666,6 +1674,7 @@ function openNewSession(prefill = {}) {
   sessionProfile = prefill.profile ? { node: sessionNode, name: prefill.profile } : null;
   sessionProxy = null;
   sessionScheme = null;
+  adblockTouched = false;
   $('sessionProfileName').value = '';
   $('sessionName').value = '';
   $('sessionUrl').value = prefill.url || '';
@@ -1751,9 +1760,10 @@ let sessionScheme = null;
 const schemeName = (v) => (v === 'light' ? 'Light' : 'Dark');
 function renderSchemePicker(profile) {
   const opt = (key, label) => `<option value="${key}"${(sessionScheme ?? '') === key ? ' selected' : ''}>${label}</option>`;
+  const engineScheme = engineDefaults(sessionNode, sessionEngine).color_scheme;
   $('sessionScheme').innerHTML = profile
-    ? [opt('', `Profile default (${schemeName(profile.color_scheme)})`), opt('dark', 'Dark'), opt('light', 'Light')].join('')
-    : [opt('', 'Dark'), opt('light', 'Light')].join('');
+    ? [opt('', `Profile default (${schemeName(profile.color_scheme ?? engineScheme)})`), opt('dark', 'Dark'), opt('light', 'Light')].join('')
+    : [opt('', `${sessionEngine === 'firefox' ? 'Firefox' : 'Chromium'} default (${schemeName(engineScheme)})`), opt('dark', 'Dark'), opt('light', 'Light')].join('');
 }
 $('sessionScheme').addEventListener('change', () => { sessionScheme = $('sessionScheme').value || null; });
 $('sessionProfiles').addEventListener('change', () => {
@@ -1789,7 +1799,8 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     color_scheme: sessionScheme,
     persistent: $('sessionPersistent').checked,
     record: $('sessionRecord').checked,
-    adblock: $('sessionAdblock').checked,
+    // Untouched: the node applies the engine's default.
+    adblock: adblockTouched ? $('sessionAdblock').checked : undefined,
     width: parseInt($('sessionWidth').value, 10) || 1920,
     height: parseInt($('sessionHeight').value, 10) || 1080,
   };
@@ -2148,6 +2159,46 @@ function renderNodes() {
   }).join('');
   if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
 }
+// Defaults per browser engine, the same on every node: shown as the local node has
+// them, saved to all online nodes (a node that differs is named).
+const ENGINES = [['chromium', 'Chromium'], ['firefox', 'Firefox']];
+function renderEngines() {
+  if (!ov || $('enginesList').contains(document.activeElement)) return;
+  const local = nodes.find((n) => n.isLocal);
+  const online = nodes.filter((n) => n.status === 'online');
+  const html = ENGINES.filter(([id]) => online.some((n) => !n.supported_engines?.length || n.supported_engines.includes(id))).map(([id, label]) => {
+    const d = local?.settings?.engines?.[id] || {};
+    const differ = online.filter((n) => !n.isLocal && n.settings && JSON.stringify(n.settings.engines?.[id] || {}) !== JSON.stringify(d)).map((n) => n.name);
+    const sel = (key, value, opts) => `<select class="input" data-engine="${id}" data-key="${key}">${opts.map(([v, l]) => `<option value="${v}"${String(value ?? '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    return `<div class="node-card" style="--node:var(--${id})">
+      <div class="node-head"><div class="avatar">${icon(id)}</div>
+        <div class="t"><b>${label}</b><span>Defaults for new ${label} sessions and their live views. A session's own choice, or its profile's, wins.</span></div></div>
+      <div class="node-settings">
+        <label class="node-setting"><span>${icon('shield', 'sm')}Ad blocking</span>${sel('adblock', d.adblock === undefined ? '' : String(d.adblock), [['', 'Node default'], ['true', 'On'], ['false', 'Off']])}</label>
+        <label class="node-setting"><span>${icon('moon', 'sm')}Colour scheme</span>${sel('color_scheme', d.color_scheme, [['', 'Dark'], ['light', 'Light']])}</label>
+        <label class="node-setting"><span>${icon('takeover', 'sm')}Show touches</span><input type="checkbox" data-engine="${id}" data-key="show_touches"${d.show_touches ? ' checked' : ''}> <span class="muted">Live views mark taps and clicks (a viewer can still switch it in the view's menu)</span></label>
+        ${differ.length ? `<span class="hint">Differs on ${esc(differ.join(', '))}: saving sets it everywhere.</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  if ($('enginesList').innerHTML !== html) $('enginesList').innerHTML = html;
+}
+$('enginesList').addEventListener('change', async (e) => {
+  const el = e.target.closest('[data-engine][data-key]');
+  if (!el) return;
+  const { engine, key } = el.dataset;
+  const engines = structuredClone(nodes.find((n) => n.isLocal)?.settings?.engines || {});
+  const d = engines[engine] ||= {};
+  if (key === 'show_touches') d.show_touches = el.checked;
+  else if (el.value === '') delete d[key];
+  else d[key] = key === 'adblock' ? el.value === 'true' : el.value;
+  const targets = nodes.filter((n) => n.status === 'online');
+  await act(`Saving ${engine} defaults`, () => Promise.all(targets.map((n) => request('PATCH', api(n.name, '/settings'), { engines }))),
+    `${engine === 'firefox' ? 'Firefox' : 'Chromium'} defaults saved on ${targets.length} node${targets.length === 1 ? '' : 's'}`);
+  for (const n of targets) n.settings = { ...(n.settings || {}), engines };
+  el.blur();
+  renderEngines();
+});
 $('nodesList').addEventListener('change', async (e) => {
   const sel = e.target.closest('[data-node-proxy]');
   if (!sel) return;
@@ -3240,7 +3291,7 @@ document.addEventListener('visibilitychange', () => {
 
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
-setView(['sessions', 'profiles', 'recordings', 'nodes'].includes(initialView) ? initialView : 'sessions');
+setView(['sessions', 'profiles', 'recordings', 'engines', 'nodes'].includes(initialView) ? initialView : 'sessions');
 addEventListener('hashchange', () => { const v = location.hash.slice(1); if (['sessions', 'profiles', 'recordings'].includes(v)) setView(v); });
 syncCachedRecordingsSet();
 refreshData(true);

@@ -7,12 +7,50 @@ use std::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use crate::browser::BrowserEngine;
+use crate::profiles::ColorScheme;
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct NodeSettings {
     /// Proxy id for sessions that choose none themselves and whose profile has
     /// none either; direct when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_proxy: Option<String>,
+    /// Defaults per browser engine (Engines tab).
+    #[serde(default)]
+    pub engines: Engines,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Engines {
+    #[serde(default)]
+    pub chromium: EngineDefaults,
+    #[serde(default)]
+    pub firefox: EngineDefaults,
+}
+
+impl Engines {
+    pub fn of(&self, engine: BrowserEngine) -> &EngineDefaults {
+        match engine {
+            BrowserEngine::Chromium => &self.chromium,
+            BrowserEngine::Firefox => &self.firefox,
+        }
+    }
+}
+
+/// What a new session of an engine starts with, unless the request or its
+/// profile says otherwise.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EngineDefaults {
+    /// Ad blocker; the node's --adblock-default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adblock: Option<bool>,
+    /// Dark when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_scheme: Option<ColorScheme>,
+    /// Live views mark taps and clicks (a viewer's own choice wins).
+    #[serde(default)]
+    pub show_touches: bool,
 }
 
 pub struct Store {
@@ -61,9 +99,12 @@ mod tests {
         let path = dir.join("node-settings.json");
         let store = Store::load(&path);
         assert_eq!(store.get(), NodeSettings::default());
-        let s = NodeSettings {
+        let mut s = NodeSettings {
             default_proxy: Some("tor".into()),
+            ..Default::default()
         };
+        s.engines.firefox.show_touches = true;
+        s.engines.chromium.color_scheme = Some(ColorScheme::Light);
         store.set(s.clone()).await.unwrap();
         assert_eq!(Store::load(&path).get(), s);
         std::fs::write(&path, "not json").unwrap();

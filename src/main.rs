@@ -597,10 +597,15 @@ impl AppState {
             ),
         };
 
-        let adblock = adblock.unwrap_or(self.adblock_default);
-        // An explicit choice wins, then the profile's; dark otherwise.
+        // An explicit choice wins, then the engine's default on this node.
+        let engine_defaults = self.settings.get().engines.of(engine).clone();
+        let adblock = adblock
+            .or(engine_defaults.adblock)
+            .unwrap_or(self.adblock_default);
+        // An explicit choice wins, then the profile's, then the engine's; dark otherwise.
         let color_scheme = color_scheme
             .or_else(|| profile.as_ref().and_then(|p| p.meta.color_scheme))
+            .or(engine_defaults.color_scheme)
             .unwrap_or_default();
         let browser = match ActiveBrowser::spawn(
             &self.config,
@@ -3877,6 +3882,9 @@ struct UpdateSettingsRequest {
     /// Proxy id; "none" or "" for direct. Absent: unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_proxy: Option<String>,
+    /// Engine defaults, replaced as a whole. Absent: unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engines: Option<settings::Engines>,
 }
 
 async fn api_get_settings(
@@ -3901,13 +3909,16 @@ async fn api_update_settings(
             state.check_proxy(key)?
         };
     }
+    if let Some(engines) = req.engines {
+        settings.engines = engines;
+    }
     state.settings.set(settings.clone()).await.map_err(|e| {
         api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Could not save the settings: {e}"),
         )
     })?;
-    info!(default_proxy = ?settings.default_proxy, "Node settings changed");
+    info!(settings = ?settings, "Node settings changed");
     Ok(Json(settings))
 }
 
