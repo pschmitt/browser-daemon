@@ -480,6 +480,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
   <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14a6.5 6.5 0 0 1 3 6"/></symbol>
   <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></symbol>
@@ -650,6 +651,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="field"><label for="profileName">Name</label><input class="input" id="profileName" required maxlength="128" placeholder="e.g. Google (me@example.com)" autocomplete="off" spellcheck="false"></div>
       <div class="field"><label for="profileClone">Start from</label><select class="input" id="profileClone"></select></div>
       <div class="field" id="profileProxyField"><label for="profileProxy">Proxy</label><select class="input" id="profileProxy"></select><span class="hint">Sessions of this profile go through it unless they pick another.</span></div>
+      <div class="field"><label for="profileHomepage">Homepage</label><input class="input" id="profileHomepage" type="text" inputmode="url" placeholder="Optional, e.g. https://ssl6.hrworks.de/o/dashboard" autocomplete="off" autocapitalize="off" spellcheck="false"><span class="hint">The page its sessions open with; a blank tab otherwise.</span></div>
       <div class="field"><label for="profileScheme">Appearance</label><select class="input" id="profileScheme"><option value="dark">Dark</option><option value="light">Light</option></select><span class="hint">What pages see as the preferred color scheme, and the browser's own look.</span></div>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-plus"/></svg>Create</button></div>
@@ -1560,6 +1562,7 @@ const ACT = {
         { label: p.session ? 'Appearance (from the next launch)' : 'Appearance' },
         ...['dark', 'light'].map((v) => ({ label: schemeName(v), on: (p.color_scheme || 'dark') === v, run: () => setProfileScheme(p, v) })),
       ]) },
+      { icon: 'home', label: 'Homepage…', meta: p.homepage ? hostOf(p.homepage) : 'blank', run: () => setProfileHomepage(p) },
       { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
       !p.session && others.length && { icon: 'transfer', label: 'Move to another node…', run: () => openTransfer(p) },
       !p.session && { icon: 'download', label: 'Export archive', run: () => { location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); } },
@@ -1990,6 +1993,7 @@ function openNewProfile() {
   fillProxyOptions();
   $('profileName').value = '';
   $('profileScheme').value = 'dark';
+  $('profileHomepage').value = '';
   fillCloneOptions();
   openModal('newProfileModal');
   setTimeout(() => $('profileName').focus(), 40);
@@ -2006,7 +2010,7 @@ function fillCloneOptions() {
 $('newProfileForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $('profileName').value.trim();
-  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null, proxy: $('profileProxy').value || null, color_scheme: $('profileScheme').value }), `Profile ${name} created`);
+  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null, proxy: $('profileProxy').value || null, color_scheme: $('profileScheme').value, homepage: $('profileHomepage').value.trim() || null }), `Profile ${name} created`);
   if (r !== undefined) closeModal('newProfileModal');
 });
 
@@ -2035,6 +2039,12 @@ function setProfileProxy(p, id) {
   act('Setting the proxy', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { proxy: id }),
     `${p.display} uses ${label}` + (p.session ? ' from its next launch' : ''));
 }
+async function setProfileHomepage(p) {
+  const v = await ask({ title: `Homepage of ${p.display}`, text: 'The page its sessions open with. Leave empty for a blank tab.', input: p.homepage || '', placeholder: 'e.g. https://ssl6.hrworks.de/o/dashboard', ok: 'Save' });
+  if (v === null || v === undefined) return;
+  act('Setting the homepage', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { homepage: v.trim() }),
+    v.trim() ? `${p.display} opens ${v.trim()}` + (p.session ? ' from its next launch' : '') : `${p.display} opens a blank tab`);
+}
 async function cloneProfile(p) {
   const name = await ask({ title: `Duplicate ${p.display}`, text: `Creates a copy on ${p.node_name}.`, input: `${p.display}-copy`, ok: 'Duplicate' });
   if (!name) return;
@@ -2053,6 +2063,7 @@ function showProfileDetails(p) {
     ['Storage', `<span class="mono">${esc(p.storage_dir || p.name)}</span>`], ['ID', p.id && `<span class="mono">${esc(p.id)}</span>`],
     ['Node', nodeChip(p.node_name)], ['Engine', p.engine],
     ['Proxy', p.proxy ? proxyChip(p.node_name, p.proxy) : 'Direct'], ['Appearance', schemeName(p.color_scheme)],
+    ['Homepage', p.homepage ? `<span class="mono">${esc(p.homepage)}</span>` : 'blank'],
     ['Size', formatBytes(p.size_bytes)], ['Status', p.session ? 'Running' : 'Stored'],
     ['Session', p.session && `<span class="mono">${esc(p.session.id)}</span>`],
     ['Created', absTime(p.created_at_secs)], ['Modified', absTime(p.modified_at_secs)],

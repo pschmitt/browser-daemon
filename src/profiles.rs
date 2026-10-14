@@ -38,6 +38,9 @@ pub struct ProfileMeta {
     /// Appearance of the profile's sessions (dark when unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_scheme: Option<ColorScheme>,
+    /// Page a session's start tab opens (blank when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +124,7 @@ pub async fn create(
         created_at_secs: now_secs(),
         proxy: None,
         color_scheme: None,
+        homepage: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
     fs::create_dir_all(&dir).await?;
@@ -130,9 +134,10 @@ pub async fn create(
 
 /// Give a directory fresh metadata (after a copy or an import).
 pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::Result<Profile> {
-    // A copied or imported profile keeps its proxy and appearance.
+    // A copied or imported profile keeps its proxy, appearance and homepage.
     let old = read_meta(&dir).await;
     let proxy = old.as_ref().and_then(|m| m.proxy.clone());
+    let homepage = old.as_ref().and_then(|m| m.homepage.clone());
     let color_scheme = old.and_then(|m| m.color_scheme);
     let id = dir
         .file_name()
@@ -145,6 +150,7 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         created_at_secs: now_secs(),
         proxy,
         color_scheme,
+        homepage,
     };
     write_meta(&dir, &meta).await?;
     Ok(Profile { meta, dir })
@@ -197,6 +203,7 @@ pub async fn migrate(profiles_dir: &Path) {
             created_at_secs,
             proxy: None,
             color_scheme: None,
+            homepage: None,
         };
         let new = profiles_dir.join(id.to_string());
         if new != old {

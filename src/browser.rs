@@ -111,6 +111,10 @@ impl ActiveBrowser {
         start_tab: bool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = Uuid::new_v4();
+        // The start tab: the profile's homepage, else blank.
+        let start_page = profile
+            .and_then(|p| p.meta.homepage.clone())
+            .unwrap_or_else(|| "about:blank".to_string());
         let relay = Relay::start(proxy.cloned()).await?;
         let audio = match config.audio {
             Some(ref cfg) => match Sink::create(cfg, id).await {
@@ -194,7 +198,7 @@ impl ActiveBrowser {
                 // No start tab for an agent opening its own (Playwright): it would sit
                 // there unused. Chromium then opens the window with the first tab.
                 if start_tab {
-                    cmd.arg("about:blank");
+                    cmd.arg(start_page);
                 } else {
                     cmd.arg("--no-startup-window");
                 }
@@ -343,7 +347,7 @@ impl ActiveBrowser {
                     .arg("--profile")
                     .arg(&user_data_dir)
                     .arg("--remote-debugging-port=0")
-                    .arg("about:blank")
+                    .arg(start_page)
                     .env("MOZ_ENABLE_WAYLAND", "0")
                     .stderr(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::null())

@@ -923,6 +923,9 @@ pub struct ProfileInfo {
     /// Appearance of the profile's sessions.
     #[serde(default)]
     pub color_scheme: ColorScheme,
+    /// Page a session's start tab opens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homepage: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -943,6 +946,8 @@ pub struct CreateProfileRequest {
     pub proxy: Option<String>,
     /// Appearance of the profile's sessions (dark when unset).
     pub color_scheme: Option<ColorScheme>,
+    /// Page a session's start tab opens.
+    pub homepage: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -952,6 +957,8 @@ pub struct UpdateProfileRequest {
     pub proxy: Option<String>,
     /// Appearance of new sessions; a running one keeps its own until restarted.
     pub color_scheme: Option<ColorScheme>,
+    /// Page new sessions' start tab opens; "" clears it.
+    pub homepage: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -2333,6 +2340,7 @@ async fn profile_info(state: &AppState, profile: &Profile) -> ProfileInfo {
         modified_at_secs,
         proxy: profile.meta.proxy.clone(),
         color_scheme: profile.meta.color_scheme.unwrap_or_default(),
+        homepage: profile.meta.homepage.clone(),
     }
 }
 
@@ -2533,12 +2541,21 @@ async fn api_create_profile(
             })?,
     };
 
-    if proxy.is_some() || req.color_scheme.is_some() {
+    let homepage = req
+        .homepage
+        .as_deref()
+        .map(homepage_url)
+        .transpose()?
+        .flatten();
+    if proxy.is_some() || req.color_scheme.is_some() || homepage.is_some() {
         if let Some(proxy) = proxy {
             profile.meta.proxy = proxy;
         }
         if req.color_scheme.is_some() {
             profile.meta.color_scheme = req.color_scheme;
+        }
+        if homepage.is_some() {
+            profile.meta.homepage = homepage;
         }
         profiles::write_meta(&profile.dir, &profile.meta)
             .await
@@ -2573,6 +2590,29 @@ async fn api_get_profile(
 }
 
 /// Rename a profile. Its directory is named by id, so a running session keeps going.
+/// A profile homepage as given: an http(s) address (a bare host gets https://);
+/// empty clears it.
+fn homepage_url(input: &str) -> Result<Option<String>, ApiError> {
+    let v = input.trim();
+    if v.is_empty() {
+        return Ok(None);
+    }
+    let full = if v.contains("://") {
+        v.to_string()
+    } else {
+        format!("https://{v}")
+    };
+    match url::Url::parse(&full) {
+        Ok(u) if matches!(u.scheme(), "http" | "https") && u.host_str().is_some() => {
+            Ok(Some(u.to_string()))
+        }
+        _ => Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "The homepage must be an http(s) address",
+        )),
+    }
+}
+
 async fn api_update_profile(
     AxumPath(key): AxumPath<String>,
     State(state): State<AppState>,
@@ -2620,6 +2660,16 @@ async fn api_update_profile(
                 .await
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             info!(profile = %profile.meta.name, color_scheme = ?scheme, "Profile appearance changed");
+        }
+    }
+    if let Some(ref requested) = req.homepage {
+        let homepage = homepage_url(requested)?;
+        if homepage != profile.meta.homepage {
+            profile.meta.homepage = homepage;
+            profiles::write_meta(&profile.dir, &profile.meta)
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            info!(profile = %profile.meta.name, homepage = ?profile.meta.homepage, "Profile homepage changed");
         }
     }
     Ok(Json(profile_info(&state, &profile).await))
