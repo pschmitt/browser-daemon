@@ -993,7 +993,23 @@ let mobileLayout = layoutMode === "phone";
 let fitLayout = layoutMode !== "window";
 let refitting = false, manualKb = false, mirror = "", composing = false, resyncTimer = null, probeSeq = 0;
 
+// While connecting, the overlay names the step it waits on and the time so far, so a
+// slow connect shows where it hangs (browser starting, attaching, page answering).
+let connectT0 = 0, connectStepText = "", connectTicker = 0;
+function connectStep(text) {
+  connectStepText = text;
+  connectT0 ||= performance.now();
+  renderConnectStep();
+  clearInterval(connectTicker);
+  connectTicker = setInterval(renderConnectStep, 200);
+}
+function renderConnectStep() {
+  if (!E.overlay.classList.contains("show") || E.dot.className !== "wait" || !connectStepText) return;
+  E.msg.textContent = `Connecting to the browser… · ${connectStepText} · ${((performance.now() - connectT0) / 1000).toFixed(1)} s`;
+}
+
 function setState(kind, text) {
+  if (kind !== "wait") { clearInterval(connectTicker); connectT0 = 0; connectStepText = ""; }
   if (kind === "bad") endSwitching();
   E.dot.className = kind === "live" ? "live" : kind === "bad" ? "bad" : "wait";
   const show = kind !== "live";
@@ -1002,6 +1018,7 @@ function setState(kind, text) {
   E.retry.hidden = kind !== "bad";
   if (E.overlayDash) E.overlayDash.hidden = kind !== "bad";
   if (show) E.msg.textContent = kind === "bad" ? (text || "Disconnected") : "Connecting to the browser…";
+  if (kind === "wait") renderConnectStep();
 }
 
 /* ---------------------------------------------------------------- connecting */
@@ -1172,6 +1189,7 @@ async function doConnect({ quiet = false } = {}) {
   if (quiet) E.dot.className = "wait";
   else setState("wait", "Connecting to the browser…");
   try {
+    connectStep("finding the tab");
     const targets = await fetchTargets();
     target = targets.find((t) => t.id === pageId) || null;
     if (!target) {
@@ -1199,11 +1217,15 @@ async function doConnect({ quiet = false } = {}) {
       ? new BidiDriver(`${scheme}${host}/firefox?session_id=${encodeURIComponent(target.sessionId)}&observer=true`, pageId, handlers)
       : new CdpDriver(`${scheme}${host}/devtools/page/${encodeURIComponent(pageId)}?observer=true`, handlers);
     document.body.dataset.engine = target.engine || "chromium";
+    connectStep(`attaching to ${target.engine === "firefox" ? "Firefox" : "Chromium"}`);
     await drv.ready;
+    connectStep("setting up the page");
     await drv.start();
     // The first fit needs the session (has it a display of its own?): without it the
     // page was emulated at this size inside the old window, then resized again later.
+    connectStep("reading the session");
     if (sess?.id !== target.sessionId) sess = (await sessionApi("GET", "").catch(() => null))?.session ?? sess;
+    connectStep("fitting the screen");
     await applyMetrics();
     setState("live");
     refreshInfo();
@@ -2931,6 +2953,8 @@ function startSessionPolling() {
 async function boot() {
   const sessionId = params.get("session");
   if (!pageId && sessionId) {
+    setState("wait");
+    connectStep("waiting for the session's first tab");
     for (let i = 0; i < 20; i++) {
       const page = (await fetchTargets().catch(() => [])).find((t) => t.sessionId === sessionId);
       if (page) {
