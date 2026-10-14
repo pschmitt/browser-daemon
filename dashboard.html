@@ -333,7 +333,14 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .endpoint { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .endpoint .lbl { font-size: 12px; font-weight: 700; color: var(--muted); width: 110px; flex: none; }
 .endpoint code { flex: 1; min-width: 0; font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.node-card { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+.nodes-list { display: flex; flex-direction: column; gap: 10px; }
+.add-peer { margin-top: 18px; max-width: 640px; }
+.node-card { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.node-head { display: flex; align-items: center; gap: 12px; }
+.node-settings { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+.node-setting { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+.node-setting > span:first-child { display: inline-flex; align-items: center; gap: 6px; min-width: 120px; color: var(--muted); }
+.node-setting select { max-width: 320px; }
 .node-card .avatar { color: var(--node); background: color-mix(in oklab, var(--node) 16%, transparent); }
 .node-card .t { flex: 1; min-width: 0; }
 .node-card .t b { display: flex; align-items: center; gap: 7px; }
@@ -569,6 +576,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <button data-act="view" data-view="sessions" role="tab"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="count" id="countSessions">0</span></button>
       <button data-act="view" data-view="profiles" role="tab"><svg class="i sm"><use href="#i-folder"/></svg>Profiles <span class="count" id="countProfiles">0</span></button>
       <button data-act="view" data-view="recordings" role="tab"><svg class="i sm"><use href="#i-film"/></svg>Recordings <span class="count" id="countRecordings">0</span></button>
+      <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes <span class="count" id="countNodes">0</span></button>
     </nav>
     <div class="view-actions" id="viewActions"></div>
   </div>
@@ -576,6 +584,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view" id="view-sessions"><div class="session-grid" id="sessionGrid"></div></section>
   <section class="view profiles" id="view-profiles" hidden></section>
   <section class="view recordings" id="view-recordings" hidden></section>
+  <section class="view nodes" id="view-nodes" hidden>
+    <div id="nodesList" class="nodes-list"></div>
+    <form id="addPeerForm" class="field add-peer"><label for="peerUrl">Add a peer</label>
+      <div style="display:flex;gap:8px"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.rofl-13.example.net"><button class="btn primary" type="submit"><svg class="i"><use href="#i-plus"/></svg>Add</button></div>
+    </form>
+  </section>
 </main>
 
 <div class="menu" id="menu" role="menu"></div>
@@ -673,18 +687,6 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </div>
 
 <!-- Nodes -->
-<div class="modal" id="nodesModal">
-  <div class="sheet wide">
-    <div class="sheet-head"><h2>Mesh nodes</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
-    <div class="sheet-body">
-      <div id="nodesList" style="display:flex;flex-direction:column;gap:8px"></div>
-      <form id="addPeerForm" class="field"><label for="peerUrl">Add a peer</label>
-        <div style="display:flex;gap:8px"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.rofl-13.example.net"><button class="btn primary" type="submit"><svg class="i"><use href="#i-plus"/></svg>Add</button></div>
-      </form>
-    </div>
-  </div>
-</div>
-
 <!-- Connect / API -->
 <div class="modal" id="connectModal">
   <div class="sheet wide">
@@ -1166,6 +1168,7 @@ function render() {
   renderSessions();
   renderProfiles();
   renderRecordings();
+  renderNodes();
 }
 
 function renderHeader() {
@@ -1194,7 +1197,7 @@ function openNodeMenu(anchor) {
       on: filter === n.name, run: () => { filter = n.name; render(); },
     })),
     '-',
-    { icon: 'server', label: `Manage nodes… (${ov.online_nodes}/${ov.total_nodes} online)`, run: () => { renderNodes(); openModal('nodesModal'); } },
+    { icon: 'server', label: `Manage nodes… (${ov.online_nodes}/${ov.total_nodes} online)`, run: () => setView('nodes') },
   ], { align: 'left' });
 }
 
@@ -1231,6 +1234,7 @@ function renderStats() {
   $('countSessions').textContent = ov.sessions.filter(inFilter).length;
   $('countProfiles').textContent = profs.length;
   $('countRecordings').textContent = visibleRecordings().length;
+  $('countNodes').textContent = nodes.length;
 }
 
 function drawSpark(scale) {
@@ -1464,7 +1468,7 @@ function setView(v) {
   view = v;
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
-  for (const name of ['sessions', 'profiles', 'recordings']) $('view-' + name).hidden = name !== v;
+  for (const name of ['sessions', 'profiles', 'recordings', 'nodes']) $('view-' + name).hidden = name !== v;
   document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   renderViewActions();
 }
@@ -1488,7 +1492,7 @@ const ACT = {
     setView(el.dataset.view);
     if (el.classList.contains('stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
-  'nodes': () => { renderNodes(); openModal('nodesModal'); },
+  'nodes': () => setView('nodes'),
   'node-menu': (el) => { if (ov) openNodeMenu(el); },
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
@@ -1731,8 +1735,10 @@ function renderProxyPicker(profile) {
   const def = profile?.proxy;
   const opt = (key, label) => `<option value="${esc(key)}"${(sessionProxy ?? '') === key ? ' selected' : ''}>${esc(label)}</option>`;
   $('sessionProxies').innerHTML = [
-    profile ? opt('', `Profile default (${def ? proxyName(sessionNode, def) : 'Direct'})`) : opt('', 'Direct'),
-    profile ? opt('none', 'Direct') : '',
+    profile && def ? opt('', `Profile default (${proxyName(sessionNode, def)})`)
+      : nodeDefaultProxy(sessionNode) ? opt('', `Node default (${proxyName(sessionNode, nodeDefaultProxy(sessionNode))})`)
+      : opt('', profile ? 'Profile default (Direct)' : 'Direct'),
+    profile || nodeDefaultProxy(sessionNode) ? opt('none', 'Direct') : '',
     ...list.map((x) => opt(x.id, `${x.name}  ·  ${x.host}:${x.port}`)),
   ].join('');
   $('sessionProxyHint').textContent = profile?.session ? 'The profile is already running: its session keeps the proxy it started with.' : '';
@@ -2105,26 +2111,57 @@ $('transferForm').addEventListener('submit', async (e) => {
 });
 
 /* ---------------------------------------------------------------- nodes & endpoints */
+// A node's default proxy: for sessions that pick none and whose profile has none.
+const nodeDefaultProxy = (node) => nodes.find((n) => n.name === node)?.settings?.default_proxy || null;
 function renderNodes() {
   if (!ov) return;
-  $('nodesList').innerHTML = nodes.map((n) => {
+  // Not while a setting is being changed: re-rendering would close its picker.
+  if ($('nodesList').contains(document.activeElement)) return;
+  const html = nodes.map((n) => {
     const online = n.status === 'online';
+    const proxies = n.proxies || [];
+    const def = n.settings?.default_proxy || '';
+    const rev = n.revision ? ` · ${n.revision.slice(0, 7)}` : '';
+    const settings = !online ? '' : `<div class="node-settings">
+        <label class="node-setting"><span>${icon('route', 'sm')}Default proxy</span>${proxies.length
+          ? `<select class="input sm" data-node-proxy="${esc(n.name)}" aria-label="Default proxy of ${esc(n.name)}">
+              <option value=""${def ? '' : ' selected'}>Direct</option>
+              ${proxies.map((x) => `<option value="${esc(x.id)}"${def === x.id ? ' selected' : ''}>${esc(x.name)} (${esc(x.host)}:${x.port})</option>`).join('')}
+            </select>`
+          : '<span class="muted">No proxies on this node</span>'}</label>
+        <span class="hint">For new sessions that pick no proxy and whose profile has none.</span>
+      </div>`;
     return `<div class="node-card" style="--node:${nodeColor(n.name)}">
-      <div class="avatar">${icon('server')}</div>
-      <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${n.latency_ms} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
-        <span>${esc(n.url)}</span>
-        ${online ? `<div class="bars"><span><b>${n.active_sessions}</b>/${n.max_sessions} sessions</span><span><b>${n.profiles_count}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.join(' · ')}</span>` : ''}</div>` : ''}
+      <div class="node-head">
+        <div class="avatar">${icon('server')}</div>
+        <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${n.latency_ms} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
+          <span>${esc(n.url)}${n.version ? ` · v${esc(n.version)}${esc(rev)}` : ''}</span>
+          ${online ? `<div class="bars"><span><b>${n.active_sessions}</b>/${n.max_sessions} sessions</span><span><b>${n.profiles_count}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.join(' · ')}</span>` : ''}</div>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;flex:none">
+          ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}">${icon('plus', 'sm')}Session</button>` : ''}
+          ${!n.isLocal ? `<button class="btn icon sm ghost" data-node-remove="${esc(n.name)}" title="Remove peer">${icon('trash', 'sm')}</button>` : ''}
+        </div>
       </div>
-      <div style="display:flex;gap:6px;flex:none">
-        ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}">${icon('plus', 'sm')}Session</button>` : ''}
-        ${!n.isLocal ? `<button class="btn icon sm ghost" data-node-remove="${esc(n.name)}" title="Remove peer">${icon('trash', 'sm')}</button>` : ''}
-      </div>
+      ${settings}
     </div>`;
   }).join('');
+  if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
 }
+$('nodesList').addEventListener('change', async (e) => {
+  const sel = e.target.closest('[data-node-proxy]');
+  if (!sel) return;
+  const node = sel.dataset.nodeProxy;
+  const r = await act(`Saving ${node}'s default proxy`,
+    () => request('PATCH', api(node, '/settings'), { default_proxy: sel.value || 'none' }),
+    `${node}: default proxy ${sel.value ? proxyName(node, sel.value) : 'Direct'}`);
+  sel.blur();
+  if (r !== undefined) { const n = nodes.find((x) => x.name === node); if (n) n.settings = r; }
+  renderNodes();
+});
 $('nodesList').addEventListener('click', async (e) => {
   const launch = e.target.closest('[data-node-launch]');
-  if (launch) { closeModal('nodesModal'); openNewSession({ node: launch.dataset.nodeLaunch }); return; }
+  if (launch) { openNewSession({ node: launch.dataset.nodeLaunch }); return; }
   const rm = e.target.closest('[data-node-remove]');
   if (rm) {
     const name = rm.dataset.nodeRemove;
@@ -3203,7 +3240,7 @@ document.addEventListener('visibilitychange', () => {
 
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
-setView(['sessions', 'profiles', 'recordings'].includes(initialView) ? initialView : 'sessions');
+setView(['sessions', 'profiles', 'recordings', 'nodes'].includes(initialView) ? initialView : 'sessions');
 addEventListener('hashchange', () => { const v = location.hash.slice(1); if (['sessions', 'profiles', 'recordings'].includes(v)) setView(v); });
 syncCachedRecordingsSet();
 refreshData(true);

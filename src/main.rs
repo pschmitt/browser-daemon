@@ -13,6 +13,7 @@ mod proxies;
 mod proxy;
 mod recorder;
 mod relay;
+mod settings;
 mod tui;
 mod video;
 mod viewers;
@@ -22,7 +23,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -416,6 +417,8 @@ pub struct AppState {
     pub viewers: Arc<viewers::Viewers>,
     /// Passkeys approved in live views, on their way to the passkey helper.
     pub passkeys: Arc<passkeys::Broker>,
+    /// This node's settings (Nodes tab of the dashboard).
+    pub settings: Arc<settings::Store>,
 }
 
 #[derive(Default)]
@@ -570,11 +573,18 @@ impl AppState {
             ));
         }
 
-        // An explicit choice wins ("none" for a direct connection), then the profile's.
+        // An explicit choice wins ("none" for a direct connection), then the profile's,
+        // then the node's default (skipped when the node no longer has that proxy).
+        let node_default = self
+            .settings
+            .get()
+            .default_proxy
+            .filter(|k| self.config.proxies.iter().any(|p| &p.id == k));
         let proxy_key = proxy
             .map(str::trim)
             .map(str::to_string)
-            .or_else(|| profile.as_ref().and_then(|p| p.meta.proxy.clone()));
+            .or_else(|| profile.as_ref().and_then(|p| p.meta.proxy.clone()))
+            .or(node_default);
         let proxy = match proxy_key.as_deref() {
             None => None,
             Some(k) if proxies::DIRECT.contains(&k) => None,
@@ -1029,6 +1039,8 @@ pub struct NodeInfo {
     pub supported_engines: Vec<BrowserEngine>,
     #[serde(default)]
     pub proxies: Vec<proxies::ProxyInfo>,
+    #[serde(default)]
+    pub settings: settings::NodeSettings,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1246,6 +1258,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         None => Vec::new(),
     };
+    // Next to the profiles directory (the state directory).
+    let settings_path = args
+        .profile_dir
+        .parent()
+        .unwrap_or(&args.profile_dir)
+        .join("node-settings.json");
     let config = Arc::new(BrowserConfig {
         chromium_bin: args.chromium,
         firefox_bin: args.firefox,
@@ -1316,6 +1334,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audio::remove_stale_sinks(cfg).await;
     }
 
+    let settings = Arc::new(settings::Store::load(&settings_path));
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -1337,6 +1356,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audible_pages: Arc::default(),
         viewers: Arc::default(),
         passkeys: Arc::default(),
+        settings,
     };
     audible::spawn_monitor(state.clone());
 
@@ -1413,6 +1433,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_session).delete(api_delete_session),
         )
         .route("/api/proxies", get(api_list_proxies))
+        .route(
+            "/api/settings",
+            get(api_get_settings).patch(api_update_settings),
+        )
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/sessions/{id}/name", post(api_session_rename))
@@ -1485,6 +1509,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/peers/{peer}/sessions/{id}/{action}",
             post(api_peer_session_action),
+        )
+        .route(
+            "/api/peers/{peer}/settings",
+            patch(api_peer_update_settings),
         )
         .route("/api/peers/{peer}/profiles", post(api_peer_create_profile))
         .route(
@@ -3057,6 +3085,7 @@ async fn api_mesh_node(
         max_storage_bytes,
         supported_engines,
         proxies: state.proxy_infos(),
+        settings: state.settings.get(),
     }))
 }
 
@@ -3085,6 +3114,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         max_storage_bytes: state.recorder_config.max_storage_bytes,
         supported_engines: local_supported_engines,
         proxies: state.proxy_infos(),
+        settings: state.settings.get(),
     };
 
     let peers: Vec<(String, String)> = {
@@ -3836,6 +3866,70 @@ async fn api_peer_clone_profile(
     let url = peer_profile_url(&peer_url, &name, Some("clone"));
     let res = state
         .peer_request(state.http_client.post(&url))
+        .json(&req)
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
+#[derive(Deserialize, Serialize)]
+struct UpdateSettingsRequest {
+    /// Proxy id; "none" or "" for direct. Absent: unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_proxy: Option<String>,
+}
+
+async fn api_get_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    Ok(Json(state.settings.get()))
+}
+
+async fn api_update_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateSettingsRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let mut settings = state.settings.get();
+    if let Some(ref key) = req.default_proxy {
+        settings.default_proxy = if key.trim().is_empty() {
+            None
+        } else {
+            state.check_proxy(key)?
+        };
+    }
+    state.settings.set(settings.clone()).await.map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Could not save the settings: {e}"),
+        )
+    })?;
+    info!(default_proxy = ?settings.default_proxy, "Node settings changed");
+    Ok(Json(settings))
+}
+
+async fn api_peer_update_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(peer): AxumPath<String>,
+    Json(req): Json<UpdateSettingsRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+        )
+            .into_response();
+    };
+    let url = format!("{}/api/settings", peer_url.trim_end_matches('/'));
+    let res = state
+        .peer_request(state.http_client.patch(&url))
         .json(&req)
         .send()
         .await;

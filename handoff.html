@@ -168,6 +168,8 @@
   #ripple { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; pointer-events: none; opacity: 0;
     background: color-mix(in oklab, var(--accent) 45%, transparent); border: 2px solid var(--accent); }
   #ripple.go { animation: ripple .45s ease-out; }
+  #touchDot { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; pointer-events: none; z-index: 3;
+    background: rgba(255, 255, 255, .28); border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); }
   @keyframes ripple { from { opacity: .9; transform: scale(.4); } to { opacity: 0; transform: scale(1.5); } }
   #overlay { position: absolute; inset: 0; display: none; flex-direction: column; gap: 14px; align-items: center; justify-content: center;
     padding: 24px; text-align: center; background: color-mix(in oklab, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
@@ -283,6 +285,7 @@
   <button class="sm-item" id="forceBtn" role="menuitemcheckbox" aria-checked="false" title="This screen's size wins over other viewers and over an attached automation client"></button>
   <div class="sm-label">View</div>
   <button class="sm-item" id="audioBtn" role="menuitemcheckbox" aria-checked="false" hidden></button>
+  <button class="sm-item" id="touchesBtn" role="menuitemcheckbox" aria-checked="false" title="Mark where you tap and click, as on a phone's screen recording"></button>
   <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
   <label class="sm-item sm-search" id="smStreamRow" hidden><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/></svg>Picture<select id="smStream" aria-label="Picture"><option value="video">Video (H.264)</option><option value="jpeg">Images (JPEG)</option></select></label>
   <div class="sm-label">Browser</div>
@@ -296,6 +299,7 @@
 <div id="stage">
   <canvas id="view" tabindex="-1"></canvas>
   <div id="ripple"></div>
+  <div id="touchDot" hidden></div>
   <div id="switching" hidden><div class="spin"></div><span id="switchingText">Loading tab…</span></div>
   <div id="overlay">
     <div class="spin" id="spin"></div>
@@ -1532,7 +1536,9 @@ E.view.addEventListener("pointerdown", (e) => {
     if (e.button > 2 || !drv || refitting || mouse) return;
     const p = toPage(e);
     if (!p) return;
-    if (xPop.open && videoShown()) {
+    // Firefox opens its context menu only for real input, not for WebDriver's: a
+    // right-click goes to the display there (then the menu takes the input, as above).
+    if ((xPop.open || (e.button === 2 && drv instanceof BidiDriver)) && videoShown()) {
       E.view.setPointerCapture(e.pointerId);
       mouse = { clicks: 1, button: e.button, x: true };
       xSend({ type: "down", ...xAt(p), button: e.button });
@@ -1664,7 +1670,7 @@ E.view.addEventListener("pointerup", (e) => {
     const p = drag ? toPage(e) || drag : toPage({ clientX: x, clientY: y });
     if (!p || !drv) return;
     if (drag) drv.mouseUp(Math.round(p.x), Math.round(p.y), 1, 0);
-    else if (xPop.open && videoShown()) { xSend({ type: "down", ...xAt(p), button: 2 }); xSend({ type: "up", ...xAt(p), button: 2 }); }
+    else if ((xPop.open || drv instanceof BidiDriver) && videoShown()) { xSend({ type: "down", ...xAt(p), button: 2 }); xSend({ type: "up", ...xAt(p), button: 2 }); }
     else { drv.mouseDown(Math.round(p.x), Math.round(p.y), 1, 2); drv.mouseUp(Math.round(p.x), Math.round(p.y), 1, 2); }
     checkPopups(250);
     return;
@@ -1720,6 +1726,43 @@ function tapFeedback(x, y) {
   E.ripple.style.left = x - r.left + "px"; E.ripple.style.top = y - r.top + "px";
   E.ripple.classList.remove("go"); void E.ripple.offsetWidth; E.ripple.classList.add("go");
   navigator.vibrate?.(8);
+}
+
+// Show touches & clicks (off by default): a dot follows the finger or the pressed mouse,
+// and every click ripples, so a screen recording of this view shows what was done.
+let showTouches = false;
+try { showTouches = localStorage.getItem("handoff.touches") === "1"; } catch { /* storage unavailable */ }
+function renderTouches() {
+  const b = $("touchesBtn");
+  b.innerHTML = `<svg viewBox="0 0 24 24"><path d="${showTouches ? "M4 12l5 5L20 6" : "M4 4h16v16H4z"}"/></svg>Show touches &amp; clicks`;
+  b.setAttribute("aria-checked", String(showTouches));
+  if (!showTouches) $("touchDot").hidden = true;
+}
+$("touchesBtn").addEventListener("click", () => {
+  showTouches = !showTouches;
+  try { localStorage.setItem("handoff.touches", showTouches ? "1" : "0"); } catch { /* storage unavailable */ }
+  renderTouches();
+});
+renderTouches();
+let touchShown = null;
+function placeTouchDot(e) {
+  const r = E.stage.getBoundingClientRect(), d = $("touchDot");
+  d.style.left = e.clientX - r.left + "px"; d.style.top = e.clientY - r.top + "px";
+  d.hidden = false;
+}
+E.view.addEventListener("pointerdown", (e) => {
+  if (!showTouches || !e.isPrimary) return;
+  touchShown = e.pointerId;
+  placeTouchDot(e);
+  if (e.pointerType === "mouse") tapFeedback(e.clientX, e.clientY);
+});
+E.view.addEventListener("pointermove", (e) => { if (touchShown === e.pointerId) placeTouchDot(e); });
+for (const type of ["pointerup", "pointercancel"]) {
+  E.view.addEventListener(type, (e) => {
+    if (touchShown !== e.pointerId) return;
+    touchShown = null;
+    $("touchDot").hidden = true;
+  });
 }
 
 /* ---------------------------------------------------------------- native keyboard */
