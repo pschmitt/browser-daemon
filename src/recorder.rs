@@ -129,6 +129,7 @@ pub fn start_recording(
     profile: Option<String>,
     node_name: String,
     config: RecorderConfig,
+    grab: Option<DisplayGrab>,
 ) -> SessionRecorderHandle {
     let recording_id = Uuid::new_v4();
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -148,6 +149,7 @@ pub fn start_recording(
             stop_clone,
             clock_clone,
             frame_rx,
+            grab,
         )
         .await;
     });
@@ -245,6 +247,13 @@ const TITLE_REFRESH: Duration = Duration::from_secs(5);
 /// delivers; four screenshots a second cost ~15%.
 const RECORD_FRAME_INTERVAL: Duration = Duration::from_millis(250);
 const LAYOUT_REQUEST_ID: u64 = 1 << 29;
+/// From here up to TITLE_REQUEST_ID: the page's size and toolbar height, for
+/// grabbing the page's area from the display (see DisplayGrab).
+const GEOMETRY_REQUEST_ID: u64 = 1 << 27;
+/// The page's size on screen (scrollbars included; a zoomed-out mobile page scaled
+/// down) and the toolbars' height (null under emulation, where outer and inner sizes
+/// don't belong together; then the last one stands).
+const GEOMETRY_EXPR: &str = "(() => { const s = Math.min(visualViewport.scale, 1); return [Math.round(innerWidth * s), Math.round(innerHeight * s), outerWidth === innerWidth ? outerHeight - innerHeight : null]; })()";
 const SHOT_REQUEST_ID: u64 = 1 << 30;
 /// Recorded frames are scaled to fit this box.
 const RECORD_MAX: (f64, f64) = (1024.0, 640.0);
@@ -259,6 +268,7 @@ async fn record_session_loop(
     stop_flag: Arc<AtomicBool>,
     clock: Arc<RecordingClock>,
     mut frame_rx: tokio::sync::mpsc::UnboundedReceiver<ProxyRecordingFrame>,
+    grab: Option<DisplayGrab>,
 ) {
     let rec_dir = config.recordings_dir.join(recording_id.to_string());
     if let Err(e) = fs::create_dir_all(&rec_dir).await {
@@ -326,6 +336,12 @@ async fn record_session_loop(
     let mut current_title: Option<String> = None;
     let mut total_frames: u64 = 0;
     let mut last_proxy_frame = Instant::now() - Duration::from_secs(60);
+    // With a display of its own: frames grabbed from it (DisplayGrab), the newest
+    // one picked up per tick; (toolbar height, width, height) of the page on it.
+    let mut grabber: Option<Grabber> = None;
+    let mut last_grab: Vec<u8> = Vec::new();
+    let mut geometry: Option<(u32, u32, u32)> = None;
+    let mut chrome_h: u32 = 87;
     let mut last_meta_flush = Instant::now();
 
     // Main recording loop
@@ -510,6 +526,10 @@ async fn record_session_loop(
                     .into(),
             ))
             .await;
+        let mut next_geometry_id = GEOMETRY_REQUEST_ID;
+        if grab.is_some() {
+            let _ = write.send(Message::Text(serde_json::json!({ "id": next_geometry_id, "method": "Runtime.evaluate", "params": { "expression": GEOMETRY_EXPR, "returnByValue": true } }).to_string().into())).await;
+        }
         let mut next_title_id = TITLE_REQUEST_ID;
         // The target's title above may predate a navigation; ask right away.
         let mut last_title_request = Instant::now() - TITLE_REFRESH;
@@ -545,7 +565,34 @@ async fn record_session_loop(
                     }
                 }
                 _ = shot_timer.tick() => {
-                    if !shot_in_flight {
+                    if let Some(ref g) = grab {
+                        // From the display: no screenshot, so no repaint in the live view.
+                        let want = geometry.and_then(|(ch, w, h)| g.region(ch, w, h));
+                        if want.is_some() && grabber.as_ref().map(|gr| gr.region) != want {
+                            grabber = want.and_then(|r| g.start(r));
+                        }
+                        let frame = grabber.as_ref().and_then(|gr| gr.latest.lock().unwrap().take());
+                        if let Some(jpeg) = frame.filter(|f| *f != last_grab) {
+                            use base64::Engine as _;
+                            let data = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+                            last_grab = jpeg;
+                            last_bg_frame_time = Instant::now();
+                            write_single_frame(
+                                &mut frames_writer,
+                                &mut meta,
+                                &meta_file,
+                                &rec_dir,
+                                &mut total_frames,
+                                &mut last_meta_flush,
+                                &clock,
+                                &mut current_url,
+                                &mut current_title,
+                                data,
+                                None,
+                                None,
+                            ).await;
+                        }
+                    } else if !shot_in_flight {
                         next_shot_id += 1;
                         let mut params = serde_json::json!({ "format": "jpeg", "quality": 60 });
                         if let Some((w, h)) = viewport {
@@ -587,6 +634,18 @@ async fn record_session_loop(
                                     }
                                     continue;
                                 }
+                                if reply_id.is_some_and(|id| (GEOMETRY_REQUEST_ID..TITLE_REQUEST_ID).contains(&id)) {
+                                    if let Some(v) = val.pointer("/result/result/value").and_then(|v| v.as_array()) {
+                                        let n = |i: usize| v.get(i).and_then(serde_json::Value::as_u64).and_then(|x| u32::try_from(x).ok());
+                                        if let Some(ch) = n(2).filter(|ch| (1..400).contains(ch)) {
+                                            chrome_h = ch;
+                                        }
+                                        if let (Some(w), Some(h)) = (n(0), n(1)) {
+                                            geometry = Some((chrome_h, w, h));
+                                        }
+                                    }
+                                    continue;
+                                }
                                 if reply_id.is_some_and(|id| (LAYOUT_REQUEST_ID..SHOT_REQUEST_ID).contains(&id)) {
                                     let vp = val.pointer("/result/cssLayoutViewport");
                                     let w = vp.and_then(|v| v.get("clientWidth")).and_then(|v| v.as_f64());
@@ -624,6 +683,10 @@ async fn record_session_loop(
                                     next_layout_id += 1;
                                     let layout_cmd = serde_json::json!({ "id": next_layout_id, "method": "Page.getLayoutMetrics" });
                                     let _ = write.send(Message::Text(layout_cmd.to_string().into())).await;
+                                    if grab.is_some() {
+                                        next_geometry_id += 1;
+                                        let _ = write.send(Message::Text(serde_json::json!({ "id": next_geometry_id, "method": "Runtime.evaluate", "params": { "expression": GEOMETRY_EXPR, "returnByValue": true } }).to_string().into())).await;
+                                    }
                                 }
                                 if method == "Page.frameNavigated" {
                                     if let Some(frame) = val.pointer("/params/frame") {
@@ -907,5 +970,91 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
         freed_bytes,
         current_storage_bytes: current_total_bytes.saturating_sub(freed_bytes),
         max_storage_bytes: config.max_storage_bytes,
+    }
+}
+
+/// The session's own X display, for recording without screenshots: asking
+/// Chromium for one makes it repaint the window, which the live view's video
+/// (captured from the same display) shows as flicker.
+#[derive(Clone, Debug)]
+pub struct DisplayGrab {
+    /// An ffmpeg with x11grab (the live video's).
+    pub ffmpeg: PathBuf,
+    pub display: String,
+    /// The display's size, to keep the grabbed area on it.
+    pub size: (u32, u32),
+}
+
+/// One ffmpeg grabbing an area of the display at the recording's frame rate; the
+/// newest JPEG is kept for the recorder to pick up.
+struct Grabber {
+    region: (u32, u32, u32, u32),
+    _child: tokio::process::Child,
+    latest: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+}
+
+impl DisplayGrab {
+    /// The page's area on the display: below the toolbars, the page's size.
+    fn region(&self, chrome_h: u32, w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
+        let (sw, sh) = self.size;
+        let y = chrome_h.min(sh.saturating_sub(16));
+        let w = w.min(sw) & !1;
+        let h = h.min(sh - y) & !1;
+        (w >= 16 && h >= 16).then_some((0, y, w, h))
+    }
+
+    fn start(&self, region: (u32, u32, u32, u32)) -> Option<Grabber> {
+        let (x, y, w, h) = region;
+        let fps = (1000 / RECORD_FRAME_INTERVAL.as_millis().max(1))
+            .max(1)
+            .to_string();
+        let mut child = tokio::process::Command::new(&self.ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-nostdin"])
+            .args(["-f", "x11grab", "-draw_mouse", "0", "-framerate", &fps])
+            .args(["-video_size", &format!("{w}x{h}")])
+            .arg("-i")
+            .arg(format!("{}+{x},{y}", self.display))
+            .args([
+                "-vf",
+                &format!(
+                    "scale=w={}:h={}:force_original_aspect_ratio=decrease",
+                    RECORD_MAX.0 as u32, RECORD_MAX.1 as u32
+                ),
+            ])
+            .args(["-c:v", "mjpeg", "-q:v", "6", "-f", "image2pipe", "-"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| error!(error = %e, "Could not start the recording grabber"))
+            .ok()?;
+        let mut out = child.stdout.take()?;
+        let latest = Arc::new(std::sync::Mutex::new(None));
+        let sink = latest.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = Vec::new();
+            let mut chunk = vec![0u8; 64 * 1024];
+            while let Ok(n) = out.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                // ffmpeg's MJPEG frames: SOI (FFD8) .. EOI (FFD9); the scan data
+                // escapes 0xFF, so EOI only appears at a frame's end.
+                while let Some(end) = buf.windows(2).position(|p| p == [0xFF, 0xD9]) {
+                    let frame: Vec<u8> = buf.drain(..end + 2).collect();
+                    if let Some(start) = frame.windows(2).position(|p| p == [0xFF, 0xD8]) {
+                        *sink.lock().unwrap() = Some(frame[start..].to_vec());
+                    }
+                }
+            }
+        });
+        Some(Grabber {
+            region,
+            _child: child,
+            latest,
+        })
     }
 }

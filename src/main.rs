@@ -683,12 +683,27 @@ impl AppState {
     }
 
     pub async fn start_recording(&self, session: &ManagedSession) -> Uuid {
+        // Chromium with a display of its own: frames grabbed from the display, since
+        // screenshots repaint the window the live video shows (flicker).
+        let grab = match (&session.display, session.display_size, &self.config.video) {
+            (Some(display), Some(size), Some(video))
+                if session.engine == BrowserEngine::Chromium =>
+            {
+                Some(recorder::DisplayGrab {
+                    ffmpeg: video.ffmpeg.clone(),
+                    display: display.clone(),
+                    size,
+                })
+            }
+            _ => None,
+        };
         let handle = recorder::start_recording(
             session.id,
             session.port,
             session.profile.clone(),
             self.node_name.clone(),
             (*self.recorder_config).clone(),
+            grab,
         );
         // Firefox has no screencast: feed the recorder with BiDi screenshots instead.
         if let Some(ref hub) = session.bidi {

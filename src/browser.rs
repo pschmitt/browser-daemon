@@ -313,6 +313,9 @@ impl ActiveBrowser {
                     ("browser.sessionstore.resume_from_crash", "false"),
                     // 2 = block: sites can't ask to show notifications.
                     ("permissions.default.desktop-notification", "2"),
+                    // No translation offers (a toolbar prompt the view can't reach).
+                    ("browser.translations.enable", "false"),
+                    ("browser.translations.automaticallyPopup", "false"),
                 ] {
                     prefs.push(format!("user_pref(\"{pref}\", {value});"));
                 }
@@ -438,6 +441,8 @@ fn chromium_preferences(existing: &str) -> String {
         ("autofill.credit_card_enabled", false.into()),
         ("profile.exit_type", "Normal".into()),
         ("profile.exited_cleanly", true.into()),
+        // No "Translate this page?" bubble: browser UI the live view can't reach.
+        ("translate.enabled", false.into()),
         // 2 = block: sites can't ask to show notifications.
         (
             "profile.default_content_setting_values.notifications",
@@ -544,6 +549,7 @@ mod tests {
         assert_eq!(out["credentials_enable_service"], false);
         assert_eq!(out["autofill"]["credit_card_enabled"], false);
         assert_eq!(out["profile"]["exit_type"], "Normal");
+        assert_eq!(out["translate"]["enabled"], false);
         assert_eq!(
             out["profile"]["default_content_setting_values"]["notifications"],
             2
