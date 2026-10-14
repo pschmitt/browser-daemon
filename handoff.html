@@ -1564,6 +1564,18 @@ E.view.addEventListener("pointerdown", (e) => {
   if (p && drv) drv.evaluate(hitExpr(p.x, p.y)).then((v) => { t.editable = v === true; }).catch(() => {});
 });
 let moveRaf = 0, lastMove = null;
+const hover = { p: null, sent: null, timer: 0 };
+function hoverTo(p) {
+  hover.p = { x: Math.round(p.x), y: Math.round(p.y) };
+  if (hover.timer) return;
+  hover.timer = setTimeout(() => {
+    hover.timer = 0;
+    const q = hover.p;
+    if (!q || !drv || mouse || xPop.open || (hover.sent && hover.sent.x === q.x && hover.sent.y === q.y)) return;
+    hover.sent = q;
+    drv.mouseMove(q.x, q.y, false);
+  }, 40);
+}
 E.view.addEventListener("pointermove", (e) => {
   if (e.pointerType === "mouse") {
     // Over a popup, hover matters (highlight, submenus): moves go to the display, throttled.
@@ -1572,7 +1584,14 @@ E.view.addEventListener("pointermove", (e) => {
       if (p) xMove(p);
       return;
     }
-    if (!mouse || !drv) return;   // hover moves are not forwarded: they would flood the socket
+    // Hover (no button down): forwarded too, for menus, tooltips and :hover styles, but
+    // throttled and only when the point changed, so moving the mouse doesn't flood the socket.
+    if (!mouse) {
+      const p = drv && !refitting && toPage(e);
+      if (p) hoverTo(p);
+      return;
+    }
+    if (!drv) return;
     lastMove = toPage(e);
     if (!moveRaf) moveRaf = requestAnimationFrame(() => {
       moveRaf = 0;
