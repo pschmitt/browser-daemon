@@ -2914,7 +2914,9 @@ function renderSession() {
   $("smEngine").textContent = sess.engine || "chromium";
   $("smDevtools").hidden = (sess.engine || "chromium") !== "chromium";
   $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
-  $("smStatus").textContent = (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
+  const agents = (sess.clients || []).filter((c) => c.agent);
+  $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => `${c.kind} (${c.from})`).join(", ")} · ` : "")
+    + (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
     + ` · Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
     + (rec ? (paused ? " · recording paused" : " · recording") : "")
     + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : "");

@@ -468,6 +468,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14a6.5 6.5 0 0 1 3 6"/></symbol>
   <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
@@ -1298,6 +1299,9 @@ function sessionCard(s) {
     </a>`).join('');
   const more = pages.length > shown.length ? `<div class="tabs-more">+${pages.length - shown.length} more tabs</div>` : '';
   const n = s.client_count || 0;
+  // Who is connected (an older node reports only the count): agents are Playwright/Puppeteer.
+  const clients = s.clients || [];
+  const agents = clients.filter((c) => c.agent), others = clients.filter((c) => !c.agent);
   const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
     fact('', icon('folder', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
@@ -1307,7 +1311,11 @@ function sessionCard(s) {
       : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
-    n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
+    agents.length && fact('accent', icon('bot', 'sm'), agents.length === 1 ? `Agent · ${agents[0].kind} · ${agents[0].from}` : `${agents.length} agents`,
+      `An agent drives this session:\n${agents.map(clientLine).join('\n')}`),
+    others.length && fact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
+      `Automation clients attached:\n${others.map(clientLine).join('\n')}`),
+    !clients.length && n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
     !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Stops when its last client disconnects'),
   ].filter(Boolean).join('') + '<span data-idle hidden></span>';
   return `
@@ -1824,6 +1832,9 @@ function renderAbout() {
   }).join('') : '<dt>Version</dt><dd>Unavailable</dd>';
 }
 
+// "Playwright from fnuc, since 10:42" (a connected automation client).
+const clientLine = (c) => `${c.kind} from ${c.from}${c.since ? `, since ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+
 // Sessions are named at creation (or get a made-up name like "quiet-otter").
 const sessName = (s) => s.name || s.profile || 'Throwaway session';
 async function renameSession(s) {
@@ -1885,7 +1896,7 @@ function showSessionDetails(s) {
   showDetails(sessName(s), [
     ['Name', esc(sessName(s))], ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
     ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Kept alive' : 'Ends with last client'],
-    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
+    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', (s.clients || []).length ? (s.clients || []).map((c) => esc(clientLine(c))).join('<br>') : s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);
 }
 

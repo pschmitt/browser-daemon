@@ -2,6 +2,7 @@ mod audible;
 mod audio;
 mod bidi;
 mod browser;
+mod clients;
 mod display;
 mod idle;
 mod names;
@@ -242,6 +243,8 @@ pub struct ManagedSession {
     pub id: Uuid,
     /// Given at creation or generated ("quiet-otter"); can be changed later.
     pub name: Arc<std::sync::RwLock<String>>,
+    /// The automation clients connected right now (not live views).
+    pub clients: Arc<clients::Clients>,
     pub engine: BrowserEngine,
     pub port: u16,
     pub ws_path: String,
@@ -301,6 +304,7 @@ impl ManagedSession {
         SessionSummary {
             id: self.id,
             name: self.name.read().unwrap().clone(),
+            clients: self.clients.list(),
             window_size: Some(self.window_size),
             engine: self.engine,
             port: self.port,
@@ -333,6 +337,9 @@ pub struct SessionSummary {
     pub id: Uuid,
     #[serde(default)]
     pub name: String,
+    /// Connected automation clients (agents), see clients.rs.
+    #[serde(default)]
+    pub clients: Vec<clients::ClientInfo>,
     /// The browser window's size at launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_size: Option<(u32, u32)>,
@@ -610,6 +617,7 @@ impl AppState {
         let session = ManagedSession {
             id: browser.id,
             name: Arc::new(std::sync::RwLock::new(names::generate(browser.id))),
+            clients: Arc::default(),
             engine: browser.engine,
             port: browser.port,
             ws_path: browser.ws_path.clone(),
@@ -1985,10 +1993,40 @@ async fn json_activate(
     (StatusCode::NOT_FOUND, "Target not found").into_response()
 }
 
+/// Registers a connecting automation client with its session; `client_gone` with
+/// the returned id when it disconnects.
+async fn client_arrived(state: &AppState, session: &ManagedSession, headers: &HeaderMap) -> u64 {
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let (kind, agent) = clients::kind_of(ua.as_deref());
+    // This node's own address too: a client may come in over it (the mesh URL).
+    let mut peers: Vec<(String, String)> = vec![("this node".into(), state.public_url.clone())];
+    peers.extend(
+        state
+            .peers
+            .read()
+            .await
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
+    let from = clients::describe_origin(clients::remote_addr(headers), &peers).await;
+    info!(session_id = %session.id, kind, from = %from, "Automation client connected");
+    session.clients.add(clients::ClientInfo {
+        kind: kind.into(),
+        agent,
+        from,
+        user_agent: ua,
+        since: clients::now_secs(),
+    })
+}
+
 async fn handle_chromium_ws(
     ws: WebSocketUpgrade,
     Query(params): Query<LaunchParams>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Response {
     let session = if let Some(sid) = params.session_id {
         let guard = state.sessions.read().await;
@@ -2023,6 +2061,7 @@ async fn handle_chromium_ws(
 
     ws.on_upgrade(move |socket| async move {
         session.client_count.fetch_add(1, Ordering::SeqCst);
+        let client = client_arrived(&state, &session, &headers).await;
         session.activity.touch();
 
         let ws_path = session.ws_path.trim_start_matches('/');
@@ -2044,6 +2083,7 @@ async fn handle_chromium_ws(
             }
         }
 
+        session.clients.remove(client);
         let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
         if !session.persistent && remaining == 0 {
             info!(session_id = %session.id, "Auto-terminating non-persistent session");
@@ -2056,6 +2096,7 @@ async fn handle_firefox_ws(
     ws: WebSocketUpgrade,
     Query(params): Query<LaunchParams>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Response {
     if state.config.firefox_bin.is_none() {
         return (
@@ -2103,15 +2144,21 @@ async fn handle_firefox_ws(
     let counted = !params.observer.unwrap_or(false);
 
     ws.on_upgrade(move |socket| async move {
-        if counted {
+        let client = if counted {
             session.client_count.fetch_add(1, Ordering::SeqCst);
-        }
+            Some(client_arrived(&state, &session, &headers).await)
+        } else {
+            None
+        };
         info!(session_id = %session.id, observer = !counted, "Client attached to Firefox WebDriver BiDi");
 
         session.activity.touch();
         hub.serve_client(socket, session.activity.clone(), !counted)
             .await;
 
+        if let Some(c) = client {
+            session.clients.remove(c);
+        }
         if counted {
             let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
             if !session.persistent && remaining == 0 {
