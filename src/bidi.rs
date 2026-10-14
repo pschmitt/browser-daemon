@@ -94,8 +94,9 @@ impl BidiHub {
             .send(ServerMsg::Text(new_cmd.to_string().into()))
             .await?;
 
+        // Firefox answers late while the host is busy (a loaded node needs well over 10s).
         let result = loop {
-            let msg = tokio::time::timeout(Duration::from_secs(10), read.next())
+            let msg = tokio::time::timeout(Duration::from_secs(30), read.next())
                 .await
                 .map_err(|_| "Timed out waiting for session.new")?
                 .ok_or("BiDi socket closed during session.new")??;
