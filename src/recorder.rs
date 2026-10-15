@@ -1094,11 +1094,13 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
 
     // 3. Prune if total storage or count exceeds quota
     let mut remaining_storage: u64 = items.iter().map(|i| i.size_bytes).sum();
+    let mut remaining_count = items.len();
     for item in items {
         let over_size = remaining_storage > config.max_storage_bytes;
-        let over_count = to_delete.len() + 1 > config.max_count;
+        let over_count = remaining_count > config.max_count;
         if (over_size || over_count) && !item.is_active && !item.keep {
             remaining_storage = remaining_storage.saturating_sub(item.size_bytes);
+            remaining_count -= 1;
             to_delete.push((item.path, item.size_bytes));
         }
     }
@@ -1265,6 +1267,41 @@ mod tests {
         assert!(set_keep(&config, ids[0], false).await);
         vacuum_recordings(&config).await;
         assert!(!dir.join(ids[0].to_string()).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn the_count_limit_keeps_the_newest_and_the_kept_ones() {
+        let dir = std::env::temp_dir().join(format!("bd-count-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let config = RecorderConfig {
+            enabled: true,
+            recordings_dir: dir.clone(),
+            max_storage_bytes: u64::MAX,
+            max_age_secs: 86400 * 365,
+            max_count: 3,
+        };
+        let mut ids = Vec::new();
+        for i in 0..6u64 {
+            let id = Uuid::new_v4();
+            let rec = dir.join(id.to_string());
+            std::fs::create_dir_all(&rec).unwrap();
+            std::fs::write(rec.join("frames.jsonl"), b"x").unwrap();
+            let meta = serde_json::json!({
+                "id": id, "session_id": Uuid::new_v4(), "profile": null, "node": "n",
+                "started_at_secs": now - 1000 + i, "ended_at_secs": now - 900 + i, "duration_seconds": 10,
+                "frame_count": 1, "size_bytes": 1, "initial_url": null, "final_url": null,
+                "title": null, "status": "completed"
+            });
+            std::fs::write(rec.join("meta.json"), meta.to_string()).unwrap();
+            ids.push(id);
+        }
+        assert!(set_keep(&config, ids[0], true).await);
+        vacuum_recordings(&config).await;
+        let left: Vec<bool> = ids.iter().map(|i| dir.join(i.to_string()).exists()).collect();
+        // Limit 3 of 6: the oldest unkept go, the kept one stays.
+        assert_eq!(left, [true, false, false, false, true, true]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
