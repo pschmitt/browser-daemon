@@ -1695,6 +1695,7 @@ const ACT = {
         : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
       { icon: 'copy', label: 'Copy WebSocket URL', run: () => copyText(wsUrl) },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
+      !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
       '-',
       { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
@@ -2254,6 +2255,14 @@ function launchProfile(p, { tabs = true } = {}) {
     showToast(`${p.display} is running`, 'success', 6000, { text: 'Take over', url: handoffUrl(p.node_name, { session: s.id }) });
     return s;
   }, `${p.display} launched`);
+}
+// Keep a throwaway session's logins, cookies and storage as a new profile: the browser
+// restarts on the same pages as a session of that profile.
+async function saveSessionAsProfile(s) {
+  const name = await ask({ title: 'Save as a profile', text: `Keeps the logins, cookies and storage of ${s.name || 'this session'} under a new profile. The browser restarts on the same pages.`, input: '', placeholder: 'e.g. Google (me@example.com)', ok: 'Save' });
+  if (!name || !name.trim()) return;
+  const r = await act('Saving the profile', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/save-as-profile`), { name: name.trim() }), `Saved as ${name.trim()}`);
+  if (r?.session) showToast(`${name.trim()} is running`, 'success', 8000, { text: 'Take over', url: handoffUrl(s.node_name, { session: r.session.id }) });
 }
 async function renameProfile(p) {
   const name = await ask({ title: `Rename ${p.display}`, input: p.display, ok: 'Rename' });

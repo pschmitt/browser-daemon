@@ -582,6 +582,7 @@ impl AppState {
         color_scheme: Option<ColorScheme>,
         start_tab: bool,
         default_tabs: bool,
+        open: Vec<String>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
@@ -667,6 +668,7 @@ impl AppState {
             color_scheme,
             start_tab,
             default_tabs,
+            &open,
         )
         .await
         {
@@ -1459,6 +1461,157 @@ async fn api_session_history(
     Ok(Json(out))
 }
 
+#[derive(Deserialize)]
+struct SaveProfileRequest {
+    name: String,
+}
+
+/// Keep what a throwaway session has gathered (logins, cookies, storage) as a new
+/// profile. The browser is quit properly so its data is on disk, the data copied,
+/// and a session of the new profile opens the same pages in its place.
+async fn api_session_save_as_profile(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SaveProfileRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let name = new_profile_name(&req.name)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    if let Some(ref p) = session.profile {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("The session already uses the profile '{p}'"),
+        ));
+    }
+    ensure_name_free(&state, &name, None).await?;
+
+    let urls: Vec<String> = get_local_targets(&state)
+        .await
+        .into_iter()
+        .filter(|t| {
+            t.session_id == Some(id)
+                && t.target_type == "page"
+                && (t.url.starts_with("http://") || t.url.starts_with("https://"))
+        })
+        .map(|t| t.url)
+        .collect();
+    let recording = state.active_recordings.read().await.contains_key(&id);
+
+    // Quit the browser (data to disk), leaving its directory in place.
+    let src = {
+        let mut guard = session.browser.lock().await;
+        let browser = guard
+            .as_mut()
+            .ok_or_else(|| api_error(StatusCode::CONFLICT, "The session is not running"))?;
+        let src = browser
+            .temp_dir_path()
+            .cloned()
+            .ok_or_else(|| api_error(StatusCode::CONFLICT, "The session has no data to keep"))?;
+        browser.quiesce().await;
+        src
+    };
+
+    let profile = {
+        let _guard = state.profiles_lock.lock().await;
+        ensure_name_free(&state, &name, None).await?;
+        profiles::create(&state.config.profiles_dir, &name, session.engine)
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    };
+    let copied = tokio::process::Command::new("cp")
+        .arg("-a")
+        .arg("--")
+        .arg(src.join("."))
+        .arg(&profile.dir)
+        .status()
+        .await;
+    if !matches!(copied, Ok(s) if s.success()) {
+        let _ = fs::remove_dir_all(&profile.dir).await;
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not copy the session's data",
+        ));
+    }
+    // What belongs to the run, not to the data.
+    for leftover in [
+        "SingletonLock",
+        "SingletonSocket",
+        "SingletonCookie",
+        "DevToolsActivePort",
+        "lock",
+        ".parentlock",
+        "parent.lock",
+    ] {
+        let _ = fs::remove_file(profile.dir.join(leftover)).await;
+    }
+    for cache in [
+        "Default/Cache",
+        "Default/Code Cache",
+        "Default/GPUCache",
+        "GrShaderCache",
+        "ShaderCache",
+        "component_crx_cache",
+        "extensions_crx_cache",
+        "cache2",
+    ] {
+        let _ = fs::remove_dir_all(profile.dir.join(cache)).await;
+    }
+    // The profile remembers the proxy and appearance the session had.
+    let mut meta = profile.meta.clone();
+    meta.proxy = session.relay.current();
+    meta.color_scheme = Some(session.color_scheme);
+    profiles::write_meta(&profile.dir, &meta)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // The throwaway ends (its directory goes with it); the profile takes over.
+    let (width, height) = session.window_size;
+    let adblock = session.adblock;
+    let color_scheme = session.color_scheme;
+    state.terminate_session(&id).await;
+    let new = state
+        .spawn_session(
+            session.engine,
+            Some(&name),
+            true,
+            Some(width),
+            Some(height),
+            Some(recording),
+            None,
+            None,
+            Some(adblock),
+            None,
+            Some(color_scheme),
+            true,
+            false,
+            urls,
+        )
+        .await
+        .map_err(|(status, msg)| api_error(status, msg))?;
+    info!(profile = %name, from = %id, session_id = %new.id, "Session saved as a profile");
+    let summary = new
+        .to_summary(
+            &state.http_client,
+            state.active_recordings.read().await.get(&new.id),
+        )
+        .await;
+    Ok(Json(serde_json::json!({
+        "profile": profile_info(&state, &meta_profile(&profile, meta)).await,
+        "session": summary,
+    })))
+}
+
+fn meta_profile(profile: &Profile, meta: profiles::ProfileMeta) -> Profile {
+    Profile { meta, dir: profile.dir.clone() }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = Cli::parse().command;
@@ -1843,6 +1996,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/sessions/{id}/name", post(api_session_rename))
         .route("/api/sessions/{id}/history", get(api_session_history))
+        .route(
+            "/api/sessions/{id}/save-as-profile",
+            post(api_session_save_as_profile),
+        )
         .route("/api/sessions/{id}/popups", get(api_session_popups))
         .route("/api/sessions/{id}/x-input", post(api_session_x_input))
         .route("/api/agent-topic", post(api_agent_topic))
@@ -2310,6 +2467,7 @@ async fn json_new(
                 None,
                 true,
                 true,
+                Vec::new(),
             )
             .await
             .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
@@ -2568,6 +2726,7 @@ async fn handle_chromium_ws(
                 // Playwright ignores tabs it did not open: the default tabs would just
                 // sit there. It can still ask (`default_tabs=true`).
                 params.default_tabs.unwrap_or(!agent_opens_own_tab),
+                Vec::new(),
             )
             .await
         {
@@ -2593,7 +2752,17 @@ async fn handle_chromium_ws(
         match tokio_tungstenite::connect_async(&backend_ws_url).await {
             Ok((server_ws, _)) => {
                 let activity = Some((session.activity.clone(), false));
-                bridge_websockets(socket, server_ws, frame_tx, activity, None, None, true).await;
+                bridge_websockets(
+                    socket,
+                    server_ws,
+                    frame_tx,
+                    activity,
+                    None,
+                    None,
+                    true,
+                    session.profile_id.is_some(),
+                )
+                .await;
             }
             Err(e) => {
                 error!(session_id = %session.id, error = %e, "Failed to connect to Chromium backend");
@@ -2648,6 +2817,7 @@ async fn handle_firefox_ws(
                 params.color_scheme,
                 true,
                 params.default_tabs.unwrap_or(true),
+                Vec::new(),
             )
             .await
         {
@@ -2757,6 +2927,7 @@ async fn handle_page_ws(
                     activity,
                     initial_url,
                     initial_title,
+                    false,
                     false,
                 )
                 .await;
@@ -2912,6 +3083,7 @@ async fn api_create_session(
             req.color_scheme,
             true,
             req.default_tabs.unwrap_or(true),
+            Vec::new(),
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
@@ -4455,6 +4627,7 @@ async fn api_peer_session_action(
             | "idle-timeout"
             | "name"
             | "proxy"
+            | "save-as-profile"
     ) {
         return (StatusCode::NOT_FOUND, "Unknown session action").into_response();
     }

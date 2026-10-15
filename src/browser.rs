@@ -121,14 +121,19 @@ impl ActiveBrowser {
         color_scheme: ColorScheme,
         start_tab: bool,
         default_tabs: bool,
+        open: &[String],
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = Uuid::new_v4();
         // What the browser opens with: the profile's default tabs, else a blank tab.
-        let start_pages: Vec<String> = profile
-            .filter(|_| default_tabs)
-            .map(|p| p.meta.tabs.clone())
-            .filter(|tabs| !tabs.is_empty())
-            .unwrap_or_default();
+        let start_pages: Vec<String> = if !open.is_empty() {
+            open.to_vec()
+        } else {
+            profile
+                .filter(|_| default_tabs)
+                .map(|p| p.meta.tabs.clone())
+                .filter(|tabs| !tabs.is_empty())
+                .unwrap_or_default()
+        };
         let relay = Relay::start(proxy.cloned()).await?;
         let audio = match config.audio {
             Some(ref cfg) => match Sink::create(cfg, id).await {
@@ -208,6 +213,18 @@ impl ActiveBrowser {
                     .arg("--disable-renderer-backgrounding")
                     .arg("--force-color-profile=srgb")
                     .arg("--password-store=basic");
+                // Chromium keeps cookies without an expiry (many logins) across runs only
+                // in its "continue where you left off" mode. Its tabs are not wanted
+                // back: the saved session is dropped before each launch, so there is
+                // nothing to restore but the cookies.
+                if temp_dir.is_none() {
+                    cmd.arg("--restore-last-session");
+                    let default = user_data_dir.join("Default");
+                    let _ = fs::remove_dir_all(default.join("Sessions")).await;
+                    for old in ["Current Session", "Current Tabs", "Last Session", "Last Tabs"] {
+                        let _ = fs::remove_file(default.join(old)).await;
+                    }
+                }
                 // Outlives the daemon: a restart adopts it again.
                 proc::own_group(&mut cmd);
                 // No start tab for an agent opening its own (Playwright): it would sit
@@ -340,6 +357,10 @@ impl ActiveBrowser {
                     ("extensions.formautofill.creditCards.enabled", "false"),
                     // Sessions end by being killed: no "restore session" afterwards.
                     ("browser.sessionstore.resume_from_crash", "false"),
+                    // A profile keeps the cookies without an expiry that logins often
+                    // use (Firefox's restore mode; the command line's pages open, not
+                    // the old tabs); throwaways start blank.
+                    ("browser.startup.page", if temp_dir.is_none() { "3" } else { "1" }),
                     // 2 = block: sites can't ask to show notifications.
                     ("permissions.default.desktop-notification", "2"),
                     // Same for location requests (a popup the view can't answer).
@@ -453,11 +474,67 @@ impl ActiveBrowser {
 
     pub async fn terminate(&mut self) {
         info!(session_id = %self.id, engine = %self.engine, "Terminating browser instance");
-        self.proc.terminate(Duration::from_secs(3)).await;
+        if self.temp_dir.is_some() {
+            self.proc.terminate(Duration::from_secs(3)).await;
+        } else {
+            // A profile outlives the session: let the browser write cookies, storage
+            // and its session to disk. It is killed only when that takes too long.
+            self.quiesce().await;
+            self.proc.terminate(Duration::from_secs(15)).await;
+        }
         if let Some(ref mut display) = self.display {
             display.stop().await;
         }
         self.cleanup_files();
+    }
+
+    /// The browser quits the way a user's quit does, writing its data to disk first.
+    pub async fn quiesce(&mut self) {
+        if self.engine == BrowserEngine::Chromium {
+            self.close_chromium().await;
+        } else if let Some(hub) = self.bidi.clone() {
+            hub.close_browser().await;
+            if !self.proc.wait_exit(Duration::from_secs(12)).await {
+                warn!(session_id = %self.id, "Firefox did not quit in time");
+            }
+        }
+    }
+
+    /// The temporary profile of a throwaway session.
+    pub fn temp_dir_path(&self) -> Option<&PathBuf> {
+        self.temp_dir.as_ref()
+    }
+
+    /// Ask Chromium to close itself (all windows, then exit), and wait for it.
+    async fn close_chromium(&mut self) {
+        use futures_util::SinkExt;
+        let ws = async {
+            let res = reqwest::Client::new()
+                .get(format!("http://127.0.0.1:{}/json/version", self.port))
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+                .ok()?;
+            let v: serde_json::Value = res.json().await.ok()?;
+            v["webSocketDebuggerUrl"].as_str().map(str::to_string)
+        }
+        .await;
+        let Some(ws) = ws else { return };
+        let Ok(Ok((mut socket, _))) = tokio::time::timeout(
+            Duration::from_secs(2),
+            tokio_tungstenite::connect_async(ws),
+        )
+        .await
+        else {
+            return;
+        };
+        let close = serde_json::json!({ "id": 1, "method": "Browser.close" });
+        let _ = socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(close.to_string().into()))
+            .await;
+        if !self.proc.wait_exit(Duration::from_secs(12)).await {
+            warn!(session_id = %self.id, "Chromium did not close in time");
+        }
     }
 
     /// Files a session leaves on disk (temporary profile, Firefox's log), for the

@@ -19,7 +19,9 @@ use ratatui::widgets::{
 };
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::{MeshOverview, MeshProfile, MeshRecording, MeshSession};
+use crate::profiles::ColorScheme;
+use crate::settings::{EngineDefaults, NodeSettings};
+use crate::{BrowserEngine, MeshOverview, MeshProfile, MeshRecording, MeshSession};
 
 const REFRESH: Duration = Duration::from_secs(3);
 const DEFAULT_SECRET_FILE: &str = "/run/secrets/browser-daemon/cluster-secret";
@@ -30,9 +32,16 @@ enum Tab {
     Profiles,
     Recordings,
     Nodes,
+    Engines,
 }
 
-const TABS: [Tab; 4] = [Tab::Sessions, Tab::Profiles, Tab::Recordings, Tab::Nodes];
+const TABS: [Tab; 5] = [
+    Tab::Sessions,
+    Tab::Profiles,
+    Tab::Recordings,
+    Tab::Nodes,
+    Tab::Engines,
+];
 
 impl Tab {
     fn title(self) -> &'static str {
@@ -41,7 +50,31 @@ impl Tab {
             Tab::Profiles => "Profiles",
             Tab::Recordings => "Recordings",
             Tab::Nodes => "Nodes",
+            Tab::Engines => "Engines",
         }
+    }
+}
+
+/// An engine on a node, with the defaults its new sessions start with.
+struct EngineRow {
+    node: String,
+    engine: BrowserEngine,
+    defaults: EngineDefaults,
+}
+
+fn tri_label(v: Option<bool>) -> &'static str {
+    match v {
+        None => "default",
+        Some(true) => "on",
+        Some(false) => "off",
+    }
+}
+
+fn scheme_label(v: Option<ColorScheme>) -> &'static str {
+    match v {
+        None => "default",
+        Some(ColorScheme::Dark) => "dark",
+        Some(ColorScheme::Light) => "light",
     }
 }
 
@@ -224,7 +257,7 @@ struct App {
     secret: Option<String>,
     ov: Option<MeshOverview>,
     tab: Tab,
-    tables: [TableState; 4],
+    tables: [TableState; 5],
     status: String,
     error: bool,
     /// The status shown is the refresh's own error.
@@ -352,6 +385,7 @@ impl App {
             Tab::Profiles => self.profiles().len(),
             Tab::Recordings => self.recordings().len(),
             Tab::Nodes => 1 + ov.peers.len(),
+            Tab::Engines => self.engine_rows().len(),
         }
     }
 
@@ -443,7 +477,7 @@ impl App {
             KeyCode::Char('?') => self.help = true,
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => self.cycle_tab(1),
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => self.cycle_tab(-1),
-            KeyCode::Char(c @ '1'..='4') => self.tab = TABS[c as usize - '1' as usize],
+            KeyCode::Char(c @ '1'..='5') => self.tab = TABS[c as usize - '1' as usize],
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
             KeyCode::PageDown => self.move_by(10),
@@ -484,6 +518,7 @@ impl App {
             Tab::Profiles => self.profile().map(|p| p.node_name),
             Tab::Recordings => self.recording().map(|r| r.node_name),
             Tab::Nodes => self.node_at_selection(),
+            Tab::Engines => self.engine_row().map(|r| r.node),
         }
     }
 
@@ -578,6 +613,35 @@ impl App {
                 let node = self.selected_node().unwrap_or_else(|| self.local_node());
                 Some(vacuum(&node))
             }
+            (Tab::Engines, KeyCode::Char('a')) => {
+                let row = self.engine_row();
+                row.map(|r| {
+                    let next = match r.defaults.adblock {
+                        None => Some(true),
+                        Some(true) => Some(false),
+                        Some(false) => None,
+                    };
+                    self.engine_patch(&r, &format!("Ad blocker: {}", tri_label(next)), |d| d.adblock = next)
+                })
+            }
+            (Tab::Engines, KeyCode::Char('c')) => {
+                let row = self.engine_row();
+                row.map(|r| {
+                    let next = match r.defaults.color_scheme {
+                        None => Some(ColorScheme::Dark),
+                        Some(ColorScheme::Dark) => Some(ColorScheme::Light),
+                        Some(ColorScheme::Light) => None,
+                    };
+                    self.engine_patch(&r, &format!("Appearance: {}", scheme_label(next)), |d| d.color_scheme = next)
+                })
+            }
+            (Tab::Engines, KeyCode::Char('t')) => {
+                let row = self.engine_row();
+                row.map(|r| {
+                    let next = !r.defaults.show_touches;
+                    self.engine_patch(&r, &format!("Show touches: {}", if next { "on" } else { "off" }), |d| d.show_touches = next)
+                })
+            }
             (Tab::Nodes, KeyCode::Char('a')) => Some(add_peer()),
             (Tab::Nodes, KeyCode::Char('x')) => {
                 let local = self.local_node();
@@ -617,6 +681,120 @@ impl App {
                     Some(details(&n, p))
                 }
             }
+            Tab::Engines => {
+                let r = self.engine_row()?;
+                Some(details(&format!("{} on {}", r.engine, r.node), &r.defaults))
+            }
+        }
+    }
+
+    /// One row per node and engine it supports, with the engine's defaults there.
+    fn engine_rows(&self) -> Vec<EngineRow> {
+        let Some(ov) = self.ov.as_ref() else {
+            return Vec::new();
+        };
+        let mut nodes: Vec<(String, Vec<BrowserEngine>, Option<NodeSettings>)> = vec![(
+            ov.local_node.name.clone(),
+            ov.local_node.supported_engines.clone(),
+            Some(ov.local_node.settings.clone()),
+        )];
+        nodes.extend(
+            ov.peers
+                .iter()
+                .filter(|p| p.status == "online")
+                .map(|p| (p.name.clone(), p.supported_engines.clone(), p.settings.clone())),
+        );
+        let mut rows = Vec::new();
+        for (node, engines, settings) in nodes {
+            if !self.keep(&node) {
+                continue;
+            }
+            for engine in engines {
+                let defaults = settings
+                    .as_ref()
+                    .map(|s| s.engines.of(engine).clone())
+                    .unwrap_or_default();
+                rows.push(EngineRow { node: node.clone(), engine, defaults });
+            }
+        }
+        rows
+    }
+
+    fn engine_row(&mut self) -> Option<EngineRow> {
+        let i = self.selected_index()?;
+        self.engine_rows().into_iter().nth(i)
+    }
+
+    fn node_settings(&self, node: &str) -> Option<NodeSettings> {
+        let ov = self.ov.as_ref()?;
+        if ov.local_node.name == node {
+            return Some(ov.local_node.settings.clone());
+        }
+        ov.peers.iter().find(|p| p.name == node)?.settings.clone()
+    }
+
+    /// Change one engine's defaults on its node: the node takes the engines as a whole.
+    fn engine_patch(
+        &self,
+        row: &EngineRow,
+        label: &str,
+        change: impl FnOnce(&mut EngineDefaults),
+    ) -> Action {
+        let Some(settings) = self.node_settings(&row.node) else {
+            return Action::Say(format!("{}'s settings are not available", row.node));
+        };
+        let mut engines = settings.engines.clone();
+        change(match row.engine {
+            BrowserEngine::Chromium => &mut engines.chromium,
+            BrowserEngine::Firefox => &mut engines.firefox,
+        });
+        Action::Api(
+            Call::new(
+                format!("{} ({} on {})", label, row.engine, row.node),
+                Method::PATCH,
+                &row.node,
+                "/settings",
+            )
+            .body(json!({ "engines": serde_json::to_value(&engines).unwrap_or(Value::Null) })),
+        )
+    }
+
+    fn engine_menu(&self, row: &EngineRow) -> Action {
+        let d = &row.defaults;
+        let mark = |on: bool| if on { "✓ " } else { "  " };
+        let adblock = [None, Some(true), Some(false)].map(|v| {
+            item(
+                format!("{}{}", mark(d.adblock == v), tri_label(v)),
+                self.engine_patch(row, &format!("Ad blocker: {}", tri_label(v)), |e| e.adblock = v),
+            )
+        });
+        let scheme = [None, Some(ColorScheme::Dark), Some(ColorScheme::Light)].map(|v| {
+            item(
+                format!("{}{}", mark(d.color_scheme == v), scheme_label(v)),
+                self.engine_patch(row, &format!("Appearance: {}", scheme_label(v)), |e| e.color_scheme = v),
+            )
+        });
+        Action::Menu {
+            title: format!("{} on {}", row.engine, row.node),
+            items: vec![
+                item(
+                    format!("Ad blocker: {}…", tri_label(d.adblock)),
+                    Action::Menu { title: "Ad blocker".into(), items: adblock.to_vec() },
+                ),
+                item(
+                    format!("Appearance: {}…", scheme_label(d.color_scheme)),
+                    Action::Menu { title: "Appearance".into(), items: scheme.to_vec() },
+                ),
+                item(
+                    format!("Show touches: {}", if d.show_touches { "on" } else { "off" }),
+                    self.engine_patch(
+                        row,
+                        &format!("Show touches: {}", if d.show_touches { "off" } else { "on" }),
+                        |e| e.show_touches = !d.show_touches,
+                    ),
+                ),
+                item("Details", details(&format!("{} on {}", row.engine, row.node), d)),
+            ],
         }
     }
 
@@ -696,6 +874,10 @@ impl App {
                 let n = self.node_at_selection()?;
                 Some(self.node_menu(&n))
             }
+            Tab::Engines => {
+                let r = self.engine_row()?;
+                Some(self.engine_menu(&r))
+            }
         }
     }
 
@@ -723,6 +905,10 @@ impl App {
                 )],
             ),
             Tab::Nodes => ("Nodes", vec![item("Add a peer…", add_peer())]),
+            Tab::Engines => (
+                "Engines",
+                vec![item("Defaults apply to new sessions of the engine: pick a row, then m", Action::Say("Select a row, then press m".into()))],
+            ),
         };
         Action::Menu { title: title.into(), items }
     }
@@ -765,6 +951,26 @@ impl App {
             ));
         }
         items.push(item("WebSocket URL", Action::Say(ws_url(s))));
+        if x.profile.is_none() {
+            items.push(item(
+                "Save as profile…",
+                ask(
+                    "Save as a profile",
+                    "Name of the new profile (the browser restarts on the same pages)",
+                    "",
+                    Action::Api(
+                        Call::new(
+                            "Saving the profile",
+                            Method::POST,
+                            &s.node_name,
+                            format!("/sessions/{}/save-as-profile", x.id),
+                        )
+                        .long()
+                        .body(json!({ "name": INPUT })),
+                    ),
+                ),
+            ));
+        }
         items.push(item("Details", details(&x.name, s)));
         items.push(item("Stop session", stop_session(s)));
         Action::Menu { title: x.name.clone(), items }
@@ -899,6 +1105,26 @@ impl App {
             if let Some(v) = settings {
                 items.push(item("Settings", details(&format!("{name} settings"), &v)));
             }
+        }
+        if !self.node_proxies(name).is_empty() {
+            let current = self.node_settings(name).and_then(|s| s.default_proxy);
+            items.push(item(
+                "Default proxy…",
+                Action::Menu {
+                    title: format!("Default proxy of {name}"),
+                    items: self.proxy_items(name, current.as_deref(), |p| {
+                        Action::Api(
+                            Call::new(
+                                format!("{name}'s default proxy"),
+                                Method::PATCH,
+                                name,
+                                "/settings",
+                            )
+                            .body(json!({ "default_proxy": p.unwrap_or("") })),
+                        )
+                    }),
+                },
+            ));
         }
         items.push(item("Apply recording retention now", vacuum(name)));
         if !is_local {
@@ -1847,6 +2073,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             app.profiles().len(),
             app.recordings().len(),
             1 + o.peers.len(),
+            app.engine_rows().len(),
         ]
     });
     let titles: Vec<Line> = TABS
@@ -2203,6 +2430,54 @@ fn draw(f: &mut Frame, app: &mut App) {
             });
             draw_detail(f, detail, lines);
         }
+        Tab::Engines => {
+            let rows_data = app.engine_rows();
+            let rows = rows_data.iter().map(|r| {
+                Row::new(vec![
+                    Cell::from(r.node.clone()),
+                    Cell::from(r.engine.to_string()),
+                    Cell::from(tri_label(r.defaults.adblock)),
+                    Cell::from(scheme_label(r.defaults.color_scheme)),
+                    Cell::from(if r.defaults.show_touches { "on" } else { "off" }),
+                ])
+            });
+            let table = Table::new(
+                rows,
+                [
+                    Constraint::Fill(2),
+                    Constraint::Length(11),
+                    Constraint::Length(12),
+                    Constraint::Length(12),
+                    Constraint::Length(14),
+                ],
+            )
+            .header(header(&["Node", "Engine", "Ad blocker", "Appearance", "Show touches"]))
+            .row_highlight_style(highlight)
+            .block(block);
+            f.render_stateful_widget(table, body, &mut app.tables[i]);
+            let lines = app.tables[i].selected().and_then(|n| rows_data.get(n)).map(|r| {
+                let proxy = app
+                    .node_settings(&r.node)
+                    .and_then(|s| s.default_proxy)
+                    .map(|p| app.proxy_name(&r.node, &p))
+                    .unwrap_or_else(|| "direct".into());
+                vec![
+                    Line::from(vec![
+                        Span::raw("New ").dim(),
+                        Span::raw(r.engine.to_string()),
+                        Span::raw(" sessions on ").dim(),
+                        Span::raw(r.node.clone()),
+                        Span::raw(" start with these unless the request or the profile says otherwise.").dim(),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("node default proxy ").dim(),
+                        Span::raw(proxy),
+                        Span::raw("   (set it from the Nodes tab)").dim(),
+                    ]),
+                ]
+            });
+            draw_detail(f, detail, lines);
+        }
     }
 
     draw_footer(f, app, foot);
@@ -2232,6 +2507,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
         Tab::Recordings => "⏎ play  E export  d delete  v vacuum  m menu",
         Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
+        Tab::Engines => "a ad blocker  c appearance  t touches  m menu  (defaults of new sessions)",
     };
     let line = if app.status.is_empty() {
         Line::from(vec![
@@ -2248,7 +2524,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
 fn help_lines() -> Vec<Line<'static>> {
     [
-        ("Tab / ← →  1-4", "switch view"),
+        ("Tab / ← →  1-5", "switch view"),
         ("↑ ↓  j k  g G", "move"),
         ("m / Space", "menu of the selected row: everything the dashboard offers"),
         ("M", "menu of the view (new session, stop all, ...)"),
@@ -2277,6 +2553,8 @@ fn help_lines() -> Vec<Line<'static>> {
         ("  d", "delete it"),
         ("Nodes", ""),
         ("  n / a / x", "session there / add a peer / remove the peer"),
+        ("Engines", ""),
+        ("  a / c / t", "cycle ad blocker / appearance, toggle show touches (defaults of new sessions)"),
         ("In a menu or form", ""),
         ("  ⏎  Esc", "choose / cancel   (1-9 pick an item)"),
         ("  ← →  Tab", "change a choice / next field"),

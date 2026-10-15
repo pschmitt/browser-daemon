@@ -41,6 +41,12 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   .tab-strip-add { width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none; margin-bottom: 3px; }
   .tab-strip-add:hover { background: var(--btn); color: var(--fg); }
   .tab-strip-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  /* The profile this session runs (or "Throwaway"), at the start of the tab bar. */
+  .prof-chip { height: 26px; max-width: 132px; padding: 0 9px; margin: 0 4px 3px 0; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent); background: color-mix(in oklab, var(--accent) 14%, transparent); color: var(--accent); font-size: 11.5px; font-weight: 700; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 5px; align-self: center; overflow: hidden; }
+  .prof-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prof-chip svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .prof-chip.throwaway { border-style: dashed; border-color: var(--line); background: transparent; color: var(--muted); font-weight: 600; }
+  .prof-chip[hidden] { display: none; }
   .tab-strip-drawer { height: 30px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; flex: none; margin-bottom: 3px; margin-left: auto; }
   .tab-strip-drawer:hover { background: var(--btn); color: var(--fg); }
   .tab-strip-drawer svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -256,6 +262,7 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
 </head>
 <body>
 <div id="tabStrip">
+  <button class="prof-chip" id="profChip" hidden title="Profile of this session"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span id="profChipText"></span></button>
   <div id="tabsScroll"></div>
   <button class="tab-strip-add" id="tabAddBtn" title="New Tab" aria-label="New Tab">
     <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -308,6 +315,7 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   <div class="sm-label">Browser</div>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search with<select id="smSearch" aria-label="Search engine"></select></label>
+ <button class="sm-item" id="smSave" hidden title="Keep this session's logins, cookies and storage as a new profile"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
   <hr>
   <a class="sm-item" href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Back to dashboard</a>
@@ -392,7 +400,7 @@ const testHost = params.get("host");               // testing only: talk to anot
 const $ = (id) => document.getElementById(id);
 const E = {
   smSearch: $("smSearch"),
-  tabStrip: $("tabStrip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
+  tabStrip: $("tabStrip"), profChip: $("profChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
@@ -2265,6 +2273,9 @@ async function closeTab(id) {
 let tabsSig = "";
 // Tabs seen so far: a popup is the one that wasn't there before.
 const knownTabs = new Set();
+// The last list of tabs: the dialog is drawn from it when it opens (it is not drawn
+// while closed, and a redraw is skipped when nothing changed).
+let tabsAll = [];
 async function loadTabs() {
   try {
     const list = await (await fetch("/json/list", { headers: authHeaders() })).json();
@@ -2272,6 +2283,7 @@ async function loadTabs() {
     const all = list.filter((x) => x.type === "page");
     const pages = all.filter((x) => !target?.sessionId || x.sessionId === target.sessionId);
     for (const x of all) knownTabs.add(x.id);
+    tabsAll = all;
     // Redrawn only when something shown changed: this also runs on a timer.
     const sig = JSON.stringify([target?.id, all.map((x) => [x.id, x.title, x.url, x.audible])]);
     if (sig === tabsSig) return;
@@ -2443,6 +2455,7 @@ async function openTabsModal() {
     E.keys.classList.remove("show");
   }
   E.tabsModal.classList.add("open");
+  renderTabsModal(tabsAll);
   loadTabs();
 }
 
@@ -2900,6 +2913,27 @@ $("smDevtools").addEventListener("click", () => {
   window.open(`/devtools/frontend/${encodeURIComponent(target.sessionId)}/inspector.html?${scheme}=${encodeURIComponent(page)}`, "_blank", "noopener");
 });
 
+E.profChip.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
+// A throwaway session becomes a profile: its data is kept, and the session continues
+// as a session of that profile (the browser restarts on the same pages).
+$("smSave").onclick = async () => {
+  if (!sess || !target?.sessionId) return;
+  const name = window.prompt("Name of the new profile", "");
+  if (!name || !name.trim()) return;
+  toggleSessMenu(false);
+  toast("Saving the session as a profile…", 15000);
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/save-as-profile`, {
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ name: name.trim() }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    location.href = `${location.pathname}?session=${encodeURIComponent(body.session.id)}`;
+  } catch (err) {
+    toast(`Could not save the profile: ${err.message}`, 6000);
+  }
+};
+
 // Tapping the session's name renames it (empty: a made-up name again).
 $("smTitle").addEventListener("click", async () => {
   if (!sess || !target?.sessionId) return;
@@ -3188,6 +3222,12 @@ function renderSession() {
   $("smEngine").textContent = sess.engine || "chromium";
   $("smDevtools").hidden = (sess.engine || "chromium") !== "chromium";
   $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
+  // The profile (or "Throwaway") in the tab bar; the latter offers to keep the data.
+  E.profChip.hidden = false;
+  E.profChip.classList.toggle("throwaway", !sess.profile);
+  $("profChipText").textContent = sess.profile || "Throwaway";
+  E.profChip.title = sess.profile ? `Profile ${sess.profile}: its logins and cookies are kept` : "Throwaway session: nothing is kept. Click to save it as a profile";
+  $("smSave").hidden = !!sess.profile;
   const agents = (sess.clients || []).filter((c) => c.agent);
   $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => [(c.agent_name || "").replace(/ \d[\w.-]*/, "") || c.from, c.topic].filter(Boolean).join(": ")).join(", ")} · ` : "")
     + (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")

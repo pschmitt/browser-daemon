@@ -79,6 +79,13 @@ pub struct BidiHub {
 impl BidiHub {
     /// End the WebDriver session: Firefox allows one, and it stays taken after
     /// the socket closes, so a daemon that is exiting must give it back.
+    /// Ask Firefox to quit the way a user's quit does: it writes its storage and
+    /// session first (a signal makes it leave without flushing localStorage).
+    pub async fn close_browser(&self) {
+        let _ = tokio::time::timeout(Duration::from_secs(3), self.call("browser.close", json!({})))
+            .await;
+    }
+
     pub async fn end(&self) {
         let _ =
             tokio::time::timeout(Duration::from_secs(3), self.call("session.end", json!({}))).await;

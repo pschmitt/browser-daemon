@@ -130,6 +130,16 @@ pub enum SessionCmd {
         #[arg(long)]
         node: Option<String>,
     },
+    /// Keep a throwaway session's data (logins, cookies, storage) as a new profile.
+    /// The browser restarts on the same pages as a session of the profile; prints its id.
+    #[command(visible_alias = "save")]
+    SaveAsProfile {
+        session: String,
+        /// Name of the new profile.
+        name: String,
+        #[arg(long)]
+        node: Option<String>,
+    },
     /// Print a session's WebSocket URL (for Playwright or Puppeteer).
     Url {
         session: String,
@@ -964,6 +974,23 @@ pub async fn session(args: SessionArgs) -> R<()> {
             let path = c.devtools(&s.node_name, &format!("/json/close/{}", enc(&tab)));
             c.call(c.req(Method::PUT, &path)).await?;
             println!("closed");
+        }
+        SessionCmd::SaveAsProfile { session, name, node } => {
+            let s = c.session(&session, node.as_deref())?;
+            let path = c.api(&s.node_name, &format!("/sessions/{}/save-as-profile", s.session.id));
+            let v = c
+                .call(
+                    c.req(Method::POST, &path)
+                        .timeout(Duration::from_secs(300))
+                        .json(&json!({ "name": name })),
+                )
+                .await?;
+            if c.json {
+                c.print_json(&v);
+            } else {
+                println!("{}", v["session"]["id"].as_str().unwrap_or("saved"));
+                eprintln!("saved as profile {name}");
+            }
         }
         SessionCmd::Url { session, node } => {
             println!("{}", ws_url(c.session(&session, node.as_deref())?));

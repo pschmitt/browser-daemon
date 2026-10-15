@@ -168,6 +168,18 @@ impl Proc {
         }
     }
 
+    /// Wait up to `max` for the main process to exit; whether it did.
+    pub async fn wait_exit(&mut self, max: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + max;
+        while self.alive() {
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        true
+    }
+
     /// SIGTERM, then SIGKILL once `grace` is over; returns when it is gone.
     pub async fn terminate(&mut self, grace: Duration) {
         if self.done {
