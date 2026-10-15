@@ -1041,6 +1041,7 @@ async function act(label, fn, okText) {
 }
 
 /* ================================================================ modals & dialogs */
+let playerHash = '';
 function openModal(id) { $(id).classList.add('open'); closeMenu(); }
 function closeModal(id) { $(id).classList.remove('open'); }
 // Dialogs are history entries: Back (Android's back gesture too) closes the top one
@@ -1051,7 +1052,10 @@ new MutationObserver((changes) => {
   for (const { target: m, oldValue } of changes) {
     if (!m.classList.contains('modal') || !m.id) continue;
     const was = /\bopen\b/.test(oldValue || ''), is = m.classList.contains('open');
-    if (is && !was && history.state?.modal !== m.id) history.pushState({ modal: m.id }, '');
+    // The player's entry carries the recording id: #recordings/<id>, a link that plays it.
+    if (is && !was && history.state?.modal !== m.id) {
+      history.pushState({ modal: m.id }, '', m.id === 'playerModal' && playerHash ? playerHash : undefined);
+    }
     // Closed here (button, Escape, backdrop): drop its entry again.
     if (was && !is && history.state?.modal === m.id && !modalPopping) { modalPopping = true; history.back(); }
   }
@@ -2489,7 +2493,15 @@ $('endpointsList').addEventListener('click', (e) => {
 let overviewWs = null, wsReconnectTimer = null;
 
 // ?play=<recording id> (e.g. from `browser-daemon tui`): open that recording once it is listed.
+// Same for #recordings/<id>, which the player shows while a recording is open.
 let pendingPlay = new URLSearchParams(location.search).get('play');
+{
+  const m = /^#recordings\/(.+)$/.exec(location.hash);
+  if (m) {
+    pendingPlay = pendingPlay || decodeURIComponent(m[1]);
+    history.replaceState(null, '', '#recordings');   // the player pushes its own entry
+  }
+}
 function applyOverview(data) {
   if (!data || !data.local_node) return;
   ov = data;
@@ -3046,6 +3058,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
 
 async function openPlayerModal(id, node) {
   const modal = document.getElementById('playerModal');
+  playerHash = '#recordings/' + enc(id);
   const nodeBadge = document.getElementById('playerNodeBadge');
   const recInfo = (currentOverview?.recordings || []).find(r => r.id === id && r.node_name === node);
   if (nodeBadge) { nodeBadge.textContent = node || 'local'; nodeBadge.style.setProperty('--node', nodeColor(node)); }
@@ -3529,7 +3542,13 @@ document.addEventListener('visibilitychange', () => {
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
 setView(['sessions', 'profiles', 'recordings', 'engines', 'nodes'].includes(initialView) ? initialView : 'sessions');
-addEventListener('hashchange', () => { const v = location.hash.slice(1); if (['sessions', 'profiles', 'recordings'].includes(v)) setView(v); });
+addEventListener('hashchange', () => {
+  const v = location.hash.slice(1);
+  if (['sessions', 'profiles', 'recordings'].includes(v)) setView(v);
+  const m = /^recordings\/(.+)$/.exec(v);
+  const r = m && (ov?.recordings || []).find((x) => x.id === decodeURIComponent(m[1]));
+  if (r && activePlayerModalId !== r.id) { setView('recordings'); openPlayerModal(r.id, r.node_name); }
+});
 syncCachedRecordingsSet();
 refreshData(true);
 connectOverviewWs();
