@@ -18,22 +18,6 @@ use crate::{MeshOverview, MeshProfile, MeshRecording, MeshSession};
 const REFRESH: Duration = Duration::from_secs(3);
 const DEFAULT_SECRET_FILE: &str = "/run/secrets/browser-daemon/cluster-secret";
 
-#[derive(clap::Args, Debug)]
-pub struct TuiArgs {
-    /// Daemon to talk to; its peers are reachable through it.
-    #[arg(
-        long,
-        default_value = "http://127.0.0.1:3001",
-        env = "BROWSER_DAEMON_URL"
-    )]
-    pub url: String,
-
-    /// File holding the cluster secret (default: the NixOS module's, when readable;
-    /// otherwise the one the dashboard hands to its viewers).
-    #[arg(long, env = "BROWSER_DAEMON_SECRET_FILE")]
-    pub secret_file: Option<PathBuf>,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Sessions,
@@ -1044,7 +1028,7 @@ fn popup(f: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
 
 /// The secret: from a file when given or readable, else the one the dashboard
 /// at `base` hands to whoever can open it.
-async fn find_secret(http: &reqwest::Client, base: &str, file: Option<&PathBuf>) -> Option<String> {
+pub(crate) async fn find_secret(http: &reqwest::Client, base: &str, file: Option<&PathBuf>) -> Option<String> {
     let path = file
         .cloned()
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SECRET_FILE));
@@ -1069,7 +1053,7 @@ async fn find_secret(http: &reqwest::Client, base: &str, file: Option<&PathBuf>)
         .flatten()
 }
 
-pub async fn run(args: TuiArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error>> {
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .build()?;

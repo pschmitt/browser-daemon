@@ -4,6 +4,7 @@ mod backups;
 mod bidi;
 mod browser;
 mod clients;
+mod ctl;
 mod display;
 mod idle;
 mod names;
@@ -64,12 +65,21 @@ static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 /// Git commit this build comes from, passed in by the Nix build.
 pub const REVISION: Option<&str> = option_env!("BROWSER_DAEMON_REV");
 
+/// `browser-daemon <command>`: the daemon itself (`run`) and clients of its API.
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Native NixOS remote browser daemon")]
-pub struct Args {
+#[command(
+    author,
+    version,
+    about = "Native NixOS remote browser daemon, and its command-line client"
+)]
+pub struct Cli {
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
+}
 
+/// Options of `browser-daemon run`.
+#[derive(clap::Args, Debug)]
+pub struct Args {
     #[arg(short, long, default_value = "127.0.0.1:3001")]
     pub bind: SocketAddr,
 
@@ -236,8 +246,22 @@ pub enum DisplayMode {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Run the daemon (what the systemd service does).
+    Run(Box<Args>),
+    /// Browser sessions: list, start, stop, record, tabs.
+    #[command(visible_alias = "sessions")]
+    Session(ctl::SessionArgs),
+    /// Profiles: list, create, back up, clear, export, import, move between nodes.
+    #[command(visible_alias = "profiles")]
+    Profile(ctl::ProfileArgs),
+    /// Recordings: list, export, delete.
+    #[command(visible_alias = "recordings")]
+    Recording(ctl::RecordingArgs),
+    /// The mesh's nodes: list, show, add, remove.
+    #[command(visible_alias = "nodes")]
+    Node(ctl::NodeArgs),
     /// Terminal UI for the mesh: sessions, profiles, recordings and nodes.
-    Tui(tui::TuiArgs),
+    Tui(ctl::Conn),
     /// Serve passkeys approved in live views from the local rbw vault.
     PasskeyHelper(passkey_helper::HelperArgs),
 }
@@ -1325,13 +1349,34 @@ fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> {
     None
 }
 
+/// Report a failed client command on one line and exit non-zero.
+fn ctl_exit(result: Result<(), Box<dyn std::error::Error>>) -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(e) = result {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = Args::parse();
-    // The TUI owns the terminal: no log output.
-    match args.command.take() {
-        Some(Command::Tui(tui_args)) => return tui::run(tui_args).await,
-        Some(Command::PasskeyHelper(helper_args)) => {
+    let command = Cli::parse().command;
+    if !matches!(command, Command::Run(_)) {
+        // `browser-daemon session list | head`: end quietly instead of panicking.
+        // SAFETY: restoring the default disposition of SIGPIPE.
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+    }
+    let args = match command {
+        Command::Run(args) => *args,
+        Command::Session(a) => return ctl_exit(ctl::session(a).await),
+        Command::Profile(a) => return ctl_exit(ctl::profile(a).await),
+        Command::Recording(a) => return ctl_exit(ctl::recording(a).await),
+        Command::Node(a) => return ctl_exit(ctl::node(a).await),
+        // The TUI owns the terminal: no log output.
+        Command::Tui(conn) => return tui::run(conn).await,
+        Command::PasskeyHelper(helper_args) => {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1340,8 +1385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .init();
             return passkey_helper::run(helper_args).await;
         }
-        None => {}
-    }
+    };
 
     tracing_subscriber::fmt()
         .with_env_filter(

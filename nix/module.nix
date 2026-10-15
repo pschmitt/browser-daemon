@@ -397,6 +397,7 @@ in
           ExecStart = lib.concatStringsSep " " (
             [
               "${cfg.package}/bin/browser-daemon"
+              "run"
               "--bind"
               cfg.bind
               "--chromium"

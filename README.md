@@ -74,15 +74,37 @@ Enable the service in your NixOS configuration:
 
 It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file`, the NixOS module's secret when readable, or otherwise the dashboard of that node. Press `?` for the keys.
 
-## CLI Usage
+## CLI
+
+The `browser-daemon` binary is the daemon (`run`, what the systemd service starts) and a command-line client for its API. The client talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (or `BROWSER_DAEMON_SECRET_FILE`), the NixOS module's secret when readable, or otherwise the dashboard of that node. `--json` prints JSON instead of tables.
 
 ```text
-Usage: browser-daemon [OPTIONS] [COMMAND]
+browser-daemon run [OPTIONS]              the daemon (see `run --help`)
+browser-daemon session list|show|new|stop|stop-all|rename|proxy|idle-timeout|record|tabs|open|close-tab|url
+browser-daemon profile list|show|new|set|clone|rm|clear|backup|export|import|transfer
+browser-daemon profile backup list|create|restore|rm PROFILE
+browser-daemon recording list|show|rm|export|vacuum
+browser-daemon node list|show|add|rm
+browser-daemon tui                        terminal UI (see above)
+browser-daemon passkey-helper             serve approved passkeys from rbw
+```
 
-Commands:
-  tui   Terminal UI for the mesh: sessions, profiles, recordings and nodes
-  help  Print this message or the help of the given subcommand(s)
+Sessions, profiles and recordings are named by id (the first characters will do), by name for sessions and profiles; `--node` narrows a name that exists on several nodes. Commands that destroy data (`profile rm|clear`, `profile backup restore`, `recording rm`, `session stop-all`) ask first, or take `-y`.
 
+```sh
+browser-daemon session list
+browser-daemon session new --engine firefox --profile hrworks --node rofl-14   # prints the id, WebSocket URL on stderr
+browser-daemon session open quiet-otter https://example.org/
+browser-daemon session record quiet-otter pause
+browser-daemon session stop-all --node rofl-13 -y
+browser-daemon profile backup create hrworks before-cleanup
+browser-daemon profile transfer hrworks --to rofl-14 --move
+browser-daemon recording export 1b2c3d4e -o rec.jsonl
+```
+
+### `browser-daemon run`
+
+```text
 Options:
   -b, --bind <BIND>
           [default: 127.0.0.1:3001]
