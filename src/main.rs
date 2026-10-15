@@ -262,6 +262,8 @@ pub enum Command {
     Node(ctl::NodeArgs),
     /// Terminal UI for the mesh: sessions, profiles, recordings and nodes.
     Tui(ctl::Conn),
+    /// Print a shell completion script (bash, zsh, fish, ...).
+    Completions { shell: clap_complete::Shell },
     /// Serve passkeys approved in live views from the local rbw vault.
     PasskeyHelper(passkey_helper::HelperArgs),
 }
@@ -1374,6 +1376,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Profile(a) => return ctl_exit(ctl::profile(a).await),
         Command::Recording(a) => return ctl_exit(ctl::recording(a).await),
         Command::Node(a) => return ctl_exit(ctl::node(a).await),
+        Command::Completions { shell } => {
+            ctl::completions(shell);
+            return Ok(());
+        }
         // The TUI owns the terminal: no log output.
         Command::Tui(conn) => return tui::run(conn).await,
         Command::PasskeyHelper(helper_args) => {
@@ -4284,13 +4290,20 @@ async fn api_peer_session_action(
     headers: HeaderMap,
     AxumPath((peer, id, action)): AxumPath<(String, String, String)>,
     axum::extract::RawQuery(query): axum::extract::RawQuery,
+    body: Bytes,
 ) -> impl IntoResponse {
     if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
     if !matches!(
         action.as_str(),
-        "record" | "stop-record" | "pause-record" | "resume-record" | "idle-timeout"
+        "record"
+            | "stop-record"
+            | "pause-record"
+            | "resume-record"
+            | "idle-timeout"
+            | "name"
+            | "proxy"
     ) {
         return (StatusCode::NOT_FOUND, "Unknown session action").into_response();
     }
@@ -4305,11 +4318,11 @@ async fn api_peer_session_action(
         Some(q) if !q.is_empty() => format!("{}/api/sessions/{}/{}?{}", peer_url, id, action, q),
         _ => format!("{}/api/sessions/{}/{}", peer_url, id, action),
     };
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .send()
-        .await;
-    proxy_response(res).await
+    let mut req = state.peer_request(state.http_client.post(&url));
+    if !body.is_empty() {
+        req = req.header(header::CONTENT_TYPE, "application/json").body(body);
+    }
+    proxy_response(req.send().await).await
 }
 
 async fn api_peer_create_profile(

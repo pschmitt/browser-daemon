@@ -426,6 +426,26 @@ pub enum NodeCmd {
     List,
     /// A node's settings, version and proxies.
     Show { node: Option<String> },
+    /// Change a node's settings (proxy default, per-engine defaults).
+    Set {
+        /// Node (default: the one asked).
+        node: Option<String>,
+        /// Proxy id sessions use unless they choose another (`none`: direct).
+        #[arg(long)]
+        default_proxy: Option<String>,
+        /// Engine the options below apply to.
+        #[arg(long, value_enum)]
+        engine: Option<Engine>,
+        /// Block ads in new sessions of the engine.
+        #[arg(long)]
+        adblock: Option<bool>,
+        /// Appearance of new sessions of the engine.
+        #[arg(long, value_enum)]
+        color_scheme: Option<Scheme>,
+        /// Live views mark taps and clicks for the engine.
+        #[arg(long)]
+        show_touches: Option<bool>,
+    },
     /// Add a peer.
     Add {
         /// The peer's base URL.
@@ -1284,6 +1304,35 @@ pub async fn node(args: NodeArgs) -> R<()> {
                 c.print_json(&serde_json::to_value(p)?);
             }
         }
+        NodeCmd::Set { node, default_proxy, engine, adblock, color_scheme, show_touches } => {
+            let node = c.node_or_local(node.as_deref())?;
+            let path = c.api(&node, "/settings");
+            let mut settings = c.call(c.req(Method::GET, &path)).await?;
+            let mut body = json!({});
+            if let Some(p) = default_proxy {
+                body["default_proxy"] = json!(if p == "none" { String::new() } else { p });
+            }
+            if adblock.is_some() || color_scheme.is_some() || show_touches.is_some() {
+                let engine = engine.ok_or("--engine says which engine's defaults to change")?;
+                let key = format!("{engine:?}").to_lowercase();
+                let mut engines = settings["engines"].take();
+                if !engines.is_object() {
+                    engines = json!({});
+                }
+                if !engines[&key].is_object() {
+                    engines[&key] = json!({});
+                }
+                if let Some(v) = adblock { engines[&key]["adblock"] = json!(v) }
+                if let Some(v) = color_scheme { engines[&key]["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
+                if let Some(v) = show_touches { engines[&key]["show_touches"] = json!(v) }
+                body["engines"] = engines;
+            }
+            if body.as_object().is_some_and(|o| o.is_empty()) {
+                return Err("Nothing to change (see --help)".into());
+            }
+            let v = c.call(c.req(Method::PATCH, &path).json(&body)).await?;
+            c.print_json(&v);
+        }
         NodeCmd::Add { peer, name } => {
             let v = c
                 .call(c.req(Method::POST, "/api/peers").json(&json!({ "url": peer, "name": name })))
@@ -1328,4 +1377,11 @@ mod tests {
         let err = one(hits("b"), "thing", "b", |s| s.to_string()).unwrap_err().to_string();
         assert!(err.contains("b2") && err.contains("b3"), "{err}");
     }
+}
+
+/// `browser-daemon completions <shell>`: a completion script on stdout.
+pub fn completions(shell: clap_complete::Shell) {
+    use clap::CommandFactory;
+    let mut cmd = crate::Cli::command();
+    clap_complete::generate(shell, &mut cmd, "browser-daemon", &mut std::io::stdout());
 }

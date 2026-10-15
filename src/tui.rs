@@ -1,7 +1,13 @@
 //! `browser-daemon tui`: a terminal view of the mesh (sessions, profiles,
-//! recordings, nodes) with the everyday actions, talking to the HTTP API.
+//! recordings, nodes) with the dashboard's actions, talking to the HTTP API.
+//!
+//! Everything the keys do is an [`Action`]: an API call, a menu, a prompt, a
+//! confirmation or a form. The item menu (`m`) offers all of them for the selected row.
 
 use std::path::PathBuf;
+
+use reqwest::Method;
+use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -39,27 +45,177 @@ impl Tab {
     }
 }
 
-/// An action waiting for y/n.
-enum Pending {
-    StopSession(MeshSession),
-    DeleteProfile(MeshProfile),
-    DeleteRecording(MeshRecording),
+/// Stands for the text typed into a prompt, in an action's path, body or label.
+const INPUT: &str = "$INPUT";
+
+/// A request to the API, to be sent when chosen.
+#[derive(Clone)]
+struct Call {
+    label: String,
+    method: Method,
+    /// Node it is for; the path is relative to that node's API.
+    node: String,
+    path: String,
+    body: Option<Value>,
+    /// File sent as the request body.
+    upload: Option<String>,
+    /// File the answer is written to.
+    save_to: Option<String>,
+    /// Takes a while (archives).
+    long: bool,
 }
 
-impl Pending {
-    fn question(&self) -> String {
-        match self {
-            Pending::StopSession(s) => format!("Stop {} on {}?", s.session.name, s.node_name),
-            Pending::DeleteProfile(p) => format!(
-                "Delete profile {} on {}? Cookies and logins are wiped.",
-                p.profile.name, p.node_name
-            ),
-            Pending::DeleteRecording(r) => format!(
-                "Delete recording {}?",
-                r.recording.title.as_deref().unwrap_or("(untitled)")
-            ),
+impl Call {
+    fn new(label: impl Into<String>, method: Method, node: &str, path: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            method,
+            node: node.to_string(),
+            path: path.into(),
+            body: None,
+            upload: None,
+            save_to: None,
+            long: false,
         }
     }
+
+    fn body(mut self, body: Value) -> Self {
+        self.body = Some(body);
+        self
+    }
+
+    fn upload(mut self, file: &str) -> Self {
+        self.upload = Some(file.to_string());
+        self.long = true;
+        self
+    }
+
+    fn long(mut self) -> Self {
+        self.long = true;
+        self
+    }
+
+    fn save_to(mut self, file: &str) -> Self {
+        self.save_to = Some(file.to_string());
+        self.long = true;
+        self
+    }
+
+    fn with_input(&self, input: &str) -> Self {
+        Self {
+            label: self.label.replace(INPUT, input),
+            path: self.path.replace(INPUT, &urlencode(input)),
+            body: self.body.as_ref().map(|b| subst(b, input)),
+            upload: self.upload.as_ref().map(|f| f.replace(INPUT, input)),
+            save_to: self.save_to.as_ref().map(|f| f.replace(INPUT, input)),
+            ..self.clone()
+        }
+    }
+}
+
+fn subst(v: &Value, input: &str) -> Value {
+    match v {
+        Value::String(s) => Value::String(s.replace(INPUT, input)),
+        Value::Array(a) => Value::Array(a.iter().map(|x| subst(x, input)).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), subst(x, input))).collect()),
+        other => other.clone(),
+    }
+}
+
+#[derive(Clone)]
+enum Action {
+    Api(Call),
+    Open(String),
+    Say(String),
+    Menu { title: String, items: Vec<(String, Action)> },
+    /// Ask for a line of text, then do `then` with it in place of `$INPUT`.
+    Input { title: String, prompt: String, initial: String, then: Box<Action> },
+    Confirm { question: String, then: Box<Action> },
+    Text { title: String, lines: Vec<String> },
+    /// The form for a new session or profile; the node it starts on.
+    Form(FormKind, Option<String>),
+    StopAll(Option<String>),
+    Filter(Option<String>),
+    /// A profile's backups and data actions (fetches the backups).
+    DataMenu(MeshProfile),
+}
+
+impl Action {
+    fn with_input(&self, input: &str) -> Self {
+        match self {
+            Action::Api(c) => Action::Api(c.with_input(input)),
+            Action::Open(u) => Action::Open(u.replace(INPUT, &urlencode(input))),
+            Action::Say(t) => Action::Say(t.replace(INPUT, input)),
+            other => other.clone(),
+        }
+    }
+}
+
+fn item(label: impl Into<String>, action: Action) -> (String, Action) {
+    (label.into(), action)
+}
+
+fn confirm_then(question: impl Into<String>, then: Action) -> Action {
+    Action::Confirm { question: question.into(), then: Box::new(then) }
+}
+
+fn ask(title: &str, prompt: &str, initial: &str, then: Action) -> Action {
+    Action::Input {
+        title: title.into(),
+        prompt: prompt.into(),
+        initial: initial.into(),
+        then: Box::new(then),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormKind {
+    Session,
+    Profile,
+}
+
+struct Field {
+    label: &'static str,
+    kind: FieldKind,
+}
+
+enum FieldKind {
+    Text(String),
+    /// (value, shown) options and the chosen one.
+    Choice { options: Vec<(String, String)>, sel: usize },
+}
+
+impl Field {
+    fn text(label: &'static str) -> Self {
+        Self { label, kind: FieldKind::Text(String::new()) }
+    }
+
+    fn choice(label: &'static str, options: Vec<(String, String)>) -> Self {
+        Self { label, kind: FieldKind::Choice { options, sel: 0 } }
+    }
+
+    fn value(&self) -> String {
+        match &self.kind {
+            FieldKind::Text(t) => t.trim().to_string(),
+            FieldKind::Choice { options, sel } => {
+                options.get(*sel).map(|o| o.0.clone()).unwrap_or_default()
+            }
+        }
+    }
+}
+
+struct Form {
+    kind: FormKind,
+    fields: Vec<Field>,
+    sel: usize,
+}
+
+enum Modal {
+    Menu { title: String, items: Vec<(String, Action)>, sel: usize },
+    Input { title: String, prompt: String, buf: String, then: Box<Action> },
+    Confirm { question: String, then: Box<Action> },
+    Text { title: String, lines: Vec<String>, scroll: usize },
+    Form(Form),
 }
 
 struct App {
@@ -71,7 +227,11 @@ struct App {
     tables: [TableState; 4],
     status: String,
     error: bool,
-    pending: Option<Pending>,
+    /// The status shown is the refresh's own error.
+    refresh_error: bool,
+    modal: Option<Modal>,
+    /// Show only this node's sessions, profiles and recordings.
+    filter: Option<String>,
     help: bool,
     last_refresh: Option<Instant>,
 }
@@ -90,9 +250,11 @@ impl App {
 
     /// API path on `node`: local, or through the daemon's peer proxy.
     fn api(&self, node: &str, path: &str) -> String {
-        let local = self.ov.as_ref().is_some_and(|o| o.local_node.name == node);
+        let local = node.is_empty() || self.ov.as_ref().is_some_and(|o| o.local_node.name == node);
+        // DevTools endpoints (`/json/...`) sit at the root of a node.
+        let root = if path.starts_with("/json") { "" } else { "/api" };
         if local {
-            format!("/api{path}")
+            format!("{root}{path}")
         } else {
             format!("/api/peers/{}{path}", urlencode(node))
         }
@@ -108,20 +270,27 @@ impl App {
             Ok(r) if r.status().is_success() => match r.json::<MeshOverview>().await {
                 Ok(ov) => {
                     self.ov = Some(ov);
-                    if self.error {
+                    // Only the refresh's own error goes away with it; an action's stays.
+                    if self.refresh_error {
+                        self.refresh_error = false;
                         self.set_status("", false);
                     }
                 }
-                Err(e) => self.set_status(format!("Unexpected answer: {e}"), true),
+                Err(e) => self.refresh_failed(format!("Unexpected answer: {e}")),
             },
-            Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => self.set_status(
-                "Unauthorized: pass --secret-file (or run where the dashboard is reachable)",
-                true,
+            Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => self.refresh_failed(
+                "Unauthorized: pass --secret-file (or run where the dashboard is reachable)"
+                    .to_string(),
             ),
-            Ok(r) => self.set_status(format!("{}: HTTP {}", self.base, r.status()), true),
-            Err(e) => self.set_status(format!("{}: {e}", self.base), true),
+            Ok(r) => self.refresh_failed(format!("{}: HTTP {}", self.base, r.status())),
+            Err(e) => self.refresh_failed(format!("{}: {e}", self.base)),
         }
         self.clamp_selection();
+    }
+
+    fn refresh_failed(&mut self, msg: String) {
+        self.refresh_error = true;
+        self.set_status(msg, true);
     }
 
     fn set_status(&mut self, msg: impl Into<String>, error: bool) {
@@ -135,10 +304,12 @@ impl App {
             Ok(r) if r.status().is_success() => self.set_status(format!("{label}: done"), false),
             Ok(r) => {
                 let status = r.status();
-                let body: serde_json::Value = r.json().await.unwrap_or_default();
-                let msg = body["error"]
-                    .as_str()
-                    .map_or_else(|| status.to_string(), str::to_string);
+                let text = r.text().await.unwrap_or_default();
+                let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                let msg = body["error"].as_str().map_or_else(
+                    || if text.is_empty() { status.to_string() } else { text.clone() },
+                    str::to_string,
+                );
                 self.set_status(format!("{label}: {msg}"), true);
             }
             Err(e) => self.set_status(format!("{label}: {e}"), true),
@@ -146,12 +317,40 @@ impl App {
         self.refresh().await;
     }
 
+    fn keep(&self, node: &str) -> bool {
+        self.filter.as_deref().is_none_or(|f| f == node)
+    }
+
+    fn sessions(&self) -> Vec<&MeshSession> {
+        self.ov
+            .iter()
+            .flat_map(|o| o.sessions.iter())
+            .filter(|s| self.keep(&s.node_name))
+            .collect()
+    }
+
+    fn profiles(&self) -> Vec<&MeshProfile> {
+        self.ov
+            .iter()
+            .flat_map(|o| o.profiles.iter())
+            .filter(|p| self.keep(&p.node_name))
+            .collect()
+    }
+
+    fn recordings(&self) -> Vec<&MeshRecording> {
+        self.ov
+            .iter()
+            .flat_map(|o| o.recordings.iter())
+            .filter(|r| self.keep(&r.node_name))
+            .collect()
+    }
+
     fn rows(&self) -> usize {
         let Some(ref ov) = self.ov else { return 0 };
         match self.tab {
-            Tab::Sessions => ov.sessions.len(),
-            Tab::Profiles => ov.profiles.len(),
-            Tab::Recordings => ov.recordings.len(),
+            Tab::Sessions => self.sessions().len(),
+            Tab::Profiles => self.profiles().len(),
+            Tab::Recordings => self.recordings().len(),
             Tab::Nodes => 1 + ov.peers.len(),
         }
     }
@@ -193,17 +392,17 @@ impl App {
 
     fn session(&mut self) -> Option<MeshSession> {
         let i = self.selected_index()?;
-        self.ov.as_ref()?.sessions.get(i).cloned()
+        self.sessions().get(i).map(|s| (*s).clone())
     }
 
     fn profile(&mut self) -> Option<MeshProfile> {
         let i = self.selected_index()?;
-        self.ov.as_ref()?.profiles.get(i).cloned()
+        self.profiles().get(i).map(|p| (*p).clone())
     }
 
     fn recording(&mut self) -> Option<MeshRecording> {
         let i = self.selected_index()?;
-        self.ov.as_ref()?.recordings.get(i).cloned()
+        self.recordings().get(i).map(|r| (*r).clone())
     }
 
     fn proxy_name(&self, node: &str, id: &str) -> String {
@@ -229,12 +428,8 @@ impl App {
 
     /// Handle a key; false quits.
     async fn key(&mut self, k: KeyEvent) -> bool {
-        if let Some(pending) = self.pending.take() {
-            if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
-                self.confirm(pending).await;
-            } else {
-                self.set_status("Cancelled", false);
-            }
+        if self.modal.is_some() {
+            self.modal_key(k).await;
             return true;
         }
         if self.help {
@@ -262,6 +457,16 @@ impl App {
                 self.refresh().await;
                 self.set_status("Refreshed", false);
             }
+            KeyCode::Char('f') => self.toggle_filter(),
+            KeyCode::Char('m') | KeyCode::Char(' ') => {
+                if let Some(a) = self.item_menu() {
+                    self.run(a).await;
+                }
+            }
+            KeyCode::Char('M') => {
+                let a = self.tab_menu();
+                self.run(a).await;
+            }
             _ => self.tab_key(k).await,
         }
         true
@@ -272,180 +477,431 @@ impl App {
         self.tab = TABS[(i + delta).rem_euclid(TABS.len() as isize) as usize];
     }
 
+    /// The node of the selected row.
+    fn selected_node(&mut self) -> Option<String> {
+        match self.tab {
+            Tab::Sessions => self.session().map(|s| s.node_name),
+            Tab::Profiles => self.profile().map(|p| p.node_name),
+            Tab::Recordings => self.recording().map(|r| r.node_name),
+            Tab::Nodes => self.node_at_selection(),
+        }
+    }
+
+    fn toggle_filter(&mut self) {
+        if let Some(node) = self.filter.take() {
+            self.set_status(format!("Showing every node (was {node} only)"), false);
+        } else if let Some(node) = self.selected_node() {
+            self.set_status(format!("Showing {node} only (f clears)"), false);
+            self.filter = Some(node);
+        }
+        self.clamp_selection();
+    }
+
+    fn local_node(&self) -> String {
+        self.ov
+            .as_ref()
+            .map(|o| o.local_node.name.clone())
+            .unwrap_or_default()
+    }
+
+    fn node_names(&self) -> Vec<String> {
+        self.ov
+            .iter()
+            .flat_map(|o| {
+                std::iter::once(o.local_node.name.clone())
+                    .chain(o.peers.iter().map(|p| p.name.clone()))
+            })
+            .collect()
+    }
+
+    /// Hotkeys of the selected tab.
     async fn tab_key(&mut self, k: KeyEvent) {
-        match (self.tab, k.code) {
-            (Tab::Sessions, KeyCode::Enter | KeyCode::Char('o')) => {
-                if let Some(s) = self.session() {
-                    let url = format!(
-                        "{}/handoff/?session={}",
-                        s.node_url.trim_end_matches('/'),
-                        s.session.id
-                    );
-                    self.open(&url);
-                }
-            }
+        let action = match (self.tab, k.code) {
+            (Tab::Sessions, KeyCode::Enter | KeyCode::Char('o')) => self
+                .session()
+                .map(|s| Action::Open(handoff_url(&s.node_url, s.session.id))),
             (Tab::Sessions, KeyCode::Char('s') | KeyCode::Char('x') | KeyCode::Delete) => {
-                if let Some(s) = self.session() {
-                    self.pending = Some(Pending::StopSession(s));
-                }
+                self.session().map(|s| stop_session(&s))
             }
-            (Tab::Sessions, KeyCode::Char('R')) => {
-                if let Some(s) = self.session() {
-                    let (path, label) = if s.session.is_recording {
-                        ("stop-record", "Stopping recording")
-                    } else {
-                        ("record", "Starting recording")
-                    };
-                    let url = self.api(&s.node_name, &format!("/sessions/{}/{path}", s.session.id));
-                    let req = self.request(reqwest::Method::POST, &url);
-                    self.act(label, req).await;
-                }
-            }
+            (Tab::Sessions, KeyCode::Char('R')) => self.session().map(|s| record_toggle(&s)),
             (Tab::Sessions, KeyCode::Char('p')) => {
-                if let Some(s) = self.session() {
-                    let choices: Vec<Option<String>> = std::iter::once(None)
-                        .chain(
-                            self.node_proxies(&s.node_name)
-                                .into_iter()
-                                .map(|x| Some(x.id)),
-                        )
-                        .collect();
-                    if choices.len() == 1 {
-                        self.set_status(format!("{} has no proxies configured", s.node_name), true);
-                        return;
-                    }
-                    let cur = choices
-                        .iter()
-                        .position(|c| *c == s.session.proxy)
-                        .unwrap_or(0);
-                    let next = choices[(cur + 1) % choices.len()].clone();
-                    let label = match next {
-                        Some(ref id) => format!(
-                            "Session now goes through {}",
-                            self.proxy_name(&s.node_name, id)
-                        ),
-                        None => "Session now connects directly".to_string(),
-                    };
-                    let url = self.api(&s.node_name, &format!("/sessions/{}/proxy", s.session.id));
-                    let req = self.request(reqwest::Method::POST, &url).json(
-                        &serde_json::json!({ "proxy": next.unwrap_or_else(|| "none".into()) }),
-                    );
-                    self.act(&label, req).await;
-                }
+                let s = self.session();
+                s.and_then(|s| self.cycle_session_proxy(&s))
             }
-            (Tab::Sessions, KeyCode::Char('w')) => {
-                if let Some(s) = self.session() {
-                    let engine = if s.session.engine == crate::BrowserEngine::Firefox {
-                        "firefox"
-                    } else {
-                        "chromium"
-                    };
-                    let ws = format!(
-                        "{}/{engine}?session_id={}",
-                        s.node_url.trim_end_matches('/').replacen("http", "ws", 1),
-                        s.session.id
-                    );
-                    self.set_status(ws, false);
-                }
+            (Tab::Sessions, KeyCode::Char('w')) => self.session().map(|s| Action::Say(ws_url(&s))),
+            (Tab::Sessions, KeyCode::Char('t')) => self.session().map(|s| new_tab(&s)),
+            (Tab::Sessions, KeyCode::Char('e')) => self.session().map(|s| rename_session(&s)),
+            (Tab::Sessions, KeyCode::Char('T')) => self.session().map(|s| idle_timeout(&s)),
+            (Tab::Sessions, KeyCode::Char('N')) => {
+                let node = self.selected_node();
+                Some(Action::Form(FormKind::Session, node))
             }
+            (Tab::Sessions, KeyCode::Char('X')) => Some(self.stop_all_action()),
             (Tab::Sessions | Tab::Nodes, KeyCode::Char('n')) => {
-                let node = match self.tab {
-                    Tab::Nodes => self.node_at_selection(),
-                    _ => self.session().map(|s| s.node_name),
-                }
-                .or_else(|| self.ov.as_ref().map(|o| o.local_node.name.clone()));
-                if let Some(node) = node {
-                    let url = self.api(&node, "/sessions");
-                    let req = self
-                        .request(reqwest::Method::POST, &url)
-                        .json(&serde_json::json!({ "persistent": true }));
-                    self.act(&format!("Starting a throwaway session on {node}"), req)
-                        .await;
-                }
+                let node = self.selected_node().unwrap_or_else(|| self.local_node());
+                Some(Action::Api(
+                    Call::new(
+                        format!("Starting a throwaway session on {node}"),
+                        Method::POST,
+                        &node,
+                        "/sessions",
+                    )
+                    .body(json!({ "persistent": true })),
+                ))
             }
             (Tab::Profiles, KeyCode::Enter | KeyCode::Char('o')) => {
-                if let Some(p) = self.profile() {
-                    if let Some(ref sid) = p.profile.session_id {
-                        let url = format!(
-                            "{}/handoff/?session={sid}",
-                            p.node_url.trim_end_matches('/')
-                        );
-                        self.open(&url);
-                    } else {
-                        let url = self.api(&p.node_name, "/sessions");
-                        let key = p
-                            .profile
-                            .id
-                            .map_or_else(|| p.profile.name.clone(), |id| id.to_string());
-                        let req =
-                            self.request(reqwest::Method::POST, &url)
-                                .json(&serde_json::json!({
-                                    "profile": key, "engine": p.profile.engine, "persistent": true,
-                                }));
-                        self.act(&format!("Launching {}", p.profile.name), req)
-                            .await;
-                    }
-                }
+                self.profile().map(|p| launch_profile(&p))
             }
             (Tab::Profiles, KeyCode::Char('p')) => {
-                if let Some(p) = self.profile() {
-                    let choices: Vec<Option<String>> = std::iter::once(None)
-                        .chain(
-                            self.node_proxies(&p.node_name)
-                                .into_iter()
-                                .map(|x| Some(x.id)),
-                        )
-                        .collect();
-                    if choices.len() == 1 {
-                        self.set_status(format!("{} has no proxies configured", p.node_name), true);
-                        return;
-                    }
-                    let cur = choices
-                        .iter()
-                        .position(|c| *c == p.profile.proxy)
-                        .unwrap_or(0);
-                    let next = choices[(cur + 1) % choices.len()].clone();
-                    let key = p
-                        .profile
-                        .id
-                        .map_or_else(|| p.profile.name.clone(), |id| id.to_string());
-                    let url = self.api(&p.node_name, &format!("/profiles/{}", urlencode(&key)));
-                    let label = match next {
-                        Some(ref id) => format!(
-                            "{} now uses {}",
-                            p.profile.name,
-                            self.proxy_name(&p.node_name, id)
-                        ),
-                        None => format!("{} now connects directly", p.profile.name),
-                    };
-                    let req = self.request(reqwest::Method::PATCH, &url).json(
-                        &serde_json::json!({ "proxy": next.unwrap_or_else(|| "none".into()) }),
-                    );
-                    self.act(&label, req).await;
-                }
+                let p = self.profile();
+                p.and_then(|p| self.cycle_profile_proxy(&p))
             }
             (Tab::Profiles, KeyCode::Char('d') | KeyCode::Delete) => {
-                if let Some(p) = self.profile() {
-                    self.pending = Some(Pending::DeleteProfile(p));
-                }
+                self.profile().map(|p| delete_profile(&p))
+            }
+            (Tab::Profiles, KeyCode::Char('e')) => self.profile().map(|p| rename_profile(&p)),
+            (Tab::Profiles, KeyCode::Char('b')) => self.profile().map(Action::DataMenu),
+            (Tab::Profiles, KeyCode::Char('N')) => {
+                let node = self.selected_node();
+                Some(Action::Form(FormKind::Profile, node))
             }
             (Tab::Recordings, KeyCode::Char('d') | KeyCode::Delete) => {
-                if let Some(r) = self.recording() {
-                    self.pending = Some(Pending::DeleteRecording(r));
-                }
+                self.recording().map(|r| delete_recording(&r))
             }
             (Tab::Recordings, KeyCode::Enter | KeyCode::Char('o')) => {
-                if let Some(r) = self.recording() {
-                    let url = format!(
-                        "{}/?play={}",
-                        r.node_url.trim_end_matches('/'),
-                        r.recording.id
-                    );
-                    self.open(&url);
+                self.recording().map(|r| Action::Open(play_url(&r)))
+            }
+            (Tab::Recordings, KeyCode::Char('E')) => {
+                self.recording().map(|r| export_recording(&r))
+            }
+            (Tab::Recordings, KeyCode::Char('v')) => {
+                let node = self.selected_node().unwrap_or_else(|| self.local_node());
+                Some(vacuum(&node))
+            }
+            (Tab::Nodes, KeyCode::Char('a')) => Some(add_peer()),
+            (Tab::Nodes, KeyCode::Char('x')) => {
+                let local = self.local_node();
+                self.node_at_selection()
+                    .filter(|n| *n != local)
+                    .map(|n| remove_peer(&n))
+            }
+            (_, KeyCode::Char('i')) => self.details_action(),
+            _ => None,
+        };
+        if let Some(a) = action {
+            self.run(a).await;
+        }
+    }
+
+    fn details_action(&mut self) -> Option<Action> {
+        match self.tab {
+            Tab::Sessions => {
+                let s = self.session()?;
+                Some(details(&s.session.name, &s))
+            }
+            Tab::Profiles => {
+                let p = self.profile()?;
+                Some(details(&p.profile.name, &p))
+            }
+            Tab::Recordings => {
+                let r = self.recording()?;
+                Some(details("Recording", &r))
+            }
+            Tab::Nodes => {
+                let n = self.node_at_selection()?;
+                let ov = self.ov.as_ref()?;
+                if n == ov.local_node.name {
+                    Some(details(&n, &ov.local_node))
+                } else {
+                    let p = ov.peers.iter().find(|p| p.name == n)?;
+                    Some(details(&n, p))
                 }
             }
-            _ => {}
         }
+    }
+
+    fn proxy_items(
+        &self,
+        node: &str,
+        current: Option<&str>,
+        make: impl Fn(Option<&str>) -> Action,
+    ) -> Vec<(String, Action)> {
+        let mark = |on: bool| if on { "✓ " } else { "  " };
+        let mut items = vec![item(format!("{}Direct", mark(current.is_none())), make(None))];
+        for p in self.node_proxies(node) {
+            items.push(item(
+                format!("{}{}", mark(current == Some(p.id.as_str())), p.name),
+                make(Some(&p.id)),
+            ));
+        }
+        items
+    }
+
+    fn cycle_session_proxy(&self, s: &MeshSession) -> Option<Action> {
+        let proxies = self.node_proxies(&s.node_name);
+        if proxies.is_empty() {
+            return Some(Action::Say(format!("{} has no proxies configured", s.node_name)));
+        }
+        let choices: Vec<Option<String>> = std::iter::once(None)
+            .chain(proxies.into_iter().map(|x| Some(x.id)))
+            .collect();
+        let cur = choices.iter().position(|c| *c == s.session.proxy).unwrap_or(0);
+        let next = choices[(cur + 1) % choices.len()].clone();
+        Some(set_session_proxy(self, s, next.as_deref()))
+    }
+
+    fn cycle_profile_proxy(&self, p: &MeshProfile) -> Option<Action> {
+        let proxies = self.node_proxies(&p.node_name);
+        if proxies.is_empty() {
+            return Some(Action::Say(format!("{} has no proxies configured", p.node_name)));
+        }
+        let choices: Vec<Option<String>> = std::iter::once(None)
+            .chain(proxies.into_iter().map(|x| Some(x.id)))
+            .collect();
+        let cur = choices.iter().position(|c| *c == p.profile.proxy).unwrap_or(0);
+        let next = choices[(cur + 1) % choices.len()].clone();
+        Some(set_profile_proxy(self, p, next.as_deref()))
+    }
+
+    fn stop_all_action(&self) -> Action {
+        let n = self.sessions().len();
+        let scope = self
+            .filter
+            .as_ref()
+            .map(|f| format!(" on {f}"))
+            .unwrap_or_default();
+        confirm_then(
+            format!("Stop {n} session{}{scope}?", if n == 1 { "" } else { "s" }),
+            Action::StopAll(self.filter.clone()),
+        )
+    }
+
+    // ----------------------------------------------------------------- menus
+
+    fn item_menu(&mut self) -> Option<Action> {
+        match self.tab {
+            Tab::Sessions => {
+                let s = self.session()?;
+                Some(self.session_menu(&s))
+            }
+            Tab::Profiles => {
+                let p = self.profile()?;
+                Some(self.profile_menu(&p))
+            }
+            Tab::Recordings => {
+                let r = self.recording()?;
+                Some(recording_menu(&r))
+            }
+            Tab::Nodes => {
+                let n = self.node_at_selection()?;
+                Some(self.node_menu(&n))
+            }
+        }
+    }
+
+    fn tab_menu(&self) -> Action {
+        let (title, items) = match self.tab {
+            Tab::Sessions => (
+                "Sessions",
+                vec![
+                    item("New session…", Action::Form(FormKind::Session, self.filter.clone())),
+                    item("Stop all sessions…", self.stop_all_action()),
+                ],
+            ),
+            Tab::Profiles => (
+                "Profiles",
+                vec![item(
+                    "New profile…",
+                    Action::Form(FormKind::Profile, self.filter.clone()),
+                )],
+            ),
+            Tab::Recordings => (
+                "Recordings",
+                vec![item(
+                    "Apply the retention limits now",
+                    vacuum(&self.filter.clone().unwrap_or_else(|| self.local_node())),
+                )],
+            ),
+            Tab::Nodes => ("Nodes", vec![item("Add a peer…", add_peer())]),
+        };
+        Action::Menu { title: title.into(), items }
+    }
+
+    fn session_menu(&self, s: &MeshSession) -> Action {
+        let x = &s.session;
+        let mut items = vec![
+            item("Take over", Action::Open(handoff_url(&s.node_url, x.id))),
+            item("New tab…", new_tab(s)),
+            item("Rename…", rename_session(s)),
+            item(
+                format!("Auto-stop when idle: {}…", idle_label(x.idle_timeout_seconds)),
+                idle_timeout(s),
+            ),
+            item(
+                "Proxy (switches now)…",
+                Action::Menu {
+                    title: "Proxy".into(),
+                    items: self.proxy_items(&s.node_name, x.proxy.as_deref(), |p| {
+                        set_session_proxy(self, s, p)
+                    }),
+                },
+            ),
+        ];
+        if x.is_recording {
+            let (verb, label) = if x.recording_paused {
+                ("resume-record", "Resume recording")
+            } else {
+                ("pause-record", "Pause recording")
+            };
+            items.push(item(label, session_call(s, label, verb)));
+            items.push(item(
+                "Stop recording",
+                session_call(s, "Stopping recording", "stop-record"),
+            ));
+        } else {
+            items.push(item(
+                "Start recording",
+                session_call(s, "Starting recording", "record"),
+            ));
+        }
+        items.push(item("WebSocket URL", Action::Say(ws_url(s))));
+        items.push(item("Details", details(&x.name, s)));
+        items.push(item("Stop session", stop_session(s)));
+        Action::Menu { title: x.name.clone(), items }
+    }
+
+    fn profile_menu(&self, p: &MeshProfile) -> Action {
+        let x = &p.profile;
+        let base = profile_base(p);
+        let patch = |label: &str, body: Value| {
+            Action::Api(Call::new(label, Method::PATCH, &p.node_name, base.clone()).body(body))
+        };
+        let others: Vec<String> = self
+            .node_names()
+            .into_iter()
+            .filter(|n| *n != p.node_name)
+            .collect();
+        let transfer = |delete_source: bool| {
+            let verb = if delete_source { "Move" } else { "Copy" };
+            Action::Menu {
+                title: format!("{verb} {} to…", x.name),
+                items: others
+                    .iter()
+                    .map(|n| {
+                        item(
+                            n.clone(),
+                            confirm_then(
+                                format!("{verb} {} from {} to {n}?", x.name, p.node_name),
+                                Action::Api(
+                                    Call::new(
+                                        format!("{verb} {} to {n}", x.name),
+                                        Method::POST,
+                                        &p.node_name,
+                                        format!("{base}/transfer"),
+                                    )
+                                    .long()
+                                    .body(json!({
+                                        "target_node": n,
+                                        "delete_source": delete_source,
+                                        "overwrite": false,
+                                    })),
+                                ),
+                            ),
+                        )
+                    })
+                    .collect(),
+            }
+        };
+        let mut items = vec![item(
+            if x.session_id.is_some() { "Take over" } else { "Launch" },
+            launch_profile(p),
+        )];
+        items.push(item("Details", details(&x.name, p)));
+        items.push(item("Rename…", rename_profile(p)));
+        items.push(item(
+            "Proxy for new sessions…",
+            Action::Menu {
+                title: "Proxy".into(),
+                items: self.proxy_items(&p.node_name, x.proxy.as_deref(), |pr| {
+                    set_profile_proxy(self, p, pr)
+                }),
+            },
+        ));
+        items.push(item(
+            "Appearance…",
+            Action::Menu {
+                title: "Appearance".into(),
+                items: vec![
+                    item("Dark", patch("Appearance: dark", json!({ "color_scheme": "dark" }))),
+                    item("Light", patch("Appearance: light", json!({ "color_scheme": "light" }))),
+                ],
+            },
+        ));
+        items.push(item(
+            "Homepage…",
+            ask(
+                "Homepage",
+                "Page the start tab opens (empty: none)",
+                x.homepage.as_deref().unwrap_or(""),
+                patch("Homepage set", json!({ "homepage": INPUT })),
+            ),
+        ));
+        items.push(item(
+            "Duplicate…",
+            ask(
+                "Duplicate profile",
+                "Name of the copy",
+                "",
+                Action::Api(
+                    Call::new("Duplicating", Method::POST, &p.node_name, format!("{base}/clone"))
+                        .body(json!({ "target_name": INPUT })),
+                ),
+            ),
+        ));
+        if !others.is_empty() {
+            items.push(item("Copy to another node…", transfer(false)));
+            items.push(item("Move to another node…", transfer(true)));
+        }
+        items.push(item("Backups & data…", Action::DataMenu(p.clone())));
+        items.push(item("Delete", delete_profile(p)));
+        Action::Menu { title: x.name.clone(), items }
+    }
+
+    fn node_menu(&self, name: &str) -> Action {
+        let is_local = name == self.local_node();
+        let only = self.filter.as_deref() == Some(name);
+        let mut items = vec![
+            item(
+                if only { "Show every node".to_string() } else { format!("Show only {name}") },
+                Action::Filter(if only { None } else { Some(name.to_string()) }),
+            ),
+            item(
+                "New session here…",
+                Action::Form(FormKind::Session, Some(name.to_string())),
+            ),
+            item(
+                "New profile here…",
+                Action::Form(FormKind::Profile, Some(name.to_string())),
+            ),
+        ];
+        if let Some(ov) = &self.ov {
+            let settings = if is_local {
+                serde_json::to_value(&ov.local_node.settings).ok()
+            } else {
+                ov.peers
+                    .iter()
+                    .find(|p| p.name == name)
+                    .and_then(|p| serde_json::to_value(&p.settings).ok())
+            };
+            if let Some(v) = settings {
+                items.push(item("Settings", details(&format!("{name} settings"), &v)));
+            }
+        }
+        items.push(item("Apply recording retention now", vacuum(name)));
+        if !is_local {
+            items.push(item("Remove peer", remove_peer(name)));
+        }
+        Action::Menu { title: name.to_string(), items }
     }
 
     fn node_at_selection(&mut self) -> Option<String> {
@@ -458,29 +914,531 @@ impl App {
         }
     }
 
-    async fn confirm(&mut self, pending: Pending) {
-        match pending {
-            Pending::StopSession(s) => {
-                let url = self.api(&s.node_name, &format!("/sessions/{}", s.session.id));
-                let req = self.request(reqwest::Method::DELETE, &url);
-                self.act("Stopping session", req).await;
+    // --------------------------------------------------------------- running
+
+    async fn run(&mut self, action: Action) {
+        match action {
+            Action::Api(call) => self.call(call).await,
+            Action::Open(url) => self.open(&url),
+            Action::Say(text) => self.set_status(text, false),
+            Action::Menu { title, items } => {
+                self.modal = Some(Modal::Menu { title, items, sel: 0 });
             }
-            Pending::DeleteProfile(p) => {
-                let key = p
-                    .profile
-                    .id
-                    .map_or_else(|| p.profile.name.clone(), |id| id.to_string());
-                let mut url = self.api(&p.node_name, &format!("/profiles/{}", urlencode(&key)));
-                if p.profile.is_active {
-                    url.push_str("?force=true");
+            Action::Input { title, prompt, initial, then } => {
+                self.modal = Some(Modal::Input { title, prompt, buf: initial, then });
+            }
+            Action::Confirm { question, then } => {
+                self.modal = Some(Modal::Confirm { question, then });
+            }
+            Action::Text { title, lines } => {
+                self.modal = Some(Modal::Text { title, lines, scroll: 0 });
+            }
+            Action::Form(kind, node) => self.open_form(kind, node),
+            Action::StopAll(node) => self.stop_all(node).await,
+            Action::Filter(node) => {
+                self.filter = node;
+                self.clamp_selection();
+            }
+            Action::DataMenu(p) => self.data_menu(p).await,
+        }
+    }
+
+    async fn call(&mut self, call: Call) {
+        let url = self.api(&call.node, &call.path);
+        let mut req = self.request(call.method.clone(), &url);
+        if call.long {
+            req = req.timeout(Duration::from_secs(3600));
+        }
+        if let Some(ref body) = call.body {
+            req = req.json(body);
+        }
+        if let Some(ref file) = call.upload {
+            match std::fs::read(expand_home(file)) {
+                Ok(data) => req = req.body(data),
+                Err(e) => {
+                    self.set_status(format!("{file}: {e}"), true);
+                    return;
                 }
-                let req = self.request(reqwest::Method::DELETE, &url);
-                self.act(&format!("Deleting {}", p.profile.name), req).await;
             }
-            Pending::DeleteRecording(r) => {
-                let url = self.api(&r.node_name, &format!("/recordings/{}", r.recording.id));
-                let req = self.request(reqwest::Method::DELETE, &url);
-                self.act("Deleting recording", req).await;
+        }
+        let Some(ref file) = call.save_to else {
+            self.act(&call.label, req).await;
+            return;
+        };
+        self.set_status(format!("{}…", call.label), false);
+        match req.send().await {
+            Ok(r) if r.status().is_success() => match r.bytes().await {
+                Ok(data) => match std::fs::write(expand_home(file), &data) {
+                    Ok(()) => self.set_status(
+                        format!("Saved {file} ({})", bytes(data.len() as u64)),
+                        false,
+                    ),
+                    Err(e) => self.set_status(format!("{file}: {e}"), true),
+                },
+                Err(e) => self.set_status(format!("{}: {e}", call.label), true),
+            },
+            Ok(r) => self.set_status(format!("{}: HTTP {}", call.label, r.status()), true),
+            Err(e) => self.set_status(format!("{}: {e}", call.label), true),
+        }
+    }
+
+    async fn stop_all(&mut self, node: Option<String>) {
+        let targets: Vec<(String, String)> = self
+            .sessions()
+            .iter()
+            .filter(|s| node.as_deref().is_none_or(|n| s.node_name == n))
+            .map(|s| (s.node_name.clone(), s.session.id.to_string()))
+            .collect();
+        if targets.is_empty() {
+            self.set_status("No sessions", false);
+            return;
+        }
+        self.set_status(format!("Stopping {} sessions…", targets.len()), false);
+        let results = futures_util::future::join_all(targets.iter().map(|(n, id)| {
+            let url = self.api(n, &format!("/sessions/{id}"));
+            self.request(Method::DELETE, &url).send()
+        }))
+        .await;
+        let failed = results
+            .iter()
+            .filter(|r| !matches!(r, Ok(res) if res.status().is_success()))
+            .count();
+        if failed == 0 {
+            self.set_status(format!("Stopped {} sessions", targets.len()), false);
+        } else {
+            self.set_status(
+                format!("{failed} of {} sessions could not be stopped", targets.len()),
+                true,
+            );
+        }
+        self.refresh().await;
+    }
+
+    /// A profile's backups, with what can be done to its data.
+    async fn data_menu(&mut self, p: MeshProfile) {
+        let base = profile_base(&p);
+        let url = self.api(&p.node_name, &format!("{base}/backups"));
+        let list: Vec<Value> = match self.request(Method::GET, &url).send().await {
+            Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
+            Ok(r) => {
+                self.set_status(format!("Backups: HTTP {}", r.status()), true);
+                return;
+            }
+            Err(e) => {
+                self.set_status(format!("Backups: {e}"), true);
+                return;
+            }
+        };
+        let node = p.node_name.clone();
+        let mut items = vec![item(
+            "Back up now…",
+            ask(
+                "Back up",
+                "Label (optional)",
+                "",
+                Action::Api(
+                    Call::new("Backing up", Method::POST, &node, format!("{base}/backups"))
+                        .body(json!({ "label": INPUT })),
+                ),
+            ),
+        )];
+        for b in &list {
+            let id = b["id"].as_str().unwrap_or_default().to_string();
+            let label = format!(
+                "{id}  {}  {}  {}{}",
+                ago(b["created_at_secs"].as_u64()),
+                bytes(b["size_bytes"].as_u64().unwrap_or(0)),
+                if b["automatic"].as_bool().unwrap_or(false) { "auto" } else { "manual" },
+                b["label"]
+                    .as_str()
+                    .filter(|l| !l.is_empty())
+                    .map(|l| format!("  {l}"))
+                    .unwrap_or_default(),
+            );
+            let bpath = format!("{base}/backups/{}", urlencode(&id));
+            items.push(item(
+                label,
+                Action::Menu {
+                    title: format!("Backup {id}"),
+                    items: vec![
+                        item(
+                            "Restore (keeps a safety backup of the current data)",
+                            confirm_then(
+                                format!("Replace the data of {} with backup {id}?", p.profile.name),
+                                Action::Api(
+                                    Call::new(
+                                        "Restoring",
+                                        Method::POST,
+                                        &node,
+                                        format!("{bpath}/restore"),
+                                    )
+                                    .long(),
+                                ),
+                            ),
+                        ),
+                        item(
+                            "Delete backup",
+                            Action::Api(Call::new("Deleting backup", Method::DELETE, &node, bpath)),
+                        ),
+                    ],
+                },
+            ));
+        }
+        let force = if p.profile.is_active { "&force=true" } else { "" };
+        items.push(item(
+            "Clear data…",
+            confirm_then(
+                format!(
+                    "Wipe cookies and logins of {}? A safety backup is kept.",
+                    p.profile.name
+                ),
+                Action::Api(Call::new(
+                    "Clearing",
+                    Method::POST,
+                    &node,
+                    format!("{base}/clear?backup=true{force}"),
+                )),
+            ),
+        ));
+        items.push(item(
+            "Export archive…",
+            ask(
+                "Export",
+                "Save as",
+                &format!("{}.tar.gz", p.profile.name),
+                Action::Api(
+                    Call::new("Exporting", Method::GET, &node, format!("{base}/export"))
+                        .save_to(INPUT),
+                ),
+            ),
+        ));
+        items.push(item(
+            "Import archive…",
+            confirm_then(
+                format!("Replace the data of {} with an archive?", p.profile.name),
+                ask(
+                    "Import",
+                    "Archive file",
+                    "",
+                    Action::Api(
+                        Call::new(
+                            "Importing",
+                            Method::POST,
+                            &node,
+                            format!(
+                                "/profiles/{}/import?overwrite=true",
+                                urlencode(&p.profile.name)
+                            ),
+                        )
+                        .upload(INPUT),
+                    ),
+                ),
+            ),
+        ));
+        self.modal = Some(Modal::Menu {
+            title: format!("{} — backups & data", p.profile.name),
+            items,
+            sel: 0,
+        });
+    }
+
+    // ----------------------------------------------------------------- forms
+
+    fn node_choice(&self, preset: Option<&str>) -> Field {
+        let nodes = self.node_names();
+        let chosen = preset
+            .or(self.filter.as_deref())
+            .and_then(|n| nodes.iter().position(|x| x == n))
+            .unwrap_or(0);
+        let mut f = Field::choice("Node", nodes.into_iter().map(|n| (n.clone(), n)).collect());
+        if let FieldKind::Choice { sel, .. } = &mut f.kind {
+            *sel = chosen;
+        }
+        f
+    }
+
+    fn proxy_field(&self, node: &str) -> Field {
+        let mut options = vec![
+            (String::new(), "(default)".to_string()),
+            ("none".to_string(), "direct".to_string()),
+        ];
+        options.extend(self.node_proxies(node).into_iter().map(|p| (p.id, p.name)));
+        Field::choice("Proxy", options)
+    }
+
+    fn open_form(&mut self, kind: FormKind, node: Option<String>) {
+        if self.ov.is_none() {
+            return;
+        }
+        let node_field = self.node_choice(node.as_deref());
+        let node = node_field.value();
+        let engines = || {
+            Field::choice(
+                "Engine",
+                vec![
+                    ("chromium".into(), "Chromium".into()),
+                    ("firefox".into(), "Firefox".into()),
+                ],
+            )
+        };
+        let scheme = || {
+            Field::choice(
+                "Appearance",
+                vec![
+                    (String::new(), "(default)".into()),
+                    ("dark".into(), "dark".into()),
+                    ("light".into(), "light".into()),
+                ],
+            )
+        };
+        let tri = |label: &'static str| {
+            Field::choice(
+                label,
+                vec![
+                    (String::new(), "(default)".into()),
+                    ("true".into(), "on".into()),
+                    ("false".into(), "off".into()),
+                ],
+            )
+        };
+        let fields = match kind {
+            FormKind::Session => {
+                let mut profiles = vec![(String::new(), "(throwaway)".to_string())];
+                profiles.extend(self.profiles().into_iter().map(|p| {
+                    (
+                        format!("{}\u{1f}{}", p.node_name, profile_key(p)),
+                        format!("{} ({})", p.profile.name, p.node_name),
+                    )
+                }));
+                vec![
+                    node_field,
+                    engines(),
+                    Field::choice("Profile", profiles),
+                    Field::text("Name"),
+                    self.proxy_field(&node),
+                    scheme(),
+                    tri("Record"),
+                    tri("Ad blocker"),
+                    Field::text("Idle (min)"),
+                ]
+            }
+            FormKind::Profile => vec![
+                node_field,
+                Field::text("Name"),
+                engines(),
+                self.proxy_field(&node),
+                scheme(),
+                Field::text("Homepage"),
+            ],
+        };
+        self.modal = Some(Modal::Form(Form { kind, fields, sel: 0 }));
+    }
+
+    /// The node changed: its proxies are the ones to choose from.
+    fn form_sync(&self, f: &mut Form) {
+        let proxy_at = match f.kind {
+            FormKind::Session => 4,
+            FormKind::Profile => 3,
+        };
+        let node = f.fields[0].value();
+        f.fields[proxy_at] = self.proxy_field(&node);
+    }
+
+    fn form_action(&self, f: &Form) -> Action {
+        let v = |i: usize| f.fields[i].value();
+        let flag = |s: String| match s.as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
+        match f.kind {
+            FormKind::Session => {
+                let mut node = v(0);
+                let mut body = json!({ "persistent": true, "engine": v(1) });
+                if let Some((n, key)) = v(2).split_once('\u{1f}') {
+                    node = n.to_string();
+                    body["profile"] = json!(key);
+                    // The profile has its own engine.
+                    if let Some(p) = self
+                        .profiles()
+                        .into_iter()
+                        .find(|p| p.node_name == n && profile_key(p) == key)
+                    {
+                        body["engine"] = json!(p.profile.engine);
+                    }
+                }
+                if !v(3).is_empty() {
+                    body["name"] = json!(v(3));
+                }
+                if !v(4).is_empty() {
+                    body["proxy"] = json!(v(4));
+                }
+                if !v(5).is_empty() {
+                    body["color_scheme"] = json!(v(5));
+                }
+                if let Some(b) = flag(v(6)) {
+                    body["record"] = json!(b);
+                }
+                if let Some(b) = flag(v(7)) {
+                    body["adblock"] = json!(b);
+                }
+                if let Ok(m) = v(8).parse::<u64>() {
+                    body["idle_timeout_minutes"] = json!(m);
+                }
+                Action::Api(
+                    Call::new(
+                        format!("Starting a session on {node}"),
+                        Method::POST,
+                        &node,
+                        "/sessions",
+                    )
+                    .body(body),
+                )
+            }
+            FormKind::Profile => {
+                let node = v(0);
+                if v(1).is_empty() {
+                    return Action::Say("A profile needs a name".into());
+                }
+                let mut body = json!({ "name": v(1), "engine": v(2) });
+                if !v(3).is_empty() {
+                    body["proxy"] = json!(v(3));
+                }
+                if !v(4).is_empty() {
+                    body["color_scheme"] = json!(v(4));
+                }
+                if !v(5).is_empty() {
+                    body["homepage"] = json!(v(5));
+                }
+                Action::Api(
+                    Call::new(
+                        format!("Creating {} on {node}", v(1)),
+                        Method::POST,
+                        &node,
+                        "/profiles",
+                    )
+                    .body(body),
+                )
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------- modals
+
+    async fn modal_key(&mut self, k: KeyEvent) {
+        let Some(modal) = self.modal.take() else { return };
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match modal {
+            Modal::Menu { title, items, mut sel } => {
+                let last = items.len().saturating_sub(1);
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('q') => return,
+                    KeyCode::Down | KeyCode::Char('j') => sel = (sel + 1).min(last),
+                    KeyCode::Up | KeyCode::Char('k') => sel = sel.saturating_sub(1),
+                    KeyCode::PageDown => sel = (sel + 8).min(last),
+                    KeyCode::PageUp => sel = sel.saturating_sub(8),
+                    KeyCode::Home | KeyCode::Char('g') => sel = 0,
+                    KeyCode::End | KeyCode::Char('G') => sel = last,
+                    KeyCode::Enter => {
+                        if let Some((_, a)) = items.get(sel) {
+                            let a = a.clone();
+                            self.run(a).await;
+                            return;
+                        }
+                    }
+                    KeyCode::Char(c @ '1'..='9') => {
+                        if let Some((_, a)) = items.get(c as usize - '1' as usize) {
+                            let a = a.clone();
+                            self.run(a).await;
+                            return;
+                        }
+                    }
+                    _ => {}
+                }
+                self.modal = Some(Modal::Menu { title, items, sel });
+            }
+            Modal::Input { title, prompt, mut buf, then } => {
+                match k.code {
+                    KeyCode::Esc => return,
+                    KeyCode::Enter => {
+                        let a = then.with_input(buf.trim());
+                        self.run(a).await;
+                        return;
+                    }
+                    KeyCode::Backspace => {
+                        buf.pop();
+                    }
+                    KeyCode::Char('u') if ctrl => buf.clear(),
+                    KeyCode::Char(c) if !ctrl => buf.push(c),
+                    _ => {}
+                }
+                self.modal = Some(Modal::Input { title, prompt, buf, then });
+            }
+            Modal::Confirm { then, .. } => {
+                if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                    self.run(*then).await;
+                } else {
+                    self.set_status("Cancelled", false);
+                }
+            }
+            Modal::Text { title, lines, mut scroll } => {
+                let last = lines.len().saturating_sub(1);
+                match k.code {
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => return,
+                    KeyCode::Down | KeyCode::Char('j') => scroll = (scroll + 1).min(last),
+                    KeyCode::Up | KeyCode::Char('k') => scroll = scroll.saturating_sub(1),
+                    KeyCode::PageDown | KeyCode::Char(' ') => scroll = (scroll + 10).min(last),
+                    KeyCode::PageUp => scroll = scroll.saturating_sub(10),
+                    KeyCode::Home | KeyCode::Char('g') => scroll = 0,
+                    KeyCode::End | KeyCode::Char('G') => scroll = last,
+                    _ => {}
+                }
+                self.modal = Some(Modal::Text { title, lines, scroll });
+            }
+            Modal::Form(mut f) => {
+                let n = f.fields.len();
+                match k.code {
+                    KeyCode::Esc => return,
+                    KeyCode::Enter => {
+                        let a = self.form_action(&f);
+                        self.run(a).await;
+                        return;
+                    }
+                    KeyCode::Up | KeyCode::BackTab => f.sel = (f.sel + n - 1) % n,
+                    KeyCode::Down | KeyCode::Tab => f.sel = (f.sel + 1) % n,
+                    code => {
+                        let at = f.sel;
+                        let mut node_changed = false;
+                        match &mut f.fields[at].kind {
+                            FieldKind::Choice { options, sel } => {
+                                let len = options.len().max(1);
+                                match code {
+                                    KeyCode::Right | KeyCode::Char(' ') | KeyCode::Char('l') => {
+                                        *sel = (*sel + 1) % len;
+                                        node_changed = at == 0;
+                                    }
+                                    KeyCode::Left | KeyCode::Char('h') => {
+                                        *sel = (*sel + len - 1) % len;
+                                        node_changed = at == 0;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            FieldKind::Text(buf) => match code {
+                                KeyCode::Backspace => {
+                                    buf.pop();
+                                }
+                                KeyCode::Char('u') if ctrl => buf.clear(),
+                                KeyCode::Char(c) if !ctrl => buf.push(c),
+                                _ => {}
+                            },
+                        }
+                        if node_changed {
+                            self.form_sync(&mut f);
+                        }
+                    }
+                }
+                self.modal = Some(Modal::Form(f));
             }
         }
     }
@@ -500,6 +1458,297 @@ impl App {
             Ok(_) => self.set_status(format!("Opened {url}"), false),
             Err(_) => self.set_status(url.to_string(), false),
         }
+    }
+}
+
+// ------------------------------------------------------- actions of one row
+
+fn handoff_url(node_url: &str, session: impl std::fmt::Display) -> String {
+    format!("{}/handoff/?session={session}", node_url.trim_end_matches('/'))
+}
+
+fn play_url(r: &MeshRecording) -> String {
+    format!("{}/?play={}", r.node_url.trim_end_matches('/'), r.recording.id)
+}
+
+fn ws_url(s: &MeshSession) -> String {
+    let engine = if s.session.engine == crate::BrowserEngine::Firefox {
+        "firefox"
+    } else {
+        "chromium"
+    };
+    format!(
+        "{}/{engine}?session_id={}",
+        s.node_url.trim_end_matches('/').replacen("http", "ws", 1),
+        s.session.id
+    )
+}
+
+fn idle_label(secs: u64) -> String {
+    if secs == 0 {
+        "never".into()
+    } else {
+        dur(secs)
+    }
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => std::env::var_os("HOME")
+            .map(|h| PathBuf::from(h).join(rest))
+            .unwrap_or_else(|| PathBuf::from(path)),
+        None => PathBuf::from(path),
+    }
+}
+
+fn session_call(s: &MeshSession, label: &str, verb: &str) -> Action {
+    Action::Api(Call::new(
+        label,
+        Method::POST,
+        &s.node_name,
+        format!("/sessions/{}/{verb}", s.session.id),
+    ))
+}
+
+fn stop_session(s: &MeshSession) -> Action {
+    confirm_then(
+        format!("Stop {} on {}?", s.session.name, s.node_name),
+        Action::Api(Call::new(
+            "Stopping session",
+            Method::DELETE,
+            &s.node_name,
+            format!("/sessions/{}", s.session.id),
+        )),
+    )
+}
+
+fn record_toggle(s: &MeshSession) -> Action {
+    if s.session.is_recording {
+        session_call(s, "Stopping recording", "stop-record")
+    } else {
+        session_call(s, "Starting recording", "record")
+    }
+}
+
+fn new_tab(s: &MeshSession) -> Action {
+    ask(
+        "New tab",
+        "URL",
+        "https://",
+        Action::Api(Call::new(
+            "Opening tab",
+            Method::PUT,
+            &s.node_name,
+            format!("/json/new?url={INPUT}&session_id={}", s.session.id),
+        )),
+    )
+}
+
+fn rename_session(s: &MeshSession) -> Action {
+    ask(
+        "Rename session",
+        "Name (empty: a generated one)",
+        &s.session.name,
+        Action::Api(
+            Call::new(
+                "Renaming",
+                Method::POST,
+                &s.node_name,
+                format!("/sessions/{}/name", s.session.id),
+            )
+            .body(json!({ "name": INPUT })),
+        ),
+    )
+}
+
+fn idle_timeout(s: &MeshSession) -> Action {
+    ask(
+        "Auto-stop",
+        "Minutes of inactivity before it stops (0: never)",
+        &(s.session.idle_timeout_seconds / 60).to_string(),
+        Action::Api(Call::new(
+            "Auto-stop set",
+            Method::POST,
+            &s.node_name,
+            format!("/sessions/{}/idle-timeout?minutes={INPUT}", s.session.id),
+        )),
+    )
+}
+
+fn set_session_proxy(app: &App, s: &MeshSession, proxy: Option<&str>) -> Action {
+    let label = match proxy {
+        Some(id) => format!("Session now goes through {}", app.proxy_name(&s.node_name, id)),
+        None => "Session now connects directly".to_string(),
+    };
+    Action::Api(
+        Call::new(
+            label,
+            Method::POST,
+            &s.node_name,
+            format!("/sessions/{}/proxy", s.session.id),
+        )
+        .body(json!({ "proxy": proxy.unwrap_or("none") })),
+    )
+}
+
+fn profile_key(p: &MeshProfile) -> String {
+    p.profile
+        .id
+        .map_or_else(|| p.profile.name.clone(), |id| id.to_string())
+}
+
+fn profile_base(p: &MeshProfile) -> String {
+    format!("/profiles/{}", urlencode(&profile_key(p)))
+}
+
+fn set_profile_proxy(app: &App, p: &MeshProfile, proxy: Option<&str>) -> Action {
+    let label = match proxy {
+        Some(id) => format!("{} now uses {}", p.profile.name, app.proxy_name(&p.node_name, id)),
+        None => format!("{} now connects directly", p.profile.name),
+    };
+    Action::Api(
+        Call::new(label, Method::PATCH, &p.node_name, profile_base(p))
+            .body(json!({ "proxy": proxy.unwrap_or("none") })),
+    )
+}
+
+fn launch_profile(p: &MeshProfile) -> Action {
+    match p.profile.session_id {
+        Some(sid) => Action::Open(handoff_url(&p.node_url, sid)),
+        None => Action::Api(
+            Call::new(
+                format!("Launching {}", p.profile.name),
+                Method::POST,
+                &p.node_name,
+                "/sessions",
+            )
+            .body(json!({
+                "profile": profile_key(p),
+                "engine": p.profile.engine,
+                "persistent": true,
+            })),
+        ),
+    }
+}
+
+fn rename_profile(p: &MeshProfile) -> Action {
+    ask(
+        "Rename profile",
+        "New name",
+        &p.profile.name,
+        Action::Api(
+            Call::new("Renaming", Method::PATCH, &p.node_name, profile_base(p))
+                .body(json!({ "name": INPUT })),
+        ),
+    )
+}
+
+fn delete_profile(p: &MeshProfile) -> Action {
+    let force = if p.profile.is_active { "?force=true" } else { "" };
+    confirm_then(
+        format!(
+            "Delete profile {} on {}? Cookies and logins are wiped.",
+            p.profile.name, p.node_name
+        ),
+        Action::Api(Call::new(
+            format!("Deleting {}", p.profile.name),
+            Method::DELETE,
+            &p.node_name,
+            format!("{}{force}", profile_base(p)),
+        )),
+    )
+}
+
+fn recording_menu(r: &MeshRecording) -> Action {
+    let title = r
+        .recording
+        .title
+        .clone()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "Recording".into());
+    Action::Menu {
+        title,
+        items: vec![
+            item("Play", Action::Open(play_url(r))),
+            item("Details", details("Recording", r)),
+            item("Export frames…", export_recording(r)),
+            item("Apply retention now", vacuum(&r.node_name)),
+            item("Delete", delete_recording(r)),
+        ],
+    }
+}
+
+fn export_recording(r: &MeshRecording) -> Action {
+    ask(
+        "Export frames",
+        "Save as (JSON lines)",
+        &format!("{}.jsonl", r.recording.id),
+        Action::Api(
+            Call::new(
+                "Exporting",
+                Method::GET,
+                &r.node_name,
+                format!("/recordings/{}/frames", r.recording.id),
+            )
+            .save_to(INPUT),
+        ),
+    )
+}
+
+fn delete_recording(r: &MeshRecording) -> Action {
+    confirm_then(
+        format!(
+            "Delete recording {}?",
+            r.recording.title.as_deref().unwrap_or("(untitled)")
+        ),
+        Action::Api(Call::new(
+            "Deleting recording",
+            Method::DELETE,
+            &r.node_name,
+            format!("/recordings/{}", r.recording.id),
+        )),
+    )
+}
+
+fn vacuum(node: &str) -> Action {
+    Action::Api(Call::new(
+        format!("Applying the retention limits on {node}"),
+        Method::POST,
+        node,
+        "/recordings/vacuum",
+    ))
+}
+
+fn add_peer() -> Action {
+    ask(
+        "Add a peer",
+        "Base URL of the node",
+        "https://",
+        Action::Api(
+            // Peers are added on the asked node itself.
+            Call::new("Adding peer", Method::POST, "", "/peers").body(json!({ "url": INPUT })),
+        ),
+    )
+}
+
+fn remove_peer(node: &str) -> Action {
+    confirm_then(
+        format!("Remove peer {node}? Its sessions keep running."),
+        Action::Api(Call::new(
+            format!("Removing {node}"),
+            Method::DELETE,
+            "",
+            format!("/peers/{}", urlencode(node)),
+        )),
+    )
+}
+
+/// Pretty JSON of `value`, line by line, in a scrollable popup.
+fn details(title: &str, value: &impl serde::Serialize) -> Action {
+    let text = serde_json::to_string_pretty(value).unwrap_or_default();
+    Action::Text {
+        title: title.to_string(),
+        lines: text.lines().map(str::to_string).collect(),
     }
 }
 
@@ -564,9 +1813,9 @@ fn draw(f: &mut Frame, app: &mut App) {
     // Tabs with counts, and the node summary on the right.
     let counts = app.ov.as_ref().map(|o| {
         [
-            o.sessions.len(),
-            o.profiles.len(),
-            o.recordings.len(),
+            app.sessions().len(),
+            app.profiles().len(),
+            app.recordings().len(),
             1 + o.peers.len(),
         ]
     });
@@ -591,8 +1840,13 @@ fn draw(f: &mut Frame, app: &mut App) {
         top,
     );
     if let Some(ref ov) = app.ov {
+        let only = app
+            .filter
+            .as_ref()
+            .map(|f| format!("only {f}  ·  "))
+            .unwrap_or_default();
         let summary = format!(
-            "{}  ·  {}/{} nodes online ",
+            "{only}{}  ·  {}/{} nodes online ",
             ov.local_node.name, ov.online_nodes, ov.total_nodes
         );
         let w = summary.chars().count() as u16;
@@ -620,10 +1874,13 @@ fn draw(f: &mut Frame, app: &mut App) {
         return;
     };
     let i = TABS.iter().position(|t| *t == app.tab).unwrap_or(0);
+    let sessions: Vec<MeshSession> = app.sessions().into_iter().cloned().collect();
+    let profiles: Vec<MeshProfile> = app.profiles().into_iter().cloned().collect();
+    let recordings: Vec<MeshRecording> = app.recordings().into_iter().cloned().collect();
 
     match app.tab {
         Tab::Sessions => {
-            let rows = ov.sessions.iter().map(|s| {
+            let rows = sessions.iter().map(|s| {
                 let ss = &s.session;
                 let rec = if ss.is_recording {
                     if ss.recording_paused {
@@ -673,7 +1930,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(table, body, &mut app.tables[i]);
             let detail_lines = app.tables[i]
                 .selected()
-                .and_then(|n| ov.sessions.get(n))
+                .and_then(|n| sessions.get(n))
                 .map(|s| {
                     let mut lines = vec![Line::from(vec![
                         Span::raw("id ").dim(),
@@ -709,7 +1966,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             draw_detail(f, detail, detail_lines);
         }
         Tab::Profiles => {
-            let rows = ov.profiles.iter().map(|p| {
+            let rows = profiles.iter().map(|p| {
                 let pp = &p.profile;
                 Row::new(vec![
                     Cell::from(pp.name.clone()),
@@ -746,7 +2003,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(table, body, &mut app.tables[i]);
             let lines = app.tables[i]
                 .selected()
-                .and_then(|n| ov.profiles.get(n))
+                .and_then(|n| profiles.get(n))
                 .map(|p| {
                     vec![
                         Line::from(vec![
@@ -762,7 +2019,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             draw_detail(f, detail, lines);
         }
         Tab::Recordings => {
-            let rows = ov.recordings.iter().map(|r| {
+            let rows = recordings.iter().map(|r| {
                 let m = &r.recording;
                 Row::new(vec![
                     Cell::from(
@@ -811,7 +2068,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             f.render_stateful_widget(table, body, &mut app.tables[i]);
             let lines = app.tables[i]
                 .selected()
-                .and_then(|n| ov.recordings.get(n))
+                .and_then(|n| recordings.get(n))
                 .map(|r| {
                     vec![
                         Line::from(vec![
@@ -912,16 +2169,8 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     draw_footer(f, app, foot);
 
-    if let Some(ref pending) = app.pending {
-        popup(
-            f,
-            "Confirm",
-            vec![
-                Line::from(pending.question()),
-                Line::from(""),
-                Line::from("y: yes   any other key: no").dim(),
-            ],
-        );
+    if let Some(ref modal) = app.modal {
+        draw_modal(f, modal);
     } else if app.help {
         popup(f, "Keys", help_lines());
     }
@@ -941,10 +2190,10 @@ fn draw_detail(f: &mut Frame, area: Rect, lines: Option<Vec<Line<'static>>>) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.tab {
-        Tab::Sessions => "⏎ take over  s stop  p proxy  R record  n new  w ws url",
-        Tab::Profiles => "⏎ launch/take over  p proxy  d delete",
-        Tab::Recordings => "⏎ play  d delete",
-        Tab::Nodes => "n new session there",
+        Tab::Sessions => "⏎ take over  s stop  p proxy  R record  t tab  e rename  N new  X stop all  m menu",
+        Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
+        Tab::Recordings => "⏎ play  E export  d delete  v vacuum  m menu",
+        Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
     };
     let line = if app.status.is_empty() {
         Line::from(vec![
@@ -963,25 +2212,36 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("Tab / ← →  1-4", "switch view"),
         ("↑ ↓  j k  g G", "move"),
+        ("m / Space", "menu of the selected row: everything the dashboard offers"),
+        ("M", "menu of the view (new session, stop all, ...)"),
+        ("f", "show only the selected row's node (again: all nodes)"),
+        ("i", "details"),
         ("r", "refresh now"),
         ("", ""),
         ("Sessions", ""),
         ("  ⏎ / o", "open the handoff view in your browser"),
         ("  s", "stop the session"),
+        ("  X", "stop every session in view"),
         ("  p", "switch its proxy now (direct, then each proxy)"),
         ("  R", "start or stop recording"),
-        ("  n", "start a throwaway session on that node"),
+        ("  t / e / T", "new tab / rename / auto-stop timeout"),
+        ("  n / N", "throwaway session on that node / new session form"),
         ("  w", "show the session's WebSocket URL"),
         ("Profiles", ""),
         ("  ⏎ / o", "launch it, or take over its session"),
-        (
-            "  p",
-            "cycle its default proxy (applies from the next launch)",
-        ),
+        ("  p", "cycle its default proxy (from the next launch)"),
+        ("  b", "backups & data: back up, restore, clear, export, import"),
+        ("  e / N", "rename / new profile form"),
         ("  d", "delete it"),
         ("Recordings", ""),
         ("  ⏎ / o", "play it in the dashboard"),
+        ("  E / v", "export its frames / apply the retention limits"),
         ("  d", "delete it"),
+        ("Nodes", ""),
+        ("  n / a / x", "session there / add a peer / remove the peer"),
+        ("In a menu or form", ""),
+        ("  ⏎  Esc", "choose / cancel   (1-9 pick an item)"),
+        ("  ← →  Tab", "change a choice / next field"),
         ("", ""),
         ("q / Esc", "quit"),
     ]
@@ -997,6 +2257,98 @@ fn help_lines() -> Vec<Line<'static>> {
         }
     })
     .collect()
+}
+
+/// Lines of `all` around the selected one that fit in `max`.
+fn window(all: Vec<Line<'static>>, sel: usize, max: usize) -> Vec<Line<'static>> {
+    if all.len() <= max {
+        return all;
+    }
+    let start = sel.saturating_sub(max / 2).min(all.len() - max);
+    all.into_iter().skip(start).take(max).collect()
+}
+
+fn draw_modal(f: &mut Frame, modal: &Modal) {
+    let room = f.area().height.saturating_sub(6) as usize;
+    let selected = |text: String| Line::from(Span::raw(format!("▸ {text}")).fg(Color::Magenta).bold());
+    let hint = |text: &str| Line::from(Span::raw(text.to_string())).dim();
+    match modal {
+        Modal::Menu { title, items, sel } => {
+            let lines: Vec<Line> = items
+                .iter()
+                .enumerate()
+                .map(|(i, (label, _))| {
+                    let n = if i < 9 { format!("{} ", i + 1) } else { "  ".to_string() };
+                    if i == *sel {
+                        selected(format!("{n}{label}"))
+                    } else {
+                        Line::from(format!("  {n}{label}"))
+                    }
+                })
+                .collect();
+            let mut lines = window(lines, *sel, room.max(3));
+            lines.push(Line::from(""));
+            lines.push(hint("⏎ choose   Esc close   1-9 pick"));
+            popup(f, title, lines);
+        }
+        Modal::Input { title, prompt, buf, .. } => popup(
+            f,
+            title,
+            vec![
+                Line::from(prompt.clone()),
+                Line::from(vec![Span::raw("› "), Span::raw(buf.clone()), Span::raw("▏")]),
+                Line::from(""),
+                hint("⏎ ok   Esc cancel   ^U clear"),
+            ],
+        ),
+        Modal::Confirm { question, .. } => popup(
+            f,
+            "Confirm",
+            vec![
+                Line::from(question.clone()),
+                Line::from(""),
+                hint("y: yes   any other key: no"),
+            ],
+        ),
+        Modal::Text { title, lines, scroll } => {
+            let mut shown: Vec<Line> = lines
+                .iter()
+                .skip(*scroll)
+                .take(room.max(3))
+                .map(|l| Line::from(l.clone()))
+                .collect();
+            shown.push(Line::from(""));
+            shown.push(hint("↑↓ scroll   Esc close"));
+            popup(f, title, shown);
+        }
+        Modal::Form(form) => {
+            let mut lines: Vec<Line> = form
+                .fields
+                .iter()
+                .enumerate()
+                .map(|(i, field)| {
+                    let value = match &field.kind {
+                        FieldKind::Text(t) => {
+                            if i == form.sel { format!("{t}▏") } else { t.clone() }
+                        }
+                        FieldKind::Choice { options, sel } => format!(
+                            "‹ {} ›",
+                            options.get(*sel).map(|o| o.1.as_str()).unwrap_or("–")
+                        ),
+                    };
+                    let text = format!("{:<12} {value}", field.label);
+                    if i == form.sel { selected(text) } else { Line::from(format!("  {text}")) }
+                })
+                .collect();
+            lines.push(Line::from(""));
+            lines.push(hint("↑↓ field   ← → change   ⏎ create   Esc cancel"));
+            let title = match form.kind {
+                FormKind::Session => "New session",
+                FormKind::Profile => "New profile",
+            };
+            popup(f, title, lines);
+        }
+    }
 }
 
 fn popup(f: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
@@ -1068,7 +2420,9 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         tables: Default::default(),
         status: String::new(),
         error: false,
-        pending: None,
+        refresh_error: false,
+        modal: None,
+        filter: None,
         help: false,
         last_refresh: None,
     };

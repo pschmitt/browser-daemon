@@ -66,13 +66,14 @@ Enable the service in your NixOS configuration:
 
 ## Terminal UI
 
-`browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, refreshed every few seconds.
+`browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, refreshed every few seconds, and does what the dashboard does.
 
-- Sessions: take over in the browser, stop, switch the proxy, start or stop recording, start a throwaway session, show the WebSocket URL.
-- Profiles: launch (or take over a running one), cycle the proxy, delete.
-- Recordings: play in the dashboard, delete.
+- `m` (or Space) opens the menu of the selected row with everything the dashboard offers: take over, new tab, rename, auto-stop timeout, proxy, recording control, details, stop for sessions; launch, rename, proxy, appearance, homepage, duplicate, copy or move to another node, backups & data (back up, restore, clear, export and import archives) and delete for profiles; play, export frames, delete for recordings; filter, settings, new session or profile there, remove for nodes. `M` opens the menu of the view (new session or profile, stop all, retention, add a peer).
+- Hotkeys for the common ones (`?` lists them): `s` stop, `X` stop all, `p` proxy, `R` record, `t` new tab, `e` rename, `N` new session or profile, `b` backups & data, `E` export frames, `d` delete, `i` details.
+- `f` shows only the selected row's node on the other tabs (again: every node); the header says so.
+- New sessions and profiles come from a form (node, engine, profile, name, proxy, appearance, recording, ad blocker, auto-stop).
 
-It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file`, the NixOS module's secret when readable, or otherwise the dashboard of that node. Press `?` for the keys.
+It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file`, the NixOS module's secret when readable, or otherwise the dashboard of that node.
 
 ## CLI
 
@@ -84,7 +85,8 @@ browser-daemon session list|show|new|stop|stop-all|rename|proxy|idle-timeout|rec
 browser-daemon profile list|show|new|set|clone|rm|clear|backup|export|import|transfer
 browser-daemon profile backup list|create|restore|rm PROFILE
 browser-daemon recording list|show|rm|export|vacuum
-browser-daemon node list|show|add|rm
+browser-daemon node list|show|set|add|rm
+browser-daemon completions bash|zsh|fish   shell completions
 browser-daemon tui                        terminal UI (see above)
 browser-daemon passkey-helper             serve approved passkeys from rbw
 ```
