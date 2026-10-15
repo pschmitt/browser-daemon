@@ -286,6 +286,37 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
   background: var(--raised); border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden;
   animation: rise .18s ease-out;
 }
+/* Default tabs editor: a list of pages, reordered by dragging. */
+.te { display: flex; flex-direction: column; gap: 10px; }
+.te-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.te-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 2px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); transition: border-color .15s, background .15s, opacity .15s; }
+.te-row:focus-within { border-color: var(--accent); }
+.te-row.dragging { opacity: .4; }
+.te-row.over { border-color: var(--accent); background: var(--accent-soft); }
+.te-row.bad { border-color: var(--bad); background: var(--bad-soft); }
+.te-grip { width: 24px; height: 30px; display: grid; place-items: center; color: var(--faint); cursor: grab; flex: none; touch-action: none; user-select: none; }
+.te-grip:hover { color: var(--fg); }
+.te-grip:active { cursor: grabbing; }
+.te-grip svg { width: 14px; height: 14px; fill: currentColor; stroke: none; }
+.te-fav { width: 24px; height: 24px; flex: none; display: grid; place-items: center; border-radius: 7px; background: var(--hover); color: var(--faint); }
+.te-fav img { width: 16px; height: 16px; border-radius: 3px; }
+.te-url { flex: 1; min-width: 0; height: 30px; border: 0; background: transparent; color: var(--fg); font: 12.5px var(--mono); padding: 0 4px; outline: none; }
+.te-btn { width: 28px; height: 28px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); display: grid; place-items: center; flex: none; }
+.te-btn:hover { background: var(--hover); color: var(--fg); }
+.te-btn.del:hover { background: var(--bad-soft); color: var(--bad); }
+.te-btn[disabled] { opacity: .25; pointer-events: none; }
+.te-btn svg { width: 14px; height: 14px; }
+.te-btn.up svg { transform: rotate(180deg); }
+.te-empty { border: 1px dashed var(--line-strong); border-radius: 12px; padding: 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.te-empty b { display: block; color: var(--fg); margin-bottom: 2px; font-size: 13.5px; }
+.te-add { display: flex; gap: 8px; }
+.te-add .input { flex: 1; min-width: 0; }
+.te-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 30px; }
+.te-msg { font-size: 12px; color: var(--muted); }
+.te-msg.err { color: var(--bad); }
+.tab-strip { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; vertical-align: middle; }
+.tab-strip img { width: 14px; height: 14px; border-radius: 3px; background: #f4f5fa; padding: 1px; }
+.tab-strip .more { font-size: 11px; color: var(--faint); margin-left: 2px; }
 .bk-new { display: flex; gap: 8px; }
 .bk-new .btn { flex: none; }
 .bk-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-height: 42vh; overflow-y: auto; }
@@ -553,6 +584,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5"/></symbol>
   <symbol id="i-install" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-broom" viewBox="0 0 24 24"><path d="m15 4 5 5M9.5 9.5 14.5 14.5M4 20s1-5 3.5-7.5l4 4C9 19 4 20 4 20zM13 7l4 4 2.5-2.5-4-4z"/></symbol>
   <symbol id="i-saved" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M8 9l3 3 5-6"/></symbol>
@@ -703,6 +735,17 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </div>
 
 <!-- New profile -->
+<div class="modal" id="tabsModal">
+  <form class="sheet" id="tabsForm">
+    <div class="sheet-head"><h2 id="tabsTitle">Default tabs</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <span class="hint" id="tabsIntro"></span>
+      <div class="te" id="tabsEditor"></div>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="tabsSave"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
+  </form>
+</div>
+
 <div class="modal" id="newProfileModal">
   <form class="sheet" id="newProfileForm">
     <div class="sheet-head"><h2>New profile</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
@@ -711,7 +754,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="field"><label for="profileName">Name</label><input class="input" id="profileName" required maxlength="128" placeholder="e.g. Google (me@example.com)" autocomplete="off" spellcheck="false"></div>
       <div class="field"><label for="profileClone">Start from</label><select class="input" id="profileClone"></select></div>
       <div class="field" id="profileProxyField"><label for="profileProxy">Proxy</label><select class="input" id="profileProxy"></select><span class="hint">Sessions of this profile go through it unless they pick another.</span></div>
-      <div class="field"><label for="profileTabs">Default tabs</label><input class="input" id="profileTabs" type="text" inputmode="url" placeholder="Optional, e.g. outlook.office.com ssl6.hrworks.de/o/dashboard" autocomplete="off" autocapitalize="off" spellcheck="false"><span class="hint">Pages its sessions open with, separated by spaces; a blank tab otherwise.</span></div>
+      <div class="field"><span class="field-label">Default tabs</span><div class="te" id="profileTabsEditor"></div></div>
       <div class="field"><label for="profileScheme">Appearance</label><select class="input" id="profileScheme"><option value="dark">Dark</option><option value="light">Light</option></select><span class="hint">What pages see as the preferred color scheme, and the browser's own look.</span></div>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-plus"/></svg>Create</button></div>
@@ -1489,7 +1532,7 @@ function profileRow(p) {
   return `
   <div class="row" data-key="${key}">
     <div class="main"><div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>
-      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}</b><span>${status}</span></div></div>
+      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}</b><span>${status}${tabStrip(p)}</span></div></div>
     <div class="c-node">${nodeChip(p.node_name)}</div>
     <div class="num c-size">${formatBytes(p.size_bytes)}</div>
     <div class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
@@ -2182,7 +2225,7 @@ function openNewProfile() {
   fillProxyOptions();
   $('profileName').value = '';
   $('profileScheme').value = 'dark';
-  $('profileTabs').value = '';
+  profileTabsEd = tabsEditor($('profileTabsEditor'), []);
   fillCloneOptions();
   openModal('newProfileModal');
   setTimeout(() => $('profileName').focus(), 40);
@@ -2196,10 +2239,12 @@ function fillCloneOptions() {
   const own = [...byKey.profiles.values()].filter((p) => p.node_name === profileNode);
   $('profileClone').innerHTML = '<option value="">An empty profile</option>' + own.map((p) => `<option value="${esc(p.key)}">Copy of ${esc(p.display)} (${formatBytes(p.size_bytes)})</option>`).join('');
 }
+let profileTabsEd = null;
 $('newProfileForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (profileTabsEd.hasInvalid()) { profileTabsEd.complain(); return; }
   const name = $('profileName').value.trim();
-  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null, proxy: $('profileProxy').value || null, color_scheme: $('profileScheme').value, tabs: $('profileTabs').value.trim() || null }), `Profile ${name} created`);
+  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null, proxy: $('profileProxy').value || null, color_scheme: $('profileScheme').value, tabs: profileTabsEd.value() }), `Profile ${name} created`);
   if (r !== undefined) closeModal('newProfileModal');
 });
 
@@ -2228,12 +2273,169 @@ function setProfileProxy(p, id) {
   act('Setting the proxy', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { proxy: id }),
     `${p.display} uses ${label}` + (p.session ? ' from its next launch' : ''));
 }
-async function setProfileTabs(p) {
-  const v = await ask({ title: `Default tabs of ${p.display}`, text: 'The pages its sessions open with, separated by spaces. Leave empty for a blank tab.', input: (p.tabs || []).join(' '), placeholder: 'e.g. outlook.office.com ssl6.hrworks.de/o/dashboard', ok: 'Save' });
-  if (v === null || v === undefined) return;
-  const tabs = v.split(/[\s,]+/).filter(Boolean);
-  act('Setting the default tabs', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { tabs }),
+/* ---- Default tabs ---- */
+// An address as a tab would open it: https:// added to a bare host. '' = empty, null = not usable.
+function normTab(raw) {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+  try {
+    const u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(v) ? v : `https://${v}`);
+    if (!/^https?:$/.test(u.protocol) || !u.hostname || !(u.hostname.includes('.') || u.hostname === 'localhost')) return null;
+    return u.href;
+  } catch { return null; }
+}
+// The list editor: one row per page (icon, address, up, down, remove), drag by the handle to reorder,
+// paste several addresses at once. `openTabs()` offers the pages a running session has open.
+function tabsEditor(root, initial = [], { openTabs = null } = {}) {
+  if (root._te) { root._te.reset(initial, openTabs); return root._te; }
+  let rows = [], getOpen = null, dragFrom = -1, note = '', noteErr = false;
+  const favHtml = (u) => (normTab(u) ? favicon(normTab(u)) : icon('globe', 'sm'));
+  const rowHtml = (r, i) => `<li class="te-row${r.bad ? ' bad' : ''}" data-i="${i}">
+      <span class="te-grip" title="Drag to reorder">${icon('grip')}</span>
+      <span class="te-fav">${favHtml(r.url)}</span>
+      <input class="te-url" value="${esc(r.url)}" data-i="${i}" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Address of tab ${i + 1}">
+      <button type="button" class="te-btn up" data-op="up" data-i="${i}" title="Move up" aria-label="Move up"${i === 0 ? ' disabled' : ''}>${icon('chev')}</button>
+      <button type="button" class="te-btn down" data-op="down" data-i="${i}" title="Move down" aria-label="Move down"${i === rows.length - 1 ? ' disabled' : ''}>${icon('chev')}</button>
+      <button type="button" class="te-btn del" data-op="del" data-i="${i}" title="Remove" aria-label="Remove">${icon('x')}</button>
+    </li>`;
+  function render(focusNew = false) {
+    root.classList.add('te');
+    root.innerHTML = (rows.length
+      ? `<ol class="te-list">${rows.map(rowHtml).join('')}</ol>`
+      : `<div class="te-empty"><b>No default tabs</b>Sessions of this profile start on a blank tab.</div>`)
+      + `<div class="te-add"><input class="input te-new" placeholder="Add a page: paste an address, or several" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Add a page"><button type="button" class="btn te-addbtn">${icon('plus', 'sm')}Add</button></div>`
+      + `<div class="te-tools">${getOpen ? `<button type="button" class="btn sm ghost te-open">${icon('tabs', 'sm')}Use the open tabs</button>` : ''}<span class="te-msg${noteErr ? ' err' : ''}">${esc(note)}</span></div>`;
+    if (focusNew) root.querySelector('.te-new').focus();
+  }
+  const say = (text, err = false) => { note = text; noteErr = err; const m = root.querySelector('.te-msg'); if (m) { m.textContent = text; m.classList.toggle('err', err); } };
+  function addMany(text) {
+    const bad = [];
+    let added = 0;
+    for (const part of String(text).split(/[\s,]+/).filter(Boolean)) {
+      const u = normTab(part);
+      if (u === null) { bad.push(part); continue; }
+      if (u && !rows.some((r) => normTab(r.url) === u)) { rows.push({ url: u }); added++; }
+    }
+    note = bad.length ? `Not a web address: ${bad.join(', ')}` : added > 1 ? `Added ${added} pages` : '';
+    noteErr = bad.length > 0;
+    render(true);
+  }
+  function move(i, to) {
+    if (to < 0 || to >= rows.length || i === to) return;
+    rows.splice(to, 0, rows.splice(i, 1)[0]);
+    render();
+  }
+  root.addEventListener('click', (e) => {
+    const op = e.target.closest('[data-op]');
+    if (op) {
+      const i = +op.dataset.i;
+      if (op.dataset.op === 'del') { rows.splice(i, 1); render(); }
+      else move(i, i + (op.dataset.op === 'up' ? -1 : 1));
+      return;
+    }
+    if (e.target.closest('.te-addbtn')) { const f = root.querySelector('.te-new'); if (f.value.trim()) addMany(f.value); else f.focus(); return; }
+    if (e.target.closest('.te-open') && getOpen) {
+      const before = rows.length;
+      for (const u of getOpen()) { const n = normTab(u); if (n && !rows.some((r) => normTab(r.url) === n)) rows.push({ url: n }); }
+      note = rows.length > before ? `Added ${rows.length - before} open page${rows.length - before === 1 ? '' : 's'}` : 'Those pages are already in the list';
+      noteErr = false;
+      render();
+    }
+  });
+  root.addEventListener('input', (e) => {
+    const f = e.target.closest('.te-url');
+    if (!f) return;
+    const r = rows[+f.dataset.i];
+    r.url = f.value;
+    r.bad = normTab(f.value) === null;
+    f.closest('.te-row').classList.toggle('bad', r.bad);
+  });
+  root.addEventListener('change', (e) => {
+    const f = e.target.closest('.te-url');
+    if (!f) return;
+    const i = +f.dataset.i, u = normTab(f.value);
+    if (u === '') { rows.splice(i, 1); render(); return; }
+    if (u !== null) { rows[i].url = u; rows[i].bad = false; f.value = u; f.closest('.te-row').querySelector('.te-fav').innerHTML = favHtml(u); }
+  });
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    if (e.target.closest('.te-new')) { e.preventDefault(); if (e.target.value.trim()) addMany(e.target.value); return; }
+    if (e.target.closest('.te-url')) { e.preventDefault(); e.target.dispatchEvent(new Event('change', { bubbles: true })); root.querySelector('.te-new')?.focus(); }
+  });
+  root.addEventListener('paste', (e) => {
+    if (!e.target.closest('.te-new')) return;
+    const text = e.clipboardData?.getData('text') || '';
+    if (/[\s,]/.test(text.trim())) { e.preventDefault(); addMany(text); }
+  });
+  // Drag by the handle (the rest of the row is a text field).
+  root.addEventListener('mousedown', (e) => { if (e.target.closest('.te-grip')) e.target.closest('.te-row').draggable = true; });
+  root.addEventListener('dragstart', (e) => {
+    const row = e.target.closest?.('.te-row');
+    if (!row) return;
+    dragFrom = +row.dataset.i;
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', rows[dragFrom]?.url || '');
+  });
+  root.addEventListener('dragover', (e) => {
+    const row = e.target.closest?.('.te-row');
+    if (!row || dragFrom < 0) return;
+    e.preventDefault();
+    root.querySelectorAll('.te-row.over').forEach((x) => x.classList.remove('over'));
+    row.classList.add('over');
+  });
+  root.addEventListener('drop', (e) => {
+    const row = e.target.closest?.('.te-row');
+    if (!row || dragFrom < 0) return;
+    e.preventDefault();
+    const from = dragFrom;
+    dragFrom = -1;
+    move(from, +row.dataset.i);
+  });
+  root.addEventListener('dragend', () => {
+    dragFrom = -1;
+    root.querySelectorAll('.te-row').forEach((x) => { x.classList.remove('dragging', 'over'); x.draggable = false; });
+  });
+  const api = {
+    reset(list, open) { rows = (list || []).map((u) => ({ url: u })); getOpen = open || null; note = ''; noteErr = false; render(); },
+    value() { const out = []; for (const r of rows) { const u = normTab(r.url); if (u && !out.includes(u)) out.push(u); } return out; },
+    hasInvalid() { return rows.some((r) => normTab(r.url) === null); },
+    complain() { say('Some rows are not web addresses', true); root.querySelector('.te-row.bad .te-url')?.focus(); },
+    focus() { root.querySelector('.te-new')?.focus(); },
+  };
+  root._te = api;
+  api.reset(initial, openTabs);
+  return api;
+}
+// The pages a profile's running session has open.
+function runningTabs(p) {
+  return (ov?.targets || []).filter((t) => t.type === 'page' && t.node_name === p.node_name && t.sessionId === p.session?.id && /^https?:/.test(t.url)).map((t) => t.url);
+}
+let tabsProfile = null;
+function setProfileTabs(p) {
+  tabsProfile = p;
+  $('tabsTitle').textContent = `Default tabs of ${p.display}`;
+  $('tabsIntro').textContent = p.session
+    ? 'The pages its sessions open with, in this order. The running session keeps what it has: this applies from the next launch.'
+    : 'The pages its sessions open with, in this order. A session can still choose to start without them.';
+  tabsEditor($('tabsEditor'), p.tabs || [], { openTabs: p.session ? () => runningTabs(p) : null });
+  openModal('tabsModal');
+  setTimeout(() => $('tabsEditor')._te.focus(), 40);
+}
+$('tabsForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const ed = $('tabsEditor')._te, p = tabsProfile;
+  if (!ed || !p) return;
+  if (ed.hasInvalid()) { ed.complain(); return; }
+  const tabs = ed.value();
+  const r = await act('Setting the default tabs', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { tabs }),
     tabs.length ? `${p.display} opens ${tabs.length} tab${tabs.length === 1 ? '' : 's'}` + (p.session ? ' from its next launch' : '') : `${p.display} opens a blank tab`);
+  if (r !== undefined) closeModal('tabsModal');
+});
+function tabStrip(p) {
+  const tabs = p.tabs || [];
+  if (!tabs.length) return '';
+  return `<span class="tab-strip" title="${esc(tabs.join('\n'))}">${tabs.slice(0, 4).map((u) => favicon(u)).join('')}${tabs.length > 4 ? `<span class="more">+${tabs.length - 4}</span>` : ''}</span>`;
 }
 async function cloneProfile(p) {
   const name = await ask({ title: `Duplicate ${p.display}`, text: `Creates a copy on ${p.node_name}.`, input: `${p.display}-copy`, ok: 'Duplicate' });
