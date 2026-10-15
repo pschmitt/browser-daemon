@@ -1307,7 +1307,13 @@ pub async fn node(args: NodeArgs) -> R<()> {
         NodeCmd::Set { node, default_proxy, engine, adblock, color_scheme, show_touches } => {
             let node = c.node_or_local(node.as_deref())?;
             let path = c.api(&node, "/settings");
-            let mut settings = c.call(c.req(Method::GET, &path)).await?;
+            // The overview carries every node's settings (a peer's route only takes PATCH).
+            let mut settings = if node == c.ov.local_node.name {
+                serde_json::to_value(&c.ov.local_node.settings)?
+            } else {
+                let peer = c.ov.peers.iter().find(|p| p.name == node);
+                serde_json::to_value(peer.and_then(|p| p.settings.as_ref()))?
+            };
             let mut body = json!({});
             if let Some(p) = default_proxy {
                 body["default_proxy"] = json!(if p == "none" { String::new() } else { p });
