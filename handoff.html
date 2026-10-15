@@ -99,9 +99,12 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); animation: pulse 1.4s infinite; }
   .rec-pill.paused { color: var(--muted); border-color: var(--line); background: var(--btn); }
   .rec-pill.paused .rec-dot { background: var(--muted); animation: none; border-radius: 1px; width: 7px; box-shadow: none; }
-  #sessMenu { position: fixed; z-index: 60; top: 56px; right: 8px; width: 272px; max-width: calc(100vw - 16px); padding: 6px;
+  #sessMenu, #profMenu { position: fixed; z-index: 60; top: 56px; right: 8px; width: 272px; max-width: calc(100vw - 16px); padding: 6px;
     background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
-  #sessMenu[hidden] { display: none; }
+  #sessMenu[hidden], #profMenu[hidden] { display: none; }
+  #profMenu { right: auto; left: 8px; width: 290px; }
+  .pm-note { padding: 2px 10px 6px; font-size: 11.5px; color: var(--muted); }
+  .pm-tabs { margin: 4px 6px 2px; padding: 8px; width: calc(100% - 12px); box-sizing: border-box; min-height: 120px; resize: vertical; border-radius: 9px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 12px ui-monospace, monospace; }
   .ib.chev { width: 20px; margin-left: -4px; border-radius: 8px; color: var(--muted); }
   .ib.chev svg { width: 16px; height: 16px; }
   /* Other running sessions of the mesh, from the dashboard button's chevron (or hover). */
@@ -157,7 +160,7 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
     .rec-pill { padding: 0; width: 28px; justify-content: center; margin: 0 2px; }
     #recPillText { display: none; }
   }
-  #sessMenu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
+  #sessMenu hr, #profMenu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
   .sm-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 2px; font-weight: 700; font-size: 14px; }
   #smTitle { cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sm-engine { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; background: var(--btn); color: var(--muted); }
@@ -325,6 +328,30 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   <hr>
   <a class="sm-item" href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Back to dashboard</a>
   <button class="sm-item danger" id="smStop"><svg viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span id="smStopText">Stop session</span></button>
+</div>
+<div id="profMenu" role="menu" hidden>
+  <div class="sm-head"><span class="sm-engine" id="pmEngine"></span><span id="pmTitle">Profile</span></div>
+  <div class="pm-note" id="pmNote"></div>
+  <hr>
+  <div id="pmProfile">
+    <button class="sm-item" id="pmOpenTabs"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 8V6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg><span id="pmOpenTabsText">Open the default tabs</span></button>
+    <button class="sm-item" id="pmUseTabs" title="The pages open now become the pages every new session of this profile starts with"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>Use the open tabs as default</button>
+    <button class="sm-item" id="pmEditTabs"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4"/></svg>Edit the default tabs…</button>
+    <button class="sm-item" id="pmRename"><svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>Rename profile…</button>
+    <hr>
+    <a class="sm-item" href="/#profiles"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Backups, clearing and more in the dashboard</a>
+  </div>
+  <div id="pmEdit" hidden>
+    <div class="sm-label">Default tabs (one address per line)</div>
+    <textarea class="pm-tabs" id="pmTabsText" spellcheck="false" placeholder="https://"></textarea>
+    <div class="sm-narrow" style="display:flex;gap:6px;padding:6px 6px 2px">
+      <button class="sm-item" id="pmEditSave" style="flex:1;justify-content:center">Save</button>
+      <button class="sm-item" id="pmEditCancel" style="flex:1;justify-content:center">Cancel</button>
+    </div>
+  </div>
+  <div id="pmThrowaway" hidden>
+    <button class="sm-item" id="pmSave"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
+  </div>
 </div>
 <div id="stage">
   <canvas id="view" tabindex="-1"></canvas>
@@ -2947,8 +2974,127 @@ $("smDevtools").addEventListener("click", () => {
   window.open(`/devtools/frontend/${encodeURIComponent(target.sessionId)}/inspector.html?${scheme}=${encodeURIComponent(page)}`, "_blank", "noopener");
 });
 
-E.profChip.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
 E.agentChip.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
+// The profile chip's own menu: what belongs to the profile (its default tabs, its name),
+// not the session's controls.
+let profileInfo = null;
+const profileKey = () => encodeURIComponent(sess?.profile || "");
+async function loadProfileInfo() {
+  profileInfo = null;
+  if (!sess?.profile) return;
+  try {
+    const res = await fetch(`/api/profiles/${profileKey()}`, { headers: authHeaders() });
+    if (res.ok) profileInfo = await res.json();
+  } catch { /* the menu works without the counts */ }
+}
+const webTabs = () => tabsAll
+  .filter((x) => (!target?.sessionId || x.sessionId === target.sessionId) && /^https?:/.test(x.url || ""))
+  .map((x) => x.url);
+function showProfMenu(open = $("profMenu").hidden) {
+  const menu = $("profMenu");
+  menu.hidden = !open;
+  if (!open) return;
+  toggleSessMenu(false);
+  closeSessPop?.();
+  const r = E.profChip.getBoundingClientRect();
+  menu.style.top = (r.bottom + 6) + "px";
+  menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + "px";
+  const named = !!sess?.profile;
+  $("pmProfile").hidden = !named;
+  $("pmThrowaway").hidden = named;
+  $("pmEdit").hidden = true;
+  $("pmEngine").textContent = sess?.engine || "chromium";
+  $("pmTitle").textContent = named ? sess.profile : "Throwaway session";
+  $("pmNote").textContent = named
+    ? "Its logins, cookies and storage are kept between sessions."
+    : "Nothing from this session is kept when it stops.";
+  if (named) {
+    const n = (profileInfo?.tabs || []).length;
+    $("pmOpenTabsText").textContent = n ? `Open the default tabs (${n})` : "Open the default tabs";
+    $("pmOpenTabs").disabled = !n;
+    $("pmUseTabs").disabled = !webTabs().length;
+    loadProfileInfo().then(() => {
+      const m = (profileInfo?.tabs || []).length;
+      $("pmOpenTabsText").textContent = m ? `Open the default tabs (${m})` : "Open the default tabs";
+      $("pmOpenTabs").disabled = !m;
+    });
+  }
+}
+async function patchProfile(body) {
+  const res = await fetch(`/api/profiles/${profileKey()}`, {
+    method: "PATCH", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || res.statusText);
+  return out;
+}
+E.profChip.onclick = (e) => { e.stopPropagation(); showProfMenu(); };
+document.addEventListener("pointerdown", (e) => {
+  if (!$("profMenu").hidden && !e.target.closest("#profMenu, #profChip")) showProfMenu(false);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("profMenu").hidden) showProfMenu(false); });
+$("pmOpenTabs").onclick = async () => {
+  const wanted = profileInfo?.tabs || [];
+  const open = new Set(webTabs().map((u) => u.replace(/\/$/, "")));
+  const fresh = wanted.filter((u) => !open.has(u.replace(/\/$/, "")));
+  showProfMenu(false);
+  if (!fresh.length) { toast("The default tabs are already open", 2500); return; }
+  try {
+    for (const url of fresh) {
+      const qs = new URLSearchParams({ url, session_id: target.sessionId });
+      const res = await fetch("/json/new?" + qs.toString(), { method: "PUT", headers: authHeaders() });
+      if (!res.ok) throw new Error(res.statusText);
+    }
+    toast(`Opened ${fresh.length} default tab${fresh.length === 1 ? "" : "s"}`, 2500);
+    loadTabs();
+  } catch (err) {
+    toast(`Could not open the tabs: ${err.message}`, 5000);
+  }
+};
+$("pmUseTabs").onclick = async () => {
+  const urls = webTabs();
+  showProfMenu(false);
+  if (!urls.length) return;
+  try {
+    await patchProfile({ tabs: urls });
+    await loadProfileInfo();
+    toast(`${urls.length} default tab${urls.length === 1 ? "" : "s"} saved for ${sess.profile}`, 3000);
+  } catch (err) {
+    toast(`Could not save the tabs: ${err.message}`, 5000);
+  }
+};
+$("pmEditTabs").onclick = () => {
+  $("pmProfile").hidden = true;
+  $("pmEdit").hidden = false;
+  $("pmTabsText").value = (profileInfo?.tabs || []).join("\n");
+  $("pmTabsText").focus();
+};
+$("pmEditCancel").onclick = () => { $("pmEdit").hidden = true; $("pmProfile").hidden = false; };
+$("pmEditSave").onclick = async () => {
+  const tabs = $("pmTabsText").value.split("\n").map((l) => l.trim()).filter(Boolean);
+  showProfMenu(false);
+  try {
+    await patchProfile({ tabs });
+    await loadProfileInfo();
+    toast(tabs.length ? `${tabs.length} default tab${tabs.length === 1 ? "" : "s"} saved` : "Default tabs cleared", 3000);
+  } catch (err) {
+    toast(`Could not save the tabs: ${err.message}`, 5000);
+  }
+};
+$("pmRename").onclick = async () => {
+  const name = window.prompt("New name of the profile", sess.profile);
+  showProfMenu(false);
+  if (!name || !name.trim() || name.trim() === sess.profile) return;
+  try {
+    await patchProfile({ name: name.trim() });
+    toast(`Renamed to ${name.trim()}`, 2500);
+    refreshSession();
+  } catch (err) {
+    toast(`Could not rename: ${err.message}`, 5000);
+  }
+};
+$("pmSave").onclick = () => { showProfMenu(false); $("smSave").click(); };
+
 // A throwaway session becomes a profile: its data is kept, and the session continues
 // as a session of that profile (the browser restarts on the same pages).
 $("smSave").onclick = async () => {
@@ -3301,6 +3447,7 @@ function toggleSessMenu(open = E.sessMenu.hidden) {
   E.sessBtn.classList.toggle("on", open);
   disarmStop();
   if (open) {
+    $("profMenu").hidden = true;
     const r = E.sessBtn.getBoundingClientRect();
     E.sessMenu.style.top = (r.bottom + 6) + "px";
     $("smFwd").disabled = E.fwd.disabled;
