@@ -20,6 +20,7 @@ mod proxy;
 mod recorder;
 mod relay;
 mod settings;
+mod thumbnail;
 mod tui;
 mod video;
 mod viewers;
@@ -466,6 +467,8 @@ pub struct AppState {
     pub settings: Arc<settings::Store>,
     /// Pages visited per profile and session, for the live view's address bar.
     pub history: Arc<history::History>,
+    /// Small screenshots of the sessions' front tabs, for the dashboard's cards.
+    pub thumbnails: Arc<thumbnail::Thumbnails>,
 }
 
 #[derive(Default)]
@@ -1397,6 +1400,80 @@ fn ctl_exit(result: Result<(), Box<dyn std::error::Error>>) -> Result<(), Box<dy
     Ok(())
 }
 
+/// A small JPEG of the tab the session is showing (the dashboard's cards).
+async fn api_session_screenshot(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(session) = state.sessions.read().await.get(&id).cloned() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let jpeg = match state.thumbnails.fresh(id) {
+        Some(jpeg) => Some(jpeg),
+        None => {
+            let shot = match session.bidi {
+                Some(ref hub) => match hub.active_context().await {
+                    Some(ctx) => hub.screenshot_jpeg(&ctx).await.ok().and_then(|b64| {
+                        use base64::Engine as _;
+                        base64::engine::general_purpose::STANDARD.decode(b64).ok()
+                    }),
+                    None => None,
+                },
+                None => thumbnail::chromium(&state.http_client, session.port).await,
+            };
+            if let Some(ref jpeg) = shot {
+                state.thumbnails.store(id, jpeg.clone());
+            }
+            shot.or_else(|| state.thumbnails.stale(id))
+        }
+    };
+    match jpeg {
+        Some(jpeg) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            jpeg,
+        )
+            .into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+async fn api_peer_session_screenshot(
+    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let url = format!("{}/api/sessions/{}/screenshot", peer_url, id);
+    match state.peer_request(state.http_client.get(&url)).send().await {
+        Ok(r) if r.status() == StatusCode::OK => match r.bytes().await {
+            Ok(b) => (
+                [
+                    (header::CONTENT_TYPE, "image/jpeg"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                b,
+            )
+                .into_response(),
+            Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+        },
+        Ok(r) if r.status() == StatusCode::NO_CONTENT => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    }
+}
+
 /// Whose history a session's pages belong to: its profile's, else its own.
 fn history_key(profile_id: Option<Uuid>, session_id: Uuid) -> String {
     profile_id.map_or_else(
@@ -1806,6 +1883,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = Arc::new(settings::Store::load(&settings_path));
     let history = Arc::new(history::History::new(config.state_dir().join("history")));
+    let thumbnails = Arc::new(thumbnail::Thumbnails::default());
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -1829,6 +1907,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         passkeys: Arc::default(),
         settings,
         history,
+        thumbnails,
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -1996,6 +2075,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/sessions/{id}/name", post(api_session_rename))
         .route("/api/sessions/{id}/history", get(api_session_history))
+        .route("/api/sessions/{id}/screenshot", get(api_session_screenshot))
+        .route(
+            "/api/peers/{peer}/sessions/{id}/screenshot",
+            get(api_peer_session_screenshot),
+        )
         .route(
             "/api/sessions/{id}/save-as-profile",
             post(api_session_save_as_profile),

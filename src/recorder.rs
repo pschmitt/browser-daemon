@@ -847,7 +847,7 @@ fn parse_data_url(url: &str) -> Option<(String, Vec<u8>)> {
 const TAB_CHECK_INTERVAL: Duration = Duration::from_millis(1500);
 
 /// The page targets worth recording, real pages first.
-fn page_candidates(targets: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+pub(crate) fn page_candidates(targets: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
     let mut pages: Vec<serde_json::Value> = targets
         .into_iter()
         .filter(|t| {
@@ -873,7 +873,7 @@ fn real_favicon(t: &serde_json::Value) -> Option<String> {
 /// The tab the user is looking at. Chromium lists targets in no useful order, so
 /// with several real pages each is asked whether its document is visible; without
 /// an answer the first one stands.
-async fn pick_visible(pages: Vec<serde_json::Value>) -> Option<serde_json::Value> {
+pub(crate) async fn pick_visible(pages: Vec<serde_json::Value>) -> Option<serde_json::Value> {
     let real = pages.iter().take_while(|t| !is_blank_target(t)).count();
     if real > 1 {
         for t in pages.iter().take(real) {
