@@ -26,6 +26,10 @@ pub struct RecordingMeta {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub favicon_url: Option<String>,
+    /// Content type of the icon stored with the recording (`favicon.bin`), grabbed from
+    /// the site itself during the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favicon_type: Option<String>,
     pub status: String, // "recording", "completed", "interrupted"
 }
 
@@ -250,6 +254,10 @@ const LAYOUT_REQUEST_ID: u64 = 1 << 29;
 /// From here up to TITLE_REQUEST_ID: the page's size and toolbar height, for
 /// grabbing the page's area from the display (see DisplayGrab).
 const GEOMETRY_REQUEST_ID: u64 = 1 << 27;
+/// CDP request id of the fetch of the page's icon (below GEOMETRY_REQUEST_ID).
+const FAVICON_REQUEST_ID: u64 = 1 << 26;
+/// Larger icons are not worth keeping.
+const FAVICON_MAX_BYTES: usize = 128 * 1024;
 /// The page's size on screen (scrollbars included; a zoomed-out mobile page scaled
 /// down) and the toolbars' height (null under emulation, where outer and inner sizes
 /// don't belong together; then the last one stands).
@@ -298,6 +306,7 @@ async fn record_session_loop(
         final_url: None,
         title: None,
         favicon_url: None,
+        favicon_type: None,
         status: "recording".to_string(),
     };
 
@@ -334,6 +343,8 @@ async fn record_session_loop(
 
     let mut current_url: Option<String> = None;
     let mut current_title: Option<String> = None;
+    // The icon URL last asked the page for, so each is tried once.
+    let mut favicon_fetched: Option<String> = None;
     let mut total_frames: u64 = 0;
     let mut last_proxy_frame = Instant::now() - Duration::from_secs(60);
     // With a display of its own: frames grabbed from it (DisplayGrab), the newest
@@ -404,28 +415,7 @@ async fn record_session_loop(
         let active_page_target = match http_client.get(&targets_url).send().await {
             Ok(res) => {
                 if let Ok(targets) = res.json::<Vec<serde_json::Value>>().await {
-                    let mut page_targets: Vec<serde_json::Value> = targets
-                        .into_iter()
-                        .filter(|t| {
-                            t.get("type").and_then(|v| v.as_str()) == Some("page")
-                                && t.get("webSocketDebuggerUrl").is_some()
-                        })
-                        .collect();
-
-                    // Prioritize targets: non-about:blank first
-                    page_targets.sort_by_key(|t| {
-                        let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                        if url.is_empty()
-                            || url == "about:blank"
-                            || url.starts_with("chrome-extension://")
-                        {
-                            1
-                        } else {
-                            0
-                        }
-                    });
-
-                    page_targets.into_iter().next()
+                    pick_visible(page_candidates(targets)).await
                 } else {
                     None
                 }
@@ -483,6 +473,9 @@ async fn record_session_loop(
                 current_url = Some(u.to_string());
             }
         }
+        if let Some(f) = real_favicon(&target) {
+            meta.favicon_url = Some(f);
+        }
         if let Some(t) = target.get("title").and_then(|v| v.as_str()) {
             if is_real_title(t) {
                 current_title = Some(t.to_string());
@@ -511,6 +504,9 @@ async fn record_session_loop(
             .await;
 
         let mut last_bg_frame_time = Instant::now();
+        // The user may switch tabs: follow the visible one.
+        let mut tab_check = tokio::time::interval(TAB_CHECK_INTERVAL);
+        tab_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut shot_timer = tokio::time::interval(RECORD_FRAME_INTERVAL);
         shot_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut next_shot_id = SHOT_REQUEST_ID;
@@ -562,6 +558,33 @@ async fn record_session_loop(
                         None => {
                             break;
                         }
+                    }
+                }
+                _ = tab_check.tick() => {
+                    let Ok(res) = http_client.get(&targets_url).send().await else { continue };
+                    let Ok(targets) = res.json::<Vec<serde_json::Value>>().await else { continue };
+                    let Some(best) = pick_visible(page_candidates(targets)).await else { continue };
+                    if best.get("id").and_then(|v| v.as_str()) != Some(current_target_id.as_str()) {
+                        debug!(recording_id = %recording_id, "Visible tab changed, switching");
+                        break;
+                    }
+                    // The page declares its icon once loaded: keep a copy from the site itself.
+                    if let Some(f) = real_favicon(&best) {
+                        if favicon_fetched.as_deref() != Some(f.as_str()) {
+                            let expr = format!(
+                                "fetch({}, {{ credentials: 'include' }}).then((r) => r.ok ? r.blob() : null).then((b) => !b || b.size > {} ? null : new Promise((ok) => {{ const f = new FileReader(); f.onload = () => ok(f.result); f.readAsDataURL(b); }})).catch(() => null)",
+                                serde_json::Value::String(f.clone()),
+                                FAVICON_MAX_BYTES
+                            );
+                            let cmd = serde_json::json!({
+                                "id": FAVICON_REQUEST_ID,
+                                "method": "Runtime.evaluate",
+                                "params": { "expression": expr, "awaitPromise": true, "returnByValue": true }
+                            });
+                            let _ = write.send(Message::Text(cmd.to_string().into())).await;
+                            favicon_fetched = Some(f.clone());
+                        }
+                        meta.favicon_url = Some(f);
                     }
                 }
                 _ = shot_timer.tick() => {
@@ -630,6 +653,18 @@ async fn record_session_loop(
                                                 None,
                                                 None,
                                             ).await;
+                                        }
+                                    }
+                                    continue;
+                                }
+                                if reply_id == Some(FAVICON_REQUEST_ID) {
+                                    if let Some((mime, bytes)) = val
+                                        .pointer("/result/result/value")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(parse_data_url)
+                                    {
+                                        if fs::write(rec_dir.join("favicon.bin"), &bytes).await.is_ok() {
+                                            meta.favicon_type = Some(mime);
                                         }
                                     }
                                     continue;
@@ -788,6 +823,90 @@ async fn record_session_loop(
         // Trigger auto-vacuum
         vacuum_recordings(&config).await;
     }
+}
+
+/// Content type and bytes of a `data:<type>;base64,<data>` URL (an image, within the size limit).
+fn parse_data_url(url: &str) -> Option<(String, Vec<u8>)> {
+    use base64::Engine as _;
+    let (head, data) = url.strip_prefix("data:")?.split_once(',')?;
+    let mime = head.strip_suffix(";base64")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+    if bytes.is_empty() || bytes.len() > FAVICON_MAX_BYTES {
+        return None;
+    }
+    let mime = if mime.starts_with("image/") { mime } else { "image/x-icon" };
+    Some((mime.to_string(), bytes))
+}
+
+/// How often the recorder checks which tab the user is looking at.
+const TAB_CHECK_INTERVAL: Duration = Duration::from_millis(1500);
+
+/// The page targets worth recording, real pages first.
+fn page_candidates(targets: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut pages: Vec<serde_json::Value> = targets
+        .into_iter()
+        .filter(|t| {
+            t.get("type").and_then(|v| v.as_str()) == Some("page")
+                && t.get("webSocketDebuggerUrl").is_some()
+        })
+        .collect();
+    pages.sort_by_key(|t| u8::from(is_blank_target(t)));
+    pages
+}
+
+fn is_blank_target(t: &serde_json::Value) -> bool {
+    let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    url.is_empty() || url == "about:blank" || url.starts_with("chrome-extension://")
+}
+
+/// The target's own icon (`faviconUrl` in the target list), when it has a plain one.
+fn real_favicon(t: &serde_json::Value) -> Option<String> {
+    let f = t.get("faviconUrl")?.as_str()?;
+    (!f.is_empty() && f.len() <= 2048 && !f.starts_with("data:")).then(|| f.to_string())
+}
+
+/// The tab the user is looking at. Chromium lists targets in no useful order, so
+/// with several real pages each is asked whether its document is visible; without
+/// an answer the first one stands.
+async fn pick_visible(pages: Vec<serde_json::Value>) -> Option<serde_json::Value> {
+    let real = pages.iter().take_while(|t| !is_blank_target(t)).count();
+    if real > 1 {
+        for t in pages.iter().take(real) {
+            if let Some(ws) = t.get("webSocketDebuggerUrl").and_then(|v| v.as_str()) {
+                if is_visible(ws).await {
+                    return Some(t.clone());
+                }
+            }
+        }
+    }
+    pages.into_iter().next()
+}
+
+/// Whether the page at this DevTools URL reports `document.visibilityState` visible.
+async fn is_visible(ws_url: &str) -> bool {
+    let probe = async {
+        let (mut ws, _) = tokio_tungstenite::connect_async(ws_url).await.ok()?;
+        let cmd = serde_json::json!({
+            "id": 1,
+            "method": "Runtime.evaluate",
+            "params": { "expression": "document.visibilityState", "returnByValue": true }
+        });
+        ws.send(Message::Text(cmd.to_string().into())).await.ok()?;
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(text) = msg {
+                let val: serde_json::Value = serde_json::from_str(&text).ok()?;
+                if val.get("id").and_then(|v| v.as_u64()) == Some(1) {
+                    return Some(val.pointer("/result/result/value").and_then(|v| v.as_str()) == Some("visible"));
+                }
+            }
+        }
+        None
+    };
+    tokio::time::timeout(Duration::from_millis(500), probe)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
 }
 
 async fn write_meta(path: &Path, meta: &RecordingMeta) -> std::io::Result<()> {
@@ -1058,5 +1177,42 @@ impl DisplayGrab {
             _child: child,
             latest,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn real_pages_come_first_and_extension_pages_are_not_recorded_first() {
+        let pages = page_candidates(vec![
+            json!({"type": "page", "url": "about:blank", "webSocketDebuggerUrl": "ws://x/1"}),
+            json!({"type": "service_worker", "url": "https://a.test/sw.js", "webSocketDebuggerUrl": "ws://x/2"}),
+            json!({"type": "page", "url": "https://a.test/", "webSocketDebuggerUrl": "ws://x/3"}),
+        ]);
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0]["url"], "https://a.test/");
+    }
+
+    #[test]
+    fn data_urls_become_icon_bytes() {
+        let (mime, bytes) = parse_data_url("data:image/png;base64,AAEC").unwrap();
+        assert_eq!((mime.as_str(), bytes), ("image/png", vec![0, 1, 2]));
+        assert_eq!(parse_data_url("data:;base64,AAEC").unwrap().0, "image/x-icon");
+        assert!(parse_data_url("data:image/png;base64,").is_none());
+        assert!(parse_data_url("https://a.test/i.png").is_none());
+    }
+
+    #[test]
+    fn only_plain_icons_are_stored() {
+        assert_eq!(
+            real_favicon(&json!({"faviconUrl": "https://a.test/i.png"})).as_deref(),
+            Some("https://a.test/i.png")
+        );
+        assert!(real_favicon(&json!({"faviconUrl": ""})).is_none());
+        assert!(real_favicon(&json!({"faviconUrl": "data:image/png;base64,AAAA"})).is_none());
+        assert!(real_favicon(&json!({})).is_none());
     }
 }

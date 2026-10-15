@@ -85,6 +85,41 @@ pub fn sweep_orphans(keep: &std::collections::HashSet<u32>) -> usize {
     killed
 }
 
+/// Remove the temporary profiles (`browserd-*` in the temp dir) and Firefox logs
+/// (`<sessions dir>/*.log`) no live session claims: a crash, a kill or a daemon
+/// of an earlier version left them. Returns how many were removed.
+pub fn sweep_leftover_files(
+    sessions_dir: &std::path::Path,
+    keep: &std::collections::HashSet<std::path::PathBuf>,
+) -> usize {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid(2) has no preconditions.
+    let uid = unsafe { libc::getuid() };
+    let mut removed = 0;
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ours = entry.file_name().to_string_lossy().starts_with("browserd-")
+                && entry.metadata().is_ok_and(|m| m.is_dir() && m.uid() == uid);
+            if ours && !keep.contains(&path) && std::fs::remove_dir_all(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "log")
+                && !keep.contains(&path)
+                && std::fs::remove_file(&path).is_ok()
+            {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 /// A process the daemon started, now or in a previous run.
 pub struct Proc {
     pub pid: u32,

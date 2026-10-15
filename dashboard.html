@@ -915,19 +915,29 @@ function shortUrl(url) {
 }
 
 // Site icons come from DuckDuckGo; private/mesh hosts get a globe instead.
-function favicon(url, faviconUrl) {
+// The icon the recorder grabbed from the site during the session.
+function recFavicon(r) {
+  if (!r.favicon_type) return '';
+  return api(r.node_name, `/recordings/${enc(r.id)}/favicon`) + (window.__CLUSTER_SECRET__ ? `?token=${enc(window.__CLUSTER_SECRET__)}` : '');
+}
+function favicon(url, ...stored) {
   const host = hostOf(url);
   const usable = host && host !== 'localhost' && !/^\d+\.\d+\.\d+\.\d+$/.test(host) && !host.endsWith('.ts.brkn.lol');
-  const src = faviconUrl || (usable ? `https://icons.duckduckgo.com/ip3/${host}.ico` : '');
+  const ddg = usable ? `https://icons.duckduckgo.com/ip3/${host}.ico` : '';
+  // The site's own icon (kept with the recording) first, then the URL it was found at;
+  // when neither loads (a guessed /favicon.ico often 404s), the icon service, then the globe.
+  const src = [...stored, ddg].find((u) => u && !failedFavicons.has(u)) || '';
   const globe = icon('globe', 'sm');
-  if (!src || failedFavicons.has(src)) return globe;
-  return `<img src="${esc(src)}" alt="" loading="lazy" onerror="faviconFailed(this)">`;
+  if (!src) return globe;
+  return `<img src="${esc(src)}" alt="" loading="lazy" data-fallback="${esc(ddg)}" onerror="faviconFailed(this)">`;
 }
-// Favicons that didn't load: the globe straight away next time (a redrawn card would
+// Favicons that didn't load: skipped straight away next time (a redrawn card would
 // otherwise try again and flash).
 const failedFavicons = new Set();
 function faviconFailed(img) {
   failedFavicons.add(img.getAttribute('src'));
+  const next = img.dataset.fallback;
+  if (next && !failedFavicons.has(next) && img.getAttribute('src') !== next) { img.src = next; return; }
   img.replaceWith(Object.assign(document.createElement('span'), { innerHTML: icon('globe', 'sm') }));
 }
 
@@ -1534,7 +1544,7 @@ function recordingRow(r) {
   <div class="row ${selected ? 'selected' : ''}" data-key="${key}">
     <div><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
-    <div class="main"><span class="site-fav">${favicon(url, r.favicon_url)}</span>
+    <div class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
       <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${cached}</b><span>${esc(sub)}</span></div></div>
     <div class="c-node">${nodeChip(r.node_name)}</div>
     <div class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
@@ -3062,7 +3072,7 @@ async function openPlayerModal(id, node) {
   const nodeBadge = document.getElementById('playerNodeBadge');
   const recInfo = (currentOverview?.recordings || []).find(r => r.id === id && r.node_name === node);
   if (nodeBadge) { nodeBadge.textContent = node || 'local'; nodeBadge.style.setProperty('--node', nodeColor(node)); }
-  $('playerFav').innerHTML = favicon(recInfo?.final_url || recInfo?.initial_url || '', recInfo?.favicon_url);
+  $('playerFav').innerHTML = favicon(recInfo?.final_url || recInfo?.initial_url || '', recInfo && recFavicon(recInfo), recInfo?.favicon_url);
 
   document.getElementById('playerPageTitle').textContent = 'Loading frames...';
   document.getElementById('playerPageUrl').textContent = '';

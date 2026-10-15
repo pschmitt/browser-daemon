@@ -451,6 +451,12 @@ impl ActiveBrowser {
         self.cleanup_files();
     }
 
+    /// Files a session leaves on disk (temporary profile, Firefox's log), for the
+    /// startup cleanup of everything else.
+    pub fn files(&self) -> impl Iterator<Item = &PathBuf> {
+        self.temp_dir.iter().chain(self.firefox_log.iter())
+    }
+
     fn cleanup_files(&mut self) {
         if let Some(dir) = self.temp_dir.take() {
             let _ = std::fs::remove_dir_all(dir);

@@ -1544,6 +1544,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Killed browsers and displays no session record claimed"
             );
         }
+        let mut files = std::collections::HashSet::new();
+        for session in state.sessions.read().await.values() {
+            if let Some(b) = session.browser.lock().await.as_ref() {
+                files.extend(b.files().cloned());
+            }
+        }
+        let removed = proc::sweep_leftover_files(&persist::dir(state.config.state_dir()), &files);
+        if removed > 0 {
+            info!(count = removed, "Removed temporary profiles and logs no session claimed");
+        }
     }
     if let Some(ref cfg) = state.config.audio {
         let keep: std::collections::HashSet<String> = state
@@ -1719,6 +1729,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_recording).delete(api_delete_recording),
         )
         .route("/api/recordings/{id}/frames", get(api_get_recording_frames))
+        .route("/api/recordings/{id}/favicon", get(api_get_recording_favicon))
         .route("/api/recordings/vacuum", post(api_vacuum_recordings))
         // Peer-to-Peer Mesh APIs
         .route("/api/mesh/node", get(api_mesh_node))
@@ -1790,6 +1801,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/peers/{peer}/recordings/{id}/frames",
             get(api_peer_get_recording_frames),
+        )
+        .route(
+            "/api/peers/{peer}/recordings/{id}/favicon",
+            get(api_peer_get_recording_favicon),
         )
         .route(
             "/api/peers/{peer}/recordings/vacuum",
@@ -4642,6 +4657,76 @@ async fn api_get_recording(
             Json(serde_json::json!({ "error": "Recording not found" })),
         ))?;
     Ok(Json(rec))
+}
+
+/// The site's own icon, as grabbed during the recording. `?token=` stands in for the
+/// cluster secret header, which an <img> can't send.
+async fn api_get_recording_favicon(
+    AxumPath(id): AxumPath<Uuid>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = state.check_auth_opt(&headers, q.get("token").map(String::as_str)) {
+        return e.into_response();
+    }
+    let dir = state.recorder_config.recordings_dir.join(id.to_string());
+    let meta = tokio::fs::read(dir.join("meta.json"))
+        .await
+        .ok()
+        .and_then(|b| serde_json::from_slice::<recorder::RecordingMeta>(&b).ok());
+    let (Some(mime), Ok(bytes)) = (
+        meta.and_then(|m| m.favicon_type),
+        tokio::fs::read(dir.join("favicon.bin")).await,
+    ) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, "private, max-age=300".to_string()),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+async fn api_peer_get_recording_favicon(
+    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = state.check_auth_opt(&headers, q.get("token").map(String::as_str)) {
+        return e.into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let url = format!("{}/api/recordings/{}/favicon", peer_url, id);
+    match state.peer_request(state.http_client.get(&url)).send().await {
+        Ok(r) if r.status().is_success() => {
+            let mime = r
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("image/x-icon")
+                .to_string();
+            match r.bytes().await {
+                Ok(b) => (
+                    [
+                        (header::CONTENT_TYPE, mime),
+                        (header::CACHE_CONTROL, "private, max-age=300".to_string()),
+                    ],
+                    b,
+                )
+                    .into_response(),
+                Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+            }
+        }
+        Ok(_) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    }
 }
 
 async fn api_get_recording_frames(
