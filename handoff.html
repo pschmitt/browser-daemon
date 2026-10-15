@@ -10,11 +10,16 @@
 <title>Browser Handoff</title>
 <link rel="icon" type="image/svg+xml" href="/handoff/favicon.svg">
 <link rel="alternate icon" type="image/x-icon" href="/handoff/favicon.ico">
+<script>
+// Theme chosen on the dashboard (none = follow the system).
+try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch { /* storage unavailable */ }
+</script>
 <style>
   :root { --bg: #0b0d12; --bar: #11141c; --fg: #e8eaf2; --muted: #98a0b8; --line: #262b38; --accent: #7c6cf0; --ok: #10b981; --bad: #e11d48; --btn: #1b2030; }
   @media (prefers-color-scheme: light) {
-    :root { --bg: #f4f5fa; --bar: #ffffff; --fg: #141725; --muted: #6b7189; --line: #dfe2ec; --btn: #eceef6; }
+    :root:not([data-theme="dark"]) { --bg: #f4f5fa; --bar: #ffffff; --fg: #141725; --muted: #6b7189; --line: #dfe2ec; --btn: #eceef6; }
   }
+  :root[data-theme="light"] { --bg: #f4f5fa; --bar: #ffffff; --fg: #141725; --muted: #6b7189; --line: #dfe2ec; --btn: #eceef6; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: var(--bg); color: var(--fg);
     font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

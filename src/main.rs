@@ -2390,7 +2390,7 @@ async fn handle_chromium_ws(
         match tokio_tungstenite::connect_async(&backend_ws_url).await {
             Ok((server_ws, _)) => {
                 let activity = Some((session.activity.clone(), false));
-                bridge_websockets(socket, server_ws, frame_tx, activity, None, None).await;
+                bridge_websockets(socket, server_ws, frame_tx, activity, None, None, true).await;
             }
             Err(e) => {
                 error!(session_id = %session.id, error = %e, "Failed to connect to Chromium backend");
@@ -2553,6 +2553,7 @@ async fn handle_page_ws(
                     activity,
                     initial_url,
                     initial_title,
+                    false,
                 )
                 .await;
             }

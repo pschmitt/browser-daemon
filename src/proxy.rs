@@ -17,6 +17,9 @@ pub async fn bridge_websockets(
     activity: Option<(Arc<Activity>, bool)>,
     initial_url: Option<String>,
     initial_title: Option<String>,
+    // Chromium clients: Playwright forces `prefers-color-scheme: light` on every
+    // context it attaches to. The session's own appearance wins, so that is dropped.
+    keep_session_appearance: bool,
 ) {
     let (mut client_tx, mut client_rx) = client_ws.split();
     let (mut server_tx, mut server_rx) = server_ws.split();
@@ -27,7 +30,12 @@ pub async fn bridge_websockets(
                 activity.note_command(text.as_str(), *observer);
             }
             let server_msg = match msg {
-                ClientMsg::Text(text) => ServerMsg::Text(text.as_str().into()),
+                ClientMsg::Text(text) => {
+                    let rewritten = keep_session_appearance
+                        .then(|| without_color_scheme_override(text.as_str()))
+                        .flatten();
+                    ServerMsg::Text(rewritten.unwrap_or_else(|| text.as_str().to_owned()).into())
+                }
                 ClientMsg::Binary(bin) => ServerMsg::Binary(bin),
                 ClientMsg::Ping(p) => ServerMsg::Ping(p),
                 ClientMsg::Pong(p) => ServerMsg::Pong(p),
@@ -121,5 +129,47 @@ pub async fn bridge_websockets(
     tokio::select! {
         _ = client_to_server => {},
         _ = server_to_client => {},
+    }
+}
+
+/// A DevTools `Emulation.setEmulatedMedia` call with its `prefers-color-scheme`
+/// override emptied (no emulation), or None when the message has none.
+fn without_color_scheme_override(text: &str) -> Option<String> {
+    if !text.contains("setEmulatedMedia") || !text.contains("prefers-color-scheme") {
+        return None;
+    }
+    let mut msg: serde_json::Value = serde_json::from_str(text).ok()?;
+    if msg.get("method")?.as_str()? != "Emulation.setEmulatedMedia" {
+        return None;
+    }
+    let mut changed = false;
+    for feature in msg.pointer_mut("/params/features")?.as_array_mut()? {
+        if feature.get("name").and_then(|n| n.as_str()) == Some("prefers-color-scheme") {
+            feature["value"] = serde_json::Value::String(String::new());
+            changed = true;
+        }
+    }
+    changed.then(|| msg.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playwrights_light_override_is_cleared() {
+        let out = without_color_scheme_override(
+            r#"{"id":7,"method":"Emulation.setEmulatedMedia","params":{"media":"","features":[{"name":"prefers-color-scheme","value":"light"},{"name":"prefers-reduced-motion","value":"reduce"}]}}"#,
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["id"], 7);
+        assert_eq!(v["params"]["features"][0]["value"], "");
+        assert_eq!(v["params"]["features"][1]["value"], "reduce");
+        assert!(without_color_scheme_override(r#"{"id":1,"method":"Page.navigate"}"#).is_none());
+        assert!(without_color_scheme_override(
+            r#"{"id":1,"method":"Emulation.setEmulatedMedia","params":{"features":[{"name":"prefers-reduced-motion","value":"reduce"}]}}"#
+        )
+        .is_none());
     }
 }

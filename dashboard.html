@@ -8,13 +8,21 @@
 <link rel="alternate icon" type="image/x-icon" href="/favicon.ico">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="color-scheme" content="dark light">
-<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f4f5fa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d12" data-auto="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f5fa" data-auto="#f4f5fa" media="(prefers-color-scheme: light)">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Browser">
 <link rel="apple-touch-icon" href="/icon-192.png">
+<script>
+// Saved theme choice (light/dark; none = follow the system), applied before first paint.
+(() => {
+  let t = null;
+  try { t = localStorage.getItem('dash.theme'); } catch { /* storage unavailable */ }
+  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+})();
+</script>
 <style>
 :root {
   --bg: #0b0d12; --surface: #11141c; --raised: #161a24; --hover: #1b2030; --line: #232836; --line-strong: #30364a;
@@ -28,12 +36,19 @@
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --bg: #f4f5fa; --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
     --fg: #141725; --muted: #646a82; --faint: #8b91a7;
     --accent-soft: rgba(124, 108, 240, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
   }
 }
+:root[data-theme="light"] {
+  --bg: #f4f5fa; --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
+  --fg: #141725; --muted: #646a82; --faint: #8b91a7;
+  --accent-soft: rgba(124, 108, 240, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -233,8 +248,9 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .site-fav img { width: 18px; height: 18px; border-radius: 4px; object-fit: contain; }
 .cached { color: var(--ok); display: inline-flex; }
 @media (prefers-color-scheme: dark) {
-  .tab-row .fav img, .site-fav img, .player-top .site-fav img { background: #f4f5fa; padding: 1px; }
+  :root:not([data-theme="light"]) :is(.tab-row .fav img, .site-fav img, .player-top .site-fav img) { background: #f4f5fa; padding: 1px; }
 }
+:root[data-theme="dark"] :is(.tab-row .fav img, .site-fav img, .player-top .site-fav img) { background: #f4f5fa; padding: 1px; }
 
 /* ------------------------------------------------------------ empty state */
 .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 46px 20px; background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--muted); }
@@ -1094,6 +1110,25 @@ $('askModal').addEventListener('click', (e) => {
 
 /* ================================================================ menu */
 let menuItems = [];
+const THEMES = { auto: 'Auto (system)', light: 'Light', dark: 'Dark' };
+function theme() {
+  const t = document.documentElement.dataset.theme;
+  return t === 'light' || t === 'dark' ? t : 'auto';
+}
+function setTheme(id) {
+  const root = document.documentElement;
+  if (id === 'light' || id === 'dark') root.dataset.theme = id; else delete root.dataset.theme;
+  try { if (id === 'auto') localStorage.removeItem('dash.theme'); else localStorage.setItem('dash.theme', id); } catch { /* storage unavailable */ }
+  syncThemeColor();
+}
+// The browser/PWA chrome colour follows the page, not only the system setting.
+function syncThemeColor() {
+  const t = theme();
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+    m.content = t === 'auto' ? m.dataset.auto : t === 'dark' ? '#0b0d12' : '#f4f5fa';
+  });
+}
+syncThemeColor();
 function openMenu(anchor, items, { align = 'right' } = {}) {
   const menu = $('menu');
   menuItems = items.filter(Boolean);
@@ -1551,6 +1586,10 @@ const ACT = {
     { icon: 'plug', label: 'Connect & API', run: openConnect },
     { icon: 'handoff', label: 'Open handoff', run: () => { location.href = '/handoff/'; } },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
+    { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], run: () => openMenu(el, [
+      { label: 'Theme' },
+      ...Object.entries(THEMES).map(([id, name]) => ({ label: name, on: id === theme(), run: () => setTheme(id) })),
+    ]) },
     { icon: 'globe', label: 'Search engine', meta: searchEngine().name, run: () => openMenu(el, [
       { label: 'Search engine' },
       ...Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ label: e.name, on: id === searchEngine().id, run: () => setSearchEngine(id) })),
