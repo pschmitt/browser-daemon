@@ -2137,7 +2137,7 @@ const AGENT_SVG = {
   hermes: '<circle cx="12" cy="12" r="9" fill="none" stroke="#c8a14a" stroke-width="1.8"/><path d="M8.5 7.5v9M15.5 7.5v9M8.5 12h7" fill="none" stroke="#c8a14a" stroke-width="1.9" stroke-linecap="round"/>',
   agent: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></g>',
 };
-const AGENT_TITLE = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
+const AGENT_TITLE = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
 function agentBrand(c) {
   const n = String(c?.agent_name || '').toLowerCase();
   if (/claude/.test(n)) return 'claude';
@@ -2156,7 +2156,7 @@ function agentIcon(c, cls = 'sm') {
 }
 
 // The agent without its version ("claude-code (work)"), as its browser MCP reported it.
-const agentName = (c) => (c.agent_name || '').replace(/ \d[\w.-]*/, '');
+const agentName = (c) => (c.agent_name || '').replace(/ \d[\w.-]*/, '').replace(/^claude-code/, 'claude');
 // The tag: which agent and what it does (its topic), else from where.
 function agentLabel(c) {
   if (!c.agent_name) return `Agent · ${c.from}`;

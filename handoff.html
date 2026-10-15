@@ -2874,7 +2874,9 @@ const AGENT_SVG = {
   hermes: '<circle cx="12" cy="12" r="9" fill="none" stroke="#c8a14a" stroke-width="1.8"/><path d="M8.5 7.5v9M15.5 7.5v9M8.5 12h7" fill="none" stroke="#c8a14a" stroke-width="1.9" stroke-linecap="round"/>',
   agent: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></g>',
 };
-const AGENT_TITLE = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
+const AGENT_TITLE = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
+// The agent as shown: without its version, and "claude" rather than "claude-code".
+const agentShort = (c) => String(c?.agent_name || "").replace(/ \d[\w.-]*/, "").replace(/^claude-code/, "claude");
 function agentBrand(c) {
   const n = String(c?.agent_name || '').toLowerCase();
   if (/claude/.test(n)) return 'claude';
@@ -3266,12 +3268,12 @@ function renderSession() {
   E.agentChip.hidden = !driving.length;
   if (driving.length) {
     const a = driving[0];
-    const name = (a.agent_name || "").replace(/ \d[\w.-]*/, "") || AGENT_TITLE[agentBrand(a)];
+    const name = agentShort(a) || AGENT_TITLE[agentBrand(a)];
     E.agentChip.innerHTML = `${agentSvg(a)}<span>${esc(driving.length > 1 ? `${name} +${driving.length - 1}` : name)}</span>`;
     E.agentChip.title = driving.map((c) => [c.agent_name, c.topic && `: ${c.topic}`].filter(Boolean).join("")).join("\n") || "An agent drives this session";
   }
   const agents = (sess.clients || []).filter((c) => c.agent);
-  $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => [(c.agent_name || "").replace(/ \d[\w.-]*/, "") || c.from, c.topic].filter(Boolean).join(": ")).join(", ")} · ` : "")
+  $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => [agentShort(c) || c.from, c.topic].filter(Boolean).join(": ")).join(", ")} · ` : "")
     + (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
     + ` · Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
     + (rec ? (paused ? " · recording paused" : " · recording") : "")
