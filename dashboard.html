@@ -1481,7 +1481,7 @@ function sessionCard(s) {
       : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
-    agents.length && clientsFact('accent', icon('bot', 'sm'), agents.length === 1 ? agentLabel(agents[0]) : `${agents.length} agents`,
+    agents.length && clientsFact('accent', [...new Map(agents.map((a) => [agentBrand(a), a])).values()].slice(0, 3).map((a) => agentIcon(a)).join(''), agents.length === 1 ? agentLabel(agents[0]) : `${agents.length} agents`,
       `An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`),
     others.length && clientsFact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
       `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
@@ -2101,7 +2101,7 @@ function showClientDetails(s) {
     const n = list.length > 1 ? `#${i + 1} ` : '';
     const at = c.since ? `${new Date(c.since * 1000).toLocaleString()} (${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since)))} ago)` : '';
     pairs.push(
-      [`${n}Agent`, esc(c.agent_name || (c.agent ? 'unnamed' : 'no, an automation client'))],
+      [`${n}Agent`, (c.agent ? agentIcon(c) + ' ' : '') + esc(c.agent_name || (c.agent ? 'unnamed' : 'no, an automation client'))],
       [`${n}Topic`, esc(c.topic || '')],
       [`${n}Conversation`, c.conversation ? `<span class="mono">${esc(c.conversation)}</span>` : ''],
       [`${n}Project`, c.cwd ? `<span class="mono">${esc(c.cwd)}</span>` : ''],
@@ -2115,6 +2115,37 @@ function showClientDetails(s) {
   });
   // Raw: the client itself, or the list when several are connected.
   showDetails(`${list.some((c) => c.agent) ? 'Agents' : 'Clients'} of ${sessName(s)}`, pairs, list.length === 1 ? list[0] : list);
+}
+
+// Which agent drives a session, by the name its browser MCP reports ("claude-code 2.1.296",
+// "codex", ...): the agent's own mark instead of a generic robot.
+const AGENT_SVG = {
+  claude: '<path d="M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64 5.64 18.36" fill="none" stroke="#d97757" stroke-width="2.4" stroke-linecap="round"/>',
+  codex: '<g fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(60 12 12)"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(120 12 12)"/></g>',
+  gemini: '<defs><linearGradient id="ag-gem" x1="3" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse"><stop stop-color="#4f8cf7"/><stop offset=".55" stop-color="#9b72f2"/><stop offset="1" stop-color="#f48fb1"/></linearGradient></defs><path d="M12 2c.7 5.6 4.4 9.3 10 10-5.6.7-9.3 4.4-10 10-.7-5.6-4.4-9.3-10-10 5.6-.7 9.3-4.4 10-10z" fill="url(#ag-gem)" stroke="none"/>',
+  antigravity: '<path d="M3.5 20.5 12 4l8.5 16.5M8.4 14.6h7.2" fill="none" stroke="#5b8dee" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  opencode: '<rect x="4" y="3.5" width="16" height="17" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8.5" y="8" width="7" height="8" rx="1" fill="currentColor" stroke="none"/>',
+  cursor: '<path d="M5 3l15 8.2-6.3 1.8L10.5 20z" fill="currentColor" stroke="none"/>',
+  copilot: '<g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="12" rx="6"/><path d="M8 7c0-2.5 2-4 4-4s4 1.5 4 4"/></g><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/>',
+  hermes: '<circle cx="12" cy="12" r="9" fill="none" stroke="#c8a14a" stroke-width="1.8"/><path d="M8.5 7.5v9M15.5 7.5v9M8.5 12h7" fill="none" stroke="#c8a14a" stroke-width="1.9" stroke-linecap="round"/>',
+  agent: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></g>',
+};
+const AGENT_TITLE = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
+function agentBrand(c) {
+  const n = String(c?.agent_name || '').toLowerCase();
+  if (/claude/.test(n)) return 'claude';
+  if (/codex|openai|chatgpt/.test(n)) return 'codex';
+  if (/gemini/.test(n)) return 'gemini';
+  if (/\bagy\b|antigravity/.test(n)) return 'antigravity';
+  if (/opencode/.test(n)) return 'opencode';
+  if (/cursor/.test(n)) return 'cursor';
+  if (/copilot/.test(n)) return 'copilot';
+  if (/hermes/.test(n)) return 'hermes';
+  return 'agent';
+}
+function agentIcon(c, cls = 'sm') {
+  const b = agentBrand(c);
+  return `<svg class="i ${cls} agent-ic" viewBox="0 0 24 24" aria-hidden="true"><title>${AGENT_TITLE[b]}</title>${AGENT_SVG[b]}</svg>`;
 }
 
 // The agent without its version ("claude-code (work)"), as its browser MCP reported it.

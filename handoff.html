@@ -47,6 +47,10 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   .prof-chip svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
   .prof-chip.throwaway { border-style: dashed; border-color: var(--line); background: transparent; color: var(--muted); font-weight: 600; }
   .prof-chip[hidden] { display: none; }
+  .agent-chip { height: 26px; max-width: 150px; padding: 0 9px 0 7px; margin: 0 4px 3px 0; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in oklab, var(--btn) 70%, transparent); color: var(--fg); font-size: 11.5px; font-weight: 600; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 6px; align-self: center; overflow: hidden; }
+  .agent-chip svg { width: 14px; height: 14px; flex: none; }
+  .agent-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-chip[hidden] { display: none; }
   .tab-strip-drawer { height: 30px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; flex: none; margin-bottom: 3px; margin-left: auto; }
   .tab-strip-drawer:hover { background: var(--btn); color: var(--fg); }
   .tab-strip-drawer svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -263,6 +267,7 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
 <body>
 <div id="tabStrip">
   <button class="prof-chip" id="profChip" hidden title="Profile of this session"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span id="profChipText"></span></button>
+  <button class="agent-chip" id="agentChip" hidden title="An agent drives this session"></button>
   <div id="tabsScroll"></div>
   <button class="tab-strip-add" id="tabAddBtn" title="New Tab" aria-label="New Tab">
     <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -400,7 +405,7 @@ const testHost = params.get("host");               // testing only: talk to anot
 const $ = (id) => document.getElementById(id);
 const E = {
   smSearch: $("smSearch"),
-  tabStrip: $("tabStrip"), profChip: $("profChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
+  tabStrip: $("tabStrip"), profChip: $("profChip"), agentChip: $("agentChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
@@ -2856,6 +2861,33 @@ async function pickPage() {
 
 /* ---------------------------------------------------------------- session menu: recording + stop */
 let sess = null, sessTimer = null, stopArmed = 0, stopping = false;
+// Which agent drives a session, by the name its browser MCP reports ("claude-code 2.1.296",
+// "codex", ...): the agent's own mark instead of a generic robot.
+const AGENT_SVG = {
+  claude: '<path d="M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64 5.64 18.36" fill="none" stroke="#d97757" stroke-width="2.4" stroke-linecap="round"/>',
+  codex: '<g fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(60 12 12)"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(120 12 12)"/></g>',
+  gemini: '<defs><linearGradient id="ag-gem" x1="3" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse"><stop stop-color="#4f8cf7"/><stop offset=".55" stop-color="#9b72f2"/><stop offset="1" stop-color="#f48fb1"/></linearGradient></defs><path d="M12 2c.7 5.6 4.4 9.3 10 10-5.6.7-9.3 4.4-10 10-.7-5.6-4.4-9.3-10-10 5.6-.7 9.3-4.4 10-10z" fill="url(#ag-gem)" stroke="none"/>',
+  antigravity: '<path d="M3.5 20.5 12 4l8.5 16.5M8.4 14.6h7.2" fill="none" stroke="#5b8dee" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  opencode: '<rect x="4" y="3.5" width="16" height="17" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8.5" y="8" width="7" height="8" rx="1" fill="currentColor" stroke="none"/>',
+  cursor: '<path d="M5 3l15 8.2-6.3 1.8L10.5 20z" fill="currentColor" stroke="none"/>',
+  copilot: '<g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="12" rx="6"/><path d="M8 7c0-2.5 2-4 4-4s4 1.5 4 4"/></g><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/>',
+  hermes: '<circle cx="12" cy="12" r="9" fill="none" stroke="#c8a14a" stroke-width="1.8"/><path d="M8.5 7.5v9M15.5 7.5v9M8.5 12h7" fill="none" stroke="#c8a14a" stroke-width="1.9" stroke-linecap="round"/>',
+  agent: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></g>',
+};
+const AGENT_TITLE = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
+function agentBrand(c) {
+  const n = String(c?.agent_name || '').toLowerCase();
+  if (/claude/.test(n)) return 'claude';
+  if (/codex|openai|chatgpt/.test(n)) return 'codex';
+  if (/gemini/.test(n)) return 'gemini';
+  if (/\bagy\b|antigravity/.test(n)) return 'antigravity';
+  if (/opencode/.test(n)) return 'opencode';
+  if (/cursor/.test(n)) return 'cursor';
+  if (/copilot/.test(n)) return 'copilot';
+  if (/hermes/.test(n)) return 'hermes';
+  return 'agent';
+}
+const agentSvg = (c) => `<svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">${AGENT_SVG[agentBrand(c)]}</svg>`;
 const ICON = {
   rec: '<svg class="fill" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></svg>',
   pause: '<svg class="fill" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
@@ -2914,6 +2946,7 @@ $("smDevtools").addEventListener("click", () => {
 });
 
 E.profChip.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
+E.agentChip.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
 // A throwaway session becomes a profile: its data is kept, and the session continues
 // as a session of that profile (the browser restarts on the same pages).
 $("smSave").onclick = async () => {
@@ -3228,6 +3261,15 @@ function renderSession() {
   $("profChipText").textContent = sess.profile || "Throwaway";
   E.profChip.title = sess.profile ? `Profile ${sess.profile}: its logins and cookies are kept` : "Throwaway session: nothing is kept. Click to save it as a profile";
   $("smSave").hidden = !!sess.profile;
+  // Which agent drives it, with its own mark.
+  const driving = (sess.clients || []).filter((c) => c.agent);
+  E.agentChip.hidden = !driving.length;
+  if (driving.length) {
+    const a = driving[0];
+    const name = (a.agent_name || "").replace(/ \d[\w.-]*/, "") || AGENT_TITLE[agentBrand(a)];
+    E.agentChip.innerHTML = `${agentSvg(a)}<span>${esc(driving.length > 1 ? `${name} +${driving.length - 1}` : name)}</span>`;
+    E.agentChip.title = driving.map((c) => [c.agent_name, c.topic && `: ${c.topic}`].filter(Boolean).join("")).join("\n") || "An agent drives this session";
+  }
   const agents = (sess.clients || []).filter((c) => c.agent);
   $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => [(c.agent_name || "").replace(/ \d[\w.-]*/, "") || c.from, c.topic].filter(Boolean).join(": ")).join(", ")} · ` : "")
     + (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
