@@ -6,6 +6,7 @@ mod browser;
 mod clients;
 mod ctl;
 mod display;
+mod history;
 mod idle;
 mod names;
 mod passkey_helper;
@@ -460,6 +461,8 @@ pub struct AppState {
     pub passkeys: Arc<passkeys::Broker>,
     /// This node's settings (Nodes tab of the dashboard).
     pub settings: Arc<settings::Store>,
+    /// Pages visited per profile and session, for the live view's address bar.
+    pub history: Arc<history::History>,
 }
 
 #[derive(Default)]
@@ -575,6 +578,7 @@ impl AppState {
         proxy: Option<&str>,
         color_scheme: Option<ColorScheme>,
         start_tab: bool,
+        default_tabs: bool,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
@@ -659,6 +663,7 @@ impl AppState {
             proxy,
             color_scheme,
             start_tab,
+            default_tabs,
         )
         .await
         {
@@ -918,6 +923,8 @@ impl AppState {
         // After the browser is gone and out of the session: a periodic save can no
         // longer write the record again.
         persist::remove(self.config.state_dir(), *id).await;
+        self.history
+            .forget(&history_key(None, *id));
         terminated
     }
 }
@@ -941,6 +948,8 @@ pub struct LaunchParams {
     pub proxy: Option<String>,
     /// "dark" or "light"; defaults to the profile's (dark).
     pub color_scheme: Option<ColorScheme>,
+    /// Open the profile's default tabs (the default); false: a blank tab.
+    pub default_tabs: Option<bool>,
     /// Attach without counting as a client (handoff page).
     pub observer: Option<bool>,
     /// Who connects, as the agent's browser MCP reports it (shown on the dashboard):
@@ -987,6 +996,8 @@ pub struct CreateSessionRequest {
     pub proxy: Option<String>,
     /// "dark" or "light"; defaults to the profile's (dark).
     pub color_scheme: Option<ColorScheme>,
+    /// Open the profile's default tabs (the default); false: a blank tab.
+    pub default_tabs: Option<bool>,
     /// How live views size the page; Phone also launches at a phone's size.
     #[serde(default)]
     pub screen: ScreenMode,
@@ -1114,9 +1125,9 @@ pub struct ProfileInfo {
     /// Appearance of the profile's sessions.
     #[serde(default)]
     pub color_scheme: ColorScheme,
-    /// Page a session's start tab opens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
+    /// Pages its sessions open with.
+    #[serde(default)]
+    pub tabs: Vec<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -1137,8 +1148,28 @@ pub struct CreateProfileRequest {
     pub proxy: Option<String>,
     /// Appearance of the profile's sessions (dark when unset).
     pub color_scheme: Option<ColorScheme>,
-    /// Page a session's start tab opens.
-    pub homepage: Option<String>,
+    /// Pages its sessions open with: a list, or addresses separated by spaces.
+    #[serde(default, deserialize_with = "tabs_field")]
+    pub tabs: Option<Vec<String>>,
+}
+
+/// Default tabs as a JSON list, or as one string of addresses separated by
+/// whitespace or commas (what a prompt or `curl` gives).
+fn tabs_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Tabs {
+        List(Vec<String>),
+        Text(String),
+    }
+    Ok(Option::<Tabs>::deserialize(d)?.map(|t| match t {
+        Tabs::List(list) => list,
+        Tabs::Text(text) => text
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect(),
+    }))
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1148,8 +1179,9 @@ pub struct UpdateProfileRequest {
     pub proxy: Option<String>,
     /// Appearance of new sessions; a running one keeps its own until restarted.
     pub color_scheme: Option<ColorScheme>,
-    /// Page new sessions' start tab opens; "" clears it.
-    pub homepage: Option<String>,
+    /// Pages new sessions open with; empty clears them.
+    #[serde(default, deserialize_with = "tabs_field")]
+    pub tabs: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1360,6 +1392,70 @@ fn ctl_exit(result: Result<(), Box<dyn std::error::Error>>) -> Result<(), Box<dy
     Ok(())
 }
 
+/// Whose history a session's pages belong to: its profile's, else its own.
+fn history_key(profile_id: Option<Uuid>, session_id: Uuid) -> String {
+    profile_id.map_or_else(
+        || format!("{}{session_id}", history::SESSION_PREFIX),
+        |p| p.to_string(),
+    )
+}
+
+#[derive(Deserialize)]
+struct HistoryParams {
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct Suggestion {
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    /// "tab": one of the profile's default tabs; "history": a page visited before.
+    kind: &'static str,
+}
+
+/// Addresses to suggest in a session's address bar: the profile's default tabs,
+/// then the pages visited in the profile (or the session).
+async fn api_session_history(
+    AxumPath(id): AxumPath<Uuid>,
+    Query(params): Query<HistoryParams>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let profile_id = {
+        let guard = state.sessions.read().await;
+        guard
+            .get(&id)
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?
+            .profile_id
+    };
+    let query = params.q.unwrap_or_default().trim().to_lowercase();
+    let limit = params.limit.unwrap_or(8).clamp(1, 50);
+    let mut out: Vec<Suggestion> = Vec::new();
+    if let Some(pid) = profile_id {
+        if let Some(profile) = profiles::find(&state.config.profiles_dir, &pid.to_string()).await {
+            for tab in profile.meta.tabs {
+                if query.is_empty() || tab.to_lowercase().contains(&query) {
+                    out.push(Suggestion { url: tab, title: None, kind: "tab" });
+                }
+            }
+        }
+    }
+    for e in state
+        .history
+        .suggest(&history_key(profile_id, id), &query, limit)
+    {
+        match out.iter_mut().find(|o| o.url == e.url) {
+            Some(known) => known.title = e.title,
+            None => out.push(Suggestion { url: e.url, title: e.title, kind: "history" }),
+        }
+    }
+    out.truncate(limit);
+    Ok(Json(out))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = Cli::parse().command;
@@ -1551,6 +1647,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let settings = Arc::new(settings::Store::load(&settings_path));
+    let history = Arc::new(history::History::new(config.state_dir().join("history")));
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -1573,6 +1670,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         viewers: Arc::default(),
         passkeys: Arc::default(),
         settings,
+        history,
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -1625,6 +1723,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for session in sessions {
                 saver.persist_session(&session).await;
             }
+            saver.history.flush().await;
+        }
+    });
+    // Note the pages the tabs are on, for the address bar's suggestions.
+    let tracker = state.clone();
+    tokio::spawn(async move {
+        let mut seen: HashMap<String, String> = HashMap::new();
+        let mut interval = tokio::time::interval(Duration::from_secs(4));
+        loop {
+            interval.tick().await;
+            let targets = get_local_targets(&tracker).await;
+            let sessions = tracker.sessions.read().await;
+            let mut live = std::collections::HashSet::new();
+            for t in targets.iter().filter(|t| t.target_type == "page") {
+                let Some(session) = t.session_id.and_then(|sid| sessions.get(&sid)) else {
+                    continue;
+                };
+                live.insert(t.id.clone());
+                let arrived = seen.get(&t.id) != Some(&t.url);
+                tracker.history.record(
+                    &history_key(session.profile_id, session.id),
+                    &t.url,
+                    t.title.as_deref(),
+                    arrived,
+                );
+                if arrived {
+                    seen.insert(t.id.clone(), t.url.clone());
+                }
+            }
+            seen.retain(|id, _| live.contains(id));
         }
     });
     audible::spawn_monitor(state.clone());
@@ -1709,6 +1837,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/sessions/{id}/name", post(api_session_rename))
+        .route("/api/sessions/{id}/history", get(api_session_history))
         .route("/api/sessions/{id}/popups", get(api_session_popups))
         .route("/api/sessions/{id}/x-input", post(api_session_x_input))
         .route("/api/agent-topic", post(api_agent_topic))
@@ -2175,6 +2304,7 @@ async fn json_new(
                 None,
                 None,
                 true,
+                true,
             )
             .await
             .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
@@ -2430,6 +2560,7 @@ async fn handle_chromium_ws(
                 params.proxy.as_deref(),
                 params.color_scheme,
                 !agent_opens_own_tab,
+                params.default_tabs.unwrap_or(true),
             )
             .await
         {
@@ -2509,6 +2640,7 @@ async fn handle_firefox_ws(
                 params.proxy.as_deref(),
                 params.color_scheme,
                 true,
+                params.default_tabs.unwrap_or(true),
             )
             .await
         {
@@ -2679,7 +2811,7 @@ async fn profile_info(state: &AppState, profile: &Profile) -> ProfileInfo {
         modified_at_secs,
         proxy: profile.meta.proxy.clone(),
         color_scheme: profile.meta.color_scheme.unwrap_or_default(),
-        homepage: profile.meta.homepage.clone(),
+        tabs: profile.meta.tabs.clone(),
     }
 }
 
@@ -2772,6 +2904,7 @@ async fn api_create_session(
             req.proxy.as_deref(),
             req.color_scheme,
             true,
+            req.default_tabs.unwrap_or(true),
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
@@ -2862,6 +2995,7 @@ async fn shutdown_on_signal(state: AppState) {
         _ = int.recv() => {}
     }
     info!("Shutting down: sessions stay running");
+    state.history.flush().await;
     let sessions: Vec<ManagedSession> = state.sessions.read().await.values().cloned().collect();
     // Records first: they say which sessions were recording.
     for session in &sessions {
@@ -2933,21 +3067,16 @@ async fn api_create_profile(
             })?,
     };
 
-    let homepage = req
-        .homepage
-        .as_deref()
-        .map(homepage_url)
-        .transpose()?
-        .flatten();
-    if proxy.is_some() || req.color_scheme.is_some() || homepage.is_some() {
+    let tabs = req.tabs.as_deref().map(tab_urls).transpose()?;
+    if proxy.is_some() || req.color_scheme.is_some() || tabs.is_some() {
         if let Some(proxy) = proxy {
             profile.meta.proxy = proxy;
         }
         if req.color_scheme.is_some() {
             profile.meta.color_scheme = req.color_scheme;
         }
-        if homepage.is_some() {
-            profile.meta.homepage = homepage;
+        if let Some(tabs) = tabs {
+            profile.meta.tabs = tabs;
         }
         profiles::write_meta(&profile.dir, &profile.meta)
             .await
@@ -2982,9 +3111,23 @@ async fn api_get_profile(
 }
 
 /// Rename a profile. Its directory is named by id, so a running session keeps going.
-/// A profile homepage as given: an http(s) address (a bare host gets https://);
-/// empty clears it.
-fn homepage_url(input: &str) -> Result<Option<String>, ApiError> {
+/// Default tabs as given: each an http(s) address (a bare host gets https://);
+/// empty entries are dropped, repeats too.
+fn tab_urls(input: &[String]) -> Result<Vec<String>, ApiError> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in input {
+        if let Some(url) = tab_url(entry)? {
+            if !out.contains(&url) {
+                out.push(url);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// One default tab as given: an http(s) address (a bare host gets https://);
+/// empty is none.
+fn tab_url(input: &str) -> Result<Option<String>, ApiError> {
     let v = input.trim();
     if v.is_empty() {
         return Ok(None);
@@ -3000,7 +3143,7 @@ fn homepage_url(input: &str) -> Result<Option<String>, ApiError> {
         }
         _ => Err(api_error(
             StatusCode::BAD_REQUEST,
-            "The homepage must be an http(s) address",
+            "A default tab must be an http(s) address",
         )),
     }
 }
@@ -3054,14 +3197,14 @@ async fn api_update_profile(
             info!(profile = %profile.meta.name, color_scheme = ?scheme, "Profile appearance changed");
         }
     }
-    if let Some(ref requested) = req.homepage {
-        let homepage = homepage_url(requested)?;
-        if homepage != profile.meta.homepage {
-            profile.meta.homepage = homepage;
+    if let Some(ref requested) = req.tabs {
+        let tabs = tab_urls(requested)?;
+        if tabs != profile.meta.tabs {
+            profile.meta.tabs = tabs;
             profiles::write_meta(&profile.dir, &profile.meta)
                 .await
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            info!(profile = %profile.meta.name, homepage = ?profile.meta.homepage, "Profile homepage changed");
+            info!(profile = %profile.meta.name, tabs = ?profile.meta.tabs, "Profile default tabs changed");
         }
     }
     Ok(Json(profile_info(&state, &profile).await))
@@ -3114,6 +3257,7 @@ async fn api_delete_profile(
     }
 
     backups::remove_all(&state.config.profiles_dir, profile.meta.id).await;
+    state.history.delete(&profile.meta.id.to_string()).await;
     info!(profile = %profile.meta.name, id = %profile.meta.id, "Profile removed");
     Ok((
         StatusCode::OK,
@@ -5873,6 +6017,18 @@ async fn compute_dir_size(path: PathBuf) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_tabs_come_as_a_list_or_as_words() {
+        let req = |json: &str| serde_json::from_str::<UpdateProfileRequest>(json).unwrap().tabs;
+        assert_eq!(req(r#"{"tabs":["a.test","b.test"]}"#), Some(vec!["a.test".into(), "b.test".into()]));
+        assert_eq!(req(r#"{"tabs":"a.test  b.test,c.test"}"#).map(|t| t.len()), Some(3));
+        assert_eq!(req(r#"{"tabs":[]}"#), Some(vec![]));
+        assert_eq!(req(r#"{}"#), None);
+        let urls = tab_urls(&["outlook.office.com".into(), "".into(), "https://outlook.office.com/".into()]).unwrap();
+        assert_eq!(urls, vec!["https://outlook.office.com/".to_string()]);
+        assert!(tab_urls(&["ftp://x.test/".into()]).is_err());
+    }
 
     #[test]
     fn tab_order_is_first_seen_not_most_recent() {

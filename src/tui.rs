@@ -816,6 +816,9 @@ impl App {
             if x.session_id.is_some() { "Take over" } else { "Launch" },
             launch_profile(p),
         )];
+        if x.session_id.is_none() && !x.tabs.is_empty() {
+            items.push(item("Launch without the default tabs", launch_profile_blank(p)));
+        }
         items.push(item("Details", details(&x.name, p)));
         items.push(item("Rename…", rename_profile(p)));
         items.push(item(
@@ -838,12 +841,12 @@ impl App {
             },
         ));
         items.push(item(
-            "Homepage…",
+            format!("Default tabs ({})…", x.tabs.len()),
             ask(
-                "Homepage",
-                "Page the start tab opens (empty: none)",
-                x.homepage.as_deref().unwrap_or(""),
-                patch("Homepage set", json!({ "homepage": INPUT })),
+                "Default tabs",
+                "Addresses its sessions open with, separated by spaces (empty: none)",
+                &x.tabs.join(" "),
+                patch("Default tabs set", json!({ "tabs": INPUT })),
             ),
         ));
         items.push(item(
@@ -1220,6 +1223,13 @@ impl App {
                     tri("Record"),
                     tri("Ad blocker"),
                     Field::text("Idle (min)"),
+                    Field::choice(
+                        "Default tabs",
+                        vec![
+                            ("true".into(), "open the profile's".into()),
+                            ("false".into(), "don't".into()),
+                        ],
+                    ),
                 ]
             }
             FormKind::Profile => vec![
@@ -1228,7 +1238,7 @@ impl App {
                 engines(),
                 self.proxy_field(&node),
                 scheme(),
-                Field::text("Homepage"),
+                Field::text("Default tabs"),
             ],
         };
         self.modal = Some(Modal::Form(Form { kind, fields, sel: 0 }));
@@ -1285,6 +1295,9 @@ impl App {
                 if let Ok(m) = v(8).parse::<u64>() {
                     body["idle_timeout_minutes"] = json!(m);
                 }
+                if v(9) == "false" {
+                    body["default_tabs"] = json!(false);
+                }
                 Action::Api(
                     Call::new(
                         format!("Starting a session on {node}"),
@@ -1308,7 +1321,7 @@ impl App {
                     body["color_scheme"] = json!(v(4));
                 }
                 if !v(5).is_empty() {
-                    body["homepage"] = json!(v(5));
+                    body["tabs"] = json!(v(5));
                 }
                 Action::Api(
                     Call::new(
@@ -1629,6 +1642,23 @@ fn launch_profile(p: &MeshProfile) -> Action {
             })),
         ),
     }
+}
+
+fn launch_profile_blank(p: &MeshProfile) -> Action {
+    Action::Api(
+        Call::new(
+            format!("Launching {} without its tabs", p.profile.name),
+            Method::POST,
+            &p.node_name,
+            "/sessions",
+        )
+        .body(json!({
+            "profile": profile_key(p),
+            "engine": p.profile.engine,
+            "persistent": true,
+            "default_tabs": false,
+        })),
+    )
 }
 
 fn rename_profile(p: &MeshProfile) -> Action {
@@ -2013,6 +2043,14 @@ fn draw(f: &mut Frame, app: &mut App) {
                         Line::from(vec![
                             Span::raw("storage ").dim(),
                             Span::raw(p.profile.storage_dir.clone().unwrap_or_default()),
+                        ]),
+                        Line::from(vec![
+                            Span::raw("tabs ").dim(),
+                            Span::raw(if p.profile.tabs.is_empty() {
+                                "(none: a blank tab)".to_string()
+                            } else {
+                                p.profile.tabs.join("  ")
+                            }),
                         ]),
                     ]
                 });

@@ -651,6 +651,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         <input class="input" id="sessionProfileName" placeholder="Profile name, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
         <span class="hint" id="sessionProfileHint"></span>
       </div>
+      <label class="switch" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
       <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Open handoff</b><span>Take over the browser right after launch</span></span></label>
       <details class="adv">
         <summary><svg class="i sm"><use href="#i-more"/></svg>Advanced<span class="adv-sum" id="advSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
@@ -710,7 +711,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="field"><label for="profileName">Name</label><input class="input" id="profileName" required maxlength="128" placeholder="e.g. Google (me@example.com)" autocomplete="off" spellcheck="false"></div>
       <div class="field"><label for="profileClone">Start from</label><select class="input" id="profileClone"></select></div>
       <div class="field" id="profileProxyField"><label for="profileProxy">Proxy</label><select class="input" id="profileProxy"></select><span class="hint">Sessions of this profile go through it unless they pick another.</span></div>
-      <div class="field"><label for="profileHomepage">Homepage</label><input class="input" id="profileHomepage" type="text" inputmode="url" placeholder="Optional, e.g. https://ssl6.hrworks.de/o/dashboard" autocomplete="off" autocapitalize="off" spellcheck="false"><span class="hint">The page its sessions open with; a blank tab otherwise.</span></div>
+      <div class="field"><label for="profileTabs">Default tabs</label><input class="input" id="profileTabs" type="text" inputmode="url" placeholder="Optional, e.g. outlook.office.com ssl6.hrworks.de/o/dashboard" autocomplete="off" autocapitalize="off" spellcheck="false"><span class="hint">Pages its sessions open with, separated by spaces; a blank tab otherwise.</span></div>
       <div class="field"><label for="profileScheme">Appearance</label><select class="input" id="profileScheme"><option value="dark">Dark</option><option value="light">Light</option></select><span class="hint">What pages see as the preferred color scheme, and the browser's own look.</span></div>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-plus"/></svg>Create</button></div>
@@ -1665,6 +1666,7 @@ const ACT = {
       p.session
         ? { icon: 'takeover', label: 'Take over', run: () => { location.href = handoffUrl(p.node_name, { session: p.session.id }); } }
         : { icon: 'play', label: `Launch in ${p.engine === 'firefox' ? 'Firefox' : 'Chromium'}`, run: () => launchProfile(p) },
+      !p.session && p.tabs?.length && { icon: 'play', label: 'Launch without the default tabs', run: () => launchProfile(p, { tabs: false }) },
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
       nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', run: () => openMenu(el, [
@@ -1676,7 +1678,7 @@ const ACT = {
         { label: p.session ? 'Appearance (from the next launch)' : 'Appearance' },
         ...['dark', 'light'].map((v) => ({ label: schemeName(v), on: (p.color_scheme || 'dark') === v, run: () => setProfileScheme(p, v) })),
       ]) },
-      { icon: 'home', label: 'Homepage…', meta: p.homepage ? hostOf(p.homepage) : 'blank', run: () => setProfileHomepage(p) },
+      { icon: 'home', label: 'Default tabs…', meta: p.tabs?.length ? `${p.tabs.length}` : 'blank', run: () => setProfileTabs(p) },
       { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
       !p.session && others.length && { icon: 'transfer', label: 'Move to another node…', run: () => openTransfer(p) },
       { icon: 'archive', label: 'Backups & data…', run: () => openBackups(p) },
@@ -1842,6 +1844,9 @@ function renderProfilePicker() {
   else if (isNew) hint = 'Created on first launch.';
   else if (picked) hint = 'Picks up cookies and logins from the last session.';
   $('sessionProfileHint').textContent = hint;
+  const tabs = picked?.tabs || [];
+  $('sessionTabsField').hidden = !tabs.length || !!picked?.session;
+  $('sessionTabsHint').textContent = tabs.map(hostOf).join(', ');
   $('sessionProfileHint').style.color = remote && (picked.session || clash?.session) ? 'var(--bad)' : '';
   $('sessionSubmit').disabled = !!(remote && (picked.session || clash?.session)) || $('sessionSubmit').dataset.unsupported === '1';
   $('sessionSubmitText').textContent = remote ? 'Copy & launch' : 'Launch';
@@ -1946,6 +1951,8 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     adblock: adblockTouched ? $('sessionAdblock').checked : undefined,
     show_touches: touchesTouched ? $('sessionTouches').checked : undefined,
     screen: sessionScreen,
+    // Only said when there are tabs to leave out.
+    default_tabs: $('sessionTabsField').hidden ? undefined : $('sessionDefaultTabs').checked,
   };
   // Window: the size chosen here; Phone: the node starts it at a phone's size; Native: the node's default.
   if (sessionScreen === 'window') {
@@ -2175,7 +2182,7 @@ function openNewProfile() {
   fillProxyOptions();
   $('profileName').value = '';
   $('profileScheme').value = 'dark';
-  $('profileHomepage').value = '';
+  $('profileTabs').value = '';
   fillCloneOptions();
   openModal('newProfileModal');
   setTimeout(() => $('profileName').focus(), 40);
@@ -2192,13 +2199,13 @@ function fillCloneOptions() {
 $('newProfileForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name = $('profileName').value.trim();
-  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null, proxy: $('profileProxy').value || null, color_scheme: $('profileScheme').value, homepage: $('profileHomepage').value.trim() || null }), `Profile ${name} created`);
+  const r = await act(`Creating profile ${name}`, () => request('POST', api(profileNode, '/profiles'), { name, clone_from: $('profileClone').value || null, proxy: $('profileProxy').value || null, color_scheme: $('profileScheme').value, tabs: $('profileTabs').value.trim() || null }), `Profile ${name} created`);
   if (r !== undefined) closeModal('newProfileModal');
 });
 
-function launchProfile(p) {
+function launchProfile(p, { tabs = true } = {}) {
   act(`Launching ${p.display}`, async () => {
-    const s = await request('POST', api(p.node_name, '/sessions'), { profile: p.id || p.display, engine: p.engine, persistent: true });
+    const s = await request('POST', api(p.node_name, '/sessions'), { profile: p.id || p.display, engine: p.engine, persistent: true, default_tabs: tabs });
     showToast(`${p.display} is running`, 'success', 6000, { text: 'Take over', url: handoffUrl(p.node_name, { session: s.id }) });
     return s;
   }, `${p.display} launched`);
@@ -2221,11 +2228,12 @@ function setProfileProxy(p, id) {
   act('Setting the proxy', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { proxy: id }),
     `${p.display} uses ${label}` + (p.session ? ' from its next launch' : ''));
 }
-async function setProfileHomepage(p) {
-  const v = await ask({ title: `Homepage of ${p.display}`, text: 'The page its sessions open with. Leave empty for a blank tab.', input: p.homepage || '', placeholder: 'e.g. https://ssl6.hrworks.de/o/dashboard', ok: 'Save' });
+async function setProfileTabs(p) {
+  const v = await ask({ title: `Default tabs of ${p.display}`, text: 'The pages its sessions open with, separated by spaces. Leave empty for a blank tab.', input: (p.tabs || []).join(' '), placeholder: 'e.g. outlook.office.com ssl6.hrworks.de/o/dashboard', ok: 'Save' });
   if (v === null || v === undefined) return;
-  act('Setting the homepage', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { homepage: v.trim() }),
-    v.trim() ? `${p.display} opens ${v.trim()}` + (p.session ? ' from its next launch' : '') : `${p.display} opens a blank tab`);
+  const tabs = v.split(/[\s,]+/).filter(Boolean);
+  act('Setting the default tabs', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { tabs }),
+    tabs.length ? `${p.display} opens ${tabs.length} tab${tabs.length === 1 ? '' : 's'}` + (p.session ? ' from its next launch' : '') : `${p.display} opens a blank tab`);
 }
 async function cloneProfile(p) {
   const name = await ask({ title: `Duplicate ${p.display}`, text: `Creates a copy on ${p.node_name}.`, input: `${p.display}-copy`, ok: 'Duplicate' });
@@ -2342,7 +2350,7 @@ function showProfileDetails(p) {
     ['Storage', `<span class="mono">${esc(p.storage_dir || p.name)}</span>`], ['ID', p.id && `<span class="mono">${esc(p.id)}</span>`],
     ['Node', nodeChip(p.node_name)], ['Engine', p.engine],
     ['Proxy', p.proxy ? proxyChip(p.node_name, p.proxy) : 'Direct'], ['Appearance', schemeName(p.color_scheme)],
-    ['Homepage', p.homepage ? `<span class="mono">${esc(p.homepage)}</span>` : 'blank'],
+    ['Default tabs', p.tabs?.length ? p.tabs.map((t) => `<span class="mono">${esc(t)}</span>`).join('<br>') : 'blank'],
     ['Size', formatBytes(p.size_bytes)], ['Status', p.session ? 'Running' : 'Stored'],
     ['Session', p.session && `<span class="mono">${esc(p.session.id)}</span>`],
     ['Created', absTime(p.created_at_secs)], ['Modified', absTime(p.modified_at_secs)],

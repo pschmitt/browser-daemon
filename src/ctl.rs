@@ -187,6 +187,9 @@ pub struct NewSession {
     /// Stop the session when its last client disconnects.
     #[arg(long)]
     pub ephemeral: bool,
+    /// Do not open the profile's default tabs (a blank tab instead).
+    #[arg(long)]
+    pub no_default_tabs: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -244,8 +247,9 @@ pub enum ProfileCmd {
         proxy: Option<String>,
         #[arg(long, value_enum)]
         color_scheme: Option<Scheme>,
-        #[arg(long)]
-        homepage: Option<String>,
+        /// Page its sessions open with (repeat for several tabs).
+        #[arg(long = "tab")]
+        tabs: Vec<String>,
     },
     /// Change a profile's name or defaults.
     Set {
@@ -259,9 +263,12 @@ pub enum ProfileCmd {
         proxy: Option<String>,
         #[arg(long, value_enum)]
         color_scheme: Option<Scheme>,
-        /// Page the start tab opens ("" clears it).
+        /// Default tabs: pages its sessions open with (repeat for several; replaces the list).
+        #[arg(long = "tab")]
+        tabs: Vec<String>,
+        /// Remove all default tabs.
         #[arg(long)]
-        homepage: Option<String>,
+        clear_tabs: bool,
     },
     /// Copy a profile under a new name (same node).
     Clone {
@@ -788,6 +795,9 @@ pub async fn session(args: SessionArgs) -> R<()> {
         SessionCmd::New(a) => {
             let node = c.node_or_local(a.node.as_deref())?;
             let mut body = json!({ "persistent": !a.ephemeral });
+            if a.no_default_tabs {
+                body["default_tabs"] = json!(false);
+            }
             let mut set = |k: &str, v: Value| body[k] = v;
             if let Some(v) = a.name { set("name", json!(v)) }
             if let Some(v) = a.engine { set("engine", json!(format!("{v:?}").to_lowercase())) }
@@ -1002,12 +1012,16 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
                         yes_no(x.is_active),
                         x.proxy.clone().unwrap_or_else(|| "-".into()),
                         format!("{:?}", x.color_scheme).to_lowercase(),
-                        x.homepage.clone().unwrap_or_else(|| "-".into()),
+                        if x.tabs.is_empty() {
+                            "-".to_string()
+                        } else {
+                            x.tabs.join(" ")
+                        },
                     ]
                 })
                 .collect();
             table(
-                &["NAME", "NODE", "ENGINE", "SIZE", "ACTIVE", "PROXY", "SCHEME", "HOMEPAGE"],
+                &["NAME", "NODE", "ENGINE", "SIZE", "ACTIVE", "PROXY", "SCHEME", "TABS"],
                 &rows,
             );
         }
@@ -1016,24 +1030,24 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             let path = c.api(&p.node_name, &format!("/profiles/{}", enc(&p.profile.name)));
             c.print_json(&c.call(c.req(Method::GET, &path)).await?);
         }
-        ProfileCmd::New { name, node, engine, clone_from, proxy, color_scheme, homepage } => {
+        ProfileCmd::New { name, node, engine, clone_from, proxy, color_scheme, tabs } => {
             let node = c.node_or_local(node.as_deref())?;
             let mut body = json!({ "name": name });
             if let Some(v) = engine { body["engine"] = json!(format!("{v:?}").to_lowercase()) }
             if let Some(v) = clone_from { body["clone_from"] = json!(v) }
             if let Some(v) = proxy { body["proxy"] = json!(v) }
             if let Some(v) = color_scheme { body["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
-            if let Some(v) = homepage { body["homepage"] = json!(v) }
+            if !tabs.is_empty() { body["tabs"] = json!(tabs) }
             let v = c.call(c.req(Method::POST, &c.api(&node, "/profiles")).json(&body)).await?;
             done(&c, v, &format!("created {name} on {node}"));
         }
-        ProfileCmd::Set { profile, node, name, proxy, color_scheme, homepage } => {
+        ProfileCmd::Set { profile, node, name, proxy, color_scheme, tabs, clear_tabs } => {
             let p = c.profile(&profile, node.as_deref())?;
             let mut body = json!({});
             if let Some(v) = name { body["name"] = json!(v) }
             if let Some(v) = proxy { body["proxy"] = json!(v) }
             if let Some(v) = color_scheme { body["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
-            if let Some(v) = homepage { body["homepage"] = json!(v) }
+            if clear_tabs { body["tabs"] = json!([]) } else if !tabs.is_empty() { body["tabs"] = json!(tabs) }
             let path = c.api(&p.node_name, &format!("/profiles/{}", enc(&p.profile.name)));
             let v = c.call(c.req(Method::PATCH, &path).json(&body)).await?;
             done(&c, v, "updated");

@@ -38,9 +38,12 @@ pub struct ProfileMeta {
     /// Appearance of the profile's sessions (dark when unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_scheme: Option<ColorScheme>,
-    /// Page a session's start tab opens (blank when unset).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub homepage: Option<String>,
+    /// Pages a session of the profile opens with (its default tabs).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<String>,
+    /// The single start page of earlier versions: folded into `tabs` when read.
+    #[serde(default, rename = "homepage", skip_serializing)]
+    legacy_homepage: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +70,13 @@ pub fn clean_name(name: &str) -> Option<String> {
 
 pub async fn read_meta(dir: &Path) -> Option<ProfileMeta> {
     let raw = fs::read(dir.join(META_FILE)).await.ok()?;
-    serde_json::from_slice(&raw).ok()
+    let mut meta: ProfileMeta = serde_json::from_slice(&raw).ok()?;
+    if let Some(page) = meta.legacy_homepage.take() {
+        if meta.tabs.is_empty() {
+            meta.tabs.push(page);
+        }
+    }
+    Some(meta)
 }
 
 pub async fn write_meta(dir: &Path, meta: &ProfileMeta) -> std::io::Result<()> {
@@ -127,7 +136,8 @@ pub async fn create(
         created_at_secs: now_secs(),
         proxy: None,
         color_scheme: None,
-        homepage: None,
+        tabs: Vec::new(),
+        legacy_homepage: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
     fs::create_dir_all(&dir).await?;
@@ -137,10 +147,10 @@ pub async fn create(
 
 /// Give a directory fresh metadata (after a copy or an import).
 pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::Result<Profile> {
-    // A copied or imported profile keeps its proxy, appearance and homepage.
+    // A copied or imported profile keeps its proxy, appearance and default tabs.
     let old = read_meta(&dir).await;
     let proxy = old.as_ref().and_then(|m| m.proxy.clone());
-    let homepage = old.as_ref().and_then(|m| m.homepage.clone());
+    let tabs = old.as_ref().map(|m| m.tabs.clone()).unwrap_or_default();
     let color_scheme = old.and_then(|m| m.color_scheme);
     let id = dir
         .file_name()
@@ -153,7 +163,8 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         created_at_secs: now_secs(),
         proxy,
         color_scheme,
-        homepage,
+        tabs,
+        legacy_homepage: None,
     };
     write_meta(&dir, &meta).await?;
     Ok(Profile { meta, dir })
@@ -206,7 +217,8 @@ pub async fn migrate(profiles_dir: &Path) {
             created_at_secs,
             proxy: None,
             color_scheme: None,
-            homepage: None,
+            tabs: Vec::new(),
+            legacy_homepage: None,
         };
         let new = profiles_dir.join(id.to_string());
         if new != old {
@@ -241,6 +253,25 @@ mod tests {
         assert_eq!(clean_name("   "), None);
         assert_eq!(clean_name("a\nb"), None);
         assert_eq!(clean_name(&"x".repeat(129)), None);
+    }
+
+    #[tokio::test]
+    async fn an_old_homepage_becomes_the_only_default_tab() {
+        let root = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        std::fs::write(
+            root.path().join(META_FILE),
+            format!(
+                r#"{{"id":"{id}","name":"work","engine":"chromium","created_at_secs":1,"homepage":"https://a.test/"}}"#
+            ),
+        )
+        .unwrap();
+        let meta = read_meta(root.path()).await.unwrap();
+        assert_eq!(meta.tabs, vec!["https://a.test/".to_string()]);
+        // Written back as tabs only.
+        write_meta(root.path(), &meta).await.unwrap();
+        let raw = std::fs::read_to_string(root.path().join(META_FILE)).unwrap();
+        assert!(raw.contains("\"tabs\"") && !raw.contains("homepage"), "{raw}");
     }
 
     #[test]

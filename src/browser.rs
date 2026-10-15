@@ -120,12 +120,15 @@ impl ActiveBrowser {
         proxy: Option<&Proxy>,
         color_scheme: ColorScheme,
         start_tab: bool,
+        default_tabs: bool,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let id = Uuid::new_v4();
-        // The start tab: the profile's homepage, else blank.
-        let start_page = profile
-            .and_then(|p| p.meta.homepage.clone())
-            .unwrap_or_else(|| "about:blank".to_string());
+        // What the browser opens with: the profile's default tabs, else a blank tab.
+        let start_pages: Vec<String> = profile
+            .filter(|_| default_tabs)
+            .map(|p| p.meta.tabs.clone())
+            .filter(|tabs| !tabs.is_empty())
+            .unwrap_or_default();
         let relay = Relay::start(proxy.cloned()).await?;
         let audio = match config.audio {
             Some(ref cfg) => match Sink::create(cfg, id).await {
@@ -209,8 +212,10 @@ impl ActiveBrowser {
                 proc::own_group(&mut cmd);
                 // No start tab for an agent opening its own (Playwright): it would sit
                 // there unused. Chromium then opens the window with the first tab.
-                if start_tab {
-                    cmd.arg(start_page);
+                if !start_pages.is_empty() {
+                    cmd.args(&start_pages);
+                } else if start_tab {
+                    cmd.arg("about:blank");
                 } else {
                     cmd.arg("--no-startup-window");
                 }
@@ -367,7 +372,11 @@ impl ActiveBrowser {
                     .arg("--profile")
                     .arg(&user_data_dir)
                     .arg("--remote-debugging-port=0")
-                    .arg(start_page)
+                    .args(if start_pages.is_empty() {
+                        vec!["about:blank".to_string()]
+                    } else {
+                        start_pages.clone()
+                    })
                     .env("MOZ_ENABLE_WAYLAND", "0")
                     .stderr(std::process::Stdio::from(std::fs::File::create(&log)?))
                     .stdout(std::process::Stdio::null());

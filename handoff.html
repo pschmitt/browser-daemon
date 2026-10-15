@@ -59,6 +59,17 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
 
   #urlBar { flex: 1; min-width: 0; height: 36px; margin: 0 4px; padding: 0 6px 0 12px; display: flex; align-items: center; gap: 8px;
     border-radius: 999px; background: var(--btn); border: 1px solid transparent; transition: background .15s, border-color .15s, box-shadow .15s; }
+  #urlBar { position: relative; }
+  /* Address suggestions: default tabs and pages visited in the profile or session. */
+  #urlSuggest { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 60; max-height: min(60vh, 420px); overflow-y: auto;
+    background: var(--bar); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 32px rgba(0, 0, 0, .35); padding: 4px; }
+  #urlSuggest[hidden] { display: none; }
+  .sg { display: flex; flex-direction: column; gap: 1px; padding: 7px 10px; border-radius: 9px; cursor: pointer; min-width: 0; }
+  .sg.on, .sg:hover { background: var(--btn); }
+  .sg .st { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; }
+  .sg .st span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sg .su { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sg .tag { flex: none; font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent); border-radius: 999px; padding: 0 6px; }
   #urlBar:hover { background: color-mix(in oklab, var(--btn) 85%, var(--accent)); }
   #urlBar:focus-within { background: var(--bar); border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 25%, transparent); }
   #urlInput { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--fg); font: 13.5px system-ui, -apple-system, sans-serif; outline: none; padding: 0; -webkit-user-select: text; user-select: text; }
@@ -266,6 +277,7 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
     <button type="button" id="urlClear" title="Clear URL" aria-label="Clear">✕</button>
     <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
     <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
+    <div id="urlSuggest" role="listbox" hidden></div>
   </form>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
@@ -382,7 +394,7 @@ const E = {
   smSearch: $("smSearch"),
   tabStrip: $("tabStrip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
-  dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
+  dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
   audioBtn: $("audioBtn"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), kbbtn: $("kbbtn"),
@@ -1951,7 +1963,58 @@ function normalizeUrl(input) {
   return searchEngine().url + encodeURIComponent(val);
 }
 
+/* Suggestions under the address bar. */
+let sgItems = [], sgSel = -1, sgTimer = null, sgSeq = 0;
+function suggestHide() {
+  clearTimeout(sgTimer);
+  sgSeq++;
+  sgItems = [];
+  sgSel = -1;
+  E.urlSuggest.hidden = true;
+  E.urlSuggest.textContent = "";
+}
+function suggestRender() {
+  E.urlSuggest.hidden = !sgItems.length;
+  E.urlSuggest.innerHTML = sgItems.map((it, i) => {
+    const host = (() => { try { return new URL(it.url).host; } catch { return it.url; } })();
+    return `<div class="sg${i === sgSel ? " on" : ""}" role="option" data-i="${i}"><div class="st"><span>${esc(it.title || host)}</span>${it.kind === "tab" ? '<span class="tag">default tab</span>' : ""}</div><div class="su">${esc(it.url)}</div></div>`;
+  }).join("");
+}
+async function suggestFetch(q) {
+  const sid = target?.sessionId;
+  if (!sid) return;
+  const seq = ++sgSeq;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/history?limit=8&q=${encodeURIComponent(q)}`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const items = await res.json();
+    // A newer question, or the bar was left meanwhile.
+    if (seq !== sgSeq || document.activeElement !== E.urlInput) return;
+    sgItems = items;
+    sgSel = -1;
+    suggestRender();
+  } catch { /* no suggestions */ }
+}
+function suggestMove(delta) {
+  if (!sgItems.length) return;
+  // -1 (none) .. last, wrapping.
+  const n = sgItems.length + 1;
+  sgSel = ((sgSel + 1 + delta + n) % n) - 1;
+  suggestRender();
+  E.urlSuggest.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+}
+// mousedown, not click: the bar loses focus (and the list goes) before a click lands.
+E.urlSuggest.addEventListener("mousedown", (e) => {
+  const row = e.target.closest(".sg");
+  if (!row) return;
+  e.preventDefault();
+  E.urlInput.value = sgItems[+row.dataset.i].url;
+  suggestHide();
+  E.urlBar.requestSubmit();
+});
+
 E.urlInput.onfocus = () => {
+  suggestFetch("");
   E.bar.classList.add("url-focused");
   E.urlInput.select();
   E.urlClear.style.display = E.urlInput.value ? "flex" : "none";
@@ -1963,6 +2026,7 @@ E.urlInput.onfocus = () => {
 };
 
 function dismissUrlBar() {
+  suggestHide();
   E.bar.classList.remove("url-focused");
   E.urlInput.value = currentUrl || "";
   E.urlClear.style.display = "none";
@@ -1976,11 +2040,14 @@ E.urlCancel.onclick = (e) => {
 
 E.urlInput.oninput = () => {
   E.urlClear.style.display = E.urlInput.value ? "flex" : "none";
+  clearTimeout(sgTimer);
+  sgTimer = setTimeout(() => suggestFetch(E.urlInput.value), 120);
 };
 
 E.urlInput.onblur = () => {
   setTimeout(() => {
     if (document.activeElement !== E.urlInput) {
+      suggestHide();
       E.bar.classList.remove("url-focused");
       E.urlClear.style.display = "none";
       if (!E.urlInput.value && currentUrl) E.urlInput.value = currentUrl;
@@ -2000,6 +2067,16 @@ E.urlInput.onkeydown = (e) => {
   if (e.key === "Escape") {
     e.preventDefault();
     dismissUrlBar();
+  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    suggestMove(e.key === "ArrowDown" ? 1 : -1);
+  } else if (e.key === "Enter" && sgSel >= 0) {
+    // The highlighted suggestion is what gets opened.
+    E.urlInput.value = sgItems[sgSel].url;
+  } else if (e.key === "Tab" && sgItems.length && !e.shiftKey) {
+    e.preventDefault();
+    E.urlInput.value = (sgItems[sgSel] || sgItems[0]).url;
+    suggestFetch(E.urlInput.value);
   }
 };
 
@@ -2007,6 +2084,7 @@ E.urlBar.onsubmit = async (e) => {
   e.preventDefault();
   const val = E.urlInput.value.trim();
   if (!val) return;
+  suggestHide();
   const dest = normalizeUrl(val);
   E.urlInput.value = dest;
   E.bar.classList.remove("url-focused");
