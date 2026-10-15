@@ -915,10 +915,24 @@ function shortUrl(url) {
 }
 
 // Site icons come from DuckDuckGo; private/mesh hosts get a globe instead.
-// The icon the recorder grabbed from the site during the session.
+// The icon the recorder grabbed from the site during the session. Fetched with the
+// auth headers into a blob (an <img> can't send them, and the secret stays out of URLs);
+// nothing until it has arrived.
+const recIcons = new Map();   // recording key -> blob URL, or '' when there is none
 function recFavicon(r) {
   if (!r.favicon_type) return '';
-  return api(r.node_name, `/recordings/${enc(r.id)}/favicon`) + (window.__CLUSTER_SECRET__ ? `?token=${enc(window.__CLUSTER_SECRET__)}` : '');
+  const key = `${r.node_name}/${r.id}`;
+  if (recIcons.has(key)) return recIcons.get(key);
+  recIcons.set(key, '');
+  fetch(api(r.node_name, `/recordings/${enc(r.id)}/favicon`), { headers: getAuthHeaders() })
+    .then((res) => (res.ok ? res.blob() : null))
+    .then((blob) => {
+      if (!blob) return;
+      recIcons.set(key, URL.createObjectURL(blob));
+      if (ov) renderRecordings();
+    })
+    .catch(() => { /* the stored URL or the icon service steps in */ });
+  return '';
 }
 function favicon(url, ...stored) {
   const host = hostOf(url);

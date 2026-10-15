@@ -4659,15 +4659,13 @@ async fn api_get_recording(
     Ok(Json(rec))
 }
 
-/// The site's own icon, as grabbed during the recording. `?token=` stands in for the
-/// cluster secret header, which an <img> can't send.
+/// The site's own icon, as grabbed during the recording.
 async fn api_get_recording_favicon(
     AxumPath(id): AxumPath<Uuid>,
-    Query(q): Query<std::collections::HashMap<String, String>>,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(e) = state.check_auth_opt(&headers, q.get("token").map(String::as_str)) {
+    if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
     let dir = state.recorder_config.recordings_dir.join(id.to_string());
@@ -4693,11 +4691,10 @@ async fn api_get_recording_favicon(
 
 async fn api_peer_get_recording_favicon(
     AxumPath((peer, id)): AxumPath<(String, Uuid)>,
-    Query(q): Query<std::collections::HashMap<String, String>>,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(e) = state.check_auth_opt(&headers, q.get("token").map(String::as_str)) {
+    if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
     let Some(peer_url) = get_peer_url(&state, &peer).await else {
