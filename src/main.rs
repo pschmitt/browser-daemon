@@ -2070,6 +2070,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_recording).delete(api_delete_recording),
         )
         .route("/api/recordings/{id}/frames", get(api_get_recording_frames))
+        .route("/api/recordings/{id}/keep", post(api_set_recording_keep))
+        .route(
+            "/api/peers/{peer}/recordings/{id}/keep",
+            post(api_peer_set_recording_keep),
+        )
         .route("/api/recordings/{id}/favicon", get(api_get_recording_favicon))
         .route("/api/recordings/vacuum", post(api_vacuum_recordings))
         // Peer-to-Peer Mesh APIs
@@ -5147,6 +5152,55 @@ async fn api_get_recording_frames(
         )
             .into_response(),
     }
+}
+
+#[derive(Deserialize)]
+struct KeepRequest {
+    keep: bool,
+}
+
+/// Mark a recording to be kept (`{"keep": true}`), or not: the cleanup never removes
+/// a kept one. Nothing is kept unless asked.
+async fn api_set_recording_keep(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<KeepRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    if recorder::set_keep(&state.recorder_config, id, req.keep).await {
+        Ok(Json(serde_json::json!({ "id": id, "keep": req.keep })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Recording not found" })),
+        ))
+    }
+}
+
+async fn api_peer_set_recording_keep(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, String)>,
+    Json(req): Json<KeepRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
+        )
+            .into_response();
+    };
+    let url = format!("{}/api/recordings/{}/keep", peer_url, id);
+    let res = state
+        .peer_request(state.http_client.post(&url))
+        .json(&serde_json::json!({ "keep": req.keep }))
+        .send()
+        .await;
+    proxy_response(res).await
 }
 
 async fn api_delete_recording(

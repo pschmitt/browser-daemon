@@ -314,6 +314,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .te-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 30px; }
 .te-msg { font-size: 12px; color: var(--muted); }
 .te-msg.err { color: var(--bad); }
+.kept { display: inline-flex; color: var(--accent); }
 .tab-strip { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; vertical-align: middle; }
 .tab-strip img { width: 14px; height: 14px; border-radius: 3px; background: #f4f5fa; padding: 1px; }
 .tab-strip .more { font-size: 11px; color: var(--faint); margin-left: 2px; }
@@ -587,6 +588,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-broom" viewBox="0 0 24 24"><path d="m15 4 5 5M9.5 9.5 14.5 14.5M4 20s1-5 3.5-7.5l4 4C9 19 4 20 4 20zM13 7l4 4 2.5-2.5-4-4z"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3z"/></symbol>
   <symbol id="i-saved" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M8 9l3 3 5-6"/></symbol>
   <symbol id="i-chromium" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 8.5h8.2M8.97 13.75 4.85 6.6M15.03 13.75 10.9 20.9"/></symbol>
   <symbol id="i-firefox" viewBox="0 0 24 24"><path d="M20.5 9.5A9 9 0 1 1 6 4.6c-.3 1.4.1 2.6 1 3.4.4-1.7 1.6-2.9 3.2-3.4-.5 1.9.6 3.3 2.2 3.8 1.9.6 3.5 2 3.5 4.1a4 4 0 0 1-7.6 1.7"/></symbol>
@@ -1586,7 +1588,7 @@ function renderViewActions(recordings = visibleRecordings()) {
   const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
   const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected</span>` : ''}
     <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
-    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
+    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button><button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
   if (actions.innerHTML !== html) actions.innerHTML = html;
 }
 
@@ -1603,7 +1605,7 @@ function recordingRow(r) {
     <div><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
     <div class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
-      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${cached}</b><span>${esc(sub)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${cached}</b><span>${esc(sub)}</span></div></div>
     <div class="c-node">${nodeChip(r.node_name)}</div>
     <div class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
     <div class="num c-dur">${formatUptime(r.duration_seconds)}</div>
@@ -1638,6 +1640,10 @@ const ACT = {
   },
   'clear-recording-selection': () => { selectedRecordings.clear(); renderRecordings(); },
   'delete-selected-recordings': () => deleteSelectedRecordings(),
+  'keep-selected-recordings': () => {
+    const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean);
+    setRecordingKeep(selected, selected.some((r) => !r.keep));
+  },
   'uncache-selected-recordings': () => uncacheSelectedRecordings(),
   'view': (el) => {
     setView(el.dataset.view);
@@ -1735,6 +1741,7 @@ const ACT = {
     const r = byKey.recordings.get(el.dataset.key); if (!r) return;
     openMenu(el, [
       { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
+      { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
       { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
@@ -3040,8 +3047,25 @@ function handleWorkerMessage(e) {
   }
 }
 
+// Keep recordings (the cleanup never removes them), or stop keeping them. Off unless asked.
+function setRecordingKeep(list, keep) {
+  if (!list.length) return;
+  act(keep ? 'Keeping the recordings' : 'No longer keeping the recordings',
+    () => Promise.all(list.map((r) => request('POST', api(r.node_name, `/recordings/${encodeURIComponent(r.id)}/keep`), { keep }))),
+    keep ? `${list.length === 1 ? 'Recording' : `${list.length} recordings`} kept: the cleanup will not remove ${list.length === 1 ? 'it' : 'them'}` : 'The cleanup may remove them again');
+}
+function showRecordingDetails(r) {
+  showDetails(r.title && r.title !== 'about:blank' ? r.title : 'Recording', [
+    ['ID', `<span class="mono">${esc(r.id)}</span>`], ['Node', nodeChip(r.node_name)], ['Profile', r.profile ? esc(r.profile) : 'Throwaway'],
+    ['Started', absTime(r.started_at_secs)], ['Length', formatUptime(r.duration_seconds)], ['Frames', String(r.frame_count)], ['Size', formatBytes(r.size_bytes)],
+    ['Status', esc(r.status)], ['Kept', r.keep ? 'Yes: the cleanup never removes it' : 'No'],
+    ['From', r.initial_url ? `<span class="mono">${esc(r.initial_url)}</span>` : '–'], ['To', r.final_url ? `<span class="mono">${esc(r.final_url)}</span>` : '–'],
+  ], r);
+}
+
 async function deleteRecording(id, node) {
-  const ok = await ask({ title: 'Delete this recording?', text: `It is removed from ${node} and from this browser's cache.`, ok: 'Delete', danger: true });
+  const kept = (ov?.recordings || []).some((x) => x.id === id && x.keep);
+  const ok = await ask({ title: 'Delete this recording?', text: `It is removed from ${node} and from this browser's cache.${kept ? ' It is marked to be kept.' : ''}`, ok: 'Delete', danger: true });
   if (!ok) return;
   const worker = getDownloadWorker();
   if (worker) worker.postMessage({ action: 'CANCEL', id });
@@ -3057,7 +3081,7 @@ async function deleteSelectedRecordings() {
   const nodesText = [...new Set(selected.map((r) => r.node_name))].join(', ');
   const ok = await ask({
     title: `Delete ${selected.length} recordings?`,
-    text: `They will be removed from ${nodesText} and from this browser's cache.`,
+    text: `They will be removed from ${nodesText} and from this browser's cache.${selected.some((r) => r.keep) ? ` ${selected.filter((r) => r.keep).length} of them are marked to be kept.` : ''}`,
     ok: `Delete ${selected.length}`,
     danger: true,
   });

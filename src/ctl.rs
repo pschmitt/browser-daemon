@@ -406,6 +406,17 @@ pub enum RecordingCmd {
     },
     /// Show one recording's details.
     Show { recording: String },
+    /// Keep recordings: the cleanup (age, count and storage limits) never removes them.
+    /// Nothing is kept unless asked.
+    Keep {
+        #[arg(required = true)]
+        recordings: Vec<String>,
+    },
+    /// Stop keeping recordings: the cleanup may remove them again.
+    Unkeep {
+        #[arg(required = true)]
+        recordings: Vec<String>,
+    },
     /// Delete recordings.
     #[command(visible_alias = "rm")]
     Delete {
@@ -1251,25 +1262,34 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                         x.frame_count.to_string(),
                         bytes(x.size_bytes),
                         x.status.clone(),
+                        if x.keep { "kept" } else { "" }.to_string(),
                         x.title.clone().or_else(|| x.final_url.clone()).unwrap_or_default(),
                     ]
                 })
                 .collect();
             table(
-                &["ID", "NODE", "STARTED", "LENGTH", "FRAMES", "SIZE", "STATUS", "TITLE"],
+                &["ID", "NODE", "STARTED", "LENGTH", "FRAMES", "SIZE", "STATUS", "KEEP", "TITLE"],
                 &rows,
             );
         }
         RecordingCmd::Show { recording } => {
             c.print_json(&serde_json::to_value(c.recording(&recording)?)?);
         }
+        RecordingCmd::Keep { recordings } => keep_recordings(&c, &recordings, true).await?,
+        RecordingCmd::Unkeep { recordings } => keep_recordings(&c, &recordings, false).await?,
         RecordingCmd::Delete { recordings, yes } => {
             let mut targets = Vec::new();
             for key in &recordings {
                 targets.push(c.recording(key)?);
             }
+            let kept = targets.iter().filter(|r| r.recording.keep).count();
             confirm(
-                &format!("Delete {} recording{}?", targets.len(), if targets.len() == 1 { "" } else { "s" }),
+                &format!(
+                    "Delete {} recording{}{}?",
+                    targets.len(),
+                    if targets.len() == 1 { "" } else { "s" },
+                    if kept > 0 { format!(" ({kept} marked to be kept)") } else { String::new() }
+                ),
                 yes,
             )?;
             for r in targets {
@@ -1299,6 +1319,17 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
             let v = c.call(c.req(Method::POST, &c.api(&node, "/recordings/vacuum"))).await?;
             c.print_json(&v);
         }
+    }
+    Ok(())
+}
+
+/// Mark recordings to be kept, or not.
+async fn keep_recordings(c: &Client, recordings: &[String], keep: bool) -> R<()> {
+    for key in recordings {
+        let r = c.recording(key)?;
+        let path = c.api(&r.node_name, &format!("/recordings/{}/keep", r.recording.id));
+        c.call(c.req(Method::POST, &path).json(&json!({ "keep": keep }))).await?;
+        println!("{} {}", if keep { "keeping" } else { "not keeping" }, short(r.recording.id));
     }
     Ok(())
 }

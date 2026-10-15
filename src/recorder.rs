@@ -30,6 +30,10 @@ pub struct RecordingMeta {
     /// the site itself during the session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub favicon_type: Option<String>,
+    /// Marked to be kept: the cleanup never removes it. Not stored in `meta.json`
+    /// (the recorder rewrites that while recording) but as a `keep` file beside it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep: bool,
     pub status: String, // "recording", "completed", "interrupted"
 }
 
@@ -307,6 +311,7 @@ async fn record_session_loop(
         title: None,
         favicon_url: None,
         favicon_type: None,
+        keep: false,
         status: "recording".to_string(),
     };
 
@@ -932,6 +937,26 @@ async fn compute_rec_dir_size(path: &Path) -> u64 {
 // Auto-Vacuum & Query Functions
 // ---------------------------------------------------------------------------
 
+/// Marker file of a recording that is kept.
+const KEEP_FILE: &str = "keep";
+
+/// Mark a recording to be kept (or not): the cleanup skips it. False when it does not exist.
+pub async fn set_keep(config: &RecorderConfig, id: Uuid, keep: bool) -> bool {
+    let rec_dir = config.recordings_dir.join(id.to_string());
+    if !rec_dir.join("meta.json").exists() {
+        return false;
+    }
+    let marker = rec_dir.join(KEEP_FILE);
+    if keep {
+        fs::write(&marker, b"").await.is_ok()
+    } else {
+        match fs::remove_file(&marker).await {
+            Ok(()) => true,
+            Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        }
+    }
+}
+
 pub async fn list_recordings(config: &RecorderConfig) -> Vec<RecordingMeta> {
     let mut list = Vec::new();
     if let Ok(mut entries) = fs::read_dir(&config.recordings_dir).await {
@@ -939,7 +964,8 @@ pub async fn list_recordings(config: &RecorderConfig) -> Vec<RecordingMeta> {
             if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
                 let meta_file = entry.path().join("meta.json");
                 if let Ok(content) = fs::read_to_string(&meta_file).await {
-                    if let Ok(meta) = serde_json::from_str::<RecordingMeta>(&content) {
+                    if let Ok(mut meta) = serde_json::from_str::<RecordingMeta>(&content) {
+                        meta.keep = entry.path().join(KEEP_FILE).exists();
                         list.push(meta);
                     }
                 }
@@ -975,7 +1001,13 @@ pub async fn mark_orphaned_recordings(config: &RecorderConfig) -> usize {
 pub async fn get_recording(config: &RecorderConfig, id: Uuid) -> Option<RecordingMeta> {
     let meta_file = config.recordings_dir.join(id.to_string()).join("meta.json");
     if let Ok(content) = fs::read_to_string(&meta_file).await {
-        serde_json::from_str::<RecordingMeta>(&content).ok()
+        let mut meta = serde_json::from_str::<RecordingMeta>(&content).ok()?;
+        meta.keep = config
+            .recordings_dir
+            .join(id.to_string())
+            .join(KEEP_FILE)
+            .exists();
+        Some(meta)
     } else {
         None
     }
@@ -1010,6 +1042,8 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
         started_at: u64,
         size_bytes: u64,
         is_active: bool,
+        /// Marked to be kept: never removed.
+        keep: bool,
     }
 
     let mut items: Vec<RecItem> = Vec::new();
@@ -1028,6 +1062,7 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
                             && now.saturating_sub(meta.started_at_secs) < 86400;
                         items.push(RecItem {
                             _id: meta.id,
+                            keep: rec_path.join(KEEP_FILE).exists(),
                             path: rec_path,
                             started_at: meta.started_at_secs,
                             size_bytes: size,
@@ -1043,7 +1078,10 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
 
     // 1. Prune recordings older than max_age_secs (skip active recordings)
     items.retain(|item| {
-        if !item.is_active && now.saturating_sub(item.started_at) > config.max_age_secs {
+        if !item.is_active
+            && !item.keep
+            && now.saturating_sub(item.started_at) > config.max_age_secs
+        {
             to_delete.push((item.path.clone(), item.size_bytes));
             false
         } else {
@@ -1059,7 +1097,7 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
     for item in items {
         let over_size = remaining_storage > config.max_storage_bytes;
         let over_count = to_delete.len() + 1 > config.max_count;
-        if (over_size || over_count) && !item.is_active {
+        if (over_size || over_count) && !item.is_active && !item.keep {
             remaining_storage = remaining_storage.saturating_sub(item.size_bytes);
             to_delete.push((item.path, item.size_bytes));
         }
@@ -1184,6 +1222,51 @@ impl DisplayGrab {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn the_cleanup_never_removes_a_kept_recording() {
+        let dir = std::env::temp_dir().join(format!("bd-keep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = RecorderConfig {
+            enabled: true,
+            recordings_dir: dir.clone(),
+            max_storage_bytes: 0,
+            max_age_secs: 60,
+            max_count: 1000,
+        };
+        // Two old recordings, one of them kept; both are over the age and storage limits.
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let id = Uuid::new_v4();
+            let rec = dir.join(id.to_string());
+            std::fs::create_dir_all(&rec).unwrap();
+            std::fs::write(rec.join("frames.jsonl"), b"x".repeat(100)).unwrap();
+            let meta = serde_json::json!({
+                "id": id, "session_id": Uuid::new_v4(), "profile": null, "node": "n",
+                "started_at_secs": 1000, "ended_at_secs": 1010, "duration_seconds": 10,
+                "frame_count": 1, "size_bytes": 100, "initial_url": null, "final_url": null,
+                "title": null, "status": "completed"
+            });
+            std::fs::write(rec.join("meta.json"), meta.to_string()).unwrap();
+            ids.push(id);
+        }
+        assert!(!list_recordings(&config).await.iter().any(|m| m.keep), "nothing is kept by default");
+        assert!(set_keep(&config, ids[0], true).await);
+        assert!(!set_keep(&config, Uuid::new_v4(), true).await);
+        assert_eq!(
+            list_recordings(&config).await.iter().filter(|m| m.keep).map(|m| m.id).collect::<Vec<_>>(),
+            vec![ids[0]]
+        );
+        let stats = vacuum_recordings(&config).await;
+        assert_eq!(stats.vacuumed_count, 1);
+        assert!(dir.join(ids[0].to_string()).exists(), "the kept one stays");
+        assert!(!dir.join(ids[1].to_string()).exists(), "the other one goes");
+        // Not kept any more: the next cleanup takes it.
+        assert!(set_keep(&config, ids[0], false).await);
+        vacuum_recordings(&config).await;
+        assert!(!dir.join(ids[0].to_string()).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn real_pages_come_first_and_extension_pages_are_not_recorded_first() {

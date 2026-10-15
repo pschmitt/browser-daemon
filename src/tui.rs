@@ -606,6 +606,7 @@ impl App {
             (Tab::Recordings, KeyCode::Enter | KeyCode::Char('o')) => {
                 self.recording().map(|r| Action::Open(play_url(&r)))
             }
+            (Tab::Recordings, KeyCode::Char('p')) => self.recording().map(|r| keep_recording(&r)),
             (Tab::Recordings, KeyCode::Char('E')) => {
                 self.recording().map(|r| export_recording(&r))
             }
@@ -1926,12 +1927,30 @@ fn recording_menu(r: &MeshRecording) -> Action {
         title,
         items: vec![
             item("Play", Action::Open(play_url(r))),
+            item(
+                if r.recording.keep { "Stop keeping (the cleanup may remove it)" } else { "Keep (the cleanup never removes it)" },
+                keep_recording(r),
+            ),
             item("Details", details("Recording", r)),
             item("Export frames…", export_recording(r)),
             item("Apply retention now", vacuum(&r.node_name)),
             item("Delete", delete_recording(r)),
         ],
     }
+}
+
+/// Keep a recording (the cleanup never removes it), or stop keeping it.
+fn keep_recording(r: &MeshRecording) -> Action {
+    let keep = !r.recording.keep;
+    Action::Api(
+        Call::new(
+            if keep { "Keeping the recording" } else { "No longer keeping the recording" },
+            Method::POST,
+            &r.node_name,
+            format!("/recordings/{}/keep", r.recording.id),
+        )
+        .body(json!({ "keep": keep })),
+    )
 }
 
 fn export_recording(r: &MeshRecording) -> Action {
@@ -1954,8 +1973,9 @@ fn export_recording(r: &MeshRecording) -> Action {
 fn delete_recording(r: &MeshRecording) -> Action {
     confirm_then(
         format!(
-            "Delete recording {}?",
-            r.recording.title.as_deref().unwrap_or("(untitled)")
+            "Delete recording {}?{}",
+            r.recording.title.as_deref().unwrap_or("(untitled)"),
+            if r.recording.keep { " It is marked to be kept." } else { "" }
         ),
         Action::Api(Call::new(
             "Deleting recording",
@@ -2301,10 +2321,12 @@ fn draw(f: &mut Frame, app: &mut App) {
                     Cell::from(ago(Some(m.started_at_secs))),
                     Cell::from(if m.status == "recording" {
                         "● rec"
+                    } else if m.keep {
+                        "★ kept"
                     } else {
                         ""
                     })
-                    .fg(Color::Red),
+                    .fg(if m.keep { Color::Yellow } else { Color::Red }),
                 ])
             });
             let table = Table::new(
@@ -2505,7 +2527,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.tab {
         Tab::Sessions => "⏎ take over  s stop  p proxy  R record  t tab  e rename  N new  X stop all  m menu",
         Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
-        Tab::Recordings => "⏎ play  E export  d delete  v vacuum  m menu",
+        Tab::Recordings => "⏎ play  p keep  E export  d delete  v vacuum  m menu",
         Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
         Tab::Engines => "a ad blocker  c appearance  t touches  m menu  (defaults of new sessions)",
     };
@@ -2549,6 +2571,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("  d", "delete it"),
         ("Recordings", ""),
         ("  ⏎ / o", "play it in the dashboard"),
+        ("  p", "keep it (the cleanup never removes it) / stop keeping it"),
         ("  E / v", "export its frames / apply the retention limits"),
         ("  d", "delete it"),
         ("Nodes", ""),
