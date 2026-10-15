@@ -8,6 +8,7 @@ mod ctl;
 mod display;
 mod history;
 mod idle;
+mod mcp;
 mod names;
 mod passkey_helper;
 mod passkeys;
@@ -263,6 +264,8 @@ pub enum Command {
     Node(ctl::NodeArgs),
     /// Terminal UI for the mesh: sessions, profiles, recordings and nodes.
     Tui(ctl::Conn),
+    /// MCP server for AI agents: one browser tool set for every node and profile.
+    Mcp(mcp::McpArgs),
     /// Print a shell completion script (bash, zsh, fish, ...).
     Completions { shell: clap_complete::Shell },
     /// Serve passkeys approved in live views from the local rbw vault.
@@ -1472,6 +1475,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Profile(a) => return ctl_exit(ctl::profile(a).await),
         Command::Recording(a) => return ctl_exit(ctl::recording(a).await),
         Command::Node(a) => return ctl_exit(ctl::node(a).await),
+        // stdout carries the protocol: the log goes to stderr, unset.
+        Command::Mcp(a) => return mcp::run(a).await,
         Command::Completions { shell } => {
             ctl::completions(shell);
             return Ok(());
@@ -2560,7 +2565,9 @@ async fn handle_chromium_ws(
                 params.proxy.as_deref(),
                 params.color_scheme,
                 !agent_opens_own_tab,
-                params.default_tabs.unwrap_or(true),
+                // Playwright ignores tabs it did not open: the default tabs would just
+                // sit there. It can still ask (`default_tabs=true`).
+                params.default_tabs.unwrap_or(!agent_opens_own_tab),
             )
             .await
         {

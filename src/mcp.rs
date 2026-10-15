@@ -1,0 +1,594 @@
+//! `browser-daemon mcp`: one MCP server for every node and profile of the mesh.
+//!
+//! The browser tools are Playwright MCP's, run as a child on a CDP endpoint of
+//! a node. Playwright MCP cannot change that endpoint once it runs, so this
+//! server swaps the child when the agent asks for another profile or node
+//! (`browser_use`), and adds `browser_status` to see what exists. Without a
+//! choice the agent gets a throwaway browser on the node with the most room.
+//!
+//! The profiles an agent may open are limited (`--allow-profile`): a profile
+//! stays signed in to whatever the user signed it in to.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use clap::Args;
+use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child as Proc, ChildStdin, Command};
+use tokio::sync::{oneshot, Mutex};
+
+use crate::ctl::Conn;
+use crate::MeshOverview;
+
+type R<T> = Result<T, Box<dyn std::error::Error>>;
+type Rpc = Result<Value, (i64, String)>;
+
+#[derive(Args, Debug)]
+pub struct McpArgs {
+    #[command(flatten)]
+    pub conn: Conn,
+
+    /// A profile agents may open (repeat for several). Throwaway browsers need no permission.
+    #[arg(long = "allow-profile")]
+    pub allow: Vec<String>,
+
+    /// Program that runs Playwright MCP on a CDP endpoint, called as `PROGRAM ENDPOINT OUTPUT_DIR`.
+    #[arg(long, default_value = "browser-mcp")]
+    pub playwright_cmd: PathBuf,
+
+    /// Where Playwright MCP keeps its output (default: ~/.cache/playwright-mcp/browser).
+    #[arg(long)]
+    pub output_dir: Option<PathBuf>,
+}
+
+const INSTRUCTIONS: &str = "Browsers run on a mesh of nodes. Without a choice you get a \
+throwaway browser on the node with the most room. To work in a saved profile (its logins and \
+cookies persist, e.g. `work` for Outlook and OpsGenie) call browser_use with its name; \
+browser_status lists the profiles you may open and the nodes. Switching closes the current browser.";
+
+/// A node and profile the browser runs on.
+#[derive(Clone)]
+struct Target {
+    node: String,
+    ws_base: String,
+    profile: Option<String>,
+}
+
+impl Target {
+    fn describe(&self) -> String {
+        match &self.profile {
+            Some(p) => format!("profile {p} on {}", self.node),
+            None => format!("a throwaway browser on {}", self.node),
+        }
+    }
+}
+
+/// A running Playwright MCP.
+struct Child {
+    stdin: Mutex<ChildStdin>,
+    proc: Mutex<Proc>,
+    pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
+    next: AtomicU64,
+    tools: std::sync::Mutex<Vec<Value>>,
+    target: Target,
+}
+
+impl Child {
+    async fn write(&self, msg: &Value) -> bool {
+        let mut line = msg.to_string();
+        line.push('\n');
+        let mut stdin = self.stdin.lock().await;
+        stdin.write_all(line.as_bytes()).await.is_ok() && stdin.flush().await.is_ok()
+    }
+
+    async fn request(&self, method: &str, params: Value, wait: Duration) -> Rpc {
+        let id = self.next.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        let sent = self
+            .write(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .await;
+        if !sent {
+            self.pending.lock().await.remove(&id);
+            return Err((-32000, "The browser tools stopped".into()));
+        }
+        match tokio::time::timeout(wait, rx).await {
+            Ok(Ok(resp)) => match resp.get("error") {
+                Some(e) => Err((
+                    e["code"].as_i64().unwrap_or(-32000),
+                    e["message"].as_str().unwrap_or("error").to_string(),
+                )),
+                None => Ok(resp.get("result").cloned().unwrap_or(Value::Null)),
+            },
+            _ => {
+                self.pending.lock().await.remove(&id);
+                Err((-32000, "The browser tools stopped or took too long".into()))
+            }
+        }
+    }
+
+    async fn stop(&self) {
+        let _ = self.proc.lock().await.kill().await;
+    }
+}
+
+struct State {
+    http: reqwest::Client,
+    base: String,
+    secret: Option<String>,
+    allow: Vec<String>,
+    cmd: PathBuf,
+    out_dir: PathBuf,
+    version: Mutex<String>,
+    child: Mutex<Option<Arc<Child>>>,
+    stdout: Mutex<tokio::io::Stdout>,
+}
+
+pub async fn run(args: McpArgs) -> R<()> {
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let base = args.conn.url.trim_end_matches('/').to_string();
+    let secret = crate::tui::find_secret(&http, &base, args.conn.secret_file.as_ref()).await;
+    let out_dir = args.output_dir.clone().unwrap_or_else(|| {
+        std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("playwright-mcp/browser")
+    });
+    let state = Arc::new(State {
+        http,
+        base,
+        secret,
+        allow: args.allow,
+        cmd: args.playwright_cmd,
+        out_dir,
+        version: Mutex::new("2025-06-18".into()),
+        child: Mutex::new(None),
+        stdout: Mutex::new(tokio::io::stdout()),
+    });
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    while let Some(line) = lines.next_line().await? {
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let st = state.clone();
+        tokio::spawn(async move { st.handle(msg).await });
+    }
+    if let Some(child) = state.child.lock().await.take() {
+        child.stop().await;
+    }
+    Ok(())
+}
+
+fn text_result(text: impl Into<String>, error: bool) -> Value {
+    json!({ "content": [{ "type": "text", "text": text.into() }], "isError": error })
+}
+
+fn own_tools() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "browser_status",
+            "description": "What this browser can use: the browser in use now, the profiles you may open (saved logins and cookies) and the nodes with their load.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "annotations": { "title": "Browser status", "readOnlyHint": true }
+        }),
+        json!({
+            "name": "browser_use",
+            "description": "Switch to another browser: a saved profile (its logins persist, e.g. `work` for Outlook and OpsGenie), or a throwaway browser on a chosen node. Closes the current browser; pages open there are lost. Without arguments: a fresh throwaway browser on the node with the most room.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "profile": { "type": "string", "description": "Name of a profile from browser_status." },
+                    "node": { "type": "string", "description": "Node to run a throwaway browser on (a profile lives on one node)." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": { "title": "Use another browser", "readOnlyHint": false }
+        }),
+    ]
+}
+
+impl State {
+    async fn send(&self, msg: Value) {
+        let mut line = msg.to_string();
+        line.push('\n');
+        let mut out = self.stdout.lock().await;
+        let _ = out.write_all(line.as_bytes()).await;
+        let _ = out.flush().await;
+    }
+
+    async fn handle(self: &Arc<Self>, msg: Value) {
+        let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+        let Some(id) = msg.get("id").cloned() else {
+            return; // notifications need no answer
+        };
+        if method.is_empty() {
+            return; // an answer to something we never asked
+        }
+        let params = msg.get("params").cloned().unwrap_or(Value::Null);
+        let result: Rpc = match method {
+            "initialize" => {
+                let version = params
+                    .get("protocolVersion")
+                    .and_then(Value::as_str)
+                    .unwrap_or("2025-06-18")
+                    .to_string();
+                *self.version.lock().await = version.clone();
+                Ok(json!({
+                    "protocolVersion": version,
+                    "capabilities": { "tools": { "listChanged": true } },
+                    "serverInfo": { "name": "browser-daemon", "version": env!("CARGO_PKG_VERSION") },
+                    "instructions": INSTRUCTIONS,
+                }))
+            }
+            "ping" => Ok(json!({})),
+            "tools/list" => Ok(self.tools_list().await),
+            "tools/call" => self.tools_call(params).await,
+            other => Err((-32601, format!("Method not found: {other}"))),
+        };
+        self.send(match result {
+            Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
+            Err((code, message)) => {
+                json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
+            }
+        })
+        .await;
+    }
+
+    async fn tools_list(&self) -> Value {
+        let mut tools = own_tools();
+        match self.child_or_default().await {
+            Ok(child) => tools.extend(child.tools.lock().unwrap().iter().cloned()),
+            Err(e) => eprintln!("browser-daemon mcp: no browser tools yet: {e}"),
+        }
+        json!({ "tools": tools })
+    }
+
+    async fn tools_call(&self, params: Value) -> Rpc {
+        let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+        let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+        match name {
+            "browser_status" => Ok(match self.status().await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            "browser_use" => Ok(match self.use_browser(&args).await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            _ => {
+                let child = self
+                    .child_or_default()
+                    .await
+                    .map_err(|e| (-32000, e))?;
+                child
+                    .request("tools/call", params, Duration::from_secs(600))
+                    .await
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ mesh
+
+    async fn overview(&self) -> Result<MeshOverview, String> {
+        let mut req = self.http.get(format!("{}/api/mesh/overview", self.base));
+        if let Some(ref s) = self.secret {
+            req = req.header("X-Browser-Cluster-Secret", s);
+        }
+        let res = req.send().await.map_err(|e| format!("{}: {e}", self.base))?;
+        if !res.status().is_success() {
+            return Err(format!("{}: HTTP {}", self.base, res.status()));
+        }
+        res.json().await.map_err(|e| format!("Unexpected answer: {e}"))
+    }
+
+    /// (name, base URL, active sessions, capacity) of the nodes that take sessions.
+    fn nodes(ov: &MeshOverview) -> Vec<(String, String, usize, usize)> {
+        let mut nodes = vec![(
+            ov.local_node.name.clone(),
+            ov.local_node.url.clone(),
+            ov.local_node.active_sessions,
+            ov.local_node.max_sessions,
+        )];
+        nodes.extend(
+            ov.peers
+                .iter()
+                .filter(|p| p.status == "online")
+                .map(|p| (p.name.clone(), p.url.clone(), p.active_sessions, p.max_sessions)),
+        );
+        nodes
+    }
+
+    fn ws_base(url: &str) -> String {
+        url.trim_end_matches('/').replacen("http", "ws", 1)
+    }
+
+    /// The node with the most room (or the one named).
+    fn pick_node(ov: &MeshOverview, wanted: Option<&str>) -> Result<(String, String), String> {
+        let nodes = Self::nodes(ov);
+        if let Some(name) = wanted {
+            return nodes
+                .iter()
+                .find(|n| n.0 == name)
+                .map(|n| (n.0.clone(), n.1.clone()))
+                .ok_or_else(|| {
+                    format!(
+                        "No node '{name}' online. Nodes: {}",
+                        nodes.iter().map(|n| n.0.as_str()).collect::<Vec<_>>().join(", ")
+                    )
+                });
+        }
+        nodes
+            .iter()
+            .filter(|n| n.2 < n.3)
+            .min_by(|a, b| {
+                let load = |n: &(String, String, usize, usize)| n.2 as f64 / n.3.max(1) as f64;
+                load(a).total_cmp(&load(b)).then_with(|| a.0.cmp(&b.0))
+            })
+            .map(|n| (n.0.clone(), n.1.clone()))
+            .ok_or_else(|| "Every node is at its session limit".to_string())
+    }
+
+    async fn default_target(&self) -> Result<Target, String> {
+        let ov = self.overview().await?;
+        let (node, url) = Self::pick_node(&ov, None)?;
+        Ok(Target { node, ws_base: Self::ws_base(&url), profile: None })
+    }
+
+    async fn status(&self) -> Result<String, String> {
+        let ov = self.overview().await?;
+        let current = self.child.lock().await.as_ref().map(|c| c.target.describe());
+        let nodes: Vec<Value> = Self::nodes(&ov)
+            .iter()
+            .map(|n| json!({ "node": n.0, "sessions": format!("{}/{}", n.2, n.3) }))
+            .collect();
+        let profiles: Vec<Value> = ov
+            .profiles
+            .iter()
+            .filter(|p| self.allow.iter().any(|a| *a == p.profile.name))
+            .map(|p| {
+                json!({
+                    "profile": p.profile.name,
+                    "node": p.node_name,
+                    "in_use": p.profile.is_active,
+                    "opens": p.profile.tabs,
+                })
+            })
+            .collect();
+        let hidden = ov.profiles.len() - profiles.len();
+        Ok(serde_json::to_string_pretty(&json!({
+            "current": current,
+            "profiles_you_may_open": profiles,
+            "other_profiles": format!("{hidden} more exist; the user has not allowed agents to open them"),
+            "nodes": nodes,
+        }))
+        .unwrap_or_default())
+    }
+
+    async fn use_browser(&self, args: &Value) -> Result<String, String> {
+        let profile = args["profile"].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let node = args["node"].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let ov = self.overview().await?;
+        let target = match profile {
+            Some(name) => {
+                if !self.allow.iter().any(|a| a == name) {
+                    return Err(format!(
+                        "Profile '{name}' is not open to agents here. Allowed: {}.",
+                        if self.allow.is_empty() { "none".to_string() } else { self.allow.join(", ") }
+                    ));
+                }
+                let hits: Vec<_> = ov
+                    .profiles
+                    .iter()
+                    .filter(|p| p.profile.name == name && node.is_none_or(|n| p.node_name == n))
+                    .collect();
+                let [p] = hits.as_slice() else {
+                    return Err(if hits.is_empty() {
+                        format!("No profile '{name}'{}", node.map(|n| format!(" on {n}")).unwrap_or_default())
+                    } else {
+                        format!("Profile '{name}' exists on several nodes: name one with `node`")
+                    });
+                };
+                Target {
+                    node: p.node_name.clone(),
+                    ws_base: Self::ws_base(&p.node_url),
+                    profile: Some(name.to_string()),
+                }
+            }
+            None => {
+                let (node, url) = Self::pick_node(&ov, node)?;
+                Target { node, ws_base: Self::ws_base(&url), profile: None }
+            }
+        };
+        let child = self.spawn_child(&target).await?;
+        let old = self.child.lock().await.replace(child);
+        if let Some(old) = old {
+            old.stop().await;
+        }
+        Ok(format!(
+            "Now using {}. It starts when you first use a browser tool; the previous browser was closed.",
+            target.describe()
+        ))
+    }
+
+    // ----------------------------------------------------------------- child
+
+    async fn child_or_default(&self) -> Result<Arc<Child>, String> {
+        if let Some(c) = self.child.lock().await.as_ref() {
+            return Ok(c.clone());
+        }
+        let target = self.default_target().await?;
+        let child = self.spawn_child(&target).await?;
+        let mut slot = self.child.lock().await;
+        // Another request may have been quicker.
+        if let Some(c) = slot.as_ref() {
+            child.stop().await;
+            return Ok(c.clone());
+        }
+        *slot = Some(child.clone());
+        Ok(child)
+    }
+
+    async fn spawn_child(&self, target: &Target) -> Result<Arc<Child>, String> {
+        let endpoint = match &target.profile {
+            Some(p) => format!(
+                "{}/chromium?profile={}",
+                target.ws_base,
+                url::form_urlencoded::byte_serialize(p.as_bytes()).collect::<String>()
+            ),
+            None => format!("{}/chromium", target.ws_base),
+        };
+        let out = self.out_dir.join(format!(
+            "{}-{}",
+            target.node,
+            target.profile.as_deref().unwrap_or("throwaway")
+        ));
+        let mut proc = Command::new(&self.cmd)
+            .arg(&endpoint)
+            .arg(&out)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("Could not start {}: {e}", self.cmd.display()))?;
+        let stdin = proc.stdin.take().ok_or("no stdin")?;
+        let stdout = proc.stdout.take().ok_or("no stdout")?;
+        let child = Arc::new(Child {
+            stdin: Mutex::new(stdin),
+            proc: Mutex::new(proc),
+            pending: Mutex::new(HashMap::new()),
+            next: AtomicU64::new(1),
+            tools: std::sync::Mutex::new(Vec::new()),
+            target: target.clone(),
+        });
+        tokio::spawn(read_child(child.clone(), stdout));
+
+        let version = self.version.lock().await.clone();
+        let setup = async {
+            child
+                .request(
+                    "initialize",
+                    json!({
+                        "protocolVersion": version,
+                        "capabilities": {},
+                        "clientInfo": { "name": "browser-daemon", "version": env!("CARGO_PKG_VERSION") },
+                    }),
+                    Duration::from_secs(30),
+                )
+                .await?;
+            child
+                .write(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))
+                .await;
+            let mut tools = Vec::new();
+            let mut cursor: Option<String> = None;
+            loop {
+                let params = cursor.as_ref().map_or(json!({}), |c| json!({ "cursor": c }));
+                let page = child.request("tools/list", params, Duration::from_secs(30)).await?;
+                tools.extend(page["tools"].as_array().cloned().unwrap_or_default());
+                cursor = page["nextCursor"].as_str().map(str::to_string);
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            *child.tools.lock().unwrap() = tools;
+            Ok::<(), (i64, String)>(())
+        };
+        if let Err((_, e)) = setup.await {
+            child.stop().await;
+            return Err(format!("The browser tools did not start: {e}"));
+        }
+        Ok(child)
+    }
+}
+
+/// Answers of a child go to whoever asked; its own requests get the plainest reply.
+async fn read_child(child: Arc<Child>, stdout: tokio::process::ChildStdout) {
+    let mut lines = BufReader::new(stdout).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let Ok(msg) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let id = msg.get("id").cloned();
+        match (msg.get("method").and_then(Value::as_str), id) {
+            // An answer.
+            (None, Some(id)) => {
+                if let Some(i) = id.as_u64() {
+                    if let Some(tx) = child.pending.lock().await.remove(&i) {
+                        let _ = tx.send(msg);
+                    }
+                }
+            }
+            // A request of the child: no roots, nothing else.
+            (Some(method), Some(id)) => {
+                let reply = match method {
+                    "roots/list" => json!({ "jsonrpc": "2.0", "id": id, "result": { "roots": [] } }),
+                    "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
+                    _ => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Method not found" } }),
+                };
+                child.write(&reply).await;
+            }
+            _ => {}
+        }
+    }
+    // The child ended: whoever still waits gets an error.
+    let waiting: Vec<_> = child.pending.lock().await.drain().collect();
+    for (_, tx) in waiting {
+        let _ = tx.send(json!({ "error": { "code": -32000, "message": "The browser tools stopped" } }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn overview(nodes: &[(&str, usize, usize, &str)]) -> MeshOverview {
+        let node = |n: &(&str, usize, usize, &str)| {
+            json!({
+                "name": n.0, "url": format!("https://browser.{}.test", n.0), "version": "0",
+                "uptime_seconds": 1, "active_sessions": n.1, "max_sessions": n.2,
+                "profiles_count": 0, "recordings_count": 0, "storage_used_bytes": 0, "max_storage_bytes": 0,
+                "status": n.3, "latency_ms": null
+            })
+        };
+        serde_json::from_value(json!({
+            "local_node": node(&nodes[0]),
+            "peers": nodes[1..].iter().map(node).collect::<Vec<_>>(),
+            "sessions": [], "profiles": [], "targets": [], "recordings": [],
+            "total_sessions": 0, "total_capacity": 0, "total_profiles": 0, "total_recordings": 0,
+            "total_nodes": nodes.len(), "online_nodes": nodes.len(),
+            "total_storage_bytes": 0, "max_storage_bytes": 0
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_node_with_the_most_room_is_picked() {
+        let ov = overview(&[("fnuc", 4, 5, "online"), ("a", 1, 10, "online"), ("b", 5, 10, "online")]);
+        assert_eq!(State::pick_node(&ov, None).unwrap().0, "a");
+        assert_eq!(State::pick_node(&ov, Some("b")).unwrap().0, "b");
+        assert!(State::pick_node(&ov, Some("nope")).is_err());
+    }
+
+    #[test]
+    fn full_and_offline_nodes_are_skipped() {
+        let ov = overview(&[("fnuc", 5, 5, "online"), ("a", 0, 10, "offline"), ("b", 9, 10, "online")]);
+        assert_eq!(State::pick_node(&ov, None).unwrap().0, "b");
+        let full = overview(&[("fnuc", 5, 5, "online")]);
+        assert!(State::pick_node(&full, None).is_err());
+    }
+
+    #[test]
+    fn web_addresses_become_websocket_ones() {
+        assert_eq!(State::ws_base("https://browser.x.test/"), "wss://browser.x.test");
+        assert_eq!(State::ws_base("http://127.0.0.1:3001"), "ws://127.0.0.1:3001");
+    }
+}

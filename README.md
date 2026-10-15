@@ -87,6 +87,7 @@ browser-daemon profile backup list|create|restore|rm PROFILE
 browser-daemon recording list|show|rm|export|vacuum
 browser-daemon node list|show|set|add|rm
 browser-daemon completions bash|zsh|fish   shell completions
+browser-daemon mcp                        MCP server for AI agents (see below)
 browser-daemon tui                        terminal UI (see above)
 browser-daemon passkey-helper             serve approved passkeys from rbw
 ```
@@ -103,6 +104,21 @@ browser-daemon profile backup create hrworks before-cleanup
 browser-daemon profile transfer hrworks --to rofl-14 --move
 browser-daemon recording export 1b2c3d4e -o rec.jsonl
 ```
+
+### MCP server for agents
+
+`browser-daemon mcp` is an MCP server (stdio) that gives an agent a browser on any node of the mesh with a single entry in its MCP configuration. The browser tools are [Playwright MCP](https://github.com/microsoft/playwright-mcp)'s, run as a child on a CDP endpoint of a node; Playwright MCP cannot change that endpoint while it runs, so the server swaps the child when the agent asks for something else. Two tools are added:
+
+- `browser_status`: the browser in use, the profiles the agent may open, the nodes and their load.
+- `browser_use`: switch to a saved profile (`profile`, which also fixes the node) or to a throwaway browser on a chosen node (`node`). The previous browser is closed.
+
+Without a choice the agent gets a throwaway browser on the node with the most room. Profiles keep whatever they are signed in to, so agents may only open the ones named with `--allow-profile` (repeatable); anything else is refused. `--playwright-cmd` names the program that runs Playwright MCP, called as `PROGRAM ENDPOINT OUTPUT_DIR`; `--url`, `--secret-file` as for the other commands.
+
+```json
+{ "command": "browser-daemon", "args": ["mcp", "--url", "https://browser.fnuc.example", "--allow-profile", "work"] }
+```
+
+Default tabs are not opened for Playwright connections (it ignores tabs it did not open); a profile's login is what an agent gets from it.
 
 ### `browser-daemon run`
 
