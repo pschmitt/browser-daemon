@@ -125,6 +125,8 @@ struct State {
     cmd: PathBuf,
     out_dir: PathBuf,
     version: Mutex<String>,
+    /// What the agent's MCP client calls itself (`clientInfo.name` of its initialize).
+    client_name: Mutex<String>,
     child: Mutex<Option<Arc<Child>>>,
     stdout: Mutex<tokio::io::Stdout>,
 }
@@ -151,6 +153,7 @@ pub async fn run(args: McpArgs) -> R<()> {
         cmd: args.playwright_cmd,
         out_dir,
         version: Mutex::new("2025-06-18".into()),
+        client_name: Mutex::new(String::new()),
         child: Mutex::new(None),
         stdout: Mutex::new(tokio::io::stdout()),
     });
@@ -222,6 +225,10 @@ impl State {
                     .unwrap_or("2025-06-18")
                     .to_string();
                 *self.version.lock().await = version.clone();
+                *self.client_name.lock().await = params["clientInfo"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": { "listChanged": true } },
@@ -451,9 +458,12 @@ impl State {
             target.node,
             target.profile.as_deref().unwrap_or("throwaway")
         ));
+        let client = self.client_name.lock().await.clone();
         let mut proc = Command::new(&self.cmd)
             .arg(&endpoint)
             .arg(&out)
+            // Who is on the other end, for the wrapper's label when its environment doesn't say.
+            .env("BROWSER_MCP_CLIENT", client)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
