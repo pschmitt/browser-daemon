@@ -333,9 +333,10 @@ impl ManagedSession {
         recording: Option<&SessionRecorderHandle>,
     ) -> SessionSummary {
         let tabs_count = if let Some(ref hub) = self.bidi {
-            hub.call(
+            hub.call_timeout(
                 "browsingContext.getTree",
                 serde_json::json!({ "maxDepth": 0 }),
+                Duration::from_secs(3),
             )
             .await
             .ok()
@@ -354,6 +355,15 @@ impl ManagedSession {
             }
         };
 
+        self.summary(tabs_count, recording)
+    }
+
+    /// The summary, given how many tabs the session has.
+    pub fn summary(
+        &self,
+        tabs_count: usize,
+        recording: Option<&SessionRecorderHandle>,
+    ) -> SessionSummary {
         SessionSummary {
             id: self.id,
             name: self.name.read().unwrap().clone(),
@@ -491,6 +501,131 @@ pub struct AppState {
     pub history: Arc<history::History>,
     /// Small screenshots of the sessions' front tabs, for the dashboard's cards.
     pub thumbnails: Arc<thumbnail::Thumbnails>,
+    /// Sessions being started: they count against the cap and hold their profile.
+    pub starting: Arc<Starting>,
+    /// One lock per profile, held while a profile is checked and then changed or
+    /// removed, and while a session of it is being admitted.
+    pub profile_locks: Arc<ProfileLocks>,
+}
+
+/// Sessions that are launching but not in the map yet. Whoever wants to know
+/// whether a profile or a slot is taken has to count these too.
+#[derive(Default)]
+pub struct Starting {
+    inner: std::sync::Mutex<StartingInner>,
+    done: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct StartingInner {
+    count: usize,
+    profiles: std::collections::HashSet<Uuid>,
+}
+
+impl Starting {
+    /// A session of the profile is launching.
+    pub fn has_profile(&self, id: Uuid) -> bool {
+        self.inner.lock().unwrap().profiles.contains(&id)
+    }
+}
+
+/// A launching session's claim on a slot (and its profile); released on drop,
+/// which must come after the session is in the map.
+pub struct Reservation {
+    starting: Arc<Starting>,
+    profile: Option<Uuid>,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        {
+            let mut inner = self.starting.inner.lock().unwrap();
+            inner.count = inner.count.saturating_sub(1);
+            if let Some(id) = self.profile {
+                inner.profiles.remove(&id);
+            }
+        }
+        self.starting.done.notify_waiters();
+    }
+}
+
+/// What asking for a slot came to.
+enum Slot {
+    /// The profile has a session already.
+    Attach(Box<ManagedSession>),
+    Reserved(Reservation),
+}
+
+/// Claim a slot for a launch, or find the session the profile already has.
+/// A profile another request is launching right now is waited for, then
+/// attached to.
+async fn reserve_slot(
+    sessions: &RwLock<HashMap<Uuid, ManagedSession>>,
+    starting: &Arc<Starting>,
+    profile_locks: &ProfileLocks,
+    max_sessions: usize,
+    id: Option<Uuid>,
+) -> Result<Slot, (StatusCode, &'static str)> {
+    // Deleting or clearing a profile holds this while it checks for sessions.
+    let _profile_guard = match id {
+        Some(id) => Some(profile_locks.lock(id).await),
+        None => None,
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let done = starting.done.notified();
+        tokio::pin!(done);
+        done.as_mut().enable();
+        {
+            // Sessions are inserted under the write lock before their reservation
+            // goes: with the read lock held, "no session, no reservation" is final.
+            let sessions = sessions.read().await;
+            let mut inner = starting.inner.lock().unwrap();
+            if let Some(id) = id {
+                if let Some(session) = sessions.values().find(|s| s.profile_id == Some(id)) {
+                    return Ok(Slot::Attach(Box::new(session.clone())));
+                }
+            }
+            if !id.is_some_and(|id| inner.profiles.contains(&id)) {
+                if sessions.len() + inner.count >= max_sessions {
+                    warn!(
+                        active = sessions.len(),
+                        starting = inner.count,
+                        max = max_sessions,
+                        "Session limit reached"
+                    );
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Session limit reached. Try again later.",
+                    ));
+                }
+                inner.count += 1;
+                if let Some(id) = id {
+                    inner.profiles.insert(id);
+                }
+                return Ok(Slot::Reserved(Reservation {
+                    starting: starting.clone(),
+                    profile: id,
+                }));
+            }
+        }
+        if tokio::time::timeout_at(deadline, done).await.is_err() {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "The profile is still starting. Try again.",
+            ));
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct ProfileLocks(std::sync::Mutex<HashMap<Uuid, Arc<Mutex<()>>>>);
+
+impl ProfileLocks {
+    pub async fn lock(&self, id: Uuid) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = self.0.lock().unwrap().entry(id).or_default().clone();
+        lock.lock_owned().await
+    }
 }
 
 #[derive(Default)]
@@ -625,30 +760,16 @@ impl AppState {
             .map_or((None, None), |p| (p.meta.record, p.meta.record_audio));
 
         // A profile runs in at most one browser: attach to its session if it has one.
-        if let Some(ref profile) = profile {
-            let sessions = self.sessions.read().await;
-            if let Some(session) = sessions
-                .values()
-                .find(|s| s.profile_id == Some(profile.meta.id))
-            {
-                info!(session_id = %session.id, engine = %engine, profile = %profile.meta.name, "Attaching to existing profile session");
+        // Otherwise a slot is reserved (also against another request launching the same
+        // profile at the same time) before the slow launch.
+        let reservation = match self.reserve_slot(profile.as_ref()).await? {
+            Slot::Attach(session) => {
+                info!(session_id = %session.id, engine = %engine, profile = ?session.profile, "Attaching to existing profile session");
                 session.activity.touch();
-                return Ok(session.clone());
+                return Ok(*session);
             }
-        }
-
-        let active_count = self.sessions.read().await.len();
-        if active_count >= self.max_sessions {
-            warn!(
-                active = active_count,
-                max = self.max_sessions,
-                "Session limit reached"
-            );
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Session limit reached. Try again later.",
-            ));
-        }
+            Slot::Reserved(r) => r,
+        };
 
         // An explicit choice wins ("none" for a direct connection), then the profile's,
         // then the node's default (skipped when the node no longer has that proxy).
@@ -749,6 +870,8 @@ impl AppState {
             let mut guard = self.sessions.write().await;
             guard.insert(session.id, session.clone());
         }
+        // In the map: the reservation is no longer needed.
+        drop(reservation);
 
         // The request's choice, then the profile's, then the node's.
         if record
@@ -760,6 +883,21 @@ impl AppState {
         self.persist_session(&session).await;
 
         Ok(session)
+    }
+
+    /// Claim a slot for a launch, or find the session the profile already has.
+    async fn reserve_slot(
+        &self,
+        profile: Option<&Profile>,
+    ) -> Result<Slot, (StatusCode, &'static str)> {
+        reserve_slot(
+            &self.sessions,
+            &self.starting,
+            &self.profile_locks,
+            self.max_sessions,
+            profile.map(|p| p.meta.id),
+        )
+        .await
     }
 
     /// Save what a restarted daemon needs to adopt the session's browser.
@@ -917,8 +1055,23 @@ impl AppState {
     }
 
     /// `audio`: take the session's sound too (default: the session's, see
-    /// `ManagedSession::record_audio`).
-    pub async fn start_recording(&self, session: &ManagedSession, audio: Option<bool>) -> Uuid {
+    /// `ManagedSession::record_audio`). A session records once: when it already does,
+    /// that recording's id comes back with `false`. `None`: the session is gone.
+    pub async fn start_recording(
+        &self,
+        session: &ManagedSession,
+        audio: Option<bool>,
+    ) -> Option<(Uuid, bool)> {
+        // Check and insert under one lock, or two requests at once would leave a
+        // recorder nothing can stop.
+        let mut recordings = self.active_recordings.write().await;
+        if let Some(running) = recordings.get(&session.id) {
+            return Some((running.recording_id, false));
+        }
+        // A session that was terminated meanwhile must not get a recorder.
+        if !self.sessions.read().await.contains_key(&session.id) {
+            return None;
+        }
         // Chromium with a display of its own: frames grabbed from the display, since
         // screenshots repaint the window the live video shows (flicker).
         let grab = match (&session.display, session.display_size, &self.config.video) {
@@ -955,11 +1108,8 @@ impl AppState {
             spawn_bidi_frame_feeder(hub.clone(), handle.clone());
         }
         let rec_id = handle.recording_id;
-        self.active_recordings
-            .write()
-            .await
-            .insert(session.id, handle);
-        rec_id
+        recordings.insert(session.id, handle);
+        Some((rec_id, true))
     }
 
     pub async fn terminate_session(&self, id: &Uuid) -> bool {
@@ -2000,13 +2150,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         settings,
         history,
         thumbnails,
+        starting: Arc::default(),
+        profile_locks: Arc::default(),
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
     state.adopt_sessions().await;
     {
+        let adopted = snapshot_sessions(&state).await;
         let mut keep = std::collections::HashSet::new();
-        for session in state.sessions.read().await.values() {
+        for session in &adopted {
             if let Some(b) = session.browser.lock().await.as_ref() {
                 keep.insert(b.proc.pid);
                 if let Some(d) = b.display.as_ref() {
@@ -2022,7 +2175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         let mut files = std::collections::HashSet::new();
-        for session in state.sessions.read().await.values() {
+        for session in &adopted {
             if let Some(b) = session.browser.lock().await.as_ref() {
                 files.extend(b.files().cloned());
             }
@@ -2125,18 +2278,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
         .route("/json/list", get(json_list))
-        .route("/json/new", put(json_new).post(json_new).get(json_new))
-        .route(
-            "/json/close/{id}",
-            put(json_close)
-                .post(json_close)
-                .delete(json_close)
-                .get(json_close),
-        )
-        .route(
-            "/json/activate/{id}",
-            put(json_activate).post(json_activate).get(json_activate),
-        )
+        // PUT only, as Chromium's own: a GET (an <img src>) must not open tabs.
+        .route("/json/new", put(json_new))
+        .route("/json/close/{id}", put(json_close))
+        .route("/json/activate/{id}", put(json_activate))
         .route("/handoff/", get(handoff_page))
         .route("/handoff", get(|| async { Redirect::to("/handoff/") }))
         .route("/chromium", get(handle_chromium_ws))
@@ -2382,7 +2527,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    let sessions = state.sessions.read().await;
+    let active_sessions = state.sessions.read().await.len();
     let mut supported_engines = vec!["chromium"];
     if state.config.firefox_bin.is_some() {
         supported_engines.push("firefox");
@@ -2390,7 +2535,7 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     Json(serde_json::json!({
         "status": "ok",
         "node": state.node_name,
-        "active_sessions": sessions.len(),
+        "active_sessions": active_sessions,
         "max_sessions": state.max_sessions,
         "peers_count": state.peers.read().await.len(),
         "supported_engines": supported_engines,
@@ -2408,34 +2553,44 @@ async fn json_version() -> impl IntoResponse {
     }))
 }
 
-async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
-    let sessions: Vec<ManagedSession> = {
-        let guard = state.sessions.read().await;
-        guard.values().cloned().collect()
-    };
-
-    let mut all_targets = Vec::new();
-
-    for session in sessions {
-        if let Some(ref hub) = session.bidi {
-            for ctx in hub.contexts().await {
-                all_targets.push(firefox_target(&session, ctx));
-            }
-            continue;
-        }
-        let url = format!("http://127.0.0.1:{}/json/list", session.port);
-        if let Ok(res) = state.http_client.get(&url).send().await {
-            if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
-                for mut target in targets {
-                    target.web_socket_debugger_url = Some(format!("/devtools/page/{}", target.id));
-                    target.session_id = Some(session.id);
-                    target.profile = session.profile.clone();
-                    target.engine = Some(BrowserEngine::Chromium);
-                    all_targets.push(target);
-                }
-            }
-        }
+/// The tabs one session shows, as a DevTools target list.
+async fn session_targets(state: &AppState, session: &ManagedSession) -> Vec<DevToolsTarget> {
+    if let Some(ref hub) = session.bidi {
+        return hub
+            .contexts()
+            .await
+            .into_iter()
+            .map(|ctx| firefox_target(session, ctx))
+            .collect();
     }
+    let url = format!("http://127.0.0.1:{}/json/list", session.port);
+    let Ok(res) = state.http_client.get(&url).send().await else {
+        return Vec::new();
+    };
+    let mut targets = res.json::<Vec<DevToolsTarget>>().await.unwrap_or_default();
+    for target in &mut targets {
+        target.web_socket_debugger_url = Some(format!("/devtools/page/{}", target.id));
+        target.session_id = Some(session.id);
+        target.profile = session.profile.clone();
+        target.engine = Some(BrowserEngine::Chromium);
+    }
+    targets
+}
+
+async fn snapshot_sessions(state: &AppState) -> Vec<ManagedSession> {
+    state.sessions.read().await.values().cloned().collect()
+}
+
+async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
+    let sessions = snapshot_sessions(state).await;
+    // All sessions at once: a hung one costs one wait, not one per session.
+    let mut all_targets: Vec<DevToolsTarget> = futures_util::future::join_all(
+        sessions.iter().map(|session| session_targets(state, session)),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
 
     if let Ok(mut order) = state.tab_order.lock() {
         order.sort(&mut all_targets);
@@ -2446,6 +2601,20 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
         }
     }
     all_targets
+}
+
+/// The session showing a tab, and the tab.
+async fn find_page(state: &AppState, page_id: &str) -> Option<(ManagedSession, DevToolsTarget)> {
+    let sessions = snapshot_sessions(state).await;
+    let found = futures_util::future::join_all(sessions.into_iter().map(|session| async move {
+        let target = session_targets(state, &session)
+            .await
+            .into_iter()
+            .find(|t| t.id == page_id)?;
+        Some((session, target))
+    }))
+    .await;
+    found.into_iter().flatten().next()
 }
 
 fn firefox_target(session: &ManagedSession, ctx: bidi::BidiContext) -> DevToolsTarget {
@@ -2461,19 +2630,6 @@ fn firefox_target(session: &ManagedSession, ctx: bidi::BidiContext) -> DevToolsT
         engine: Some(BrowserEngine::Firefox),
         audible: false,
     }
-}
-
-/// Find the Firefox session owning a BiDi browsing context.
-async fn find_firefox_context(state: &AppState, context: &str) -> Option<ManagedSession> {
-    let sessions: Vec<ManagedSession> = state.sessions.read().await.values().cloned().collect();
-    for session in sessions {
-        if let Some(ref hub) = session.bidi {
-            if hub.contexts().await.iter().any(|c| c.id == context) {
-                return Some(session);
-            }
-        }
-    }
-    None
 }
 
 async fn json_list(State(state): State<AppState>) -> impl IntoResponse {
@@ -2594,10 +2750,18 @@ async fn handoff_page(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+/// The error reply of the DevTools-style routes.
+fn json_err(status: StatusCode, msg: impl ToString) -> ApiError {
+    (status, Json(serde_json::json!({ "error": msg.to_string() })))
+}
+
+/// Opens a tab. It belongs to the session named by `session_id`, or the one
+/// showing the tab `page`; neither given, a session of its own is started. Never
+/// another session's: that could be somebody's logged-in profile.
 async fn json_new(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let raw = raw_query.unwrap_or_default();
     let mut target_url: Option<String> = None;
     let mut session_id: Option<Uuid> = None;
@@ -2622,39 +2786,21 @@ async fn json_new(
     }
     let target_url = target_url.unwrap_or_else(|| "about:blank".to_string());
 
-    let session = {
-        let guard = state.sessions.read().await;
-        if let Some(sid) = session_id {
-            guard.get(&sid).cloned()
-        } else if let Some(ref pid) = page {
-            let mut found = None;
-            for s in guard.values() {
-                if let Some(ref hub) = s.bidi {
-                    if hub.contexts().await.iter().any(|c| &c.id == pid) {
-                        found = Some(s.clone());
-                        break;
-                    }
-                    continue;
-                }
-                let list_url = format!("http://127.0.0.1:{}/json/list", s.port);
-                if let Ok(res) = state.http_client.get(&list_url).send().await {
-                    if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
-                        if targets.iter().any(|t| &t.id == pid) {
-                            found = Some(s.clone());
-                            break;
-                        }
-                    }
-                }
-            }
-            found.or_else(|| guard.values().next().cloned())
-        } else {
-            guard.values().next().cloned()
-        }
-    };
-
-    let session = match session {
-        Some(s) => s,
-        None => state
+    let session = if let Some(sid) = session_id {
+        state
+            .sessions
+            .read()
+            .await
+            .get(&sid)
+            .cloned()
+            .ok_or_else(|| json_err(StatusCode::NOT_FOUND, "Session not found"))?
+    } else if let Some(ref pid) = page {
+        find_page(&state, pid)
+            .await
+            .map(|(session, _)| session)
+            .ok_or_else(|| json_err(StatusCode::NOT_FOUND, "Page not found"))?
+    } else {
+        state
             .spawn_session(
                 BrowserEngine::Chromium,
                 None,
@@ -2672,7 +2818,7 @@ async fn json_new(
                 Vec::new(),
             )
             .await
-            .map_err(|(st, err)| (st, Json(serde_json::json!({ "error": err }))))?,
+            .map_err(|(st, err)| json_err(st, err))?
     };
 
     session.activity.touch();
@@ -2687,12 +2833,10 @@ async fn json_new(
             } else {
                 None
             };
-        let ctx = hub.create_tab(&target_url).await.map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": e })),
-            )
-        })?;
+        let ctx = hub
+            .create_tab(&target_url)
+            .await
+            .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
         if let Some(blank) = start_tab.filter(|id| *id != ctx.id) {
             if let Err(e) = hub
                 .call(
@@ -2715,50 +2859,34 @@ async fn json_new(
     // new tab instead of lingering as an empty second tab.
     let start_tab =
         if target_url != "about:blank" && session.client_count.load(Ordering::SeqCst) == 0 {
-            let list_url = format!("http://127.0.0.1:{}/json/list", session.port);
-            match state.http_client.get(&list_url).send().await {
-                Ok(res) => res
-                    .json::<Vec<DevToolsTarget>>()
-                    .await
-                    .ok()
-                    .and_then(|targets| {
-                        let pages: Vec<_> = targets
-                            .into_iter()
-                            .filter(|t| t.target_type == "page")
-                            .collect();
-                        match pages.as_slice() {
-                            [only] if only.url == "about:blank" => Some(only.id.clone()),
-                            _ => None,
-                        }
-                    }),
-                Err(_) => None,
+            let pages: Vec<_> = session_targets(&state, &session)
+                .await
+                .into_iter()
+                .filter(|t| t.target_type == "page")
+                .collect();
+            match pages.as_slice() {
+                [only] if only.url == "about:blank" => Some(only.id.clone()),
+                _ => None,
             }
         } else {
             None
         };
 
     let mut dest_url = url::Url::parse(&format!("http://127.0.0.1:{}/json/new", session.port))
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-        })?;
+        .map_err(|e| json_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     dest_url.set_query(Some(&target_url));
 
-    let res = state.http_client.put(dest_url).send().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
+    let res = state
+        .http_client
+        .put(dest_url)
+        .send()
+        .await
+        .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
 
-    let mut target = res.json::<DevToolsTarget>().await.map_err(|e| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-    })?;
+    let mut target = res
+        .json::<DevToolsTarget>()
+        .await
+        .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
 
     if let Some(blank) = start_tab.filter(|id| *id != target.id) {
         let close_url = format!("http://127.0.0.1:{}/json/close/{}", session.port, blank);
@@ -2782,66 +2910,44 @@ async fn json_close(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let sessions: Vec<ManagedSession> = {
-        let guard = state.sessions.read().await;
-        guard.values().cloned().collect()
+    let Some((session, _)) = find_page(&state, &id).await else {
+        return (StatusCode::NOT_FOUND, "Target not found").into_response();
     };
-
-    if let Some(session) = find_firefox_context(&state, &id).await {
-        if let Some(ref hub) = session.bidi {
-            return match hub.close_tab(&id).await {
-                Ok(()) => (StatusCode::OK, "Target is closing").into_response(),
-                Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
-            };
-        }
+    if let Some(ref hub) = session.bidi {
+        return match hub.close_tab(&id).await {
+            Ok(()) => (StatusCode::OK, "Target is closing").into_response(),
+            Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+        };
     }
-
-    for session in sessions {
-        if session.engine == BrowserEngine::Firefox {
-            continue;
+    let req_url = format!("http://127.0.0.1:{}/json/close/{}", session.port, id);
+    match state.http_client.put(&req_url).send().await {
+        Ok(res) if res.status().is_success() => {
+            (StatusCode::OK, "Target is closing").into_response()
         }
-        let req_url = format!("http://127.0.0.1:{}/json/close/{}", session.port, id);
-        if let Ok(res) = state.http_client.put(&req_url).send().await {
-            if res.status().is_success() {
-                return (StatusCode::OK, "Target is closing").into_response();
-            }
-        }
+        _ => (StatusCode::NOT_FOUND, "Target not found").into_response(),
     }
-
-    (StatusCode::NOT_FOUND, "Target not found").into_response()
 }
 
 async fn json_activate(
     AxumPath(id): AxumPath<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let sessions: Vec<ManagedSession> = {
-        let guard = state.sessions.read().await;
-        guard.values().cloned().collect()
+    let Some((session, _)) = find_page(&state, &id).await else {
+        return (StatusCode::NOT_FOUND, "Target not found").into_response();
     };
-
-    if let Some(session) = find_firefox_context(&state, &id).await {
-        if let Some(ref hub) = session.bidi {
-            return match hub.activate_tab(&id).await {
-                Ok(()) => (StatusCode::OK, "Target activated").into_response(),
-                Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
-            };
-        }
+    if let Some(ref hub) = session.bidi {
+        return match hub.activate_tab(&id).await {
+            Ok(()) => (StatusCode::OK, "Target activated").into_response(),
+            Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+        };
     }
-
-    for session in sessions {
-        if session.engine == BrowserEngine::Firefox {
-            continue;
+    let req_url = format!("http://127.0.0.1:{}/json/activate/{}", session.port, id);
+    match state.http_client.put(&req_url).send().await {
+        Ok(res) if res.status().is_success() => {
+            (StatusCode::OK, "Target activated").into_response()
         }
-        let req_url = format!("http://127.0.0.1:{}/json/activate/{}", session.port, id);
-        if let Ok(res) = state.http_client.put(&req_url).send().await {
-            if res.status().is_success() {
-                return (StatusCode::OK, "Target activated").into_response();
-            }
-        }
+        _ => (StatusCode::NOT_FOUND, "Target not found").into_response(),
     }
-
-    (StatusCode::NOT_FOUND, "Target not found").into_response()
 }
 
 /// Registers a connecting automation client with its session; `client_gone` with
@@ -2884,6 +2990,51 @@ async fn client_arrived(
         machine: clients::clean(params.machine.as_deref()),
         topic: None,
     })
+}
+
+/// An automation client's place on a session. Taken before the WebSocket upgrade
+/// and given back however it ends, so a client that vanishes during the upgrade
+/// (or a failed upgrade) cannot leave a non-persistent session running unused.
+struct ClientSlot {
+    state: AppState,
+    session: ManagedSession,
+    /// Counts as a client (a live view's observer does not).
+    counted: bool,
+    client: Option<u64>,
+}
+
+impl ClientSlot {
+    fn new(state: &AppState, session: &ManagedSession, counted: bool) -> Self {
+        if counted {
+            session.client_count.fetch_add(1, Ordering::SeqCst);
+        }
+        Self {
+            state: state.clone(),
+            session: session.clone(),
+            counted,
+            client: None,
+        }
+    }
+}
+
+impl Drop for ClientSlot {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            self.session.clients.remove(client);
+        }
+        if !self.counted {
+            return;
+        }
+        let remaining = self.session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        if !self.session.persistent && remaining == 0 {
+            let state = self.state.clone();
+            let id = self.session.id;
+            tokio::spawn(async move {
+                info!(session_id = %id, "Auto-terminating non-persistent session");
+                state.terminate_session(&id).await;
+            });
+        }
+    }
 }
 
 async fn handle_chromium_ws(
@@ -2937,9 +3088,9 @@ async fn handle_chromium_ws(
         }
     };
 
+    let mut slot = ClientSlot::new(&state, &session, true);
     ws.on_upgrade(move |socket| async move {
-        session.client_count.fetch_add(1, Ordering::SeqCst);
-        let client = client_arrived(&state, &session, &headers, &params).await;
+        slot.client = Some(client_arrived(&state, &session, &headers, &params).await);
         session.activity.touch();
 
         let ws_path = session.ws_path.trim_start_matches('/');
@@ -2971,12 +3122,7 @@ async fn handle_chromium_ws(
             }
         }
 
-        session.clients.remove(client);
-        let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
-        if !session.persistent && remaining == 0 {
-            info!(session_id = %session.id, "Auto-terminating non-persistent session");
-            state.terminate_session(&session.id).await;
-        }
+        drop(slot);
     })
 }
 
@@ -3034,29 +3180,17 @@ async fn handle_firefox_ws(
     // The handoff page attaches as an observer: it must not keep sessions alive.
     let counted = !params.observer.unwrap_or(false);
 
+    let mut slot = ClientSlot::new(&state, &session, counted);
     ws.on_upgrade(move |socket| async move {
-        let client = if counted {
-            session.client_count.fetch_add(1, Ordering::SeqCst);
-            Some(client_arrived(&state, &session, &headers, &params).await)
-        } else {
-            None
-        };
+        if counted {
+            slot.client = Some(client_arrived(&state, &session, &headers, &params).await);
+        }
         info!(session_id = %session.id, observer = !counted, "Client attached to Firefox WebDriver BiDi");
 
         session.activity.touch();
         hub.serve_client(socket, session.activity.clone(), !counted)
             .await;
-
-        if let Some(c) = client {
-            session.clients.remove(c);
-        }
-        if counted {
-            let remaining = session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
-            if !session.persistent && remaining == 0 {
-                info!(session_id = %session.id, "Auto-terminating non-persistent session");
-                state.terminate_session(&session.id).await;
-            }
-        }
+        drop(slot);
     })
 }
 
@@ -3066,46 +3200,15 @@ async fn handle_page_ws(
     Query(params): Query<LaunchParams>,
     State(state): State<AppState>,
 ) -> Response {
-    let sessions: Vec<ManagedSession> = {
-        let guard = state.sessions.read().await;
-        guard.values().cloned().collect()
+    let found = find_page(&state, &page_id)
+        .await
+        .filter(|(session, _)| session.bidi.is_none());
+    let Some((session, target)) = found else {
+        warn!(page_id = %page_id, "Page not found across active sessions");
+        return (StatusCode::NOT_FOUND, "Target page not found").into_response();
     };
-
-    let mut target_info: Option<(
-        u16,
-        Uuid,
-        Arc<idle::Activity>,
-        Option<String>,
-        Option<String>,
-    )> = None;
-    for session in sessions {
-        if session.bidi.is_some() {
-            continue;
-        }
-        let url = format!("http://127.0.0.1:{}/json/list", session.port);
-        if let Ok(res) = state.http_client.get(&url).send().await {
-            if let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await {
-                if let Some(target) = targets.into_iter().find(|t| t.id == page_id) {
-                    target_info = Some((
-                        session.port,
-                        session.id,
-                        session.activity.clone(),
-                        target.title,
-                        Some(target.url),
-                    ));
-                    break;
-                }
-            }
-        }
-    }
-
-    let (port, session_id, activity, initial_title, initial_url) = match target_info {
-        Some(info) => info,
-        None => {
-            warn!(page_id = %page_id, "Page not found across active sessions");
-            return (StatusCode::NOT_FOUND, "Target page not found").into_response();
-        }
-    };
+    let (port, session_id, activity) = (session.port, session.id, session.activity.clone());
+    let (initial_title, initial_url) = (target.title, Some(target.url));
 
     let frame_tx = {
         let recs = state.active_recordings.read().await;
@@ -3146,18 +3249,15 @@ async fn handle_page_ws(
 // ---------------------------------------------------------------------------
 
 async fn get_local_sessions(state: &AppState) -> Vec<SessionSummary> {
-    let sessions: Vec<ManagedSession> = {
-        let guard = state.sessions.read().await;
-        guard.values().cloned().collect()
-    };
-    let rec_guard = state.active_recordings.read().await;
-
-    let mut summaries = Vec::new();
-    for session in sessions {
-        let rec = rec_guard.get(&session.id);
-        summaries.push(session.to_summary(&state.http_client, rec).await);
-    }
-    summaries
+    let sessions = snapshot_sessions(state).await;
+    let recordings = state.active_recordings.read().await.clone();
+    // At once, and with the locks released: one hung tab must not hold the API up.
+    futures_util::future::join_all(
+        sessions
+            .iter()
+            .map(|session| session.to_summary(&state.http_client, recordings.get(&session.id))),
+    )
+    .await
 }
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
@@ -3327,13 +3427,9 @@ async fn api_get_session(
         .await
         .get(&session.id)
         .cloned();
-    let summary = session.to_summary(&state.http_client, rec.as_ref()).await;
-    let url = format!("http://127.0.0.1:{}/json/list", session.port);
-    let targets = if let Ok(res) = state.http_client.get(&url).send().await {
-        res.json::<Vec<DevToolsTarget>>().await.unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let targets = session_targets(&state, &session).await;
+    let tabs = targets.iter().filter(|t| t.target_type == "page").count();
+    let summary = session.summary(tabs, rec.as_ref());
 
     Ok(Json(serde_json::json!({
         "session": summary,
@@ -5717,18 +5813,21 @@ async fn api_session_start_record(
         ))?
     };
 
-    if state.active_recordings.read().await.contains_key(&id) {
-        return Ok(Json(
-            serde_json::json!({ "status": "already_recording", "session_id": id }),
+    let Some((rec_id, started)) = state.start_recording(&session, params.audio).await else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "Session not found" })),
         ));
-    }
-
-    let rec_id = state.start_recording(&session, params.audio).await;
-    Ok(Json(serde_json::json!({
-        "status": "recording_started",
-        "session_id": id,
-        "recording_id": rec_id
-    })))
+    };
+    Ok(Json(if started {
+        serde_json::json!({
+            "status": "recording_started",
+            "session_id": id,
+            "recording_id": rec_id
+        })
+    } else {
+        serde_json::json!({ "status": "already_recording", "session_id": id })
+    }))
 }
 
 async fn api_session_stop_record(
@@ -7023,6 +7122,116 @@ mod tests {
             peer_profile_url("https://browser.h.ts.example", "a b", None),
             "https://browser.h.ts.example/api/profiles/a%20b"
         );
+    }
+
+    async fn fake_session(profile: Option<Uuid>) -> ManagedSession {
+        ManagedSession {
+            id: Uuid::new_v4(),
+            name: Arc::new(std::sync::RwLock::new("test".into())),
+            clients: Arc::default(),
+            engine: BrowserEngine::Chromium,
+            port: 1,
+            ws_path: String::new(),
+            profile: None,
+            profile_id: profile,
+            persistent: true,
+            record_audio: false,
+            created_at: Instant::now(),
+            client_count: Arc::new(AtomicUsize::new(0)),
+            activity: Arc::new(idle::Activity::new(0)),
+            adblock: false,
+            relay: relay::Relay::start(None).await.unwrap(),
+            audio_sink: None,
+            display: None,
+            display_size: None,
+            window_size: (1, 1),
+            video: false,
+            color_scheme: ColorScheme::default(),
+            screen: Arc::default(),
+            show_touches: Arc::default(),
+            audible: Arc::new(AtomicBool::new(false)),
+            browser: Arc::new(Mutex::new(None)),
+            bidi: None,
+        }
+    }
+
+    type Sessions = Arc<RwLock<HashMap<Uuid, ManagedSession>>>;
+
+    async fn slot(
+        sessions: &Sessions,
+        starting: &Arc<Starting>,
+        locks: &ProfileLocks,
+        max: usize,
+        profile: Option<Uuid>,
+    ) -> Result<Slot, (StatusCode, &'static str)> {
+        reserve_slot(sessions, starting, locks, max, profile).await
+    }
+
+    #[tokio::test]
+    async fn launches_count_against_the_cap_before_they_are_sessions() {
+        let sessions = Sessions::default();
+        let (starting, locks) = (Arc::new(Starting::default()), ProfileLocks::default());
+        let first = slot(&sessions, &starting, &locks, 2, None).await.unwrap();
+        let _second = slot(&sessions, &starting, &locks, 2, None).await.unwrap();
+        let third = slot(&sessions, &starting, &locks, 2, None).await;
+        assert!(matches!(third, Err((StatusCode::SERVICE_UNAVAILABLE, _))));
+        // A failed launch gives its slot back.
+        drop(first);
+        assert!(slot(&sessions, &starting, &locks, 2, None).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_profile_launched_twice_at_once_gets_one_browser() {
+        let sessions = Sessions::default();
+        let (starting, locks) = (Arc::new(Starting::default()), Arc::new(ProfileLocks::default()));
+        let profile = Uuid::new_v4();
+        let Slot::Reserved(reservation) =
+            slot(&sessions, &starting, &locks, 8, Some(profile)).await.unwrap()
+        else {
+            panic!("the first launch reserves");
+        };
+        assert!(starting.has_profile(profile));
+        // Another profile is not held up.
+        assert!(matches!(
+            slot(&sessions, &starting, &locks, 8, Some(Uuid::new_v4())).await,
+            Ok(Slot::Reserved(_))
+        ));
+        let second = {
+            let (sessions, starting, locks) = (sessions.clone(), starting.clone(), locks.clone());
+            tokio::spawn(async move {
+                reserve_slot(&sessions, &starting, &locks, 8, Some(profile)).await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!second.is_finished(), "waits for the launch in progress");
+        // The launch finishes: the session is in the map, then the reservation goes.
+        let session = fake_session(Some(profile)).await;
+        let id = session.id;
+        sessions.write().await.insert(id, session);
+        drop(reservation);
+        let Ok(Slot::Attach(attached)) = second.await.unwrap() else {
+            panic!("the second request attaches");
+        };
+        assert_eq!(attached.id, id);
+        assert!(!starting.has_profile(profile));
+    }
+
+    #[tokio::test]
+    async fn a_profile_that_is_being_changed_is_not_admitted_meanwhile() {
+        let sessions = Sessions::default();
+        let (starting, locks) = (Arc::new(Starting::default()), Arc::new(ProfileLocks::default()));
+        let profile = Uuid::new_v4();
+        let held = locks.lock(profile).await;
+        let launch = {
+            let (sessions, starting, locks) = (sessions.clone(), starting.clone(), locks.clone());
+            tokio::spawn(async move {
+                reserve_slot(&sessions, &starting, &locks, 8, Some(profile)).await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!launch.is_finished());
+        drop(held);
+        assert!(matches!(launch.await.unwrap(), Ok(Slot::Reserved(_))));
     }
 
     #[test]
