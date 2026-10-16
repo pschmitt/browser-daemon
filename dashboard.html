@@ -3585,7 +3585,11 @@ function syncPlayerAudio() {
   const a = $('playerAudio'), p = activePlayer;
   const t = (p.frames[p.currentIndex]?.t || 0) / 1000;
   const running = p.isPlaying && !p.waiting;
-  if (Math.abs(a.currentTime - t) > (running ? 0.3 : 0.05)) a.currentTime = t;
+  // While playing, the sound runs on between two frames (a still page sends none
+  // for a while): it only drifted when it left the stretch up to the next frame.
+  const next = p.currentIndex + 1 < p.frames.length ? p.frames[p.currentIndex + 1].t / 1000 : Infinity;
+  const drifted = running ? a.currentTime < t - 0.3 || a.currentTime > next + 0.3 : Math.abs(a.currentTime - t) > 0.05;
+  if (drifted) a.currentTime = t;
   a.playbackRate = p.speed || 1;
   if (running && a.paused) a.play().catch(() => {});
   if (!running && !a.paused) a.pause();
@@ -3851,6 +3855,12 @@ function playNextFrame() {
     return;
   }
   if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+    // The page stood still at the end, but the sound goes on: play it out.
+    const a = $('playerAudio');
+    if (playerHasSound() && !a.ended && a.duration && a.currentTime < a.duration - 0.15) {
+      activePlayer.timer = setTimeout(playNextFrame, 250);
+      return;
+    }
     if (activePlayer.isLooping) {
       activePlayer.currentIndex = 0;
       renderPlayerFrame(0);
