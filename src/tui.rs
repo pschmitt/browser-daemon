@@ -303,6 +303,10 @@ enum Modal {
 enum Msg {
     /// The overview, or why it could not be fetched.
     Overview(Result<MeshOverview, String>),
+    /// An overview the daemon pushed (`/api/ws/overview`).
+    Pushed(MeshOverview),
+    /// The push stream connected (true) or dropped (false): polling covers the gaps.
+    Live(bool),
     /// An action finished: its message (empty: "done"), or its error.
     Done {
         label: String,
@@ -340,6 +344,8 @@ struct App {
     filter: Option<String>,
     help: bool,
     last_refresh: Option<Instant>,
+    /// The daemon pushes overviews: no polling needed.
+    live: bool,
 }
 
 impl App {
@@ -388,17 +394,19 @@ impl App {
 
     fn handle(&mut self, msg: Msg) {
         match msg {
+            Msg::Pushed(ov) => {
+                self.set_overview(ov);
+                if self.refresh_error {
+                    self.refresh_error = false;
+                    self.set_status("", false);
+                }
+            }
+            Msg::Live(live) => self.live = live,
             Msg::Overview(res) => {
                 self.refreshing = false;
                 match res {
                     Ok(ov) => {
-                        // The selection stays on its item when rows come and go.
-                        let keep: Vec<Option<String>> =
-                            TABS.iter().map(|t| self.selected_key(*t)).collect();
-                        self.ov = Some(ov);
-                        for (t, key) in TABS.iter().zip(keep) {
-                            self.reselect(*t, key);
-                        }
+                        self.set_overview(ov);
                         // Only the refresh's own error goes away with it; an action's stays.
                         if self.refresh_error {
                             self.refresh_error = false;
@@ -440,6 +448,16 @@ impl App {
                 }
             }
         }
+    }
+
+    fn set_overview(&mut self, ov: MeshOverview) {
+        // The selection stays on its item when rows come and go.
+        let keep: Vec<Option<String>> = TABS.iter().map(|t| self.selected_key(*t)).collect();
+        self.ov = Some(ov);
+        for (t, key) in TABS.iter().zip(keep) {
+            self.reselect(*t, key);
+        }
+        self.clamp_selection();
     }
 
     fn refresh_failed(&mut self, msg: String) {
@@ -3202,8 +3220,14 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         filter: None,
         help: false,
         last_refresh: None,
+        live: false,
     };
     app.refresh();
+    tokio::spawn(push_overviews(
+        app.base.clone(),
+        app.secret.clone(),
+        app.tx.clone(),
+    ));
 
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app, &mut rx);
@@ -3228,9 +3252,67 @@ fn event_loop(
                     return Ok(());
                 }
             }
-        } else if app.last_refresh.is_none_or(|t| t.elapsed() >= REFRESH) {
+        } else if !app.live && app.last_refresh.is_none_or(|t| t.elapsed() >= REFRESH) {
             app.refresh();
         }
+    }
+}
+
+/// The overview's WebSocket URL for a daemon's base URL.
+fn overview_ws_url(base: &str) -> String {
+    let ws = if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        base.to_string()
+    };
+    format!("{ws}/api/ws/overview")
+}
+
+/// Follow the overviews the daemon pushes, reconnecting with a growing pause; the
+/// event loop polls while this is not connected.
+async fn push_overviews(
+    base: String,
+    secret: Option<String>,
+    tx: tokio::sync::mpsc::UnboundedSender<Msg>,
+) {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+
+    let mut pause = Duration::from_secs(1);
+    loop {
+        let Ok(mut req) = overview_ws_url(&base).into_client_request() else {
+            return;
+        };
+        if let Some(value) = secret
+            .as_deref()
+            .and_then(|s| reqwest::header::HeaderValue::from_str(s).ok())
+        {
+            req.headers_mut().insert("X-Browser-Cluster-Secret", value);
+        }
+        let connect = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio_tungstenite::connect_async(req),
+        );
+        if let Ok(Ok((mut ws, _))) = connect.await {
+            pause = Duration::from_secs(1);
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(text) = msg else { continue };
+                let Ok(ov) = serde_json::from_str::<MeshOverview>(text.as_str()) else {
+                    continue;
+                };
+                // Live only once an overview came through, not on the handshake.
+                if tx.send(Msg::Live(true)).is_err() || tx.send(Msg::Pushed(ov)).is_err() {
+                    return;
+                }
+            }
+        }
+        if tx.send(Msg::Live(false)).is_err() {
+            return;
+        }
+        tokio::time::sleep(pause).await;
+        pause = (pause * 2).min(Duration::from_secs(30));
     }
 }
 
@@ -3289,6 +3371,18 @@ async fn run_call(
 
 #[cfg(test)]
 mod secret_tests {
+    #[test]
+    fn the_overview_socket_follows_the_scheme() {
+        assert_eq!(
+            super::overview_ws_url("https://b.test"),
+            "wss://b.test/api/ws/overview"
+        );
+        assert_eq!(
+            super::overview_ws_url("http://127.0.0.1:3001"),
+            "ws://127.0.0.1:3001/api/ws/overview"
+        );
+    }
+
     use super::*;
 
     #[test]
