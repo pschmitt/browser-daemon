@@ -457,7 +457,14 @@ impl State {
             .await
             .map_err(|e| self.mask(&e))?;
         // Masked from here on, whatever fails later.
-        self.filled.lock().unwrap().push(secret.value.clone());
+        {
+            let mut filled = self.filled.lock().unwrap();
+            filled.push(secret.value.clone());
+            if let Some(ref user) = secret.username {
+                // HTTP Basic auth carries both, base64-encoded.
+                filled.push(format!("{user}:{}", secret.value));
+            }
+        }
         if !secrets::url_matches(&address, &secret.uris) {
             return Err(format!(
                 "The entry '{entry}' is not saved for {host}, so it is not typed there."

@@ -17,6 +17,9 @@ const MIN_REDACT: usize = 4;
 /// A field of a vault entry and the sites the entry is for.
 pub struct Secret {
     pub value: String,
+    /// The entry's username, when it has one: `user:password` (HTTP Basic
+    /// auth) is masked as well.
+    pub username: Option<String>,
     pub uris: Vec<Uri>,
 }
 
@@ -94,6 +97,7 @@ pub async fn lookup(
     }
     Ok(Secret {
         value,
+        username: pick_field(&raw, "username").filter(|u| !u.is_empty()),
         uris: uris(&raw),
     })
 }
@@ -277,8 +281,48 @@ fn variants(secret: &str) -> Vec<String> {
             out.push(v);
         }
     }
+    for v in base64_forms(secret) {
+        if !out.contains(&v) {
+            out.push(v);
+        }
+    }
     // Longest first: an escaped form contains the shorter ones.
     out.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    out
+}
+
+/// Shortest base64 fragment worth masking (a shorter one would hit unrelated text).
+const MIN_B64: usize = 6;
+
+/// The base64 text of `secret` as it can appear inside a longer encoded
+/// string (a header, a data URL): standard and url-safe alphabet, each of the
+/// three byte alignments, cut to the characters the secret alone determines.
+fn base64_forms(secret: &str) -> Vec<String> {
+    use base64::Engine;
+    let engines: [&base64::engine::GeneralPurpose; 2] = [
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+    ];
+    let mut out: Vec<String> = Vec::new();
+    for engine in engines {
+        for pad in 0..3usize {
+            let mut bytes = vec![b'x'; pad];
+            bytes.extend_from_slice(secret.as_bytes());
+            let enc = engine.encode(&bytes);
+            // Characters that carry bits of the padding bytes are not ours.
+            let skip = [0, 2, 3][pad];
+            // The last character holds zero fill bits unless the length is a
+            // multiple of three: what follows would change it.
+            let drop = usize::from(bytes.len() % 3 != 0);
+            let end = enc.len().saturating_sub(drop);
+            let Some(part) = enc.get(skip..end) else {
+                continue;
+            };
+            if part.len() >= MIN_B64 && !out.iter().any(|o| o == part) {
+                out.push(part.to_string());
+            }
+        }
+    }
     out
 }
 
@@ -322,6 +366,39 @@ pub fn redact_str(text: &str, secrets: &[String]) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn base64_forms_are_masked_at_every_alignment() {
+        use base64::Engine;
+        let secret = "s3cr/t+pässwörd?~";
+        for engine in [
+            &base64::engine::general_purpose::STANDARD,
+            &base64::engine::general_purpose::URL_SAFE,
+            &base64::engine::general_purpose::STANDARD_NO_PAD,
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+        ] {
+            for prefix in ["", "a", "ab", "abc"] {
+                for suffix in ["", "z", "zy"] {
+                    let enc = engine.encode(format!("{prefix}{secret}{suffix}"));
+                    let mut v = Value::String(format!("Authorization: Basic {enc}!"));
+                    redact(&mut v, &[secret.to_string()]);
+                    let text = v.as_str().unwrap();
+                    assert!(text.contains(MASK), "{prefix:?} {suffix:?}: {text}");
+                    let full = engine.encode(secret);
+                    assert!(!text.contains(&full[..full.len().min(8)]), "{text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn basic_auth_pairs_are_masked() {
+        use base64::Engine;
+        let enc = base64::engine::general_purpose::STANDARD.encode("alice:hunter22!");
+        let mut v = Value::String(format!("Basic {enc}"));
+        redact(&mut v, &["alice:hunter22!".to_string()]);
+        assert_eq!(v.as_str().unwrap(), format!("Basic {MASK}"));
+    }
 
     fn uri(u: &str, m: Option<u64>) -> Uri {
         Uri {
