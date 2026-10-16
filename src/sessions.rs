@@ -522,6 +522,7 @@ impl AppState {
         let _ = fs::remove_dir_all(upload_dir(id)).await;
         // Live views of the session end with it.
         self.viewers.close_session(*id);
+        self.thumbnails.forget(*id);
         let mut terminated = false;
         if let Some(session) = removed {
             // Out of the session before the slow part (a profile's browser gets up to

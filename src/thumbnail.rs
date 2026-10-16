@@ -44,7 +44,6 @@ impl Thumbnails {
         cache.insert(id, (Instant::now(), jpeg));
     }
 
-    #[allow(dead_code)]
     pub fn forget(&self, id: Uuid) {
         self.cache.lock().unwrap().remove(&id);
     }
