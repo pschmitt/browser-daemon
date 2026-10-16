@@ -167,7 +167,8 @@ enum Action {
     Text { title: String, lines: Vec<String> },
     /// The form for a new session or profile; the node it starts on.
     Form(FormKind, Option<String>),
-    StopAll(Option<String>),
+    /// Stop these sessions (node, id), as counted when the confirmation was asked.
+    StopAll(Vec<(String, String)>),
     Filter(Option<String>),
     /// A profile's backups and data actions (fetches the backups).
     DataMenu(MeshProfile),
@@ -251,7 +252,29 @@ enum Modal {
     Form(Form),
 }
 
+/// What background tasks report to the event loop. Nothing in the loop waits on
+/// the network: requests run in spawned tasks and come back as one of these.
+enum Msg {
+    /// The overview, or why it could not be fetched.
+    Overview(Result<MeshOverview, String>),
+    /// An action finished: its message (empty: "done"), or its error.
+    Done { label: String, result: Result<String, String>, refresh: bool },
+    /// A profile's backups, for its data menu.
+    Backups(MeshProfile, Result<Vec<Value>, String>),
+}
+
+const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 struct App {
+    tx: tokio::sync::mpsc::UnboundedSender<Msg>,
+    /// Requests of actions still running.
+    pending: usize,
+    /// The overview is being fetched.
+    refreshing: bool,
+    /// Another refresh was asked for while one ran.
+    refresh_again: bool,
+    /// Frames drawn, for the spinner.
+    tick: usize,
     http: reqwest::Client,
     base: String,
     secret: Option<String>,
@@ -293,32 +316,66 @@ impl App {
         }
     }
 
-    async fn refresh(&mut self) {
-        self.last_refresh = Some(Instant::now());
-        let res = self
-            .request(reqwest::Method::GET, "/api/mesh/overview")
-            .send()
-            .await;
-        match res {
-            Ok(r) if r.status().is_success() => match r.json::<MeshOverview>().await {
-                Ok(ov) => {
-                    self.ov = Some(ov);
-                    // Only the refresh's own error goes away with it; an action's stays.
-                    if self.refresh_error {
-                        self.refresh_error = false;
-                        self.set_status("", false);
-                    }
-                }
-                Err(e) => self.refresh_failed(format!("Unexpected answer: {e}")),
-            },
-            Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => self.refresh_failed(
-                "Unauthorized: pass --secret-file (or run where the dashboard is reachable)"
-                    .to_string(),
-            ),
-            Ok(r) => self.refresh_failed(format!("{}: HTTP {}", self.base, r.status())),
-            Err(e) => self.refresh_failed(format!("{}: {e}", self.base)),
+    /// Fetch the overview in the background.
+    fn refresh(&mut self) {
+        if self.refreshing {
+            self.refresh_again = true;
+            return;
         }
-        self.clamp_selection();
+        self.refreshing = true;
+        self.last_refresh = Some(Instant::now());
+        let req = self.request(reqwest::Method::GET, "/api/mesh/overview");
+        let base = self.base.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let _ = tx.send(Msg::Overview(fetch_overview(req, &base).await));
+        });
+    }
+
+    fn handle(&mut self, msg: Msg) {
+        match msg {
+            Msg::Overview(res) => {
+                self.refreshing = false;
+                match res {
+                    Ok(ov) => {
+                        self.ov = Some(ov);
+                        // Only the refresh's own error goes away with it; an action's stays.
+                        if self.refresh_error {
+                            self.refresh_error = false;
+                            self.set_status("", false);
+                        } else if self.status == "Refreshing…" {
+                            self.set_status("Refreshed", false);
+                        }
+                    }
+                    Err(e) => self.refresh_failed(e),
+                }
+                self.clamp_selection();
+                if std::mem::take(&mut self.refresh_again) {
+                    self.refresh();
+                }
+            }
+            Msg::Done { label, result, refresh } => {
+                self.pending = self.pending.saturating_sub(1);
+                match result {
+                    Ok(text) if text.is_empty() => self.set_status(format!("{label}: done"), false),
+                    Ok(text) => self.set_status(text, false),
+                    Err(e) => self.set_status(format!("{label}: {e}"), true),
+                }
+                if refresh {
+                    self.refresh();
+                }
+            }
+            Msg::Backups(p, res) => {
+                self.pending = self.pending.saturating_sub(1);
+                match res {
+                    Ok(list) => {
+                        self.set_status("", false);
+                        self.show_data_menu(p, list);
+                    }
+                    Err(e) => self.set_status(format!("Backups: {e}"), true),
+                }
+            }
+        }
     }
 
     fn refresh_failed(&mut self, msg: String) {
@@ -329,25 +386,6 @@ impl App {
     fn set_status(&mut self, msg: impl Into<String>, error: bool) {
         self.status = msg.into();
         self.error = error;
-    }
-
-    async fn act(&mut self, label: &str, req: reqwest::RequestBuilder) {
-        self.set_status(format!("{label}…"), false);
-        match req.send().await {
-            Ok(r) if r.status().is_success() => self.set_status(format!("{label}: done"), false),
-            Ok(r) => {
-                let status = r.status();
-                let text = r.text().await.unwrap_or_default();
-                let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-                let msg = body["error"].as_str().map_or_else(
-                    || if text.is_empty() { status.to_string() } else { text.clone() },
-                    str::to_string,
-                );
-                self.set_status(format!("{label}: {msg}"), true);
-            }
-            Err(e) => self.set_status(format!("{label}: {e}"), true),
-        }
-        self.refresh().await;
     }
 
     fn keep(&self, node: &str) -> bool {
@@ -461,9 +499,9 @@ impl App {
     }
 
     /// Handle a key; false quits.
-    async fn key(&mut self, k: KeyEvent) -> bool {
+    fn key(&mut self, k: KeyEvent) -> bool {
         if self.modal.is_some() {
-            self.modal_key(k).await;
+            self.modal_key(k);
             return true;
         }
         if self.help {
@@ -472,7 +510,7 @@ impl App {
         }
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match k.code {
-            KeyCode::Char('q') | KeyCode::Esc => return false,
+            KeyCode::Char('q') => return false,
             KeyCode::Char('c') if ctrl => return false,
             KeyCode::Char('?') => self.help = true,
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => self.cycle_tab(1),
@@ -488,20 +526,20 @@ impl App {
                 self.table().select(n.checked_sub(1));
             }
             KeyCode::Char('r') => {
-                self.refresh().await;
-                self.set_status("Refreshed", false);
+                self.refresh();
+                self.set_status("Refreshing…", false);
             }
             KeyCode::Char('f') => self.toggle_filter(),
             KeyCode::Char('m') | KeyCode::Char(' ') => {
                 if let Some(a) = self.item_menu() {
-                    self.run(a).await;
+                    self.run(a);
                 }
             }
             KeyCode::Char('M') => {
                 let a = self.tab_menu();
-                self.run(a).await;
+                self.run(a);
             }
-            _ => self.tab_key(k).await,
+            _ => self.tab_key(k),
         }
         true
     }
@@ -550,7 +588,7 @@ impl App {
     }
 
     /// Hotkeys of the selected tab.
-    async fn tab_key(&mut self, k: KeyEvent) {
+    fn tab_key(&mut self, k: KeyEvent) {
         let action = match (self.tab, k.code) {
             (Tab::Sessions, KeyCode::Enter | KeyCode::Char('o')) => self
                 .session()
@@ -606,7 +644,7 @@ impl App {
             (Tab::Recordings, KeyCode::Enter | KeyCode::Char('o')) => {
                 self.recording().map(|r| Action::Open(play_url(&r)))
             }
-            (Tab::Recordings, KeyCode::Char('p')) => self.recording().map(|r| keep_recording(&r)),
+            (Tab::Recordings, KeyCode::Char('K')) => self.recording().map(|r| keep_recording(&r)),
             (Tab::Recordings, KeyCode::Char('E')) => {
                 self.recording().map(|r| export_recording(&r))
             }
@@ -654,7 +692,7 @@ impl App {
             _ => None,
         };
         if let Some(a) = action {
-            self.run(a).await;
+            self.run(a);
         }
     }
 
@@ -843,7 +881,12 @@ impl App {
     }
 
     fn stop_all_action(&self) -> Action {
-        let n = self.sessions().len();
+        let targets: Vec<(String, String)> = self
+            .sessions()
+            .iter()
+            .map(|s| (s.node_name.clone(), s.session.id.to_string()))
+            .collect();
+        let n = targets.len();
         let scope = self
             .filter
             .as_ref()
@@ -851,7 +894,7 @@ impl App {
             .unwrap_or_default();
         confirm_then(
             format!("Stop {n} session{}{scope}?", if n == 1 { "" } else { "s" }),
-            Action::StopAll(self.filter.clone()),
+            Action::StopAll(targets),
         )
     }
 
@@ -1146,9 +1189,9 @@ impl App {
 
     // --------------------------------------------------------------- running
 
-    async fn run(&mut self, action: Action) {
+    fn run(&mut self, action: Action) {
         match action {
-            Action::Api(call) => self.call(call).await,
+            Action::Api(call) => self.call(call),
             Action::Open(url) => self.open(&url),
             Action::Say(text) => self.set_status(text, false),
             Action::Menu { title, items } => {
@@ -1164,16 +1207,16 @@ impl App {
                 self.modal = Some(Modal::Text { title, lines, scroll: 0 });
             }
             Action::Form(kind, node) => self.open_form(kind, node),
-            Action::StopAll(node) => self.stop_all(node).await,
+            Action::StopAll(targets) => self.stop_all(targets),
             Action::Filter(node) => {
                 self.filter = node;
                 self.clamp_selection();
             }
-            Action::DataMenu(p) => self.data_menu(p).await,
+            Action::DataMenu(p) => self.data_menu(p),
         }
     }
 
-    async fn call(&mut self, call: Call) {
+    fn call(&mut self, call: Call) {
         let url = self.api(&call.node, &call.path);
         let mut req = self.request(call.method.clone(), &url);
         if call.long {
@@ -1182,83 +1225,67 @@ impl App {
         if let Some(ref body) = call.body {
             req = req.json(body);
         }
-        if let Some(ref file) = call.upload {
-            match std::fs::read(expand_home(file)) {
-                Ok(data) => req = req.body(data),
-                Err(e) => {
-                    self.set_status(format!("{file}: {e}"), true);
-                    return;
-                }
-            }
-        }
-        let Some(ref file) = call.save_to else {
-            self.act(&call.label, req).await;
-            return;
-        };
         self.set_status(format!("{}…", call.label), false);
-        match req.send().await {
-            Ok(r) if r.status().is_success() => match r.bytes().await {
-                Ok(data) => match std::fs::write(expand_home(file), &data) {
-                    Ok(()) => self.set_status(
-                        format!("Saved {file} ({})", bytes(data.len() as u64)),
-                        false,
-                    ),
-                    Err(e) => self.set_status(format!("{file}: {e}"), true),
-                },
-                Err(e) => self.set_status(format!("{}: {e}", call.label), true),
-            },
-            Ok(r) => self.set_status(format!("{}: HTTP {}", call.label, r.status()), true),
-            Err(e) => self.set_status(format!("{}: {e}", call.label), true),
-        }
+        self.pending += 1;
+        let tx = self.tx.clone();
+        let refresh = call.save_to.is_none();
+        tokio::spawn(async move {
+            let result = run_call(req, call.upload, call.save_to).await;
+            let _ = tx.send(Msg::Done { label: call.label, result, refresh });
+        });
     }
 
-    async fn stop_all(&mut self, node: Option<String>) {
-        let targets: Vec<(String, String)> = self
-            .sessions()
-            .iter()
-            .filter(|s| node.as_deref().is_none_or(|n| s.node_name == n))
-            .map(|s| (s.node_name.clone(), s.session.id.to_string()))
-            .collect();
+    fn stop_all(&mut self, targets: Vec<(String, String)>) {
         if targets.is_empty() {
             self.set_status("No sessions", false);
             return;
         }
-        self.set_status(format!("Stopping {} sessions…", targets.len()), false);
-        let results = futures_util::future::join_all(targets.iter().map(|(n, id)| {
-            let url = self.api(n, &format!("/sessions/{id}"));
-            self.request(Method::DELETE, &url).send()
-        }))
-        .await;
-        let failed = results
+        let label = format!("Stopping {} sessions", targets.len());
+        self.set_status(format!("{label}…"), false);
+        self.pending += 1;
+        let reqs: Vec<_> = targets
             .iter()
-            .filter(|r| !matches!(r, Ok(res) if res.status().is_success()))
-            .count();
-        if failed == 0 {
-            self.set_status(format!("Stopped {} sessions", targets.len()), false);
-        } else {
-            self.set_status(
-                format!("{failed} of {} sessions could not be stopped", targets.len()),
-                true,
-            );
-        }
-        self.refresh().await;
+            .map(|(n, id)| {
+                let url = self.api(n, &format!("/sessions/{id}"));
+                self.request(Method::DELETE, &url)
+            })
+            .collect();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let results = futures_util::future::join_all(reqs.into_iter().map(|r| r.send())).await;
+            let failed = results
+                .iter()
+                .filter(|r| !matches!(r, Ok(res) if res.status().is_success()))
+                .count();
+            let result = if failed == 0 {
+                Ok(format!("Stopped {} sessions", results.len()))
+            } else {
+                Err(format!("{failed} of {} could not be stopped", results.len()))
+            };
+            let _ = tx.send(Msg::Done { label, result, refresh: true });
+        });
     }
 
-    /// A profile's backups, with what can be done to its data.
-    async fn data_menu(&mut self, p: MeshProfile) {
+    /// A profile's backups, with what can be done to its data (fetched in the background).
+    fn data_menu(&mut self, p: MeshProfile) {
         let base = profile_base(&p);
         let url = self.api(&p.node_name, &format!("{base}/backups"));
-        let list: Vec<Value> = match self.request(Method::GET, &url).send().await {
-            Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
-            Ok(r) => {
-                self.set_status(format!("Backups: HTTP {}", r.status()), true);
-                return;
-            }
-            Err(e) => {
-                self.set_status(format!("Backups: {e}"), true);
-                return;
-            }
-        };
+        let req = self.request(Method::GET, &url);
+        self.set_status("Loading backups…", false);
+        self.pending += 1;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let res = match req.send().await {
+                Ok(r) if r.status().is_success() => Ok(r.json().await.unwrap_or_default()),
+                Ok(r) => Err(format!("HTTP {}", r.status())),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(Msg::Backups(p, res));
+        });
+    }
+
+    fn show_data_menu(&mut self, p: MeshProfile, list: Vec<Value>) {
+        let base = profile_base(&p);
         let node = p.node_name.clone();
         let mut items = vec![item(
             "Back up now…",
@@ -1565,7 +1592,7 @@ impl App {
 
     // ----------------------------------------------------------------- modals
 
-    async fn modal_key(&mut self, k: KeyEvent) {
+    fn modal_key(&mut self, k: KeyEvent) {
         let Some(modal) = self.modal.take() else { return };
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match modal {
@@ -1582,14 +1609,14 @@ impl App {
                     KeyCode::Enter => {
                         if let Some((_, a)) = items.get(sel) {
                             let a = a.clone();
-                            self.run(a).await;
+                            self.run(a);
                             return;
                         }
                     }
                     KeyCode::Char(c @ '1'..='9') => {
                         if let Some((_, a)) = items.get(c as usize - '1' as usize) {
                             let a = a.clone();
-                            self.run(a).await;
+                            self.run(a);
                             return;
                         }
                     }
@@ -1602,7 +1629,7 @@ impl App {
                     KeyCode::Esc => return,
                     KeyCode::Enter => {
                         let a = then.with_input(buf.trim());
-                        self.run(a).await;
+                        self.run(a);
                         return;
                     }
                     KeyCode::Backspace => {
@@ -1616,7 +1643,7 @@ impl App {
             }
             Modal::Confirm { then, .. } => {
                 if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
-                    self.run(*then).await;
+                    self.run(*then);
                 } else {
                     self.set_status("Cancelled", false);
                 }
@@ -1641,7 +1668,7 @@ impl App {
                     KeyCode::Esc => return,
                     KeyCode::Enter => {
                         let a = self.form_action(&f);
-                        self.run(a).await;
+                        self.run(a);
                         return;
                     }
                     KeyCode::Up | KeyCode::BackTab => f.sel = (f.sel + n - 1) % n,
@@ -1691,11 +1718,18 @@ impl App {
         };
         match std::process::Command::new(opener)
             .arg(url)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
         {
-            Ok(_) => self.set_status(format!("Opened {url}"), false),
+            Ok(mut child) => {
+                // Reap it when it ends (the opener may stay for as long as the browser does).
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                self.set_status(format!("Opened {url}"), false);
+            }
             Err(_) => self.set_status(url.to_string(), false),
         }
     }
@@ -2082,7 +2116,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         Constraint::Length(1),
         Constraint::Min(5),
         Constraint::Length(6),
-        Constraint::Length(1),
+        Constraint::Length(2),
     ])
     .areas(f.area());
 
@@ -2182,6 +2216,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                     Cell::from(ss.tabs_count.to_string()),
                     Cell::from(dur(ss.uptime_seconds)),
                     Cell::from(ss.client_count.to_string()),
+                    Cell::from(crate::ctl::agents(&ss.clients)),
                     Cell::from(rec).fg(Color::Red),
                 ])
             });
@@ -2196,11 +2231,12 @@ fn draw(f: &mut Frame, app: &mut App) {
                     Constraint::Length(5),
                     Constraint::Length(9),
                     Constraint::Length(8),
+                    Constraint::Fill(3),
                     Constraint::Length(7),
                 ],
             )
             .header(header(&[
-                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Clients", "",
+                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Clients", "Agent", "",
             ]))
             .row_highlight_style(highlight)
             .block(block);
@@ -2527,21 +2563,27 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.tab {
         Tab::Sessions => "⏎ take over  s stop  p proxy  R record  t tab  e rename  N new  X stop all  m menu",
         Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
-        Tab::Recordings => "⏎ play  p keep  E export  d delete  v vacuum  m menu",
+        Tab::Recordings => "⏎ play  K keep  E export  d delete  v vacuum  m menu",
         Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
         Tab::Engines => "a ad blocker  c appearance  t touches  m menu  (defaults of new sessions)",
     };
-    let line = if app.status.is_empty() {
-        Line::from(vec![
-            Span::raw(hints).dim(),
-            Span::raw("   ? help  q quit").dim(),
-        ])
-    } else if app.error {
-        Line::from(Span::raw(app.status.clone()).fg(Color::Red))
+    let spin = if app.pending > 0 {
+        format!("{} ", SPINNER[app.tick % SPINNER.len()])
     } else {
-        Line::from(Span::raw(app.status.clone()).fg(Color::Cyan))
+        String::new()
     };
-    f.render_widget(Paragraph::new(line), area);
+    let status = if app.status.is_empty() {
+        Line::from(Span::raw(spin).fg(Color::Cyan))
+    } else if app.error {
+        Line::from(Span::raw(format!("{spin}{}", app.status)).fg(Color::Red))
+    } else {
+        Line::from(Span::raw(format!("{spin}{}", app.status)).fg(Color::Cyan))
+    };
+    let keys = Line::from(vec![
+        Span::raw(hints).dim(),
+        Span::raw("   ? help  q quit").dim(),
+    ]);
+    f.render_widget(Paragraph::new(vec![status, keys]), area);
 }
 
 fn help_lines() -> Vec<Line<'static>> {
@@ -2552,7 +2594,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("M", "menu of the view (new session, stop all, ...)"),
         ("f", "show only the selected row's node (again: all nodes)"),
         ("i", "details"),
-        ("r", "refresh now"),
+        ("r", "refresh now (requests run in the background; the spinner shows while they do)"),
         ("", ""),
         ("Sessions", ""),
         ("  ⏎ / o", "open the handoff view in your browser"),
@@ -2571,7 +2613,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("  d", "delete it"),
         ("Recordings", ""),
         ("  ⏎ / o", "play it in the dashboard"),
-        ("  p", "keep it (the cleanup never removes it) / stop keeping it"),
+        ("  K", "keep it (the cleanup never removes it) / stop keeping it"),
         ("  E / v", "export its frames / apply the retention limits"),
         ("  d", "delete it"),
         ("Nodes", ""),
@@ -2582,7 +2624,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("  ⏎  Esc", "choose / cancel   (1-9 pick an item)"),
         ("  ← →  Tab", "change a choice / next field"),
         ("", ""),
-        ("q / Esc", "quit"),
+        ("q / Ctrl-C", "quit"),
     ]
     .into_iter()
     .map(|(k, v)| {
@@ -2750,7 +2792,13 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         .build()?;
     let base = args.url.trim_end_matches('/').to_string();
     let secret = find_secret(&http, &base, args.secret_file.as_ref()).await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App {
+        tx,
+        pending: 0,
+        refreshing: false,
+        refresh_again: false,
+        tick: 0,
         http,
         base,
         secret,
@@ -2765,28 +2813,79 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         help: false,
         last_refresh: None,
     };
-    app.refresh().await;
+    app.refresh();
 
     let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, &mut app).await;
+    let result = event_loop(&mut terminal, &mut app, &mut rx);
     ratatui::restore();
     result
 }
 
-async fn event_loop(
+fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Msg>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
+        while let Ok(msg) = rx.try_recv() {
+            app.handle(msg);
+        }
+        app.tick = app.tick.wrapping_add(1);
         terminal.draw(|f| draw(f, app))?;
-        if event::poll(Duration::from_millis(250))? {
+        if event::poll(Duration::from_millis(100))? {
             if let Event::Key(k) = event::read()? {
-                if k.kind == KeyEventKind::Press && !app.key(k).await {
+                if k.kind == KeyEventKind::Press && !app.key(k) {
                     return Ok(());
                 }
             }
         } else if app.last_refresh.is_none_or(|t| t.elapsed() >= REFRESH) {
-            app.refresh().await;
+            app.refresh();
         }
     }
+}
+
+/// Fetch the overview; an error reads as the status line does.
+async fn fetch_overview(req: reqwest::RequestBuilder, base: &str) -> Result<MeshOverview, String> {
+    match req.send().await {
+        Ok(r) if r.status().is_success() => {
+            r.json::<MeshOverview>().await.map_err(|e| format!("Unexpected answer: {e}"))
+        }
+        Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
+            Err("Unauthorized: pass --secret-file (or set BROWSER_DAEMON_SECRET_FILE)".to_string())
+        }
+        Ok(r) => Err(format!("{base}: HTTP {}", r.status())),
+        Err(e) => Err(format!("{base}: {e}")),
+    }
+}
+
+/// Send an action's request; the answer's own error message on failure. A body
+/// to upload is read from `upload`, an answer to save is streamed to `save_to`.
+async fn run_call(
+    mut req: reqwest::RequestBuilder,
+    upload: Option<String>,
+    save_to: Option<String>,
+) -> Result<String, String> {
+    if let Some(file) = upload {
+        match tokio::fs::read(expand_home(&file)).await {
+            Ok(data) => req = req.body(data),
+            Err(e) => return Err(format!("{file}: {e}")),
+        }
+    }
+    let res = req.send().await.map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        let body: Value = serde_json::from_str(&text).unwrap_or_default();
+        return Err(body["error"].as_str().map_or_else(
+            || if text.is_empty() { status.to_string() } else { text.clone() },
+            str::to_string,
+        ));
+    }
+    if let Some(file) = save_to {
+        let size = crate::ctl::save_stream(res, &expand_home(&file), false)
+            .await
+            .map_err(|e| format!("{file}: {e}"))?;
+        return Ok(format!("Saved {file} ({})", bytes(size)));
+    }
+    Ok(String::new())
 }
