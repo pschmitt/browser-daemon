@@ -3062,14 +3062,31 @@ pub(crate) async fn find_secret(
     base: &str,
     file: Option<&PathBuf>,
 ) -> Result<Option<String>, String> {
+    // The NixOS module exports the file in the environment of every user, most of
+    // whom cannot read it: only a file named on the command line must be readable.
+    let from_env = |p: &PathBuf| {
+        std::env::var_os("BROWSER_DAEMON_SECRET_FILE")
+            .is_some_and(|e| std::path::Path::new(&e) == p.as_path())
+    };
     if let Some(path) = file {
-        let secret = std::fs::read_to_string(path)
-            .map_err(|e| format!("Cannot read the secret file {}: {e}", path.display()))?;
-        let secret = secret.trim();
-        if secret.is_empty() {
-            return Err(format!("The secret file {} is empty", path.display()));
+        match std::fs::read_to_string(path) {
+            Ok(secret) => {
+                let secret = secret.trim();
+                if secret.is_empty() {
+                    return Err(format!("The secret file {} is empty", path.display()));
+                }
+                return Ok(Some(secret.to_string()));
+            }
+            Err(e) if from_env(path) => {
+                tracing::debug!("Secret file {} unreadable: {e}", path.display());
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Cannot read the secret file {}: {e}",
+                    path.display()
+                ));
+            }
         }
-        return Ok(Some(secret.to_string()));
     }
     if let Ok(s) = std::fs::read_to_string(DEFAULT_SECRET_FILE) {
         let s = s.trim().to_string();
