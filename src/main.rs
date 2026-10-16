@@ -724,7 +724,7 @@ impl AppState {
             created_at: browser.created_at,
             client_count: Arc::new(AtomicUsize::new(0)),
             activity: Arc::new(idle::Activity::new(
-                idle_timeout_minutes.map_or(self.idle_timeout_secs, |m| m * 60),
+                idle_timeout_minutes.map_or(self.idle_timeout_secs, idle::minutes_to_secs),
             )),
             adblock: browser.adblock,
             relay: browser.relay.clone(),
@@ -1979,7 +1979,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cluster_secret,
         recorder_config,
         active_recordings,
-        idle_timeout_secs: args.idle_timeout_minutes * 60,
+        idle_timeout_secs: idle::minutes_to_secs(args.idle_timeout_minutes),
         adblock_default: args.adblock_default,
         profiles_lock: Arc::new(Mutex::new(())),
         tab_order: Arc::new(std::sync::Mutex::new(TabOrder::default())),
@@ -5760,10 +5760,11 @@ async fn api_session_idle_timeout(
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({ "error": "Session not found" })),
     ))?;
-    session.activity.set_timeout_secs(params.minutes * 60);
+    let secs = idle::minutes_to_secs(params.minutes);
+    session.activity.set_timeout_secs(secs);
     Ok(Json(serde_json::json!({
         "session_id": id,
-        "idle_timeout_seconds": params.minutes * 60
+        "idle_timeout_seconds": secs
     })))
 }
 
