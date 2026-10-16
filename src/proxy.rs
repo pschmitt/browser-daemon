@@ -4,7 +4,7 @@ use tokio_tungstenite::tungstenite::Message as ServerMsg;
 use tracing::debug;
 
 use crate::idle::Activity;
-use crate::recorder::ProxyRecordingFrame;
+use crate::recorder::{FrameSender, ProxyRecordingFrame};
 use std::sync::Arc;
 
 pub async fn bridge_websockets(
@@ -12,7 +12,7 @@ pub async fn bridge_websockets(
     server_ws: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    frame_tx: Option<tokio::sync::mpsc::UnboundedSender<ProxyRecordingFrame>>,
+    frame_tx: Option<FrameSender>,
     // The session's idle clock, and whether this client is a mere observer.
     activity: Option<(Arc<Activity>, bool)>,
     initial_url: Option<String>,

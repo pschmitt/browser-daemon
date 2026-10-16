@@ -3724,6 +3724,8 @@ async fn api_create_backup(
     body: Option<Json<CreateBackupRequest>>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
+    // A session must not start on the profile while it is archived.
+    let _guard = state.profiles_lock.lock().await;
     let profile = lookup_profile(&state, &key).await?;
     if let Some(session) = profile_session(&state, profile.meta.id).await {
         return Err(api_error(
@@ -5421,6 +5423,12 @@ async fn api_delete_recording(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     state.check_auth(&headers)?;
+    if recorder::is_active(id) || recorder::is_busy(id) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "The recording is in use (being recorded, exported or merged)" })),
+        ));
+    }
     if recorder::delete_recording(&state.recorder_config, id).await {
         Ok(Json(serde_json::json!({ "status": "deleted", "id": id })))
     } else {
