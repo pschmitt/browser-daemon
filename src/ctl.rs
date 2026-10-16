@@ -14,6 +14,38 @@ use crate::{MeshOverview, MeshProfile, MeshRecording, MeshSession};
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
 
+/// Exit statuses (clap itself uses 2 for a bad command line).
+pub const EXIT_NOT_FOUND: i32 = 3;
+pub const EXIT_UNREACHABLE: i32 = 4;
+pub const EXIT_CANCELLED: i32 = 5;
+pub const EXIT_UNAUTHORIZED: i32 = 6;
+
+/// An error with its own exit status (others exit with 1).
+#[derive(Debug)]
+pub struct ExitError {
+    pub code: i32,
+    pub msg: String,
+}
+
+impl std::fmt::Display for ExitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for ExitError {}
+
+fn fail<T>(code: i32, msg: impl Into<String>) -> R<T> {
+    Err(Box::new(ExitError { code, msg: msg.into() }))
+}
+
+/// The exit status for an error of a command.
+pub fn exit_code(e: &(dyn std::error::Error + 'static)) -> i32 {
+    e.downcast_ref::<ExitError>().map_or(1, |e| e.code)
+}
+
+const UNAUTHORIZED: &str = "Unauthorized: pass --secret-file (or set BROWSER_DAEMON_SECRET_FILE)";
+
 /// Which daemon to talk to, and how.
 #[derive(Args, Debug, Clone)]
 pub struct Conn {
@@ -26,8 +58,9 @@ pub struct Conn {
     )]
     pub url: String,
 
-    /// File holding the cluster secret (default: the NixOS module's, when readable;
-    /// otherwise the one the dashboard hands to its viewers).
+    /// File holding the cluster secret (default: the one the NixOS module's
+    /// `clusterSecretFile` exports in `$BROWSER_DAEMON_SECRET_FILE`, else
+    /// /run/secrets/browser-daemon/cluster-secret when readable).
     #[arg(long, global = true, env = "BROWSER_DAEMON_SECRET_FILE")]
     pub secret_file: Option<PathBuf>,
 
@@ -354,6 +387,9 @@ pub enum ProfileCmd {
         /// File to write (default: <profile>.tar.gz).
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Replace the file if it exists.
+        #[arg(short, long)]
+        force: bool,
     },
     /// Create a profile from an archive made by `export`.
     Import {
@@ -474,6 +510,9 @@ pub enum RecordingCmd {
         /// A WebM video (VP9, with the sound), encoded on its node.
         #[arg(long)]
         webm: bool,
+        /// Replace the file if it exists.
+        #[arg(short, long)]
+        force: bool,
     },
     /// Apply the retention limits now.
     Vacuum {
@@ -559,12 +598,15 @@ impl Client {
         if let Some(ref s) = secret {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
-        let res = req.send().await.map_err(|e| format!("{base}: {e}"))?;
+        let res = match req.send().await {
+            Ok(res) => res,
+            Err(e) => return fail(EXIT_UNREACHABLE, format!("{base}: {e}")),
+        };
         if res.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err("Unauthorized: pass --secret-file (or run where the dashboard is reachable)".into());
+            return fail(EXIT_UNAUTHORIZED, UNAUTHORIZED);
         }
         if !res.status().is_success() {
-            return Err(format!("{base}: HTTP {}", res.status()).into());
+            return fail(EXIT_UNREACHABLE, format!("{base}: HTTP {}", res.status()));
         }
         let ov = res.json().await?;
         Ok(Self { http, base, secret, json: conn.json, ov })
@@ -583,19 +625,23 @@ impl Client {
 
     /// Send, fail with the API's own message, return the JSON answer (null when empty).
     async fn call(&self, req: reqwest::RequestBuilder) -> R<Value> {
-        let res = req.send().await.map_err(|e| format!("{}: {e}", self.base))?;
+        let res = match req.send().await {
+            Ok(res) => res,
+            Err(e) => return fail(EXIT_UNREACHABLE, format!("{}: {e}", self.base)),
+        };
         let status = res.status();
         let text = res.text().await?;
         let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err("Unauthorized: pass --secret-file (or run where the dashboard is reachable)".into());
+            return fail(EXIT_UNAUTHORIZED, UNAUTHORIZED);
         }
         if !status.is_success() {
             let msg = value["error"]
                 .as_str()
                 .map(str::to_string)
                 .unwrap_or_else(|| if text.is_empty() { status.to_string() } else { text });
-            return Err(msg.into());
+            let code = if status == reqwest::StatusCode::NOT_FOUND { EXIT_NOT_FOUND } else { 1 };
+            return fail(code, msg);
         }
         Ok(value)
     }
@@ -623,7 +669,7 @@ impl Client {
         if known {
             Ok(())
         } else {
-            Err(format!("Unknown node '{node}'").into())
+            fail(EXIT_NOT_FOUND, format!("Unknown node '{node}'"))
         }
     }
 
@@ -639,20 +685,20 @@ impl Client {
     }
 
     fn session(&self, key: &str, node: Option<&str>) -> R<&MeshSession> {
-        let in_node = |s: &&MeshSession| node.is_none_or(|n| s.node_name == n);
         let hits: Vec<&MeshSession> = self
             .ov
             .sessions
             .iter()
-            .filter(in_node)
-            .filter(|s| {
-                let id = s.session.id.to_string();
-                id == key || s.session.name == key || (key.len() >= 4 && id.starts_with(key))
-            })
+            .filter(|s| node.is_none_or(|n| s.node_name == n))
             .collect();
-        one(hits, "session", key, |s| {
-            format!("{} {} on {}", s.session.id, s.session.name, s.node_name)
-        })
+        resolve(
+            hits,
+            key,
+            "session",
+            |s| Some(s.session.id.to_string()),
+            |s| Some(s.session.name.clone()),
+            |s| format!("{} {} on {}", s.session.id, s.session.name, s.node_name),
+        )
     }
 
     fn profile(&self, key: &str, node: Option<&str>) -> R<&MeshProfile> {
@@ -661,32 +707,27 @@ impl Client {
             .profiles
             .iter()
             .filter(|p| node.is_none_or(|n| p.node_name == n))
-            .filter(|p| {
-                p.profile.name == key
-                    || p.profile.id.is_some_and(|id| {
-                        let id = id.to_string();
-                        id == key || (key.len() >= 4 && id.starts_with(key))
-                    })
-            })
             .collect();
-        one(hits, "profile", key, |p| {
-            format!("{} on {}", p.profile.name, p.node_name)
-        })
+        resolve(
+            hits,
+            key,
+            "profile",
+            |p| p.profile.id.map(|id| id.to_string()),
+            |p| Some(p.profile.name.clone()),
+            |p| format!("{} on {}", p.profile.name, p.node_name),
+        )
     }
 
     fn recording(&self, key: &str) -> R<&MeshRecording> {
-        let hits: Vec<&MeshRecording> = self
-            .ov
-            .recordings
-            .iter()
-            .filter(|r| {
-                let id = r.recording.id.to_string();
-                id == key || (key.len() >= 4 && id.starts_with(key))
-            })
-            .collect();
-        one(hits, "recording", key, |r| {
-            format!("{} on {}", r.recording.id, r.node_name)
-        })
+        let hits: Vec<&MeshRecording> = self.ov.recordings.iter().collect();
+        resolve(
+            hits,
+            key,
+            "recording",
+            |r| Some(r.recording.id.to_string()),
+            |_| None,
+            |r| format!("{} on {}", r.recording.id, r.node_name),
+        )
     }
 
     fn print_json(&self, v: &Value) {
@@ -694,16 +735,75 @@ impl Client {
     }
 }
 
-/// Exactly one match, or an error that says what was ambiguous.
-fn one<'a, T>(hits: Vec<&'a T>, what: &str, key: &str, describe: impl Fn(&T) -> String) -> R<&'a T> {
-    match hits.as_slice() {
-        [] => Err(format!("No {what} '{key}'").into()),
-        [x] => Ok(x),
-        many => Err(format!(
-            "'{key}' matches several {what}s (use --node, or more of the id):\n  {}",
-            many.iter().map(|x| describe(x)).collect::<Vec<_>>().join("\n  ")
-        )
-        .into()),
+/// Shortest id prefix that counts as a match.
+const MIN_PREFIX: usize = 4;
+
+/// The item `key` names: an exact id wins over an exact name, which wins over an
+/// id prefix. Within the deciding tier exactly one item must match, else the
+/// error says what was ambiguous.
+fn resolve<'a, T>(
+    items: Vec<&'a T>,
+    key: &str,
+    what: &str,
+    id: impl Fn(&T) -> Option<String>,
+    name: impl Fn(&T) -> Option<String>,
+    describe: impl Fn(&T) -> String,
+) -> R<&'a T> {
+    let matches = |tier: usize, x: &T| match tier {
+        0 => id(x).is_some_and(|i| i == key),
+        1 => name(x).is_some_and(|n| n == key),
+        _ => key.len() >= MIN_PREFIX && id(x).is_some_and(|i| i.starts_with(key)),
+    };
+    for tier in 0..3 {
+        let hits: Vec<&T> = items.iter().copied().filter(|x| matches(tier, x)).collect();
+        match hits.as_slice() {
+            [] => {}
+            [x] => return Ok(x),
+            many => {
+                return fail(
+                    1,
+                    format!(
+                        "'{key}' matches several {what}s (use --node, or more of the id):\n  {}",
+                        many.iter().map(|x| describe(x)).collect::<Vec<_>>().join("\n  ")
+                    ),
+                )
+            }
+        }
+    }
+    let hint = if key.len() < MIN_PREFIX {
+        format!(" (an id prefix needs at least {MIN_PREFIX} characters)")
+    } else {
+        String::new()
+    };
+    fail(EXIT_NOT_FOUND, format!("No {what} '{key}'{hint}"))
+}
+
+/// Several targets: the ones that resolved, and how many did not (reported as they come).
+struct Tally {
+    failed: usize,
+    total: usize,
+    code: i32,
+}
+
+impl Tally {
+    fn new(total: usize) -> Self {
+        Self { failed: 0, total, code: 1 }
+    }
+
+    fn fail(&mut self, what: &str, e: &(dyn std::error::Error + 'static)) {
+        eprintln!("{what}: {e}");
+        if self.failed == 0 {
+            self.code = exit_code(e);
+        }
+        self.failed += 1;
+    }
+
+    fn finish(self, verb: &str) -> R<()> {
+        if self.failed == 0 {
+            Ok(())
+        } else {
+            fail(self.code, format!("{} of {} could not be {verb}", self.failed, self.total))
+        }
     }
 }
 
@@ -778,7 +878,7 @@ fn confirm(question: &str, yes: bool) -> R<()> {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        return Err(format!("{question} Pass --yes to confirm.").into());
+        return fail(EXIT_CANCELLED, format!("{question} Pass --yes to confirm."));
     }
     eprint!("{question} [y/N] ");
     std::io::stderr().flush().ok();
@@ -787,8 +887,26 @@ fn confirm(question: &str, yes: bool) -> R<()> {
     if matches!(answer.trim(), "y" | "Y" | "yes") {
         Ok(())
     } else {
-        Err("Cancelled".into())
+        fail(EXIT_CANCELLED, "Cancelled")
     }
+}
+
+/// The agents driving a session: their name and what they say they are doing.
+pub fn agents(clients: &[crate::clients::ClientInfo]) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    for c in clients {
+        let label = match (c.agent_name.as_deref(), c.topic.as_deref()) {
+            (Some(a), Some(t)) => format!("{a}: {t}"),
+            (None, Some(t)) => t.to_string(),
+            (Some(a), None) => a.to_string(),
+            (None, None) if c.agent => c.kind.clone(),
+            (None, None) => continue,
+        };
+        if !seen.contains(&label) {
+            seen.push(label);
+        }
+    }
+    if seen.is_empty() { "-".to_string() } else { seen.join("; ") }
 }
 
 fn ws_url(s: &MeshSession) -> String {
@@ -842,11 +960,12 @@ pub async fn session(args: SessionArgs) -> R<()> {
                         x.tabs_count.to_string(),
                         rec.to_string(),
                         x.proxy.clone().unwrap_or_else(|| "-".into()),
+                        agents(&x.clients),
                     ]
                 })
                 .collect();
             table(
-                &["ID", "NAME", "NODE", "ENGINE", "PROFILE", "UP", "TABS", "REC", "PROXY"],
+                &["ID", "NAME", "NODE", "ENGINE", "PROFILE", "UP", "TABS", "REC", "PROXY", "AGENT"],
                 &rows,
             );
         }
@@ -899,21 +1018,22 @@ pub async fn session(args: SessionArgs) -> R<()> {
             }
         }
         SessionCmd::Delete { sessions, node } => {
-            let mut failed = 0;
+            let mut tally = Tally::new(sessions.len());
+            let mut targets = Vec::new();
             for key in &sessions {
-                let s = c.session(key, node.as_deref())?;
+                match c.session(key, node.as_deref()) {
+                    Ok(s) => targets.push(s),
+                    Err(e) => tally.fail(key, e.as_ref()),
+                }
+            }
+            for s in targets {
                 let path = c.api(&s.node_name, &format!("/sessions/{}", s.session.id));
                 match c.call(c.req(Method::DELETE, &path)).await {
                     Ok(_) => println!("stopped {} ({})", s.session.name, s.node_name),
-                    Err(e) => {
-                        failed += 1;
-                        eprintln!("{}: {e}", s.session.name);
-                    }
+                    Err(e) => tally.fail(&s.session.name, e.as_ref()),
                 }
             }
-            if failed > 0 {
-                return Err(format!("{failed} session(s) could not be stopped").into());
-            }
+            tally.finish("stopped")?;
         }
         SessionCmd::StopAll { node, yes } => {
             if let Some(ref n) = node {
@@ -944,11 +1064,14 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 async move { client.call(client.req(Method::DELETE, &path)).await }
             }))
             .await;
-            let failed = results.iter().filter(|r| r.is_err()).count();
-            println!("Stopped {} of {}", sessions.len() - failed, sessions.len());
-            if failed > 0 {
-                return Err(format!("{failed} session(s) could not be stopped").into());
+            let mut tally = Tally::new(sessions.len());
+            for (s, r) in sessions.iter().zip(&results) {
+                if let Err(e) = r {
+                    tally.fail(&s.session.name, e.as_ref());
+                }
             }
+            println!("Stopped {} of {}", sessions.len() - tally.failed, sessions.len());
+            tally.finish("stopped")?;
         }
         SessionCmd::Rename { session, name, node } => {
             let s = c.session(&session, node.as_deref())?;
@@ -1174,21 +1297,11 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             done(&c, v, "cleared");
         }
         ProfileCmd::Backup(cmd) => backup(&c, cmd).await?,
-        ProfileCmd::Export { profile, node, output } => {
+        ProfileCmd::Export { profile, node, output, force } => {
             let p = c.profile(&profile, node.as_deref())?;
             let path = c.api(&p.node_name, &format!("/profiles/{}/export", enc(&p.profile.name)));
-            let res = c
-                .req(Method::GET, &path)
-                .timeout(Duration::from_secs(3600))
-                .send()
-                .await?;
-            if !res.status().is_success() {
-                return Err(format!("export failed: HTTP {}", res.status()).into());
-            }
-            let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.tar.gz", p.profile.name)));
-            let data = res.bytes().await?;
-            std::fs::write(&file, &data)?;
-            println!("{} ({})", file.display(), bytes(data.len() as u64));
+            let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.tar.gz", safe_filename(&p.profile.name))));
+            export_to(&c, &path, &file, force).await?;
         }
         ProfileCmd::Import { name, file, node, overwrite } => {
             let node = c.node_or_local(node.as_deref())?;
@@ -1325,9 +1438,16 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
         RecordingCmd::Keep { recordings } => keep_recordings(&c, &recordings, true).await?,
         RecordingCmd::Unkeep { recordings } => keep_recordings(&c, &recordings, false).await?,
         RecordingCmd::Delete { recordings, yes } => {
+            let mut tally = Tally::new(recordings.len());
             let mut targets = Vec::new();
             for key in &recordings {
-                targets.push(c.recording(key)?);
+                match c.recording(key) {
+                    Ok(r) => targets.push(r),
+                    Err(e) => tally.fail(key, e.as_ref()),
+                }
+            }
+            if targets.is_empty() {
+                return tally.finish("deleted");
             }
             let kept = targets.iter().filter(|r| r.recording.keep).count();
             confirm(
@@ -1341,9 +1461,12 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
             )?;
             for r in targets {
                 let path = c.api(&r.node_name, &format!("/recordings/{}", r.recording.id));
-                c.call(c.req(Method::DELETE, &path)).await?;
-                println!("deleted {}", short(r.recording.id));
+                match c.call(c.req(Method::DELETE, &path)).await {
+                    Ok(_) => println!("deleted {}", short(r.recording.id)),
+                    Err(e) => tally.fail(&short(r.recording.id), e.as_ref()),
+                }
             }
+            tally.finish("deleted")?;
         }
         RecordingCmd::Merge {
             recordings,
@@ -1396,25 +1519,14 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
             recording,
             output,
             webm,
+            force,
         } => {
             let r = c.recording(&recording)?;
             let what = if webm { "export.webm" } else { "frames" };
             let path = c.api(&r.node_name, &format!("/recordings/{}/{what}", r.recording.id));
-            let res = c
-                .req(Method::GET, &path)
-                .timeout(Duration::from_secs(3600))
-                .send()
-                .await?;
-            if !res.status().is_success() {
-                let status = res.status();
-                let why = res.json::<Value>().await.ok().and_then(|v| v["error"].as_str().map(str::to_string));
-                return Err(format!("export failed: {}", why.unwrap_or_else(|| format!("HTTP {status}"))).into());
-            }
             let ext = if webm { "webm" } else { "jsonl" };
             let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.{ext}", r.recording.id)));
-            let data = res.bytes().await?;
-            std::fs::write(&file, &data)?;
-            println!("{} ({})", file.display(), bytes(data.len() as u64));
+            export_to(&c, &path, &file, force).await?;
         }
         RecordingCmd::Vacuum { node } => {
             let node = c.node_or_local(node.as_deref())?;
@@ -1425,15 +1537,91 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
     Ok(())
 }
 
+/// File name made of the characters that are safe everywhere.
+pub fn safe_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .collect();
+    let cleaned = cleaned.trim_start_matches('.');
+    if cleaned.is_empty() { "export".to_string() } else { cleaned.chars().take(100).collect() }
+}
+
+/// What the API said was wrong with a failed download.
+pub async fn download_error(res: reqwest::Response) -> String {
+    let status = res.status();
+    let why = res
+        .json::<Value>()
+        .await
+        .ok()
+        .and_then(|v| v["error"].as_str().map(str::to_string));
+    format!("export failed: {}", why.unwrap_or_else(|| format!("HTTP {status}")))
+}
+
+/// Stream a successful download to `file` through a temporary file next to it,
+/// which replaces `file` only once complete. An existing file is kept unless `force`.
+pub async fn save_stream(res: reqwest::Response, file: &std::path::Path, force: bool) -> R<u64> {
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    if !force && file.exists() {
+        return fail(1, format!("{} exists (use --force to replace it)", file.display()));
+    }
+    let dir = match file.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => std::path::Path::new("."),
+    };
+    let tmp = tempfile::NamedTempFile::new_in(dir)?;
+    let mut out = tokio::fs::File::from_std(tmp.as_file().try_clone()?);
+    let mut stream = res.bytes_stream();
+    let mut size = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        size += chunk.len() as u64;
+        out.write_all(&chunk).await?;
+    }
+    out.flush().await?;
+    drop(out);
+    if force {
+        tmp.persist(file).map_err(|e| e.error)?;
+    } else {
+        tmp.persist_noclobber(file).map_err(|e| e.error)?;
+    }
+    Ok(size)
+}
+
+async fn export_to(c: &Client, path: &str, file: &std::path::Path, force: bool) -> R<()> {
+    let res = c
+        .req(Method::GET, path)
+        .timeout(Duration::from_secs(3600))
+        .send()
+        .await
+        .map_err(|e| format!("{}: {e}", c.base))?;
+    if !res.status().is_success() {
+        return fail(1, download_error(res).await);
+    }
+    let size = save_stream(res, file, force).await?;
+    println!("{} ({})", file.display(), bytes(size));
+    Ok(())
+}
+
 /// Mark recordings to be kept, or not.
 async fn keep_recordings(c: &Client, recordings: &[String], keep: bool) -> R<()> {
+    let mut tally = Tally::new(recordings.len());
     for key in recordings {
-        let r = c.recording(key)?;
+        let r = match c.recording(key) {
+            Ok(r) => r,
+            Err(e) => {
+                tally.fail(key, e.as_ref());
+                continue;
+            }
+        };
         let path = c.api(&r.node_name, &format!("/recordings/{}/keep", r.recording.id));
-        c.call(c.req(Method::POST, &path).json(&json!({ "keep": keep }))).await?;
-        println!("{} {}", if keep { "keeping" } else { "not keeping" }, short(r.recording.id));
+        match c.call(c.req(Method::POST, &path).json(&json!({ "keep": keep }))).await {
+            Ok(_) => println!("{} {}", if keep { "keeping" } else { "not keeping" }, short(r.recording.id)),
+            Err(e) => tally.fail(key, e.as_ref()),
+        }
     }
-    Ok(())
+    tally.finish(if keep { "kept" } else { "released" })
 }
 
 // --------------------------------------------------------------------- nodes
@@ -1497,7 +1685,7 @@ pub async fn node(args: NodeArgs) -> R<()> {
                 let key = format!("{engine:?}").to_lowercase();
                 let mut engines = settings["engines"].take();
                 if !engines.is_object() {
-                    engines = json!({});
+                    return Err(format!("{node}'s engine settings are unknown (peer unreachable?); not changing them blind").into());
                 }
                 if !engines[&key].is_object() {
                     engines[&key] = json!({});
@@ -1527,6 +1715,13 @@ pub async fn node(args: NodeArgs) -> R<()> {
     Ok(())
 }
 
+/// `browser-daemon completions <shell>`: a completion script on stdout.
+pub fn completions(shell: clap_complete::Shell) {
+    use clap::CommandFactory;
+    let mut cmd = crate::Cli::command();
+    clap_complete::generate(shell, &mut cmd, "browser-daemon", &mut std::io::stdout());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1548,20 +1743,72 @@ mod tests {
         assert_eq!(bytes(1536), "1.5 KB");
     }
 
-    #[test]
-    fn one_match_or_an_explanation() {
-        let items = ["a1", "b2", "b3"];
-        let hits = |p: &str| items.iter().filter(|s| s.starts_with(p)).collect::<Vec<_>>();
-        assert_eq!(*one(hits("a"), "thing", "a", |s| s.to_string()).unwrap(), "a1");
-        assert!(one(hits("z"), "thing", "z", |s| s.to_string()).is_err());
-        let err = one(hits("b"), "thing", "b", |s| s.to_string()).unwrap_err().to_string();
-        assert!(err.contains("b2") && err.contains("b3"), "{err}");
-    }
-}
+    #[derive(Debug)]
+    struct Item(&'static str, &'static str);
 
-/// `browser-daemon completions <shell>`: a completion script on stdout.
-pub fn completions(shell: clap_complete::Shell) {
-    use clap::CommandFactory;
-    let mut cmd = crate::Cli::command();
-    clap_complete::generate(shell, &mut cmd, "browser-daemon", &mut std::io::stdout());
+    fn find<'a>(items: &'a [Item], key: &str) -> R<&'a Item> {
+        resolve(
+            items.iter().collect(),
+            key,
+            "thing",
+            |i| Some(i.0.to_string()),
+            |i| Some(i.1.to_string()),
+            |i| format!("{} {}", i.0, i.1),
+        )
+    }
+
+    #[test]
+    fn exact_id_beats_name_beats_prefix() {
+        let items = [Item("abcd1111", "web"), Item("abcd2222", "abcd1111"), Item("web99999", "x")];
+        // An exact id wins over another item named like it.
+        assert_eq!(find(&items, "abcd1111").unwrap().1, "web");
+        // An exact name wins over an id prefix.
+        assert_eq!(find(&items, "web").unwrap().0, "abcd1111");
+        // A prefix works when unambiguous.
+        assert_eq!(find(&items, "web9").unwrap().0, "web99999");
+    }
+
+    #[test]
+    fn ambiguity_and_misses_are_explained() {
+        let items = [Item("abcd1111", "a"), Item("abcd2222", "b")];
+        let err = find(&items, "abcd").unwrap_err().to_string();
+        assert!(err.contains("abcd1111") && err.contains("abcd2222"), "{err}");
+        let err = find(&items, "ab").unwrap_err();
+        assert!(err.to_string().contains("at least 4"), "{err}");
+        assert_eq!(exit_code(err.as_ref()), EXIT_NOT_FOUND);
+        assert_eq!(exit_code(find(&items, "zzzzzz").unwrap_err().as_ref()), EXIT_NOT_FOUND);
+    }
+
+    #[test]
+    fn filenames_are_made_safe() {
+        assert_eq!(safe_filename("work/../x y"), "work_.._x_y");
+        assert_eq!(safe_filename("..hidden"), "hidden");
+        assert_eq!(safe_filename("///"), "___");
+        assert_eq!(safe_filename(""), "export");
+        assert_eq!(safe_filename("..."), "export");
+    }
+
+    #[test]
+    fn agents_show_name_and_topic() {
+        let client = |agent_name: Option<&str>, topic: Option<&str>, agent: bool| crate::clients::ClientInfo {
+            kind: "Playwright".into(),
+            agent,
+            from: "n".into(),
+            addr: None,
+            user_agent: None,
+            since: 0,
+            agent_name: agent_name.map(str::to_string),
+            conversation: None,
+            cwd: None,
+            machine: None,
+            topic: topic.map(str::to_string),
+        };
+        assert_eq!(agents(&[]), "-");
+        assert_eq!(agents(&[client(None, None, false)]), "-");
+        assert_eq!(agents(&[client(None, None, true)]), "Playwright");
+        assert_eq!(
+            agents(&[client(Some("claude"), Some("netbox"), true), client(Some("claude"), Some("netbox"), true)]),
+            "claude: netbox"
+        );
+    }
 }

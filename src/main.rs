@@ -74,11 +74,17 @@ static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 /// Git commit this build comes from, passed in by the Nix build.
 pub const REVISION: Option<&str> = option_env!("BROWSER_DAEMON_REV");
 
+/// `--version`: the crate's version and, when known, the git commit.
+static VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| match REVISION {
+    Some(rev) => format!("{} ({rev})", env!("CARGO_PKG_VERSION")),
+    None => env!("CARGO_PKG_VERSION").to_string(),
+});
+
 /// `browser-daemon <command>`: the daemon itself (`run`) and clients of its API.
 #[derive(Parser, Debug)]
 #[command(
     author,
-    version,
+    version = VERSION.as_str(),
     about = "Native NixOS remote browser daemon, and its command-line client"
 )]
 pub struct Cli {
@@ -131,7 +137,8 @@ pub struct Args {
     #[arg(long, default_value = "/var/lib/browser-daemon/recordings")]
     pub recordings_dir: PathBuf,
 
-    #[arg(long, default_value_t = true)]
+    /// Record new sessions unless they opt out (`--record-sessions false` to turn off).
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub record_sessions: bool,
 
     /// Record the session's sound with its recording (needs --pulse-server); a
@@ -1474,7 +1481,7 @@ fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> {
 fn ctl_exit(result: Result<(), Box<dyn std::error::Error>>) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = result {
         eprintln!("error: {e}");
-        std::process::exit(1);
+        std::process::exit(ctl::exit_code(e.as_ref()));
     }
     Ok(())
 }
@@ -1791,7 +1798,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         // The TUI owns the terminal: no log output.
-        Command::Tui(conn) => return tui::run(conn).await,
+        Command::Tui(conn) => return ctl_exit(tui::run(conn).await),
         Command::PasskeyHelper(helper_args) => {
             tracing_subscriber::fmt()
                 .with_env_filter(
