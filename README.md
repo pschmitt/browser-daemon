@@ -192,6 +192,10 @@ Default tabs are not opened for Playwright connections (it ignores tabs it did n
 ### `browser-daemon run`
 
 ```text
+Run the daemon (what the systemd service does)
+
+Usage: browser-daemon run [OPTIONS]
+
 Options:
   -b, --bind <BIND>
           [default: 127.0.0.1:3001]
@@ -220,7 +224,7 @@ Options:
       --cluster-secret-file <CLUSTER_SECRET_FILE>
           Path to file containing shared cluster secret
       --allowed-host <ALLOWED_HOSTS>
-          A `Host` (HOST[:PORT]) the node answers to besides its public URL's and loopback's (repeatable)
+          A `Host` (HOST[:PORT]) the node answers to besides its public URL's and loopback's (repeat for several); other hosts get 403
       --recordings-dir <RECORDINGS_DIR>
           [default: /var/lib/browser-daemon/recordings]
       --record-sessions <RECORD_SESSIONS>
@@ -265,8 +269,6 @@ Options:
           [default: /dev/dri/renderD128]
       --chromium-gpu <CHROMIUM_GPU>
           Render Chromium on the GPU: vulkan (ANGLE on Vulkan), or none (software) [default: none] [possible values: none, vulkan]
-      --allowed-host <ALLOWED_HOST>
-          Host (HOST[:PORT]) accepted in the Host header besides --public-url's and loopback; repeatable
   -h, --help
           Print help
 ```
