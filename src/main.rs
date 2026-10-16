@@ -1,3 +1,4 @@
+mod api;
 mod audible;
 mod audio;
 mod auth;
@@ -57,6 +58,7 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::api::*;
 use crate::bidi::BidiHub;
 use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine, SessionState};
 use crate::profiles::{ColorScheme, Profile};
@@ -2289,12 +2291,6 @@ async fn handle_page_ws(
 // ---------------------------------------------------------------------------
 // REST API Handlers
 // ---------------------------------------------------------------------------
-
-type ApiError = (StatusCode, Json<serde_json::Value>);
-
-fn api_error(status: StatusCode, msg: impl Into<String>) -> ApiError {
-    (status, Json(serde_json::json!({ "error": msg.into() })))
-}
 
 async fn profile_session(state: &AppState, id: Uuid) -> Option<ManagedSession> {
     let guard = state.sessions.read().await;
