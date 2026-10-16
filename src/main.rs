@@ -973,6 +973,8 @@ impl AppState {
         };
 
         let _ = fs::remove_dir_all(upload_dir(id)).await;
+        // Live views of the session end with it.
+        self.viewers.close_session(*id);
         let mut terminated = false;
         if let Some(session) = removed {
             let mut b_guard = session.browser.lock().await;
