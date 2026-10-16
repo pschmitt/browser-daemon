@@ -8,11 +8,12 @@ build:
 
 check:
   cargo check
-  cargo clippy
+  cargo clippy --all-targets -- -D warnings
+  cargo fmt --all --check
 
 fmt:
   cargo fmt --all
-  nixfmt **/*.nix
+  nixfmt flake.nix nix/*.nix
 
 test:
   cargo test

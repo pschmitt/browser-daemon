@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+      - name: Format
+        run: nix develop -c cargo fmt --all --check
+      - name: Clippy
+        run: nix develop -c cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: nix develop -c cargo test
+
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+      - name: Flake check (builds the package, checks Nix formatting)
+        run: nix flake check

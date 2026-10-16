@@ -1,5 +1,5 @@
 {
-  description = "browser-daemon - Multi-tenant Chromium CDP daemon with virtual display isolation and mobile handoff";
+  description = "browser-daemon - remote Chromium and Firefox sessions with CDP multiplexing, virtual displays and mobile handoff";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -15,7 +15,8 @@
     let
       # Uncommitted builds report "<sha>-dirty".
       rev = self.rev or self.dirtyRev or null;
-      eachSystem = flake-utils.lib.eachDefaultSystem (
+      # The module and the browsers it runs are Linux-only.
+      eachSystem = flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
@@ -33,6 +34,23 @@
             type = "app";
             program = "${browser-daemon}/bin/browser-daemon";
           };
+
+          # Builds the package (which runs the unit tests) and checks the Nix formatting.
+          checks = {
+            inherit browser-daemon;
+            nixfmt =
+              pkgs.runCommand "browser-daemon-nixfmt"
+                {
+                  nativeBuildInputs = [ pkgs.nixfmt ];
+                }
+                ''
+                  cd ${self}
+                  nixfmt --check flake.nix nix/*.nix
+                  touch $out
+                '';
+          };
+
+          formatter = pkgs.nixfmt;
 
           devShells.default = pkgs.mkShell {
             packages = with pkgs; [
@@ -54,7 +72,16 @@
         browser-daemon = prev.callPackage ./nix/package.nix { inherit rev; };
       };
 
-      nixosModules.default = import ./nix/module.nix;
+      # The flake's own package is the default, so the module needs no overlay
+      # (and the binary knows its git revision).
+      nixosModules.default =
+        { lib, pkgs, ... }:
+        {
+          imports = [ ./nix/module.nix ];
+          services.browser-daemon.package =
+            lib.mkDefault
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        };
       nixosModules.browser-daemon = self.nixosModules.default;
     };
 }
