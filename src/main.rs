@@ -1369,14 +1369,16 @@ fn spawn_bidi_frame_feeder(hub: Arc<BidiHub>, handle: SessionRecorderHandle) {
             if data == last {
                 continue;
             }
+            // In a realm of its own: the page cannot fake what it reads.
             let info = hub
-                .call(
+                .call_timeout(
                     "script.evaluate",
                     serde_json::json!({
                         "expression": "JSON.stringify([location.href, document.title])",
-                        "target": { "context": ctx },
+                        "target": { "context": ctx, "sandbox": "browser-daemon" },
                         "awaitPromise": false
                     }),
+                    Duration::from_secs(5),
                 )
                 .await
                 .ok()

@@ -197,6 +197,15 @@ Options:
           Print version
 ```
 
+## Behaviour worth knowing
+
+- **One browser per profile.** Launching a profile that is already running, or being launched at that moment, attaches to its session. Launches in progress count against `--max-sessions`. A throwaway session whose client disconnects before the connection is complete ends with it.
+- **Tabs over HTTP.** `PUT /json/new` opens a tab in the session named by `session_id`, or in the one showing `page`; with neither it starts a session of its own, and an unknown session or page is a 404. `/json/new`, `/json/close/{id}` and `/json/activate/{id}` take PUT only.
+- **Idle timeouts** are given in minutes (0 = never) and capped at a year.
+- **Peers.** `/api/peers/{peer}/...` forwards a management request to a node of the mesh, with the same path and body as on that node (`GET .../profiles/{name}` included); the peer is named exactly, by name or URL. Requests that copy data (import, export, transfer, clone, clear, restore, recordings) may take up to an hour, others two minutes; bodies are streamed in both directions. The overview's polls of the peers stay short.
+- **The overview** (`/api/mesh/overview`, `/api/ws/overview`) is computed once every two seconds, while somebody listens, and shared by every dashboard, CLI and TUI. Profile sizes in it are at most a minute old.
+- **Profiles.** Exports, imports and transfers are streamed (nothing is held in memory); an import is unpacked into a hidden `.import-*` directory next to the profiles and renamed into place when complete. Delete, clear, restore, backup, export and transfer refuse a profile that a session uses or is starting (`?force=true` stops the session first for delete, clear and restore). A recording that is still being made cannot be deleted.
+
 ## License
 
 GPL-3.0-only. See [LICENSE](LICENSE).
