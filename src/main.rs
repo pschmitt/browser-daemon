@@ -36,7 +36,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Json, Router};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -474,7 +474,11 @@ pub struct AppState {
     pub config: Arc<BrowserConfig>,
     pub max_sessions: usize,
     pub sessions: Arc<RwLock<HashMap<Uuid, ManagedSession>>>,
+    /// For this node's own browsers and the overview's polls: gives up after 3 s.
     pub http_client: reqwest::Client,
+    /// For requests to peers that change something or carry a body: no limit of
+    /// its own, each request sets the one it needs.
+    pub peer_client: reqwest::Client,
     pub node_name: String,
     pub public_url: String,
     pub peers: Arc<RwLock<HashMap<String, String>>>,
@@ -1761,36 +1765,6 @@ async fn api_session_screenshot(
     }
 }
 
-async fn api_peer_session_screenshot(
-    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let url = format!("{}/api/sessions/{}/screenshot", peer_url, id);
-    match state.peer_request(state.http_client.get(&url)).send().await {
-        Ok(r) if r.status() == StatusCode::OK => match r.bytes().await {
-            Ok(b) => (
-                [
-                    (header::CONTENT_TYPE, "image/jpeg"),
-                    (header::CACHE_CONTROL, "no-store"),
-                ],
-                b,
-            )
-                .into_response(),
-            Err(_) => StatusCode::BAD_GATEWAY.into_response(),
-        },
-        Ok(r) if r.status() == StatusCode::NO_CONTENT => StatusCode::NO_CONTENT.into_response(),
-        Ok(_) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
-    }
-}
-
 /// Whose history a session's pages belong to: its profile's, else its own.
 fn history_key(profile_id: Option<Uuid>, session_id: Uuid) -> String {
     profile_id.map_or_else(
@@ -2216,6 +2190,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(3))
             .build()?,
+        peer_client: reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .build()?,
         node_name,
         public_url,
         peers: Arc::new(RwLock::new(peer_map)),
@@ -2418,10 +2395,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/history", get(api_session_history))
         .route("/api/sessions/{id}/screenshot", get(api_session_screenshot))
         .route(
-            "/api/peers/{peer}/sessions/{id}/screenshot",
-            get(api_peer_session_screenshot),
-        )
-        .route(
             "/api/sessions/{id}/save-as-profile",
             post(api_session_save_as_profile),
         )
@@ -2500,24 +2473,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/recordings/{id}/export.webm",
             get(api_export_recording),
         )
-        .route(
-            "/api/peers/{peer}/recordings/{id}/export.webm",
-            get(api_peer_export_recording),
-        )
         .route("/api/recordings/merge", post(api_merge_recordings))
-        .route(
-            "/api/peers/{peer}/recordings/{id}/audio",
-            get(api_peer_get_recording_audio),
-        )
-        .route(
-            "/api/peers/{peer}/recordings/merge",
-            post(api_peer_merge_recordings),
-        )
         .route("/api/recordings/{id}/keep", post(api_set_recording_keep))
-        .route(
-            "/api/peers/{peer}/recordings/{id}/keep",
-            post(api_peer_set_recording_keep),
-        )
         .route("/api/recordings/{id}/favicon", get(api_get_recording_favicon))
         .route("/api/recordings/vacuum", post(api_vacuum_recordings))
         // Peer-to-Peer Mesh APIs
@@ -2526,98 +2483,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/ws/overview", get(handle_overview_ws))
         .route("/api/peers", get(api_list_peers).post(api_add_peer))
         .route("/api/peers/{peer}", delete(api_remove_peer))
-        .route("/api/peers/{peer}/sessions", post(api_peer_create_session))
-        .route(
-            "/api/peers/{peer}/sessions/{id}",
-            delete(api_peer_delete_session),
-        )
-        .route(
-            "/api/peers/{peer}/sessions/{id}/{action}",
-            post(api_peer_session_action),
-        )
-        .route(
-            "/api/peers/{peer}/settings",
-            patch(api_peer_update_settings),
-        )
-        .route("/api/peers/{peer}/profiles", post(api_peer_create_profile))
-        .route(
-            "/api/peers/{peer}/profiles/{name}",
-            delete(api_peer_delete_profile)
-                .patch(api_peer_update_profile)
-                .put(api_peer_update_profile),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/clone",
-            post(api_peer_clone_profile),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/export",
-            get(api_peer_export_profile),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/import",
-            post(api_peer_import_profile)
-                .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/clear",
-            post(api_peer_clear_profile),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/backups",
-            get(api_peer_backups).post(api_peer_backups),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/backups/{backup}",
-            delete(api_peer_backups),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/backups/{backup}/restore",
-            post(api_peer_backups),
-        )
-        .route(
-            "/api/peers/{peer}/profiles/{name}/transfer",
-            post(api_peer_transfer_profile),
-        )
-        .route(
-            "/api/peers/{peer}/recordings",
-            get(api_peer_list_recordings),
-        )
-        .route(
-            "/api/peers/{peer}/recordings/{id}",
-            get(api_peer_get_recording).delete(api_peer_delete_recording),
-        )
-        .route(
-            "/api/peers/{peer}/recordings/{id}/frames",
-            get(api_peer_get_recording_frames),
-        )
-        .route(
-            "/api/peers/{peer}/recordings/{id}/favicon",
-            get(api_peer_get_recording_favicon),
-        )
-        .route(
-            "/api/peers/{peer}/recordings/vacuum",
-            post(api_peer_vacuum_recordings),
-        )
-        .route(
-            "/api/peers/{peer}/json/new",
-            put(api_peer_json_new)
-                .post(api_peer_json_new)
-                .get(api_peer_json_new),
-        )
-        .route(
-            "/api/peers/{peer}/json/close/{id}",
-            put(api_peer_json_close)
-                .post(api_peer_json_close)
-                .delete(api_peer_json_close)
-                .get(api_peer_json_close),
-        )
-        .route(
-            "/api/peers/{peer}/json/activate/{id}",
-            put(api_peer_json_activate)
-                .post(api_peer_json_activate)
-                .get(api_peer_json_activate),
-        )
+        // Everything else for a peer is forwarded to it (see `peer_target`).
+        .route("/api/peers/{peer}/{*rest}", any(api_peer_forward))
         .with_state(state.clone());
 
     tokio::spawn(shutdown_on_signal(state));
@@ -4732,45 +4599,218 @@ async fn handle_overview_ws(
     })
 }
 
-async fn get_peer_url(state: &AppState, peer: &str) -> Option<String> {
-    let guard = state.peers.read().await;
-    if let Some(u) = guard.get(peer) {
-        return Some(u.clone());
+/// The peer a request names: by its name or its URL, exactly (a name is
+/// matched without regard to case). A name that fits several peers fits none.
+fn find_peer<'a>(peers: &'a HashMap<String, String>, peer: &str) -> Option<&'a String> {
+    let peer = peer.trim();
+    if let Some(url) = peers.get(peer) {
+        return Some(url);
     }
-    guard.iter().find_map(|(k, v)| {
-        if k.eq_ignore_ascii_case(peer) || v.contains(peer) {
-            Some(v.clone())
-        } else {
-            None
+    let wanted_url = peer.trim_end_matches('/');
+    let mut hits = peers
+        .iter()
+        .filter(|(name, url)| name.eq_ignore_ascii_case(peer) || url.trim_end_matches('/') == wanted_url);
+    let hit = hits.next()?;
+    hits.next().is_none().then_some(hit.1)
+}
+
+async fn get_peer_url(state: &AppState, peer: &str) -> Option<String> {
+    find_peer(&*state.peers.read().await, peer).cloned()
+}
+
+/// How long a peer may take to answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PeerWait {
+    /// Anything that answers from memory or does a little work.
+    Short,
+    /// Copies, archives, recordings: minutes to hours.
+    Long,
+}
+
+impl PeerWait {
+    fn timeout(self) -> Duration {
+        match self {
+            Self::Short => Duration::from_secs(120),
+            Self::Long => Duration::from_secs(3600),
         }
+    }
+}
+
+/// Where a request for a peer goes on that peer.
+#[derive(Debug, PartialEq, Eq)]
+struct PeerTarget {
+    /// Path segments below `/api`, or the whole path of a DevTools route.
+    segments: Vec<String>,
+    devtools: bool,
+    wait: PeerWait,
+}
+
+/// What `/api/peers/{peer}/{rest}` may reach on a peer: the management routes the
+/// dashboard, CLI and TUI use on remote nodes, and the DevTools tab routes. Anything
+/// else (the peer's own peers included, which would loop) is not forwarded.
+fn peer_target(method: &axum::http::Method, rest: &str) -> Option<PeerTarget> {
+    use PeerWait::{Long, Short};
+    let segments: Vec<&str> = rest.split('/').collect();
+    if segments
+        .iter()
+        .any(|s| s.is_empty() || *s == "." || *s == ".." || s.contains(['\\', '\0']))
+    {
+        return None;
+    }
+    let (devtools, wait) = match (method.as_str(), segments.as_slice()) {
+        ("POST", ["sessions"]) => (false, Short),
+        ("DELETE", ["sessions", _]) => (false, Short),
+        ("GET", ["sessions", _, "screenshot"]) => (false, Short),
+        ("POST", ["sessions", _, "save-as-profile"]) => (false, Long),
+        (
+            "POST",
+            ["sessions", _, "record" | "stop-record" | "pause-record" | "resume-record" | "idle-timeout" | "name" | "proxy"],
+        ) => (false, Short),
+        ("PATCH", ["settings"]) => (false, Short),
+        ("POST", ["profiles"]) => (false, Long),
+        ("GET" | "PATCH" | "PUT", ["profiles", _]) => (false, Short),
+        ("DELETE", ["profiles", _]) => (false, Long),
+        ("POST", ["profiles", _, "clone" | "clear" | "import" | "transfer"]) => (false, Long),
+        ("GET", ["profiles", _, "export"]) => (false, Long),
+        ("GET" | "POST", ["profiles", _, "backups"]) => (false, Long),
+        ("DELETE", ["profiles", _, "backups", _]) => (false, Short),
+        ("POST", ["profiles", _, "backups", _, "restore"]) => (false, Long),
+        ("GET", ["recordings"]) => (false, Short),
+        ("POST", ["recordings", "vacuum" | "merge"]) => (false, Long),
+        ("GET" | "DELETE", ["recordings", _]) => (false, Short),
+        ("GET", ["recordings", _, "frames" | "audio" | "export.webm"]) => (false, Long),
+        ("GET", ["recordings", _, "favicon"]) => (false, Short),
+        ("POST", ["recordings", _, "keep"]) => (false, Short),
+        ("PUT", ["json", "new"]) => (true, Short),
+        ("PUT", ["json", "close" | "activate", _]) => (true, Short),
+        _ => return None,
+    };
+    Some(PeerTarget {
+        segments: segments.into_iter().map(str::to_string).collect(),
+        devtools,
+        wait,
     })
 }
 
-async fn proxy_response(res_result: Result<reqwest::Response, reqwest::Error>) -> Response {
-    match res_result {
+/// A request body's chunks, failing once more than `limit` bytes have come.
+fn capped_chunks(
+    body: axum::body::Body,
+    limit: usize,
+) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
+    use futures_util::StreamExt;
+    body.into_data_stream().scan(0usize, move |seen, chunk| {
+        let item = match chunk {
+            Ok(bytes) => {
+                *seen = seen.saturating_add(bytes.len());
+                if *seen > limit {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "The body is too large",
+                    ))
+                } else {
+                    Ok(bytes)
+                }
+            }
+            Err(e) => Err(std::io::Error::other(e)),
+        };
+        std::future::ready(Some(item))
+    })
+}
+
+/// Forward a request to the peer it names, streaming the body both ways: an
+/// import or an export never sits in memory, and the wait is as long as the
+/// kind of request needs, not the overview's few seconds.
+async fn api_peer_forward(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    AxumPath((peer, rest)): AxumPath<(String, String)>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    body: axum::body::Body,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(target) = peer_target(&method, &rest) else {
+        return api_error(StatusCode::NOT_FOUND, "Unknown route for a peer").into_response();
+    };
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            format!("Peer '{peer}' not found in mesh"),
+        )
+        .into_response();
+    };
+    let Ok(mut url) = url::Url::parse(&peer_url) else {
+        return api_error(StatusCode::BAD_GATEWAY, "The peer's URL is invalid").into_response();
+    };
+    {
+        let Ok(mut path) = url.path_segments_mut() else {
+            return api_error(StatusCode::BAD_GATEWAY, "The peer's URL is invalid").into_response();
+        };
+        path.pop_if_empty();
+        if !target.devtools {
+            path.push("api");
+        }
+        path.extend(&target.segments);
+    }
+    url.set_query(query.as_deref().filter(|q| !q.is_empty()));
+
+    let upstream_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
+        .unwrap_or(reqwest::Method::GET);
+    let mut req = state
+        .peer_request(state.peer_client.request(upstream_method, url))
+        .timeout(target.wait.timeout());
+    if let Some(range) = headers.get(header::RANGE) {
+        req = req.header(header::RANGE, range.clone());
+    }
+    let length = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if length.map_or(headers.contains_key(header::TRANSFER_ENCODING), |n| n > 0) {
+        if let Some(ct) = headers.get(header::CONTENT_TYPE) {
+            req = req.header(header::CONTENT_TYPE, ct.clone());
+        }
+        if let Some(n) = length {
+            req = req.header(header::CONTENT_LENGTH, n);
+        }
+        req = req.body(reqwest::Body::wrap_stream(capped_chunks(
+            body,
+            MAX_UPLOAD_BYTES,
+        )));
+    }
+
+    match req.send().await {
         Ok(res) => {
             let status =
                 StatusCode::from_u16(res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut headers = HeaderMap::new();
-            if let Some(ct) = res.headers().get(header::CONTENT_TYPE) {
-                headers.insert(header::CONTENT_TYPE, ct.clone());
-            } else {
-                headers.insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("application/json"),
-                );
+            let mut builder = Response::builder().status(status);
+            for name in [
+                header::CONTENT_TYPE,
+                header::CONTENT_LENGTH,
+                header::CONTENT_DISPOSITION,
+                header::CONTENT_RANGE,
+                header::ACCEPT_RANGES,
+                header::CACHE_CONTROL,
+                header::ETAG,
+                header::LAST_MODIFIED,
+            ] {
+                if let Some(v) = res.headers().get(name.as_str()) {
+                    if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {
+                        builder = builder.header(name, v);
+                    }
+                }
             }
-            if let Some(cd) = res.headers().get(header::CONTENT_DISPOSITION) {
-                headers.insert(header::CONTENT_DISPOSITION, cd.clone());
-            }
-            let bytes = res.bytes().await.unwrap_or_default();
-            (status, headers, bytes).into_response()
+            builder
+                .body(axum::body::Body::from_stream(res.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
         }
-        Err(e) => (
+        Err(e) => api_error(
             StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("Peer communication failed: {}", e) })),
+            format!("Peer communication failed: {e}"),
         )
-            .into_response(),
+        .into_response(),
     }
 }
 
@@ -4913,204 +4953,22 @@ async fn api_remove_peer(
     }
 }
 
-async fn api_peer_create_session(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath(peer): AxumPath<String>,
-    Json(req): Json<CreateSessionRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/sessions", peer_url);
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .json(&req)
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_delete_session(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/sessions/{}", peer_url, id);
-    let res = state
-        .peer_request(state.http_client.delete(&url))
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-/// Proxy `record` / `stop-record` to the peer owning the session.
-async fn api_peer_session_action(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id, action)): AxumPath<(String, String, String)>,
-    axum::extract::RawQuery(query): axum::extract::RawQuery,
-    body: Bytes,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    if !matches!(
-        action.as_str(),
-        "record"
-            | "stop-record"
-            | "pause-record"
-            | "resume-record"
-            | "idle-timeout"
-            | "name"
-            | "proxy"
-            | "save-as-profile"
-    ) {
-        return (StatusCode::NOT_FOUND, "Unknown session action").into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-        )
-            .into_response();
-    };
-    let url = match query {
-        Some(q) if !q.is_empty() => format!("{}/api/sessions/{}/{}?{}", peer_url, id, action, q),
-        _ => format!("{}/api/sessions/{}/{}", peer_url, id, action),
-    };
-    let mut req = state.peer_request(state.http_client.post(&url));
-    if !body.is_empty() {
-        req = req.header(header::CONTENT_TYPE, "application/json").body(body);
-    }
-    proxy_response(req.send().await).await
-}
-
-async fn api_peer_create_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath(peer): AxumPath<String>,
-    Json(req): Json<CreateProfileRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/profiles", peer_url);
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .json(&req)
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_delete_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, name)): AxumPath<(String, String)>,
-    Query(params): Query<DeleteProfileParams>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let mut url = peer_profile_url(&peer_url, &name, None);
-    if let Some(f) = params.force {
-        url.push_str(&format!("?force={}", f));
-    }
-    let res = state
-        .peer_request(state.http_client.delete(&url))
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_clone_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, name)): AxumPath<(String, String)>,
-    Json(req): Json<CloneProfileRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = peer_profile_url(&peer_url, &name, Some("clone"));
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .json(&req)
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct UpdateSettingsRequest {
     /// Proxy id; "none" or "" for direct. Absent: unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     default_proxy: Option<String>,
     /// Engine defaults, each engine replaced as a whole. Absent: unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     engines: Option<EnginesPatch>,
 }
 
 /// The engines of an `UpdateSettingsRequest` that change; one left out stays.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct EnginesPatch {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     chromium: Option<settings::EngineDefaults>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     firefox: Option<settings::EngineDefaults>,
 }
 
@@ -5158,238 +5016,6 @@ async fn api_update_settings(
         })?;
     info!(settings = ?settings, "Node settings changed");
     Ok(Json(settings))
-}
-
-async fn api_peer_update_settings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath(peer): AxumPath<String>,
-    Json(req): Json<UpdateSettingsRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-        )
-            .into_response();
-    };
-    let url = format!("{}/api/settings", peer_url.trim_end_matches('/'));
-    let res = state
-        .peer_request(state.http_client.patch(&url))
-        .json(&req)
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_update_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, name)): AxumPath<(String, String)>,
-    Json(req): Json<UpdateProfileRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = peer_profile_url(&peer_url, &name, None);
-    let res = state
-        .peer_request(state.http_client.patch(&url))
-        .json(&req)
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_clear_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, name)): AxumPath<(String, String)>,
-    axum::extract::RawQuery(query): axum::extract::RawQuery,
-) -> impl IntoResponse {
-    forward_profile_request(
-        &state,
-        &headers,
-        reqwest::Method::POST,
-        &peer,
-        &name,
-        &["clear"],
-        query,
-        None,
-    )
-    .await
-}
-
-/// Backup routes on a peer: the request's path below the profile is replayed there.
-async fn api_peer_backups(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    AxumPath(params): AxumPath<HashMap<String, String>>,
-    axum::extract::RawQuery(query): axum::extract::RawQuery,
-    body: Bytes,
-) -> impl IntoResponse {
-    let (Some(peer), Some(name)) = (params.get("peer"), params.get("name")) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    let mut tail = vec!["backups"];
-    if let Some(backup) = params.get("backup") {
-        tail.push(backup);
-        if uri.path().ends_with("/restore") {
-            tail.push("restore");
-        }
-    }
-    let method =
-        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
-    forward_profile_request(
-        &state,
-        &headers,
-        method,
-        peer,
-        name,
-        &tail,
-        query,
-        (!body.is_empty()).then_some(body),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn forward_profile_request(
-    state: &AppState,
-    headers: &HeaderMap,
-    method: reqwest::Method,
-    peer: &str,
-    name: &str,
-    tail: &[&str],
-    query: Option<String>,
-    body: Option<Bytes>,
-) -> Response {
-    if let Err(e) = state.check_auth(headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(state, peer).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-        )
-            .into_response();
-    };
-    let mut url = peer_profile_url(&peer_url, name, None);
-    if let Ok(mut parsed) = url::Url::parse(&url) {
-        if let Ok(mut segments) = parsed.path_segments_mut() {
-            segments.extend(tail);
-        }
-        url = parsed.to_string();
-    }
-    if let Some(q) = query.filter(|q| !q.is_empty()) {
-        url.push('?');
-        url.push_str(&q);
-    }
-    let mut req = state.peer_request(state.http_client.request(method, &url));
-    if let Some(body) = body {
-        req = req
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(body);
-    }
-    proxy_response(req.send().await).await
-}
-
-async fn api_peer_export_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, name)): AxumPath<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = peer_profile_url(&peer_url, &name, Some("export"));
-    let res = state.peer_request(state.http_client.get(&url)).send().await;
-    proxy_response(res).await
-}
-
-async fn api_peer_import_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, name)): AxumPath<(String, String)>,
-    Query(params): Query<ImportProfileParams>,
-    body: Bytes,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let mut url = peer_profile_url(&peer_url, &name, Some("import"));
-    if let Some(true) = params.overwrite {
-        url.push_str("?overwrite=true");
-    }
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .header(header::CONTENT_TYPE, "application/gzip")
-        .body(body)
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_transfer_profile(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, name)): AxumPath<(String, String)>,
-    Json(req): Json<TransferProfileRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = peer_profile_url(&peer_url, &name, Some("transfer"));
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .json(&req)
-        .send()
-        .await;
-    proxy_response(res).await
 }
 
 // ---------------------------------------------------------------------------
@@ -5448,43 +5074,6 @@ async fn api_get_recording_favicon(
         bytes,
     )
         .into_response()
-}
-
-async fn api_peer_get_recording_favicon(
-    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Response {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let url = format!("{}/api/recordings/{}/favicon", peer_url, id);
-    match state.peer_request(state.http_client.get(&url)).send().await {
-        Ok(r) if r.status().is_success() => {
-            let mime = r
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("image/x-icon")
-                .to_string();
-            match r.bytes().await {
-                Ok(b) => (
-                    [
-                        (header::CONTENT_TYPE, mime),
-                        (header::CACHE_CONTROL, "private, max-age=300".to_string()),
-                    ],
-                    b,
-                )
-                    .into_response(),
-                Err(_) => StatusCode::BAD_GATEWAY.into_response(),
-            }
-        }
-        Ok(_) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
-    }
 }
 
 async fn api_get_recording_frames(
@@ -5553,31 +5142,6 @@ async fn api_set_recording_keep(
     }
 }
 
-async fn api_peer_set_recording_keep(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, String)>,
-    Json(req): Json<KeepRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-        )
-            .into_response();
-    };
-    let url = format!("{}/api/recordings/{}/keep", peer_url, id);
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .json(&serde_json::json!({ "keep": req.keep }))
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
 async fn api_delete_recording(
     AxumPath(id): AxumPath<Uuid>,
     State(state): State<AppState>,
@@ -5625,60 +5189,6 @@ async fn api_get_recording_audio(
     }
 }
 
-async fn api_peer_get_recording_audio(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
-) -> Response {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return api_error(
-            StatusCode::NOT_FOUND,
-            format!("Peer '{peer}' not found in mesh"),
-        )
-        .into_response();
-    };
-    let mut req = state
-        .peer_request(
-            state
-                .http_client
-                .get(format!("{peer_url}/api/recordings/{id}/audio")),
-        )
-        .timeout(Duration::from_secs(3600));
-    if let Some(range) = headers.get(header::RANGE) {
-        req = req.header(header::RANGE, range.clone());
-    }
-    match req.send().await {
-        Ok(r) => {
-            let status =
-                StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut builder = Response::builder().status(status);
-            for name in [
-                header::CONTENT_TYPE,
-                header::CONTENT_LENGTH,
-                header::CONTENT_RANGE,
-                header::ACCEPT_RANGES,
-            ] {
-                if let Some(v) = r.headers().get(name.as_str()) {
-                    if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {
-                        builder = builder.header(name, v);
-                    }
-                }
-            }
-            builder
-                .body(axum::body::Body::from_stream(r.bytes_stream()))
-                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
-        }
-        Err(e) => api_error(
-            StatusCode::BAD_GATEWAY,
-            format!("Peer communication failed: {e}"),
-        )
-        .into_response(),
-    }
-}
-
 /// The recording as a WebM video with its sound, encoded on request (see
 /// rec_export.rs); this takes a while for a long one.
 async fn api_export_recording(
@@ -5716,56 +5226,6 @@ async fn api_export_recording(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-async fn api_peer_export_recording(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
-) -> Response {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return api_error(
-            StatusCode::NOT_FOUND,
-            format!("Peer '{peer}' not found in mesh"),
-        )
-        .into_response();
-    };
-    let req = state
-        .peer_request(
-            state
-                .http_client
-                .get(format!("{peer_url}/api/recordings/{id}/export.webm")),
-        )
-        .timeout(Duration::from_secs(3600));
-    match req.send().await {
-        Ok(r) => {
-            let status =
-                StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut builder = Response::builder().status(status);
-            for name in [
-                header::CONTENT_TYPE,
-                header::CONTENT_LENGTH,
-                header::CONTENT_DISPOSITION,
-            ] {
-                if let Some(v) = r.headers().get(name.as_str()) {
-                    if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {
-                        builder = builder.header(name, v);
-                    }
-                }
-            }
-            builder
-                .body(axum::body::Body::from_stream(r.bytes_stream()))
-                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
-        }
-        Err(e) => api_error(
-            StatusCode::BAD_GATEWAY,
-            format!("Peer communication failed: {e}"),
-        )
-        .into_response(),
-    }
-}
-
 #[derive(Deserialize, Serialize)]
 struct MergeRequest {
     /// The recordings to merge, in order.
@@ -5786,36 +5246,6 @@ async fn api_merge_recordings(
         .await
         .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(meta))
-}
-
-async fn api_peer_merge_recordings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath(peer): AxumPath<String>,
-    Json(req): Json<MergeRequest>,
-) -> Response {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let Some(peer_url) = get_peer_url(&state, &peer).await else {
-        return api_error(
-            StatusCode::NOT_FOUND,
-            format!("Peer '{peer}' not found in mesh"),
-        )
-        .into_response();
-    };
-    // Merging copies every frame: long recordings take a while.
-    let res = state
-        .peer_request(
-            state
-                .http_client
-                .post(format!("{peer_url}/api/recordings/merge")),
-        )
-        .timeout(Duration::from_secs(1800))
-        .json(&req)
-        .send()
-        .await;
-    proxy_response(res).await
 }
 
 async fn api_vacuum_recordings(
@@ -6793,233 +6223,6 @@ async fn set_recording_paused(
     })))
 }
 
-async fn api_peer_list_recordings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath(peer): AxumPath<String>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/recordings", peer_url);
-    let res = state.peer_request(state.http_client.get(&url)).send().await;
-    proxy_response(res).await
-}
-
-async fn api_peer_get_recording(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/recordings/{}", peer_url, id);
-    let res = state.peer_request(state.http_client.get(&url)).send().await;
-    proxy_response(res).await
-}
-
-async fn api_peer_get_recording_frames(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/recordings/{}/frames", peer_url, id);
-    // The shared client's 3 s timeout covers the whole body; a large recording
-    // needs far longer, so stream it through with a generous per-request limit.
-    let mut req = state
-        .peer_request(state.http_client.get(&url))
-        .timeout(Duration::from_secs(3600));
-    if let Some(range) = headers.get(header::RANGE) {
-        req = req.header(header::RANGE, range.clone());
-    }
-    match req.send().await {
-        Ok(r) => {
-            let status =
-                StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let mut builder = Response::builder().status(status);
-            for name in [
-                header::CONTENT_TYPE,
-                header::CONTENT_LENGTH,
-                header::CONTENT_RANGE,
-                header::ACCEPT_RANGES,
-            ] {
-                if let Some(v) = r.headers().get(name.as_str()) {
-                    if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {
-                        builder = builder.header(name, v);
-                    }
-                }
-            }
-            builder
-                .body(axum::body::Body::from_stream(r.bytes_stream()))
-                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
-        }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("Peer communication failed: {}", e) })),
-        )
-            .into_response(),
-    }
-}
-
-async fn api_peer_delete_recording(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/recordings/{}", peer_url, id);
-    let res = state
-        .peer_request(state.http_client.delete(&url))
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_vacuum_recordings(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath(peer): AxumPath<String>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/api/recordings/vacuum", peer_url);
-    let res = state
-        .peer_request(state.http_client.post(&url))
-        .send()
-        .await;
-    proxy_response(res).await
-}
-
-async fn api_peer_json_new(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath(peer): AxumPath<String>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = match raw_query {
-        Some(q) if !q.is_empty() => format!("{}/json/new?{}", peer_url, q),
-        _ => format!("{}/json/new", peer_url),
-    };
-    let res = state.peer_request(state.http_client.put(&url)).send().await;
-    proxy_response(res).await
-}
-
-async fn api_peer_json_close(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/json/close/{}", peer_url, id);
-    let res = state.peer_request(state.http_client.put(&url)).send().await;
-    proxy_response(res).await
-}
-
-async fn api_peer_json_activate(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    AxumPath((peer, id)): AxumPath<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(e) = state.check_auth(&headers) {
-        return e.into_response();
-    }
-    let peer_url = match get_peer_url(&state, &peer).await {
-        Some(u) => u,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": format!("Peer '{}' not found in mesh", peer) })),
-            )
-                .into_response();
-        }
-    };
-    let url = format!("{}/json/activate/{}", peer_url, id);
-    let res = state.peer_request(state.http_client.put(&url)).send().await;
-    proxy_response(res).await
-}
-
 async fn copy_dir_all(src: PathBuf, dst: PathBuf) -> std::io::Result<()> {
     tokio::task::spawn_blocking(move || {
         fn copy_all(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -7286,6 +6489,78 @@ mod tests {
         sizes.store(Path::new("/profiles/gone"), t0, 1);
         sizes.store(dir, t0 + DIR_SIZE_TTL * 11, 2);
         assert_eq!(sizes.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn peers_are_matched_exactly() {
+        let peers: HashMap<String, String> = [
+            ("rofl-13", "https://browser.rofl-13.example"),
+            ("rofl-14", "https://browser.rofl-14.example/"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let url = |p: &str| find_peer(&peers, p).map(String::as_str);
+        assert_eq!(url("rofl-13"), Some("https://browser.rofl-13.example"));
+        assert_eq!(url("ROFL-14"), Some("https://browser.rofl-14.example/"));
+        assert_eq!(
+            url("https://browser.rofl-14.example"),
+            Some("https://browser.rofl-14.example/")
+        );
+        // Not a part of a name or an address, which used to pick one at random.
+        assert_eq!(url("rofl-1"), None);
+        assert_eq!(url("rofl"), None);
+        assert_eq!(url("browser.rofl-13"), None);
+        assert_eq!(url(""), None);
+    }
+
+    #[test]
+    fn only_known_routes_reach_a_peer() {
+        use axum::http::Method;
+        let target = |m: Method, p: &str| peer_target(&m, p);
+        let t = target(Method::GET, "profiles/Work").unwrap();
+        assert_eq!(t.segments, ["profiles", "Work"]);
+        assert!(!t.devtools);
+        assert_eq!(t.wait, PeerWait::Short);
+        assert_eq!(
+            target(Method::POST, "profiles/Work/import").unwrap().wait,
+            PeerWait::Long
+        );
+        assert_eq!(
+            target(Method::GET, "recordings/abc/export.webm").unwrap().wait,
+            PeerWait::Long
+        );
+        assert!(target(Method::PUT, "json/new").unwrap().devtools);
+        assert!(target(Method::PUT, "json/close/ABC").unwrap().devtools);
+        // The method matters.
+        assert!(target(Method::GET, "json/new").is_none());
+        assert!(target(Method::DELETE, "settings").is_none());
+        // Nothing else of the peer is reachable, nor a way out of the route.
+        assert!(target(Method::POST, "peers/rofl-14/sessions").is_none());
+        assert!(target(Method::GET, "mesh/overview").is_none());
+        assert!(target(Method::GET, "profiles/../settings").is_none());
+        assert!(target(Method::GET, "profiles/./x").is_none());
+        assert!(target(Method::GET, "profiles//x").is_none());
+        assert!(target(Method::GET, "profiles/").is_none());
+        assert!(target(Method::GET, "profiles/a\\b").is_none());
+        assert!(target(Method::POST, "sessions/abc/passkey").is_none());
+    }
+
+    #[tokio::test]
+    async fn forwarded_bodies_are_capped() {
+        use futures_util::StreamExt;
+        let body = |chunks: Vec<&'static [u8]>| {
+            axum::body::Body::from_stream(futures_util::stream::iter(
+                chunks
+                    .into_iter()
+                    .map(|c| Ok::<_, std::io::Error>(Bytes::from_static(c))),
+            ))
+        };
+        let ok: Vec<_> = capped_chunks(body(vec![b"abc", b"de"]), 5).collect().await;
+        assert!(ok.iter().all(Result::is_ok));
+        let over: Vec<_> = capped_chunks(body(vec![b"abc", b"def"]), 5).collect().await;
+        assert!(over[0].is_ok());
+        assert!(over[1].is_err());
     }
 
     #[test]
