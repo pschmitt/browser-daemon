@@ -1850,7 +1850,7 @@ function renderProfiles() {
   }
   if (sec._static !== undefined || !sec.querySelector('.list')) {
     clearStatic(sec);
-    sec.innerHTML = `<div class="list"><div class="list-head"><span>Profile</span><span>Node</span><span>Size</span><span>Modified</span><span></span></div><div class="rows"></div></div>`;
+    sec.innerHTML = `<div class="list" role="table" aria-label="Profiles"><div class="list-head" role="row"><span role="columnheader">Profile</span><span role="columnheader">Node</span><span role="columnheader">Size</span><span role="columnheader">Modified</span><span role="columnheader" aria-label="Actions"></span></div><div class="rows" role="rowgroup"></div></div>`;
   }
   reconcile(sec.querySelector('.rows'), list, keyOf.profile, profileRow);
 }
@@ -1863,14 +1863,14 @@ function profileRow(p) {
     ? `<a class="btn sm primary" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)}>${icon('takeover', 'sm')}Take over</a>`
     : `<button class="btn sm" data-act="launch-profile" data-key="${key}">${icon('play', 'sm fill')}Launch</button>`;
   return `
-  <div class="row" data-key="${key}">
-    <div class="main"><div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>
+  <div class="row" role="row" data-key="${key}">
+    <div role="cell" class="main"><div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>
       <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}</b><span>${status}${tabStrip(p)}</span></div></div>
-    <div class="c-node">${nodeChip(p.node_name)}</div>
-    <div class="num c-size">${formatBytes(p.size_bytes)}</div>
-    <div class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
-    <div class="acts">${primary}<button class="btn icon sm ghost" data-act="profile-menu" data-key="${key}" aria-label="Profile actions">${icon('more')}</button></div>
-    <div class="mobile-meta">${nodeChip(p.node_name)}<span>${formatBytes(p.size_bytes)}</span><span>·</span><span>${relTime(p.modified_at_secs)}</span></div>
+    <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
+    <div role="cell" class="num c-size">${formatBytes(p.size_bytes)}</div>
+    <div role="cell" class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
+    <div role="cell" class="acts">${primary}<button class="btn icon sm ghost" data-act="profile-menu" data-key="${key}" aria-label="Profile actions">${icon('more')}</button></div>
+    <div class="mobile-meta" role="cell">${nodeChip(p.node_name)}<span>${formatBytes(p.size_bytes)}</span><span>·</span><span>${relTime(p.modified_at_secs)}</span></div>
   </div>`;
 }
 
@@ -1907,7 +1907,7 @@ function renderRecordings() {
   }
   if (sec._static !== undefined || !sec.querySelector('.list')) {
     clearStatic(sec);
-    sec.innerHTML = `<div class="list"><div class="list-head"><span></span><span></span><span>Recording</span><span>Node</span><span class="c-started">Started</span><span class="c-dur">Length</span><span class="c-size">Size</span><span></span></div><div class="rows"></div><div class="list-nomatch" hidden></div><div class="list-more" hidden></div></div>`;
+    sec.innerHTML = `<div class="list" role="table" aria-label="Recordings"><div class="list-head" role="row"><span role="columnheader" aria-label="Select"></span><span role="columnheader" aria-label="Play"></span><span role="columnheader">Recording</span><span role="columnheader">Node</span><span role="columnheader" class="c-started">Started</span><span role="columnheader" class="c-dur">Length</span><span role="columnheader" class="c-size">Size</span><span role="columnheader" aria-label="Actions"></span></div><div class="rows" role="rowgroup"></div><div class="list-nomatch" hidden></div><div class="list-more" hidden></div></div>`;
   }
   reconcile(sec.querySelector('.rows'), list.slice(0, recLimit), keyOf.recording, recordingRow);
   const none = sec.querySelector('.list-nomatch');
@@ -1957,17 +1957,17 @@ function recordingRow(r) {
   const live = isLive(r);
   const cached = cachedRecordingsSet.has(r.id) ? `<span class="cached" title="Saved in this browser: plays without the server">${icon('saved', 'sm')}</span>` : '';
   return `
-  <div class="row ${selected ? 'selected' : ''}" data-key="${key}">
-    <div><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
-    <div><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
-    <div class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
+  <div class="row ${selected ? 'selected' : ''}" role="row" data-key="${key}">
+    <div role="cell"><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
+    <div role="cell"><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
+    <div role="cell" class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
       <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}</b><span>${esc(sub)}</span></div></div>
-    <div class="c-node">${nodeChip(r.node_name)}</div>
-    <div class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
-    <div class="num c-dur">${formatUptime(r.duration_seconds)}</div>
-    <div class="num c-size">${formatBytes(r.size_bytes)}</div>
-    <div class="acts"><button class="btn icon sm ghost" data-act="recording-menu" data-key="${key}" aria-label="Recording actions">${icon('more')}</button></div>
-    <div class="mobile-meta">${nodeChip(r.node_name)}<span title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</span><span>·</span><span>${formatUptime(r.duration_seconds)}</span><span>·</span><span>${formatBytes(r.size_bytes)}</span></div>
+    <div role="cell" class="c-node">${nodeChip(r.node_name)}</div>
+    <div role="cell" class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
+    <div role="cell" class="num c-dur">${formatUptime(r.duration_seconds)}</div>
+    <div role="cell" class="num c-size">${formatBytes(r.size_bytes)}</div>
+    <div role="cell" class="acts"><button class="btn icon sm ghost" data-act="recording-menu" data-key="${key}" aria-label="Recording actions">${icon('more')}</button></div>
+    <div class="mobile-meta" role="cell">${nodeChip(r.node_name)}<span title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</span><span>·</span><span>${formatUptime(r.duration_seconds)}</span><span>·</span><span>${formatBytes(r.size_bytes)}</span></div>
   </div>`;
 }
 
