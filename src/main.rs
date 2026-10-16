@@ -977,8 +977,11 @@ impl AppState {
         self.viewers.close_session(*id);
         let mut terminated = false;
         if let Some(session) = removed {
-            let mut b_guard = session.browser.lock().await;
-            if let Some(mut b) = b_guard.take() {
+            // Out of the session before the slow part (a profile's browser gets up to
+            // 27 s to quit): the periodic save of every other session would wait for
+            // the lock otherwise, and finds nothing to save here.
+            let browser = session.browser.lock().await.take();
+            if let Some(mut b) = browser {
                 b.terminate().await;
                 info!(session_id = %id, "Session terminated");
                 terminated = true;
