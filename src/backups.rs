@@ -2,11 +2,14 @@
 //! next to the profiles directory. A backup is a gzipped tar of the profile's
 //! user-data directory, restorable in place.
 
+use crate::persist;
 use crate::profiles::{self, Profile};
 use serde::Serialize;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
+use tracing::warn;
 use uuid::Uuid;
 
 const EXT: &str = ".tar.gz";
@@ -111,8 +114,16 @@ fn path_of(profiles_dir: &Path, profile_id: Uuid, id: &str) -> PathBuf {
     dir_for(profiles_dir, profile_id).join(format!("{id}{EXT}"))
 }
 
+/// The tar to run: `BROWSER_DAEMON_TAR` (the service points it at a store path),
+/// else the one on the PATH.
+fn tar_program() -> PathBuf {
+    std::env::var_os("BROWSER_DAEMON_TAR")
+        .filter(|t| !t.is_empty())
+        .map_or_else(|| PathBuf::from("tar"), PathBuf::from)
+}
+
 async fn run_tar(args: &[&std::ffi::OsStr]) -> Result<(), String> {
-    let out = tokio::process::Command::new("tar")
+    let out = tokio::process::Command::new(tar_program())
         .args(args)
         .output()
         .await
@@ -134,8 +145,9 @@ pub async fn create(
     label: Option<&str>,
 ) -> Result<BackupInfo, String> {
     let dir = dir_for(profiles_dir, profile.meta.id);
-    fs::create_dir_all(&dir)
+    persist::private_dir(&backups_root(profiles_dir))
         .await
+        .and(persist::private_dir(&dir).await)
         .map_err(|e| format!("failed to create backup directory: {e}"))?;
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -159,6 +171,10 @@ pub async fn create(
         let _ = fs::remove_file(&tmp).await;
         return Err(e);
     }
+    // The profile holds logins: tar's umask would let others read the archive.
+    fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
+        .await
+        .map_err(|e| format!("failed to protect backup: {e}"))?;
     fs::rename(&tmp, &target)
         .await
         .map_err(|e| format!("failed to store backup: {e}"))?;
@@ -201,7 +217,7 @@ pub async fn restore(profiles_dir: &Path, profile: &Profile, id: &str) -> Result
         return Err("backup not found".into());
     }
     let staging = profiles_dir.join(format!(".restore-{}", Uuid::new_v4()));
-    fs::create_dir_all(&staging)
+    persist::private_dir(&staging)
         .await
         .map_err(|e| format!("failed to create staging directory: {e}"))?;
     let fail = |e: String, staging: PathBuf| async move {
@@ -218,6 +234,10 @@ pub async fn restore(profiles_dir: &Path, profile: &Profile, id: &str) -> Result
     {
         return fail(e, staging).await;
     }
+    // The archive's own "." entry decides the mode of the extracted directory.
+    if let Err(e) = fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).await {
+        return fail(format!("failed to protect the restored data: {e}"), staging).await;
+    }
     if let Err(e) = profiles::write_meta(&staging, &profile.meta).await {
         return fail(format!("failed to write profile metadata: {e}"), staging).await;
     }
@@ -231,6 +251,34 @@ pub async fn restore(profiles_dir: &Path, profile: &Profile, id: &str) -> Result
     }
     let _ = fs::remove_dir_all(&old).await;
     Ok(())
+}
+
+/// Startup: tighten the backups' permissions and drop archives a crash left
+/// half written.
+pub async fn sweep(profiles_dir: &Path) {
+    let root = backups_root(profiles_dir);
+    let Ok(mut profiles) = fs::read_dir(&root).await else {
+        return;
+    };
+    let _ = fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).await;
+    while let Ok(Some(p)) = profiles.next_entry().await {
+        if !p.file_type().await.is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        let _ = fs::set_permissions(p.path(), std::fs::Permissions::from_mode(0o700)).await;
+        let Ok(mut files) = fs::read_dir(p.path()).await else {
+            continue;
+        };
+        while let Ok(Some(f)) = files.next_entry().await {
+            let name = f.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') && name.ends_with(".tmp") {
+                warn!(file = %name, "Removing an unfinished backup");
+                let _ = fs::remove_file(f.path()).await;
+            } else {
+                let _ = fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o600)).await;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -257,5 +305,22 @@ mod tests {
         assert_eq!(b.label, None);
         assert!(parse("x.tar.gz", 1).is_none());
         assert!(parse("1-../x.tar.gz", 1).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_crash_leaves_no_partial_backup_and_modes_are_private() {
+        let root = tempfile::tempdir().unwrap();
+        let profiles = root.path().join("profiles");
+        let id = Uuid::new_v4();
+        let dir = dir_for(&profiles, id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(".1700-x.tmp"), b"half").unwrap();
+        std::fs::write(dir.join("1700.tar.gz"), b"done").unwrap();
+        sweep(&profiles).await;
+        assert!(!dir.join(".1700-x.tmp").exists());
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir.join("1700.tar.gz")), 0o600);
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(list(&profiles, id).await.len(), 1);
     }
 }

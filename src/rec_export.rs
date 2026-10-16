@@ -20,6 +20,16 @@ static EXPORTS: LazyLock<tokio::sync::Semaphore> = LazyLock::new(|| tokio::sync:
 /// The last frame stays this long at least (ms).
 const LAST_FRAME_MS: u64 = 500;
 
+/// Name prefix of an export's work directory inside the recording's: left behind
+/// by a crash, it is removed at startup (see recorder::mark_orphaned_recordings).
+pub const WORK_PREFIX: &str = ".export-";
+
+/// The video's length (ms): the recording's, or up to the last frame and a moment
+/// more if that is later.
+fn export_total_ms(recorded_ms: u64, last_frame_ms: u64) -> u64 {
+    recorded_ms.max(last_frame_ms + LAST_FRAME_MS)
+}
+
 /// Width and height of a JPEG, from its start-of-frame marker.
 fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
     let mut i = 2;
@@ -63,21 +73,40 @@ pub async fn export_webm(
     id: Uuid,
 ) -> Result<(tokio::fs::File, u64, String), String> {
     let ffmpeg = config.ffmpeg.clone().ok_or("No ffmpeg on this node")?;
+    // Before the wait for a turn: the cleanup must not take the recording meanwhile.
+    let _busy = recorder::mark_busy(&[id]).ok_or("Still recording: stop it first")?;
     let meta = recorder::get_recording(config, id)
         .await
         .ok_or("No such recording")?;
-    if meta.status == "recording" {
-        return Err("Still recording: stop it first".into());
-    }
     let _turn = EXPORTS.acquire().await.map_err(|e| e.to_string())?;
     let started = Instant::now();
     let rec_dir = config.recordings_dir.join(id.to_string());
-    let work = tempfile::Builder::new()
-        .prefix(".export-")
-        .tempdir_in(&rec_dir)
+    let work = rec_dir.join(format!("{WORK_PREFIX}{}", Uuid::new_v4()));
+    crate::persist::private_dir(&work)
+        .await
         .map_err(|e| format!("No room to work: {e}"))?;
-    let dir = work.path();
+    let result = encode(&ffmpeg, &meta, id, &rec_dir, &work).await;
+    // Off the async workers' hands: thousands of frame files.
+    let _ = tokio::fs::remove_dir_all(&work).await;
+    let (file, size, frames, with_audio) = result?;
+    info!(recording_id = %id, frames, audio = with_audio, size, took_ms = started.elapsed().as_millis() as u64, "Exported recording as WebM");
+    let date = meta.started_at_secs;
+    Ok((
+        file,
+        size,
+        format!("recording-{}-{date}.webm", &id.to_string()[..8]),
+    ))
+}
 
+/// The encoding itself, in the work directory `dir`: the open video file, its size,
+/// the frames in it and whether it has sound.
+async fn encode(
+    ffmpeg: &std::path::Path,
+    meta: &recorder::RecordingMeta,
+    id: Uuid,
+    rec_dir: &std::path::Path,
+    dir: &std::path::Path,
+) -> Result<(tokio::fs::File, u64, usize, bool), String> {
     // The frames as files, and the size they all fit in.
     let f = tokio::fs::File::open(rec_dir.join("frames.jsonl"))
         .await
@@ -106,7 +135,7 @@ pub async fn export_webm(
     }
     let (w, h) = (w.max(2).div_ceil(2) * 2, h.max(2).div_ceil(2) * 2);
     let last_t = frames.last().map_or(0, |(_, t)| *t);
-    let total_ms = (meta.duration_seconds * 1000).max(last_t + LAST_FRAME_MS);
+    let total_ms = export_total_ms(meta.length_ms(), last_t);
     let list = dir.join("frames.ffconcat");
     tokio::fs::write(&list, concat_list(&frames, total_ms))
         .await
@@ -115,7 +144,8 @@ pub async fn export_webm(
     let out = dir.join("export.webm");
     let audio = rec_dir.join(crate::rec_audio::FILE);
     let with_audio = meta.audio && audio.exists();
-    let mut cmd = Command::new(&ffmpeg);
+    let mut cmd = Command::new(ffmpeg);
+    crate::proc::die_with_parent(&mut cmd);
     cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
         .args(["-f", "concat", "-safe", "0", "-i"])
         .arg(&list);
@@ -168,14 +198,7 @@ pub async fn export_webm(
         .await
         .map_err(|e| e.to_string())?;
     let size = file.metadata().await.map_err(|e| e.to_string())?.len();
-    drop(work);
-    info!(recording_id = %id, frames = frames.len(), audio = with_audio, size, took_ms = started.elapsed().as_millis() as u64, "Exported recording as WebM");
-    let date = meta.started_at_secs;
-    Ok((
-        file,
-        size,
-        format!("recording-{}-{date}.webm", &id.to_string()[..8]),
-    ))
+    Ok((file, size, frames.len(), with_audio))
 }
 
 #[cfg(test)]
@@ -197,6 +220,15 @@ mod tests {
         );
         // A recording whose length is unknown still shows its last frame a moment.
         assert!(concat_list(&frames[2..], 0).contains("duration 2.100"));
+    }
+
+    #[test]
+    fn the_video_lasts_as_long_as_the_recording() {
+        // The recording's own length wins (ms, not whole seconds)...
+        assert_eq!(export_total_ms(12_750, 12_000), 12_750);
+        // ...unless the last frame is later than it says.
+        assert_eq!(export_total_ms(5_000, 5_000), 5_500);
+        assert_eq!(export_total_ms(0, 0), 500);
     }
 
     #[test]

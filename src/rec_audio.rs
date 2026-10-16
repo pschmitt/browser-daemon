@@ -29,6 +29,23 @@ pub struct Source {
     pub sink: String,
 }
 
+/// A running ffmpeg writing one segment.
+struct Live {
+    child: Child,
+    since: Instant,
+    /// Index in the segment list.
+    segment: usize,
+    /// Its first bytes are on disk: capture has started.
+    started: bool,
+}
+
+/// How long an ffmpeg must live to count as working.
+const WORKING_AFTER: Duration = Duration::from_secs(2);
+/// How often to look at ffmpeg while waiting for it to start, and afterwards. Pauses
+/// and the end are not waited for: the clock wakes the loop.
+const START_POLL: Duration = Duration::from_millis(40);
+const POLL: Duration = Duration::from_millis(500);
+
 /// Records `src` into `dir` until `stop` is set, following the clock's pauses.
 /// The task answers whether the recording kept audio.
 pub fn spawn(
@@ -39,41 +56,61 @@ pub fn spawn(
 ) -> tokio::task::JoinHandle<bool> {
     tokio::spawn(async move {
         let parts = dir.join(PARTS);
-        if let Err(e) = tokio::fs::create_dir_all(&parts).await {
+        if let Err(e) = crate::persist::private_dir(&parts).await {
             warn!(error = %e, "Could not create the audio directory: recording without sound");
             return false;
         }
-        let mut current: Option<(Child, Instant)> = None;
+        let mut current: Option<Live> = None;
         let mut segments: Vec<(u64, PathBuf)> = Vec::new();
         let mut early_deaths = 0;
         loop {
+            // Asked for before the state is read: a pause or the end after that wakes us.
+            let changed = clock.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let stopping = stop.load(Ordering::SeqCst);
             if stopping || clock.is_paused() {
-                if let Some((child, _)) = current.take() {
-                    finish(child).await;
+                if let Some(live) = current.take() {
+                    finish(live.child).await;
                 }
                 if stopping {
                     break;
                 }
-            } else if let Some((child, since)) = current.as_mut() {
+            } else if let Some(live) = current.as_mut() {
                 // ffmpeg went away (the sink was removed?): a new segment on the next
                 // round, unless it keeps dying right away.
-                if let Ok(Some(_)) = child.try_wait() {
-                    if since.elapsed() < Duration::from_secs(2) {
+                if let Ok(Some(_)) = live.child.try_wait() {
+                    if live.since.elapsed() < WORKING_AFTER {
                         early_deaths += 1;
+                    } else {
+                        early_deaths = 0;
                     }
                     current = None;
                     if early_deaths >= 3 {
                         warn!(sink = %src.sink, "ffmpeg keeps failing: recording without sound from here");
                         break;
                     }
+                } else if !live.started
+                    && tokio::fs::metadata(&segments[live.segment].1)
+                        .await
+                        .is_ok_and(|m| m.len() > 0)
+                {
+                    // The segment begins where the first bytes are, not where ffmpeg was
+                    // started: starting it takes a moment, and the sound would run early.
+                    live.started = true;
+                    segments[live.segment].0 = clock.elapsed().as_millis() as u64;
                 }
             } else {
                 let t = clock.elapsed().as_millis() as u64;
                 let path = parts.join(format!("{t:010}.webm"));
                 match record(&src, &path) {
                     Ok(child) => {
-                        current = Some((child, Instant::now()));
+                        current = Some(Live {
+                            child,
+                            since: Instant::now(),
+                            segment: segments.len(),
+                            started: false,
+                        });
                         segments.push((t, path));
                     }
                     Err(e) => {
@@ -82,10 +119,18 @@ pub fn spawn(
                     }
                 }
             }
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            let wait = if current.as_ref().is_some_and(|l| !l.started) {
+                START_POLL
+            } else {
+                POLL
+            };
+            tokio::select! {
+                () = &mut changed => {}
+                () = tokio::time::sleep(wait) => {}
+            }
         }
-        if let Some((child, _)) = current.take() {
-            finish(child).await;
+        if let Some(live) = current.take() {
+            finish(live.child).await;
         }
         let kept = join(&src.cfg.ffmpeg, &segments, &dir.join(FILE)).await;
         let _ = tokio::fs::remove_dir_all(&parts).await;
@@ -179,6 +224,7 @@ pub async fn join(ffmpeg: &Path, inputs: &[(u64, PathBuf)], out: &Path) -> bool 
         cmd.arg("-i").arg(p);
     }
     let offsets: Vec<u64> = present.iter().map(|(t, _)| *t).collect();
+    crate::proc::die_with_parent(&mut cmd);
     let ok = cmd
         .arg("-filter_complex")
         .arg(mix_filter(&offsets))
@@ -187,6 +233,7 @@ pub async fn join(ffmpeg: &Path, inputs: &[(u64, PathBuf)], out: &Path) -> bool 
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .output()
         .await
         .map(|o| {
@@ -209,29 +256,44 @@ pub async fn join(ffmpeg: &Path, inputs: &[(u64, PathBuf)], out: &Path) -> bool 
 }
 
 /// The loudest moment of `file`, from ffmpeg's volumedetect, is below SILENCE_DB.
+/// Only an answer says so: a report that does not come (ffmpeg failed or did not
+/// say) keeps the audio rather than throwing a recording's sound away.
 async fn is_silent(ffmpeg: &Path, file: &Path) -> bool {
-    let Ok(out) = Command::new(ffmpeg)
+    let mut cmd = Command::new(ffmpeg);
+    crate::proc::die_with_parent(&mut cmd);
+    let Ok(out) = cmd
         .args(["-hide_banner", "-nostdin", "-i"])
         .arg(file)
         .args(["-af", "volumedetect", "-f", "null", "-"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .output()
         .await
     else {
         return false;
     };
-    max_volume(&String::from_utf8_lossy(&out.stderr)).is_none_or(|db| db < SILENCE_DB)
+    silent_in_report(&String::from_utf8_lossy(&out.stderr)).unwrap_or(false)
 }
 
-/// `max_volume: -12.3 dB` from volumedetect's report (None for -inf or none).
-fn max_volume(report: &str) -> Option<f64> {
-    report
+/// Whether volumedetect's report says the audio is silent: `max_volume: -inf dB`
+/// or below SILENCE_DB. None when it does not say.
+fn silent_in_report(report: &str) -> Option<bool> {
+    let value = report
         .lines()
-        .find_map(|l| l.split("max_volume:").nth(1))
-        .and_then(|v| v.trim().trim_end_matches("dB").trim().parse::<f64>().ok())
+        .find_map(|l| l.split("max_volume:").nth(1))?
+        .trim()
+        .trim_end_matches("dB")
+        .trim();
+    if value.trim_start_matches('-').eq_ignore_ascii_case("inf") && value.starts_with('-') {
+        return Some(true);
+    }
+    value
+        .parse::<f64>()
+        .ok()
         .filter(|v| v.is_finite())
+        .map(|db| db < SILENCE_DB)
 }
 
 #[cfg(test)]
@@ -247,10 +309,14 @@ mod tests {
     }
 
     #[test]
-    fn loudness_from_the_report() {
+    fn silence_is_only_what_the_report_says() {
         let r = "[Parsed_volumedetect_0 @ 0x1] mean_volume: -30.1 dB\n[Parsed_volumedetect_0 @ 0x1] max_volume: -12.5 dB\n";
-        assert_eq!(max_volume(r), Some(-12.5));
-        assert_eq!(max_volume("max_volume: -inf dB"), None);
-        assert_eq!(max_volume("nothing"), None);
+        assert_eq!(silent_in_report(r), Some(false));
+        assert_eq!(silent_in_report("max_volume: -70.0 dB"), Some(true));
+        assert_eq!(silent_in_report("max_volume: -inf dB"), Some(true));
+        // No report, a failed ffmpeg, nonsense: the audio stays.
+        assert_eq!(silent_in_report("nothing"), None);
+        assert_eq!(silent_in_report("max_volume: inf dB"), None);
+        assert_eq!(silent_in_report("max_volume: ? dB"), None);
     }
 }

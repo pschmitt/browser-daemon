@@ -41,14 +41,21 @@ pub struct VirtualDisplay {
 
 /// Lock file of a display whose server is gone (killed without cleaning up)?
 fn stale_lock(n: u32) -> bool {
-    let Ok(pid) = std::fs::read_to_string(format!("/tmp/.X{n}-lock")) else {
-        return false;
-    };
-    match pid.trim().parse::<u32>() {
-        Ok(pid) => !Path::new(&format!("/proc/{pid}")).exists(),
-        Err(_) => false,
-    }
+    lock_pid(n).is_some_and(|pid| !Path::new(&format!("/proc/{pid}")).exists())
 }
+
+/// The pid in a display's lock file.
+fn lock_pid(n: u32) -> Option<u32> {
+    std::fs::read_to_string(format!("/tmp/.X{n}-lock"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Display numbers are picked one launch at a time: two launches at once would
+/// both see the same number free.
+static ALLOCATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn in_use(n: u32) -> bool {
     Path::new(&format!("/tmp/.X{n}-lock")).exists()
@@ -62,6 +69,7 @@ impl VirtualDisplay {
             (width + MARGIN).max(MIN_SCREEN.0),
             (height + MARGIN).max(MIN_SCREEN.1),
         );
+        let _turn = ALLOCATE.lock().await;
         for n in FIRST_DISPLAY..=LAST_DISPLAY {
             if stale_lock(n) {
                 debug!(display = n, "Removing a stale X lock");
@@ -81,21 +89,29 @@ impl VirtualDisplay {
                 .stderr(Stdio::null());
             proc::own_group(&mut cmd);
             let mut child = cmd.spawn()?;
-            // Ready once its socket exists; gone again means another server won the race.
+            let pid = child.id();
+            // Ready once its socket exists and the lock is ours; gone means another
+            // server (not ours to clean up after) won the race.
             let socket = PathBuf::from(format!("/tmp/.X11-unix/X{n}"));
             let mut ready = false;
             for _ in 0..60 {
-                if socket.exists() {
-                    ready = true;
+                if child.try_wait()?.is_some() {
                     break;
                 }
-                if child.try_wait()?.is_some() {
+                if socket.exists() && pid.is_some() && lock_pid(n) == pid {
+                    ready = true;
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             if !ready {
                 let _ = child.start_kill();
+                let _ = child.wait().await;
+                // Killed, it cannot remove what it made; a server that won the number is not ours.
+                if pid.is_some() && lock_pid(n) == pid {
+                    let _ = std::fs::remove_file(format!("/tmp/.X{n}-lock"));
+                    let _ = std::fs::remove_file(format!("/tmp/.X11-unix/X{n}"));
+                }
                 continue;
             }
             let Some(proc) = Proc::spawned(child) else {
@@ -140,10 +156,15 @@ impl VirtualDisplay {
 
     pub async fn stop(&mut self) {
         self.proc.terminate(Duration::from_secs(2)).await;
-        // Killed, the server cannot remove its lock and socket itself.
-        let n = self.name.trim_start_matches(':');
-        let _ = std::fs::remove_file(format!("/tmp/.X{n}-lock"));
-        let _ = std::fs::remove_file(format!("/tmp/.X11-unix/X{n}"));
+        // Killed, the server cannot remove its lock and socket itself; another
+        // server's (the number was taken over) are left alone.
+        let Ok(n) = self.name.trim_start_matches(':').parse::<u32>() else {
+            return;
+        };
+        if lock_pid(n).is_none_or(|pid| pid == self.proc.pid) {
+            let _ = std::fs::remove_file(format!("/tmp/.X{n}-lock"));
+            let _ = std::fs::remove_file(format!("/tmp/.X11-unix/X{n}"));
+        }
     }
 }
 

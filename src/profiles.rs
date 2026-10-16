@@ -86,9 +86,7 @@ pub async fn read_meta(dir: &Path) -> Option<ProfileMeta> {
 }
 
 pub async fn write_meta(dir: &Path, meta: &ProfileMeta) -> std::io::Result<()> {
-    let tmp = dir.join(format!(".{META_FILE}.tmp"));
-    fs::write(&tmp, serde_json::to_vec_pretty(meta)?).await?;
-    fs::rename(&tmp, dir.join(META_FILE)).await
+    crate::persist::write_atomic(&dir.join(META_FILE), &serde_json::to_vec_pretty(meta)?).await
 }
 
 pub async fn list(profiles_dir: &Path) -> Vec<Profile> {
@@ -148,7 +146,8 @@ pub async fn create(
         legacy_homepage: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
-    fs::create_dir_all(&dir).await?;
+    crate::persist::private_dir(profiles_dir).await?;
+    crate::persist::private_dir(&dir).await?;
     write_meta(&dir, &meta).await?;
     Ok(Profile { meta, dir })
 }
@@ -157,6 +156,8 @@ pub async fn create(
 pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::Result<Profile> {
     // A copied or imported profile keeps its proxy, appearance, default tabs and
     // recording settings.
+    // An imported or restored directory holds logins: the archive's mode is not trusted.
+    crate::persist::private_dir(&dir).await?;
     let old = read_meta(&dir).await;
     let (record, record_audio) = old
         .as_ref()
@@ -193,9 +194,45 @@ pub fn legacy_identity(dir_name: &str) -> (String, BrowserEngine) {
     }
 }
 
+/// Finish or undo what a crash left in a restore: `.restore-*` is a half-extracted
+/// backup, `.old-*` the data it was replacing. Data whose profile has no directory
+/// any more (the crash came between the two renames) goes back to its place.
+pub async fn recover_interrupted(profiles_dir: &Path) {
+    let Ok(mut entries) = fs::read_dir(profiles_dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path();
+        if name.starts_with(".restore-") {
+            warn!(dir = %name, "Removing an unfinished restore");
+            let _ = fs::remove_dir_all(&path).await;
+        } else if name.starts_with(".old-") {
+            let Some(meta) = read_meta(&path).await else {
+                warn!(dir = %name, "Data left by an interrupted restore has no profile.json: kept");
+                continue;
+            };
+            let home = profiles_dir.join(meta.id.to_string());
+            if fs::metadata(&home).await.is_err() {
+                warn!(dir = %name, profile = %meta.name, "Putting a profile back after an interrupted restore");
+                if let Err(e) = fs::rename(&path, &home).await {
+                    warn!(dir = %name, error = %e, "Could not put the profile back");
+                }
+            } else {
+                let _ = fs::remove_dir_all(&path).await;
+            }
+        }
+    }
+}
+
 /// Move name-based profile directories to `<uuid>/` with a `profile.json`.
 /// Runs at startup, before any session can hold a profile open.
 pub async fn migrate(profiles_dir: &Path) {
+    recover_interrupted(profiles_dir).await;
+    crate::backups::sweep(profiles_dir).await;
+    if fs::metadata(profiles_dir).await.is_ok() {
+        let _ = crate::persist::private_dir(profiles_dir).await;
+    }
     let Ok(mut entries) = fs::read_dir(profiles_dir).await else {
         return;
     };
@@ -203,11 +240,17 @@ pub async fn migrate(profiles_dir: &Path) {
     while let Ok(Some(entry)) = entries.next_entry().await {
         let dir = entry.path();
         let hidden = entry.file_name().to_string_lossy().starts_with('.');
-        if !hidden
-            && entry.file_type().await.is_ok_and(|t| t.is_dir())
-            && read_meta(&dir).await.is_none()
-        {
-            legacy.push(dir);
+        if hidden || !entry.file_type().await.is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        // Only a directory without a profile.json is a legacy one: an unreadable
+        // file is somebody's metadata, not to be replaced by a guess.
+        match fs::try_exists(dir.join(META_FILE)).await {
+            Ok(false) => legacy.push(dir),
+            Ok(true) if read_meta(&dir).await.is_none() => {
+                warn!(dir = %dir.display(), "profile.json is unreadable: the profile is left alone");
+            }
+            _ => {}
         }
     }
     for old in legacy {
@@ -287,7 +330,10 @@ mod tests {
         // Written back as tabs only.
         write_meta(root.path(), &meta).await.unwrap();
         let raw = std::fs::read_to_string(root.path().join(META_FILE)).unwrap();
-        assert!(raw.contains("\"tabs\"") && !raw.contains("homepage"), "{raw}");
+        assert!(
+            raw.contains("\"tabs\"") && !raw.contains("homepage"),
+            "{raw}"
+        );
     }
 
     #[test]
@@ -343,5 +389,44 @@ mod tests {
         assert!(find(root.path(), "google (p@pschmitt.dev)").await.is_none());
         assert!(name_taken(root.path(), "Google (p@pschmitt.dev)", None).await);
         assert!(!name_taken(root.path(), "Google (p@pschmitt.dev)", Some(p.meta.id)).await);
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_profile_json_is_not_overwritten_by_the_migration() {
+        let root = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let dir = root.path().join(id.to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(META_FILE), b"{ torn").unwrap();
+        migrate(root.path()).await;
+        assert_eq!(std::fs::read(dir.join(META_FILE)).unwrap(), b"{ torn");
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_restore_is_undone() {
+        let root = tempfile::tempdir().unwrap();
+        let p = create(root.path(), "work", BrowserEngine::Chromium)
+            .await
+            .unwrap();
+        // Crash between the two renames: the data is under .old-*, the profile's directory is gone.
+        let old = root.path().join(".old-1");
+        std::fs::rename(&p.dir, &old).unwrap();
+        std::fs::create_dir_all(root.path().join(".restore-2/Default")).unwrap();
+        // Another restore got as far as removing the old data's copy.
+        let done = create(root.path(), "other", BrowserEngine::Chromium)
+            .await
+            .unwrap();
+        std::fs::create_dir_all(root.path().join(".old-3")).unwrap();
+        std::fs::copy(
+            done.dir.join(META_FILE),
+            root.path().join(".old-3").join(META_FILE),
+        )
+        .unwrap();
+        recover_interrupted(root.path()).await;
+        assert!(p.dir.join(META_FILE).exists());
+        assert!(!old.exists());
+        assert!(!root.path().join(".restore-2").exists());
+        assert!(!root.path().join(".old-3").exists());
+        assert_eq!(list(root.path()).await.len(), 2);
     }
 }

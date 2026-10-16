@@ -81,13 +81,16 @@ pub fn spawn_monitor(state: AppState) {
                         continue;
                     }
                     for c in contexts {
-                        let r = hub
-                            .call(
+                        // A hung tab must not stall the monitor for the hub's 30 s.
+                        let r = tokio::time::timeout(
+                            Duration::from_secs(2),
+                            hub.call(
                                 "script.evaluate",
                                 json!({ "expression": PLAYING_JS, "target": { "context": c.id }, "awaitPromise": false }),
-                            )
-                            .await;
-                        if r.is_ok_and(|v| v["result"]["value"] == true) {
+                            ),
+                        )
+                        .await;
+                        if r.is_ok_and(|v| v.is_ok_and(|v| v["result"]["value"] == true)) {
                             pages.insert(c.id);
                         }
                     }

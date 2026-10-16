@@ -1,13 +1,14 @@
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::fs::{self, OpenOptions};
+use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -19,6 +20,9 @@ pub struct RecordingMeta {
     pub started_at_secs: u64,
     pub ended_at_secs: Option<u64>,
     pub duration_seconds: u64,
+    /// The length in milliseconds (0 in recordings of older versions: see `length_ms`).
+    #[serde(default)]
+    pub duration_ms: u64,
     pub frame_count: u64,
     pub size_bytes: u64,
     pub initial_url: Option<String>,
@@ -41,6 +45,28 @@ pub struct RecordingMeta {
     /// Made by merging these recordings, in this order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub merged_from: Vec<Uuid>,
+    /// When the merge was made: the cleanup's age counts from here, not from
+    /// the start of the oldest source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_at_secs: Option<u64>,
+}
+
+impl RecordingMeta {
+    /// The recording's length (ms).
+    pub fn length_ms(&self) -> u64 {
+        if self.duration_ms > 0 {
+            self.duration_ms
+        } else {
+            self.duration_seconds.saturating_mul(1000)
+        }
+    }
+
+    /// The moment the cleanup measures the recording's age from.
+    fn age_reference_secs(&self) -> u64 {
+        self.merged_at_secs
+            .unwrap_or(self.started_at_secs)
+            .max(self.ended_at_secs.unwrap_or(0))
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -73,12 +99,80 @@ pub struct ProxyRecordingFrame {
     pub data: String, // base64 JPEG
 }
 
+/// A proxied frame with the recording time it arrived at.
+struct StampedFrame {
+    t: u64,
+    frame: ProxyRecordingFrame,
+}
+
+/// Frames waiting for the recorder: a slow disk drops frames, it does not grow memory.
+const FRAME_QUEUE: usize = 8;
+
+/// Where the handoff view's frames (and Firefox's BiDi screenshots) go: stamped
+/// with the recording's clock when they arrive here, thinned to the recording's
+/// frame rate, dropped when the recorder cannot keep up.
+#[derive(Clone)]
+pub struct FrameSender {
+    tx: tokio::sync::mpsc::Sender<StampedFrame>,
+    clock: Arc<RecordingClock>,
+    last: Arc<Mutex<Option<(Instant, u64)>>>,
+}
+
+/// The recorder is gone.
+#[derive(Debug)]
+pub struct RecorderClosed;
+
+impl FrameSender {
+    /// Offer a frame. Ok also when it was dropped on purpose (paused, too soon after
+    /// the last one, unchanged, queue full); Err once the recording has ended.
+    pub fn send(&self, frame: ProxyRecordingFrame) -> Result<(), RecorderClosed> {
+        if self.tx.is_closed() {
+            return Err(RecorderClosed);
+        }
+        if self.clock.is_paused() {
+            return Ok(());
+        }
+        let fingerprint = frame_fingerprint(&frame.data);
+        {
+            let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            if let Some((at, fp)) = *last {
+                if now.duration_since(at) < RECORD_FRAME_INTERVAL || fp == fingerprint {
+                    return Ok(());
+                }
+            }
+            *last = Some((now, fingerprint));
+        }
+        let stamped = StampedFrame {
+            t: duration_ms(self.clock.elapsed()),
+            frame,
+        };
+        match self.tx.try_send(stamped) {
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Err(RecorderClosed),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Cheap identity of a frame's data, to skip a picture shown twice.
+fn frame_fingerprint(data: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.len().hash(&mut h);
+    data.hash(&mut h);
+    h.finish()
+}
+
+fn duration_ms(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
+}
+
 #[derive(Clone)]
 pub struct SessionRecorderHandle {
     pub recording_id: Uuid,
     pub stop_flag: Arc<AtomicBool>,
     pub clock: Arc<RecordingClock>,
-    pub frame_tx: tokio::sync::mpsc::UnboundedSender<ProxyRecordingFrame>,
+    pub frame_tx: FrameSender,
     /// Recording the session's sound too.
     pub audio: bool,
 }
@@ -93,11 +187,109 @@ impl SessionRecorderHandle {
     }
 }
 
+// ---------------------------------------------------------------------------
+// What this process is working on
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct Registry {
+    /// Recordings being written: recording id -> session.
+    active: HashMap<Uuid, Uuid>,
+    /// The stop flag of each session's recorder, so a second one replaces the first.
+    stops: HashMap<Uuid, (Uuid, Arc<AtomicBool>)>,
+    /// Recordings an export, merge or salvage is reading: how many each.
+    busy: HashMap<Uuid, usize>,
+}
+
+static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(Mutex::default);
+
+fn registry() -> std::sync::MutexGuard<'static, Registry> {
+    REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Is this recording being written by a recorder of this process right now?
+/// (A `status: recording` in `meta.json` alone proves nothing: a crash leaves it.)
+pub fn is_active(id: Uuid) -> bool {
+    registry().active.contains_key(&id)
+}
+
+/// Is an export, merge or salvage working on this recording? Then the cleanup,
+/// a delete and a merge leave it alone.
+pub fn is_busy(id: Uuid) -> bool {
+    registry().busy.contains_key(&id)
+}
+
+/// Marks recordings busy until dropped.
+pub struct BusyGuard(Vec<Uuid>);
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        let mut reg = registry();
+        for id in &self.0 {
+            if let Some(n) = reg.busy.get_mut(id) {
+                *n -= 1;
+                if *n == 0 {
+                    reg.busy.remove(id);
+                }
+            }
+        }
+    }
+}
+
+/// Mark `ids` busy. None when one of them is being recorded.
+pub fn mark_busy(ids: &[Uuid]) -> Option<BusyGuard> {
+    let mut reg = registry();
+    if ids.iter().any(|id| reg.active.contains_key(id)) {
+        return None;
+    }
+    for id in ids {
+        *reg.busy.entry(*id).or_default() += 1;
+    }
+    Some(BusyGuard(ids.to_vec()))
+}
+
+/// Registered while a recorder runs.
+struct ActiveGuard {
+    id: Uuid,
+    session: Uuid,
+    stop: Arc<AtomicBool>,
+}
+
+impl ActiveGuard {
+    /// Registers the recording; the session's earlier recorder, if any, is told to stop.
+    fn new(id: Uuid, session: Uuid, stop: Arc<AtomicBool>) -> Self {
+        let mut reg = registry();
+        if let Some((_, old)) = reg.stops.insert(session, (id, stop.clone())) {
+            old.store(true, Ordering::SeqCst);
+        }
+        reg.active.insert(id, session);
+        Self { id, session, stop }
+    }
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        let mut reg = registry();
+        reg.active.remove(&self.id);
+        if reg
+            .stops
+            .get(&self.session)
+            .is_some_and(|(id, _)| *id == self.id)
+        {
+            reg.stops.remove(&self.session);
+        }
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Recording time that stands still while the recording is paused, so a
 /// pause leaves no frozen gap in the playback.
 pub struct RecordingClock {
     start: Instant,
     state: std::sync::Mutex<PauseState>,
+    /// Woken on every pause and resume (and by the recorder when it ends), so the
+    /// sound follows the clock without polling it.
+    changed: tokio::sync::Notify,
 }
 
 #[derive(Default)]
@@ -111,6 +303,7 @@ impl RecordingClock {
         Self {
             start: Instant::now(),
             state: std::sync::Mutex::new(PauseState::default()),
+            changed: tokio::sync::Notify::new(),
         }
     }
 
@@ -124,15 +317,18 @@ impl RecordingClock {
 
     /// Returns false when the clock already was in the requested state.
     pub fn set_paused(&self, paused: bool) -> bool {
-        let mut st = self.lock();
-        match (paused, st.paused_since) {
-            (true, None) => st.paused_since = Some(Instant::now()),
-            (false, Some(since)) => {
-                st.paused_total += since.elapsed();
-                st.paused_since = None;
+        {
+            let mut st = self.lock();
+            match (paused, st.paused_since) {
+                (true, None) => st.paused_since = Some(Instant::now()),
+                (false, Some(since)) => {
+                    st.paused_total += since.elapsed();
+                    st.paused_since = None;
+                }
+                _ => return false,
             }
-            _ => return false,
         }
+        self.changed.notify_waiters();
         true
     }
 
@@ -140,6 +336,16 @@ impl RecordingClock {
         let st = self.lock();
         let paused = st.paused_total + st.paused_since.map_or(Duration::ZERO, |s| s.elapsed());
         self.start.elapsed().saturating_sub(paused)
+    }
+
+    /// Completes at the next pause, resume or [`wake`](Self::wake). Create it
+    /// before looking at the state, so a change in between is not missed.
+    pub fn notified(&self) -> tokio::sync::futures::Notified<'_> {
+        self.changed.notified()
+    }
+
+    pub fn wake(&self) {
+        self.changed.notify_waiters();
     }
 }
 
@@ -158,7 +364,14 @@ pub fn start_recording(
     let stop_clone = stop_flag.clone();
     let clock = Arc::new(RecordingClock::new());
     let clock_clone = clock.clone();
-    let (frame_tx, frame_rx) = tokio::sync::mpsc::unbounded_channel::<ProxyRecordingFrame>();
+    let (tx, frame_rx) = tokio::sync::mpsc::channel::<StampedFrame>(FRAME_QUEUE);
+    let frame_tx = FrameSender {
+        tx,
+        clock: clock.clone(),
+        last: Arc::default(),
+    };
+    // Registered here, not in the task: the next call must already see this recorder.
+    let active = ActiveGuard::new(recording_id, session_id, stop_flag.clone());
 
     tokio::spawn(async move {
         record_session_loop(
@@ -173,6 +386,7 @@ pub fn start_recording(
             frame_rx,
             grab,
             audio,
+            active,
         )
         .await;
     });
@@ -186,6 +400,7 @@ pub fn start_recording(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_single_frame(
     writer: &mut tokio::fs::File,
     meta: &mut RecordingMeta,
@@ -194,11 +409,14 @@ async fn write_single_frame(
     total_frames: &mut u64,
     last_meta_flush: &mut Instant,
     clock: &RecordingClock,
+    last_t: &mut u64,
     current_url: &mut Option<String>,
     current_title: &mut Option<String>,
     data: String,
     url: Option<String>,
     title: Option<String>,
+    // The recording time the frame arrived at, if it was stamped on the way here.
+    stamp: Option<u64>,
 ) {
     if let Some(ref u) = url {
         if !u.is_empty() && u != "about:blank" {
@@ -224,10 +442,15 @@ async fn write_single_frame(
         }
     }
 
-    if clock.is_paused() {
+    // A frame stamped before a pause still belongs to the time before it.
+    if stamp.is_none() && clock.is_paused() {
         return;
     }
-    let elapsed_ms = clock.elapsed().as_millis() as u64;
+    let elapsed_ms = frame_time(
+        stamp.unwrap_or_else(|| duration_ms(clock.elapsed())),
+        *last_t,
+    );
+    *last_t = elapsed_ms;
     let frame = RecordingFrame {
         t: elapsed_ms,
         url: current_url.clone(),
@@ -242,9 +465,11 @@ async fn write_single_frame(
     }
 
     // Flush metadata every 4 seconds or every 30 frames
-    if last_meta_flush.elapsed() > Duration::from_secs(4) || *total_frames % 30 == 0 {
+    if last_meta_flush.elapsed() > Duration::from_secs(4) || total_frames.is_multiple_of(30) {
         let _ = writer.flush().await;
-        meta.duration_seconds = clock.elapsed().as_secs();
+        let elapsed = clock.elapsed();
+        meta.duration_seconds = elapsed.as_secs();
+        meta.duration_ms = duration_ms(elapsed);
         meta.frame_count = *total_frames;
         meta.size_bytes = compute_rec_dir_size(rec_dir).await;
         meta.final_url = current_url.clone();
@@ -252,6 +477,11 @@ async fn write_single_frame(
         let _ = write_meta(meta_file, meta).await;
         *last_meta_flush = Instant::now();
     }
+}
+
+/// Frame times never go back, whatever order frames from different sources arrive in.
+fn frame_time(t: u64, last: u64) -> u64 {
+    t.max(last)
 }
 
 /// Chromium reports a blank tab's URL as its title; that is no title.
@@ -286,6 +516,7 @@ const SHOT_REQUEST_ID: u64 = 1 << 30;
 /// Recorded frames are scaled to fit this box.
 const RECORD_MAX: (f64, f64) = (1024.0, 640.0);
 
+#[allow(clippy::too_many_arguments)]
 async fn record_session_loop(
     recording_id: Uuid,
     session_id: Uuid,
@@ -295,12 +526,14 @@ async fn record_session_loop(
     config: RecorderConfig,
     stop_flag: Arc<AtomicBool>,
     clock: Arc<RecordingClock>,
-    mut frame_rx: tokio::sync::mpsc::UnboundedReceiver<ProxyRecordingFrame>,
+    mut frame_rx: tokio::sync::mpsc::Receiver<StampedFrame>,
     grab: Option<DisplayGrab>,
     audio: Option<crate::rec_audio::Source>,
+    // Registered until the recording is final.
+    active: ActiveGuard,
 ) {
     let rec_dir = config.recordings_dir.join(recording_id.to_string());
-    if let Err(e) = fs::create_dir_all(&rec_dir).await {
+    if let Err(e) = make_rec_dir(&config, &rec_dir).await {
         error!(recording_id = %recording_id, error = %e, "Failed to create recording directory");
         return;
     }
@@ -321,6 +554,7 @@ async fn record_session_loop(
         started_at_secs,
         ended_at_secs: None,
         duration_seconds: 0,
+        duration_ms: 0,
         frame_count: 0,
         size_bytes: 0,
         initial_url: None,
@@ -332,6 +566,7 @@ async fn record_session_loop(
         status: "recording".to_string(),
         audio: false,
         merged_from: Vec::new(),
+        merged_at_secs: None,
     };
 
     let _ = write_meta(&meta_file, &meta).await;
@@ -356,13 +591,7 @@ async fn record_session_loop(
         .unwrap_or_default();
 
     // Open frames file
-    let mut frames_writer = match OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(&frames_file)
-        .await
-    {
+    let mut frames_writer = match crate::persist::private_append(&frames_file).await {
         Ok(f) => f,
         Err(e) => {
             error!(recording_id = %recording_id, error = %e, "Failed to open frames file");
@@ -377,7 +606,11 @@ async fn record_session_loop(
     // The icon URL last asked the page for, so each is tried once.
     let mut favicon_fetched: Option<String> = None;
     let mut total_frames: u64 = 0;
-    let mut last_proxy_frame = Instant::now() - Duration::from_secs(60);
+    // When the handoff view last sent a frame (none yet).
+    let mut last_proxy_frame: Option<Instant> = None;
+    // The proxy channel closed: nobody can send any more (the session is going away).
+    let mut channel_closed = false;
+    let mut last_t: u64 = 0;
     // With a display of its own: frames grabbed from it (DisplayGrab), the newest
     // one picked up per tick; (toolbar height, width, height) of the page on it.
     let mut grabber: Option<Grabber> = None;
@@ -390,7 +623,7 @@ async fn record_session_loop(
     while !stop_flag.load(Ordering::SeqCst) {
         // 1. Drain any proxy frames that arrived from handoff.html
         while let Ok(pf) = frame_rx.try_recv() {
-            last_proxy_frame = Instant::now();
+            last_proxy_frame = Some(Instant::now());
             write_single_frame(
                 &mut frames_writer,
                 &mut meta,
@@ -399,21 +632,23 @@ async fn record_session_loop(
                 &mut total_frames,
                 &mut last_meta_flush,
                 &clock,
+                &mut last_t,
                 &mut current_url,
                 &mut current_title,
-                pf.data,
-                pf.url,
-                pf.title,
+                pf.frame.data,
+                pf.frame.url,
+                pf.frame.title,
+                Some(pf.t),
             )
             .await;
         }
 
         // 2. If handoff.html is actively streaming (frames received in last 2 seconds),
         // wait for more proxy frames without competing on background screencast!
-        if last_proxy_frame.elapsed() < Duration::from_secs(2) {
+        if last_proxy_frame.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
             match tokio::time::timeout(Duration::from_millis(500), frame_rx.recv()).await {
                 Ok(Some(pf)) => {
-                    last_proxy_frame = Instant::now();
+                    last_proxy_frame = Some(Instant::now());
                     write_single_frame(
                         &mut frames_writer,
                         &mut meta,
@@ -422,11 +657,13 @@ async fn record_session_loop(
                         &mut total_frames,
                         &mut last_meta_flush,
                         &clock,
+                        &mut last_t,
                         &mut current_url,
                         &mut current_title,
-                        pf.data,
-                        pf.url,
-                        pf.title,
+                        pf.frame.data,
+                        pf.frame.url,
+                        pf.frame.title,
+                        Some(pf.t),
                     )
                     .await;
                     continue;
@@ -483,7 +720,7 @@ async fn record_session_loop(
         let current_target_is_blank = target
             .get("url")
             .and_then(|v| v.as_str())
-            .map_or(true, |u| u == "about:blank" || u.is_empty());
+            .is_none_or(|u| u == "about:blank" || u.is_empty());
 
         if let Some(u) = target.get("url").and_then(|v| v.as_str()) {
             if !u.is_empty() && u != "about:blank" {
@@ -559,7 +796,9 @@ async fn record_session_loop(
         }
         let mut next_title_id = TITLE_REQUEST_ID;
         // The target's title above may predate a navigation; ask right away.
-        let mut last_title_request = Instant::now() - TITLE_REFRESH;
+        let mut last_title_request = Instant::now()
+            .checked_sub(TITLE_REFRESH)
+            .unwrap_or_else(Instant::now);
 
         // Inner frame loop for this page
         while !stop_flag.load(Ordering::SeqCst) {
@@ -568,7 +807,7 @@ async fn record_session_loop(
                 proxy_frame = frame_rx.recv() => {
                     match proxy_frame {
                         Some(pf) => {
-                            last_proxy_frame = Instant::now();
+                            last_proxy_frame = Some(Instant::now());
                             write_single_frame(
                                 &mut frames_writer,
                                 &mut meta,
@@ -577,16 +816,19 @@ async fn record_session_loop(
                                 &mut total_frames,
                                 &mut last_meta_flush,
                                 &clock,
+                                &mut last_t,
                                 &mut current_url,
                                 &mut current_title,
-                                pf.data,
-                                pf.url,
-                                pf.title,
+                                pf.frame.data,
+                                pf.frame.url,
+                                pf.frame.title,
+                                Some(pf.t),
                             ).await;
                             // Yield background connection to handoff
                             break;
                         }
                         None => {
+                            channel_closed = true;
                             break;
                         }
                     }
@@ -639,9 +881,11 @@ async fn record_session_loop(
                                 &mut total_frames,
                                 &mut last_meta_flush,
                                 &clock,
+                                &mut last_t,
                                 &mut current_url,
                                 &mut current_title,
                                 data,
+                                None,
                                 None,
                                 None,
                             ).await;
@@ -678,9 +922,11 @@ async fn record_session_loop(
                                                 &mut total_frames,
                                                 &mut last_meta_flush,
                                                 &clock,
+                                                &mut last_t,
                                                 &mut current_url,
                                                 &mut current_title,
                                                 last_shot.clone(),
+                                                None,
                                                 None,
                                                 None,
                                             ).await;
@@ -779,35 +1025,33 @@ async fn record_session_loop(
                             debug!(recording_id = %recording_id, error = %e, "WebSocket error");
                             break;
                         }
-                        Err(_) => {
-                            // Timeout hit (no messages for 600ms)
-                            if last_bg_frame_time.elapsed() > Duration::from_secs(2) {
-                                let check_url = format!("http://127.0.0.1:{}/json/list", port);
-                                if let Ok(res) = http_client.get(&check_url).send().await {
-                                    if let Ok(targets) = res.json::<Vec<serde_json::Value>>().await {
-                                        let still_exists = targets.iter().any(|t| {
-                                            t.get("id").and_then(|v| v.as_str()) == Some(current_target_id.as_str())
-                                        });
-                                        let has_better_target = targets.iter().any(|t| {
-                                            t.get("type").and_then(|v| v.as_str()) == Some("page")
-                                                && t.get("id").and_then(|v| v.as_str()) != Some(current_target_id.as_str())
-                                                && t.get("url").and_then(|v| v.as_str()).map_or(false, |u| {
-                                                    u != "about:blank" && !u.is_empty() && !u.starts_with("chrome-extension://")
-                                                })
-                                        });
-                                        if !still_exists || (current_target_is_blank && has_better_target) {
-                                            debug!(recording_id = %recording_id, "Target closed or better target appeared, switching");
-                                            break;
-                                        }
-
-                                        // A screenshot got lost (navigation): ask again.
-                                        shot_in_flight = false;
-                                        last_bg_frame_time = Instant::now();
+                        // Timeout hit (no messages for 600ms)
+                        Err(_) if last_bg_frame_time.elapsed() > Duration::from_secs(2) => {
+                            let check_url = format!("http://127.0.0.1:{}/json/list", port);
+                            if let Ok(res) = http_client.get(&check_url).send().await {
+                                if let Ok(targets) = res.json::<Vec<serde_json::Value>>().await {
+                                    let still_exists = targets.iter().any(|t| {
+                                        t.get("id").and_then(|v| v.as_str()) == Some(current_target_id.as_str())
+                                    });
+                                    let has_better_target = targets.iter().any(|t| {
+                                        t.get("type").and_then(|v| v.as_str()) == Some("page")
+                                            && t.get("id").and_then(|v| v.as_str()) != Some(current_target_id.as_str())
+                                            && t.get("url").and_then(|v| v.as_str()).is_some_and(|u| {
+                                                u != "about:blank" && !u.is_empty() && !u.starts_with("chrome-extension://")
+                                            })
+                                    });
+                                    if !still_exists || (current_target_is_blank && has_better_target) {
+                                        debug!(recording_id = %recording_id, "Target closed or better target appeared, switching");
+                                        break;
                                     }
-                                } else {
-                                    // Port died
-                                    break;
+
+                                    // A screenshot got lost (navigation): ask again.
+                                    shot_in_flight = false;
+                                    last_bg_frame_time = Instant::now();
                                 }
+                            } else {
+                                // Port died
+                                break;
                             }
                         }
                         _ => {}
@@ -815,14 +1059,19 @@ async fn record_session_loop(
                 }
             }
         }
+        if channel_closed {
+            break;
+        }
     }
 
     let _ = frames_writer.flush().await;
     drop(frames_writer);
 
     // Before the audio is joined, which takes a moment of the clock.
-    let duration_seconds = clock.elapsed().as_secs();
+    let length = clock.elapsed();
+    let duration_seconds = length.as_secs();
     audio_stop.store(true, Ordering::SeqCst);
+    clock.wake();
     if let Some(task) = audio_task {
         meta.audio = task.await.unwrap_or(false);
     }
@@ -836,6 +1085,7 @@ async fn record_session_loop(
 
     meta.ended_at_secs = Some(ended_at_secs);
     meta.duration_seconds = duration_seconds;
+    meta.duration_ms = duration_ms(length);
     meta.frame_count = total_frames;
     meta.size_bytes = size_bytes;
     meta.final_url = current_url;
@@ -852,6 +1102,9 @@ async fn record_session_loop(
         "Finalized session recording"
     );
 
+    // Final: from here on the cleanup may treat it like any other recording.
+    drop(active);
+
     // If no frames were captured at all, remove the empty directory to save disk clutter
     if total_frames == 0 && duration_seconds < 2 {
         let _ = fs::remove_dir_all(&rec_dir).await;
@@ -867,11 +1120,17 @@ fn parse_data_url(url: &str) -> Option<(String, Vec<u8>)> {
     use base64::Engine as _;
     let (head, data) = url.strip_prefix("data:")?.split_once(',')?;
     let mime = head.strip_suffix(";base64")?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
     if bytes.is_empty() || bytes.len() > FAVICON_MAX_BYTES {
         return None;
     }
-    let mime = if mime.starts_with("image/") { mime } else { "image/x-icon" };
+    let mime = if mime.starts_with("image/") {
+        mime
+    } else {
+        "image/x-icon"
+    };
     Some((mime.to_string(), bytes))
 }
 
@@ -933,7 +1192,10 @@ async fn is_visible(ws_url: &str) -> bool {
             if let Message::Text(text) = msg {
                 let val: serde_json::Value = serde_json::from_str(&text).ok()?;
                 if val.get("id").and_then(|v| v.as_u64()) == Some(1) {
-                    return Some(val.pointer("/result/result/value").and_then(|v| v.as_str()) == Some("visible"));
+                    return Some(
+                        val.pointer("/result/result/value").and_then(|v| v.as_str())
+                            == Some("visible"),
+                    );
                 }
             }
         }
@@ -947,18 +1209,27 @@ async fn is_visible(ws_url: &str) -> bool {
 }
 
 async fn write_meta(path: &Path, meta: &RecordingMeta) -> std::io::Result<()> {
-    let json = serde_json::to_string_pretty(meta)?;
-    fs::write(path, json).await
+    let json = serde_json::to_vec_pretty(meta)?;
+    crate::persist::write_atomic(path, &json).await
 }
 
+/// Size of everything in a recording's directory: frames, sound, the parts of a
+/// sound still being recorded and the work files of an export.
 async fn compute_rec_dir_size(path: &Path) -> u64 {
     let mut total = 0;
-    if let Ok(mut entries) = fs::read_dir(path).await {
+    let mut dirs = vec![path.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(mut entries) = fs::read_dir(&dir).await else {
+            continue;
+        };
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if let Ok(m) = entry.metadata().await {
-                if m.is_file() {
-                    total += m.len();
-                }
+            let Ok(m) = entry.metadata().await else {
+                continue;
+            };
+            if m.is_dir() {
+                dirs.push(entry.path());
+            } else if m.is_file() {
+                total += m.len();
             }
         }
     }
@@ -971,16 +1242,32 @@ async fn compute_rec_dir_size(path: &Path) -> u64 {
 
 /// Marker file of a recording that is kept.
 const KEEP_FILE: &str = "keep";
+/// Present in a merge's directory until the merge is complete.
+const MERGING_FILE: &str = ".merging";
+
+/// A recording's directory, and the recordings directory above it, for the
+/// daemon's user only: the frames show whatever the sessions showed.
+async fn make_rec_dir(config: &RecorderConfig, dir: &Path) -> std::io::Result<()> {
+    crate::persist::private_dir(&config.recordings_dir).await?;
+    crate::persist::private_dir(dir).await
+}
+
+fn rec_dir_of(config: &RecorderConfig, id: Uuid) -> PathBuf {
+    config.recordings_dir.join(id.to_string())
+}
 
 /// Mark a recording to be kept (or not): the cleanup skips it. False when it does not exist.
 pub async fn set_keep(config: &RecorderConfig, id: Uuid, keep: bool) -> bool {
-    let rec_dir = config.recordings_dir.join(id.to_string());
-    if !rec_dir.join("meta.json").exists() {
+    let rec_dir = rec_dir_of(config, id);
+    if !fs::try_exists(rec_dir.join("meta.json"))
+        .await
+        .unwrap_or(false)
+    {
         return false;
     }
     let marker = rec_dir.join(KEEP_FILE);
     if keep {
-        fs::write(&marker, b"").await.is_ok()
+        crate::persist::private_file(&marker).await.is_ok()
     } else {
         match fs::remove_file(&marker).await {
             Ok(()) => true,
@@ -989,66 +1276,223 @@ pub async fn set_keep(config: &RecorderConfig, id: Uuid, keep: bool) -> bool {
     }
 }
 
-pub async fn list_recordings(config: &RecorderConfig) -> Vec<RecordingMeta> {
-    let mut list = Vec::new();
+/// A recording's metadata rebuilt from its frames, for one whose `meta.json` is
+/// gone or unreadable: the frames are the recording, the metadata only describes
+/// it. None without a readable frame.
+async fn rebuild_meta(dir: &Path, id: Uuid) -> Option<RecordingMeta> {
+    use tokio::io::AsyncBufReadExt;
+    let file = fs::File::open(dir.join("frames.jsonl")).await.ok()?;
+    let ended_at_secs = file
+        .metadata()
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    let mut lines = tokio::io::BufReader::new(file).lines();
+    let (mut count, mut last_t) = (0u64, 0u64);
+    let (mut initial_url, mut final_url, mut title) = (None, None, None);
+    // The last line may be cut off by the crash: it is skipped like any other bad one.
+    while let Ok(Some(line)) = lines.next_line().await {
+        let Ok(frame) = serde_json::from_str::<RecordingFrame>(&line) else {
+            continue;
+        };
+        count += 1;
+        last_t = last_t.max(frame.t);
+        if let Some(u) = frame.url.filter(|u| !u.is_empty() && u != "about:blank") {
+            initial_url.get_or_insert_with(|| u.clone());
+            final_url = Some(u);
+        }
+        if let Some(t) = frame.title.filter(|t| is_real_title(t)) {
+            title = Some(t);
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    let audio = fs::try_exists(dir.join(crate::rec_audio::FILE))
+        .await
+        .unwrap_or(false);
+    Some(RecordingMeta {
+        id,
+        session_id: Uuid::nil(),
+        profile: None,
+        node: "unknown".to_string(),
+        started_at_secs: ended_at_secs.saturating_sub(last_t / 1000),
+        ended_at_secs: Some(ended_at_secs),
+        duration_seconds: last_t / 1000,
+        duration_ms: last_t,
+        frame_count: count,
+        size_bytes: compute_rec_dir_size(dir).await,
+        initial_url,
+        final_url,
+        title,
+        favicon_url: None,
+        favicon_type: None,
+        keep: false,
+        status: "interrupted".to_string(),
+        audio,
+        merged_from: Vec::new(),
+        merged_at_secs: None,
+    })
+}
+
+/// The metadata of recording `id`, rebuilt from its frames (and written back) when
+/// `meta.json` is missing or unreadable and nothing is writing the recording.
+async fn load_meta(config: &RecorderConfig, id: Uuid) -> Option<RecordingMeta> {
+    let dir = rec_dir_of(config, id);
+    let meta_file = dir.join("meta.json");
+    match fs::read(&meta_file).await {
+        Ok(raw) => {
+            if let Ok(meta) = serde_json::from_slice::<RecordingMeta>(&raw) {
+                return Some(meta);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return None,
+    }
+    // Being recorded or merged: its metadata is in the making.
+    if is_active(id)
+        || fs::try_exists(dir.join(MERGING_FILE))
+            .await
+            .unwrap_or(false)
+    {
+        return None;
+    }
+    let meta = rebuild_meta(&dir, id).await?;
+    warn!(recording_id = %id, frames = meta.frame_count, "Rebuilt a recording's metadata from its frames");
+    let _ = write_meta(&meta_file, &meta).await;
+    Some(meta)
+}
+
+async fn kept(dir: &Path) -> bool {
+    fs::try_exists(dir.join(KEEP_FILE)).await.unwrap_or(false)
+}
+
+/// Directories of recordings: those named by an id.
+async fn recording_ids(config: &RecorderConfig) -> Vec<Uuid> {
+    let mut ids = Vec::new();
     if let Ok(mut entries) = fs::read_dir(&config.recordings_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-                let meta_file = entry.path().join("meta.json");
-                if let Ok(content) = fs::read_to_string(&meta_file).await {
-                    if let Ok(mut meta) = serde_json::from_str::<RecordingMeta>(&content) {
-                        meta.keep = entry.path().join(KEEP_FILE).exists();
-                        list.push(meta);
-                    }
-                }
+            if !entry.file_type().await.is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            if let Ok(id) = Uuid::parse_str(&entry.file_name().to_string_lossy()) {
+                ids.push(id);
             }
         }
     }
+    ids
+}
 
-    list.sort_by(|a, b| b.started_at_secs.cmp(&a.started_at_secs));
+pub async fn list_recordings(config: &RecorderConfig) -> Vec<RecordingMeta> {
+    let mut list = Vec::new();
+    for id in recording_ids(config).await {
+        if let Some(mut meta) = load_meta(config, id).await {
+            meta.keep = kept(&rec_dir_of(config, id)).await;
+            list.push(meta);
+        }
+    }
+    list.sort_by_key(|m| std::cmp::Reverse(m.started_at_secs));
     list
 }
 
+/// Startup housekeeping in the recordings directory: owner-only permissions,
+/// unfinished merges and export work files removed.
+async fn tidy_recordings_dir(config: &RecorderConfig) {
+    use std::os::unix::fs::PermissionsExt;
+    let private = std::fs::Permissions::from_mode(0o700);
+    if fs::set_permissions(&config.recordings_dir, private.clone())
+        .await
+        .is_err()
+    {
+        return;
+    }
+    for id in recording_ids(config).await {
+        let dir = rec_dir_of(config, id);
+        if fs::try_exists(dir.join(MERGING_FILE))
+            .await
+            .unwrap_or(false)
+        {
+            warn!(recording_id = %id, "Removing a merge that was never finished");
+            let _ = fs::remove_dir_all(&dir).await;
+            continue;
+        }
+        let _ = fs::set_permissions(&dir, private.clone()).await;
+        let Ok(mut entries) = fs::read_dir(&dir).await else {
+            continue;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(crate::rec_export::WORK_PREFIX) {
+                debug!(recording_id = %id, "Removing the leftovers of an export");
+                let _ = fs::remove_dir_all(entry.path()).await;
+            } else if name.starts_with(".meta.json.") && name.ends_with(".tmp") {
+                let _ = fs::remove_file(entry.path()).await;
+            }
+        }
+    }
+}
+
 /// Recordings still marked "recording" at startup belong to a previous
-/// daemon process that died mid-recording.
+/// daemon process that died mid-recording. Their sound is joined in the background.
 pub async fn mark_orphaned_recordings(config: &RecorderConfig) -> usize {
+    tidy_recordings_dir(config).await;
     let mut count = 0;
     for mut meta in list_recordings(config).await {
         if meta.status != "recording" {
             continue;
         }
+        let rec_dir = rec_dir_of(config, meta.id);
         meta.status = "interrupted".to_string();
-        meta.ended_at_secs = Some(meta.started_at_secs + meta.duration_seconds);
-        let rec_dir = config.recordings_dir.join(meta.id.to_string());
-        if let Some(ref ffmpeg) = config.ffmpeg {
-            meta.audio = crate::rec_audio::salvage(ffmpeg, &rec_dir).await;
+        meta.ended_at_secs = Some(meta.started_at_secs + meta.length_ms() / 1000);
+        meta.audio = fs::try_exists(rec_dir.join(crate::rec_audio::FILE))
+            .await
+            .unwrap_or(false);
+        if write_meta(&rec_dir.join("meta.json"), &meta).await.is_err() {
+            continue;
         }
-        let meta_file = rec_dir.join("meta.json");
-        if write_meta(&meta_file, &meta).await.is_ok() {
-            count += 1;
+        count += 1;
+        if let Some(ffmpeg) = config.ffmpeg.clone() {
+            // Joining takes a while per recording: not before the daemon serves.
+            let (config, id) = (config.clone(), meta.id);
+            tokio::spawn(async move { salvage_audio(&config, &ffmpeg, id).await });
         }
     }
     count
 }
 
-pub async fn get_recording(config: &RecorderConfig, id: Uuid) -> Option<RecordingMeta> {
-    let meta_file = config.recordings_dir.join(id.to_string()).join("meta.json");
-    if let Ok(content) = fs::read_to_string(&meta_file).await {
-        let mut meta = serde_json::from_str::<RecordingMeta>(&content).ok()?;
-        meta.keep = config
-            .recordings_dir
-            .join(id.to_string())
-            .join(KEEP_FILE)
-            .exists();
-        Some(meta)
-    } else {
-        None
-    }
+/// Join the sound segments an interrupted recording left, and note the result.
+async fn salvage_audio(config: &RecorderConfig, ffmpeg: &Path, id: Uuid) {
+    let Some(_busy) = mark_busy(&[id]) else {
+        return;
+    };
+    let rec_dir = rec_dir_of(config, id);
+    let joined = crate::rec_audio::salvage(ffmpeg, &rec_dir).await
+        || fs::try_exists(rec_dir.join(crate::rec_audio::FILE))
+            .await
+            .unwrap_or(false);
+    let Some(mut meta) = load_meta(config, id).await else {
+        return;
+    };
+    meta.audio = joined;
+    meta.size_bytes = compute_rec_dir_size(&rec_dir).await;
+    let _ = write_meta(&rec_dir.join("meta.json"), &meta).await;
 }
 
+pub async fn get_recording(config: &RecorderConfig, id: Uuid) -> Option<RecordingMeta> {
+    let mut meta = load_meta(config, id).await?;
+    meta.keep = kept(&rec_dir_of(config, id)).await;
+    Some(meta)
+}
+
+/// False when there is no such recording, or it is being recorded, exported or merged.
 pub async fn delete_recording(config: &RecorderConfig, id: Uuid) -> bool {
-    let rec_dir = config.recordings_dir.join(id.to_string());
-    if rec_dir.exists() {
+    if is_active(id) || is_busy(id) {
+        return false;
+    }
+    let rec_dir = rec_dir_of(config, id);
+    if fs::try_exists(&rec_dir).await.unwrap_or(false) {
         fs::remove_dir_all(&rec_dir).await.is_ok()
     } else {
         false
@@ -1058,51 +1502,91 @@ pub async fn delete_recording(config: &RecorderConfig, id: Uuid) -> bool {
 /// Silence between merged recordings (ms), so the cut shows.
 const MERGE_GAP_MS: u64 = 500;
 
+/// Where each of recordings of the given lengths (ms) starts in their merge, and
+/// the merge's length: one after the other, a gap between them.
+fn merge_plan(lengths: &[u64]) -> (Vec<u64>, u64) {
+    let mut starts = Vec::with_capacity(lengths.len());
+    let mut at = 0;
+    for len in lengths {
+        starts.push(at);
+        at += len + MERGE_GAP_MS;
+    }
+    (starts, at.saturating_sub(MERGE_GAP_MS))
+}
+
+/// The length of a source in a merge (ms): its recorded length, or its last
+/// frame if that is later.
+fn merge_length(last_frame_ms: u64, source: &RecordingMeta) -> u64 {
+    last_frame_ms.max(source.length_ms())
+}
+
 /// Merges recordings, in the order given, into a new one: their frames one after
 /// the other on one clock, their sound (if any) where it belongs. With `delete`,
-/// the originals are removed once the merge is written.
+/// the originals are removed once the merge is written (but not when sound would
+/// be lost with them). The result is kept if any source was, and its age counts
+/// from the merge.
 pub async fn merge_recordings(
     config: &RecorderConfig,
     ids: &[Uuid],
     delete: bool,
 ) -> Result<RecordingMeta, String> {
     use tokio::io::AsyncBufReadExt;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     if ids.len() < 2 || !ids.iter().all(|id| seen.insert(*id)) {
         return Err("Pick at least two different recordings".into());
     }
+    let busy =
+        mark_busy(ids).ok_or_else(|| "A recording is still running: stop it first".to_string())?;
     let mut sources = Vec::new();
+    let mut any_kept = false;
     for id in ids {
         let meta = get_recording(config, *id)
             .await
             .ok_or_else(|| format!("No recording {id} on this node"))?;
-        if meta.status == "recording" {
-            return Err(format!("Recording {id} is still running: stop it first"));
-        }
+        any_kept |= meta.keep;
         sources.push(meta);
     }
     let id = Uuid::new_v4();
-    let dir = config.recordings_dir.join(id.to_string());
-    fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let new_busy = mark_busy(&[id]);
+    let dir = rec_dir_of(config, id);
+    make_rec_dir(config, &dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    // Until the metadata is there this is no recording: a crash leaves the marker
+    // for the next start to clean up.
+    let _ = crate::persist::private_file(&dir.join(MERGING_FILE)).await;
     let work = async {
-        let mut out = fs::File::create(dir.join("frames.jsonl"))
+        let mut out = crate::persist::private_file(&dir.join("frames.jsonl"))
             .await
             .map_err(|e| e.to_string())?;
-        let (mut offset, mut frames) = (0u64, 0u64);
-        let mut audio = Vec::new();
+        // Lengths first: the frames of each source go at its start.
+        let mut lengths = Vec::new();
         for src in &sources {
-            let src_dir = config.recordings_dir.join(src.id.to_string());
-            if src.audio {
-                audio.push((offset, src_dir.join(crate::rec_audio::FILE)));
-            }
             let mut last_t = 0;
+            if let Ok(f) = fs::File::open(rec_dir_of(config, src.id).join("frames.jsonl")).await {
+                let mut lines = tokio::io::BufReader::new(f).lines();
+                while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+                    if let Ok(frame) = serde_json::from_str::<RecordingFrame>(&line) {
+                        last_t = last_t.max(frame.t);
+                    }
+                }
+            }
+            lengths.push(merge_length(last_t, src));
+        }
+        let (starts, total_ms) = merge_plan(&lengths);
+        let mut frames = 0u64;
+        let mut audio = Vec::new();
+        for (src, offset) in sources.iter().zip(&starts) {
+            let src_dir = rec_dir_of(config, src.id);
+            if src.audio {
+                audio.push((*offset, src_dir.join(crate::rec_audio::FILE)));
+            }
             if let Ok(f) = fs::File::open(src_dir.join("frames.jsonl")).await {
                 let mut lines = tokio::io::BufReader::new(f).lines();
                 while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
                     let Ok(mut frame) = serde_json::from_str::<RecordingFrame>(&line) else {
                         continue;
                     };
-                    last_t = frame.t;
                     frame.t += offset;
                     let line = serde_json::to_string(&frame).map_err(|e| e.to_string())?;
                     out.write_all(line.as_bytes())
@@ -1112,9 +1596,9 @@ pub async fn merge_recordings(
                     frames += 1;
                 }
             }
-            offset += (last_t + MERGE_GAP_MS).max(src.duration_seconds * 1000);
         }
         out.flush().await.map_err(|e| e.to_string())?;
+        drop(out);
         let first = &sources[0];
         let last = &sources[sources.len() - 1];
         let mut meta = RecordingMeta {
@@ -1124,7 +1608,8 @@ pub async fn merge_recordings(
             node: first.node.clone(),
             started_at_secs: first.started_at_secs,
             ended_at_secs: last.ended_at_secs,
-            duration_seconds: offset / 1000,
+            duration_seconds: total_ms / 1000,
+            duration_ms: total_ms,
             frame_count: frames,
             size_bytes: 0,
             initial_url: first.initial_url.clone(),
@@ -1132,17 +1617,20 @@ pub async fn merge_recordings(
             title: sources.iter().find_map(|s| s.title.clone()),
             favicon_url: None,
             favicon_type: None,
-            keep: false,
+            keep: any_kept,
             status: "completed".to_string(),
             audio: false,
             merged_from: ids.to_vec(),
+            merged_at_secs: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            ),
         };
         // The first source's site icon.
         for src in &sources {
-            let icon = config
-                .recordings_dir
-                .join(src.id.to_string())
-                .join("favicon.bin");
+            let icon = rec_dir_of(config, src.id).join("favicon.bin");
             if src.favicon_type.is_some() && fs::copy(&icon, dir.join("favicon.bin")).await.is_ok()
             {
                 meta.favicon_url = src.favicon_url.clone();
@@ -1150,17 +1638,24 @@ pub async fn merge_recordings(
                 break;
             }
         }
-        if let (false, Some(ffmpeg)) = (audio.is_empty(), config.ffmpeg.as_ref()) {
+        let wanted_audio = !audio.is_empty();
+        if let (true, Some(ffmpeg)) = (wanted_audio, config.ffmpeg.as_ref()) {
             meta.audio =
                 crate::rec_audio::join(ffmpeg, &audio, &dir.join(crate::rec_audio::FILE)).await;
+        }
+        if any_kept {
+            crate::persist::private_file(&dir.join(KEEP_FILE))
+                .await
+                .map_err(|e| e.to_string())?;
         }
         meta.size_bytes = compute_rec_dir_size(&dir).await;
         write_meta(&dir.join("meta.json"), &meta)
             .await
             .map_err(|e| e.to_string())?;
-        Ok::<_, String>(meta)
+        let _ = fs::remove_file(dir.join(MERGING_FILE)).await;
+        Ok::<_, String>((meta, wanted_audio))
     };
-    let meta = match work.await {
+    let (meta, wanted_audio) = match work.await {
         Ok(m) => m,
         Err(e) => {
             let _ = fs::remove_dir_all(&dir).await;
@@ -1168,9 +1663,15 @@ pub async fn merge_recordings(
         }
     };
     info!(recording_id = %id, sources = ids.len(), frames = meta.frame_count, audio = meta.audio, "Merged recordings");
-    if delete {
+    drop(new_busy);
+    drop(busy);
+    if delete && wanted_audio && !meta.audio {
+        warn!(recording_id = %id, "The merge lost the sound of its sources: they are kept");
+    } else if delete {
         for id in ids {
-            delete_recording(config, *id).await;
+            if !delete_recording(config, *id).await {
+                warn!(recording_id = %id, "A merged recording could not be deleted (in use?)");
+            }
         }
     }
     Ok(meta)
@@ -1184,88 +1685,110 @@ pub struct VacuumStats {
     pub max_storage_bytes: u64,
 }
 
+/// What the cleanup knows about a recording.
+struct Candidate {
+    /// Seconds the age is counted from.
+    age_ref: u64,
+    size_bytes: u64,
+    /// Being recorded by this process.
+    active: bool,
+    /// Marked to be kept.
+    keep: bool,
+    /// An export, merge or salvage is reading it.
+    busy: bool,
+}
+
+/// Which recordings (indexes) the cleanup removes: those older than `max_age_secs`,
+/// then the oldest until the rest is within `max_storage_bytes` and `max_count`.
+/// Kept and active recordings are never removed and do not count against the
+/// limits (they would otherwise make every other recording go as soon as they
+/// alone exceed a limit); a busy one stays until it is free.
+fn select_for_removal(
+    items: &[Candidate],
+    now: u64,
+    max_age_secs: u64,
+    max_storage_bytes: u64,
+    max_count: usize,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    // The population the limits apply to, oldest first.
+    let mut rest: Vec<usize> = Vec::new();
+    for (i, c) in items.iter().enumerate() {
+        if c.keep || c.active {
+            continue;
+        }
+        if !c.busy && now.saturating_sub(c.age_ref) > max_age_secs {
+            out.push(i);
+        } else {
+            rest.push(i);
+        }
+    }
+    rest.sort_by_key(|&i| items[i].age_ref);
+    let mut storage: u64 = rest.iter().map(|&i| items[i].size_bytes).sum();
+    let mut count = rest.len();
+    for i in rest {
+        if storage <= max_storage_bytes && count <= max_count {
+            break;
+        }
+        if items[i].busy {
+            continue;
+        }
+        storage = storage.saturating_sub(items[i].size_bytes);
+        count -= 1;
+        out.push(i);
+    }
+    out
+}
+
 pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
-    struct RecItem {
-        _id: Uuid,
-        path: PathBuf,
-        started_at: u64,
-        size_bytes: u64,
-        is_active: bool,
-        /// Marked to be kept: never removed.
-        keep: bool,
-    }
-
-    let mut items: Vec<RecItem> = Vec::new();
+    let mut paths = Vec::new();
+    let mut items: Vec<Candidate> = Vec::new();
     let mut current_total_bytes = 0u64;
 
-    if let Ok(mut entries) = fs::read_dir(&config.recordings_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
-                let rec_path = entry.path();
-                let meta_file = rec_path.join("meta.json");
-                if let Ok(content) = fs::read_to_string(&meta_file).await {
-                    if let Ok(meta) = serde_json::from_str::<RecordingMeta>(&content) {
-                        let size = compute_rec_dir_size(&rec_path).await;
-                        current_total_bytes += size;
-                        let is_active = meta.status == "recording"
-                            && now.saturating_sub(meta.started_at_secs) < 86400;
-                        items.push(RecItem {
-                            _id: meta.id,
-                            keep: rec_path.join(KEEP_FILE).exists(),
-                            path: rec_path,
-                            started_at: meta.started_at_secs,
-                            size_bytes: size,
-                            is_active,
-                        });
-                    }
-                }
-            }
-        }
+    for id in recording_ids(config).await {
+        let Some(meta) = load_meta(config, id).await else {
+            continue;
+        };
+        let rec_path = rec_dir_of(config, id);
+        let size = compute_rec_dir_size(&rec_path).await;
+        current_total_bytes += size;
+        items.push(Candidate {
+            age_ref: meta.age_reference_secs(),
+            size_bytes: size,
+            active: is_active(id),
+            keep: kept(&rec_path).await,
+            busy: is_busy(id),
+        });
+        paths.push(rec_path);
     }
 
-    let mut to_delete = Vec::new();
-
-    // 1. Prune recordings older than max_age_secs (skip active recordings)
-    items.retain(|item| {
-        if !item.is_active
-            && !item.keep
-            && now.saturating_sub(item.started_at) > config.max_age_secs
-        {
-            to_delete.push((item.path.clone(), item.size_bytes));
-            false
-        } else {
-            true
-        }
-    });
-
-    // 2. Sort remaining non-active by age (oldest first)
-    items.sort_by_key(|i| i.started_at);
-
-    // 3. Prune if total storage or count exceeds quota
-    let mut remaining_storage: u64 = items.iter().map(|i| i.size_bytes).sum();
-    let mut remaining_count = items.len();
-    for item in items {
-        let over_size = remaining_storage > config.max_storage_bytes;
-        let over_count = remaining_count > config.max_count;
-        if (over_size || over_count) && !item.is_active && !item.keep {
-            remaining_storage = remaining_storage.saturating_sub(item.size_bytes);
-            remaining_count -= 1;
-            to_delete.push((item.path, item.size_bytes));
-        }
-    }
+    let to_delete = select_for_removal(
+        &items,
+        now,
+        config.max_age_secs,
+        config.max_storage_bytes,
+        config.max_count,
+    );
 
     let mut vacuumed_count = 0;
     let mut freed_bytes = 0;
 
-    for (p, s) in to_delete {
-        if let Ok(_) = fs::remove_dir_all(&p).await {
+    for i in to_delete {
+        // Busy (or active) since the listing: the next round.
+        let id = paths[i]
+            .file_name()
+            .and_then(|n| Uuid::parse_str(&n.to_string_lossy()).ok());
+        if id.is_some_and(|id| is_active(id) || is_busy(id)) {
+            continue;
+        }
+        if fs::remove_dir_all(&paths[i]).await.is_ok() {
             vacuumed_count += 1;
-            freed_bytes += s;
+            freed_bytes += items[i].size_bytes;
         }
     }
 
@@ -1408,11 +1931,19 @@ mod tests {
             std::fs::write(rec.join("meta.json"), meta.to_string()).unwrap();
             ids.push(id);
         }
-        assert!(!list_recordings(&config).await.iter().any(|m| m.keep), "nothing is kept by default");
+        assert!(
+            !list_recordings(&config).await.iter().any(|m| m.keep),
+            "nothing is kept by default"
+        );
         assert!(set_keep(&config, ids[0], true).await);
         assert!(!set_keep(&config, Uuid::new_v4(), true).await);
         assert_eq!(
-            list_recordings(&config).await.iter().filter(|m| m.keep).map(|m| m.id).collect::<Vec<_>>(),
+            list_recordings(&config)
+                .await
+                .iter()
+                .filter(|m| m.keep)
+                .map(|m| m.id)
+                .collect::<Vec<_>>(),
             vec![ids[0]]
         );
         let stats = vacuum_recordings(&config).await;
@@ -1430,7 +1961,10 @@ mod tests {
     async fn the_count_limit_keeps_the_newest_and_the_kept_ones() {
         let dir = std::env::temp_dir().join(format!("bd-count-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let config = RecorderConfig {
             enabled: true,
             recordings_dir: dir.clone(),
@@ -1457,9 +1991,12 @@ mod tests {
         }
         assert!(set_keep(&config, ids[0], true).await);
         vacuum_recordings(&config).await;
-        let left: Vec<bool> = ids.iter().map(|i| dir.join(i.to_string()).exists()).collect();
-        // Limit 3 of 6: the oldest unkept go, the kept one stays.
-        assert_eq!(left, [true, false, false, false, true, true]);
+        let left: Vec<bool> = ids
+            .iter()
+            .map(|i| dir.join(i.to_string()).exists())
+            .collect();
+        // Limit 3: the kept one does not count, so the oldest two of the other five go.
+        assert_eq!(left, [true, false, false, true, true, true]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1478,7 +2015,10 @@ mod tests {
     fn data_urls_become_icon_bytes() {
         let (mime, bytes) = parse_data_url("data:image/png;base64,AAEC").unwrap();
         assert_eq!((mime.as_str(), bytes), ("image/png", vec![0, 1, 2]));
-        assert_eq!(parse_data_url("data:;base64,AAEC").unwrap().0, "image/x-icon");
+        assert_eq!(
+            parse_data_url("data:;base64,AAEC").unwrap().0,
+            "image/x-icon"
+        );
         assert!(parse_data_url("data:image/png;base64,").is_none());
         assert!(parse_data_url("https://a.test/i.png").is_none());
     }
@@ -1524,9 +2064,14 @@ mod tests {
             std::fs::write(rec.join("meta.json"), meta.to_string()).unwrap();
             ids.push(id);
         }
-        // Second one first.
+        // Second one first; one of them is kept.
+        std::fs::write(dir.join(ids[0].to_string()).join(KEEP_FILE), b"").unwrap();
         let order = [ids[1], ids[0]];
         let m = merge_recordings(&config, &order, true).await.unwrap();
+        assert_eq!((m.duration_ms, m.duration_seconds), (5500, 5));
+        assert!(m.keep && dir.join(m.id.to_string()).join(KEEP_FILE).exists());
+        assert!(m.merged_at_secs.is_some());
+        assert!(!dir.join(m.id.to_string()).join(MERGING_FILE).exists());
         assert_eq!(m.merged_from, order);
         assert_eq!((m.frame_count, m.title.as_deref()), (4, Some("t1")));
         assert_eq!(m.initial_url.as_deref(), Some("https://1.test"));
@@ -1544,5 +2089,230 @@ mod tests {
         );
         assert!(merge_recordings(&config, &[m.id], false).await.is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn cand(age: u64, size: u64) -> Candidate {
+        Candidate {
+            age_ref: age,
+            size_bytes: size,
+            active: false,
+            keep: false,
+            busy: false,
+        }
+    }
+
+    #[test]
+    fn kept_recordings_do_not_eat_the_quota() {
+        // 5 GB kept, quota 2 GB: the new recording is well within it.
+        let gb = 1u64 << 30;
+        let mut items = vec![cand(100, 5 * gb), cand(200, gb / 2), cand(300, gb / 2)];
+        items[0].keep = true;
+        assert!(select_for_removal(&items, 400, 10_000, 2 * gb, 100).is_empty());
+        // An active recording is out of it too.
+        items[2].active = true;
+        items[2].size_bytes = 9 * gb;
+        assert!(select_for_removal(&items, 400, 10_000, 2 * gb, 100).is_empty());
+        // The others still go, oldest first, when they alone are over.
+        items[1].size_bytes = 3 * gb;
+        items.push(cand(350, gb));
+        assert_eq!(select_for_removal(&items, 400, 10_000, 2 * gb, 100), [1]);
+    }
+
+    #[test]
+    fn age_and_count_limits_skip_kept_active_and_busy_ones() {
+        let mut items = vec![cand(10, 1), cand(20, 1), cand(30, 1), cand(1000, 1)];
+        items[0].keep = true;
+        items[1].busy = true;
+        // Older than 500 s at now=1100: 0 (kept) and 1 (busy) stay, 2 goes.
+        assert_eq!(select_for_removal(&items, 1100, 500, u64::MAX, 100), [2]);
+        // Count limit 2 with a busy oldest: the busy one is skipped, the next goes.
+        let mut items = vec![cand(10, 1), cand(20, 1), cand(30, 1)];
+        items[0].busy = true;
+        assert_eq!(select_for_removal(&items, 40, 1000, u64::MAX, 2), [1]);
+        // Limit 1: the busy one stays whatever, the others make room.
+        assert_eq!(select_for_removal(&items, 40, 1000, u64::MAX, 1), [1, 2]);
+    }
+
+    #[test]
+    fn merged_recordings_start_after_each_other_with_a_gap() {
+        assert_eq!(merge_plan(&[3000, 2500]), (vec![0, 3500], 6000));
+        assert_eq!(merge_plan(&[1234]), (vec![0], 1234));
+        assert_eq!(merge_plan(&[1500, 0, 700]), (vec![0, 2000, 2500], 3200));
+    }
+
+    #[test]
+    fn a_recordings_length_is_the_longer_of_its_clock_and_its_last_frame() {
+        let mut m = serde_json::from_value::<RecordingMeta>(json!({
+            "id": Uuid::nil(), "session_id": Uuid::nil(), "node": "n", "started_at_secs": 1,
+            "duration_seconds": 2, "frame_count": 0, "size_bytes": 0, "status": "completed"
+        }))
+        .unwrap();
+        // Recordings of older versions have whole seconds only.
+        assert_eq!(m.length_ms(), 2000);
+        m.duration_ms = 2750;
+        assert_eq!(m.length_ms(), 2750);
+        assert_eq!(merge_length(3100, &m), 3100);
+        assert_eq!(merge_length(100, &m), 2750);
+    }
+
+    #[test]
+    fn frame_times_never_go_back() {
+        assert_eq!(frame_time(900, 1000), 1000);
+        assert_eq!(frame_time(1200, 1000), 1200);
+    }
+
+    #[tokio::test]
+    async fn a_torn_meta_is_rebuilt_from_the_frames() {
+        let dir = std::env::temp_dir().join(format!("bd-meta-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = RecorderConfig {
+            enabled: true,
+            recordings_dir: dir.clone(),
+            max_storage_bytes: u64::MAX,
+            max_age_secs: u64::MAX,
+            max_count: 100,
+            audio: false,
+            ffmpeg: None,
+        };
+        let id = Uuid::new_v4();
+        let rec = dir.join(id.to_string());
+        std::fs::create_dir_all(&rec).unwrap();
+        // The last frame line is cut off by the crash.
+        let frames = "{\"t\":0,\"url\":\"about:blank\",\"data\":\"a\"}\n\
+            {\"t\":800,\"url\":\"https://a.test/\",\"title\":\"A\",\"data\":\"b\"}\n\
+            {\"t\":2600,\"url\":\"https://a.test/x\",\"title\":\"B\",\"data\":\"c\"}\n\
+            {\"t\":3000,\"da";
+        std::fs::write(rec.join("frames.jsonl"), frames).unwrap();
+        std::fs::write(rec.join("meta.json"), "{\"id\": \"torn").unwrap();
+        let m = get_recording(&config, id).await.expect("rebuilt");
+        assert_eq!((m.id, m.frame_count, m.duration_ms), (id, 3, 2600));
+        assert_eq!(m.duration_seconds, 2);
+        assert_eq!(m.status, "interrupted");
+        assert_eq!(m.initial_url.as_deref(), Some("https://a.test/"));
+        assert_eq!(m.final_url.as_deref(), Some("https://a.test/x"));
+        assert_eq!(m.title.as_deref(), Some("B"));
+        // Written back, and listed.
+        assert_eq!(list_recordings(&config).await.len(), 1);
+        let again: RecordingMeta =
+            serde_json::from_slice(&std::fs::read(rec.join("meta.json")).unwrap()).unwrap();
+        assert_eq!(again.frame_count, 3);
+        // No frames, no recording.
+        let empty = dir.join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(list_recordings(&config).await.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn metadata_is_written_all_at_once() {
+        let dir = std::env::temp_dir().join(format!("bd-atomic-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = serde_json::from_value::<RecordingMeta>(json!({
+            "id": Uuid::nil(), "session_id": Uuid::nil(), "node": "n", "started_at_secs": 1,
+            "duration_seconds": 2, "frame_count": 0, "size_bytes": 0, "status": "completed"
+        }))
+        .unwrap();
+        let path = dir.join("meta.json");
+        write_meta(&path, &meta).await.unwrap();
+        write_meta(&path, &meta).await.unwrap();
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["meta.json"]);
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn busy_recordings_are_not_deleted_and_running_ones_not_merged() {
+        let dir = std::env::temp_dir().join(format!("bd-busy-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = RecorderConfig {
+            enabled: true,
+            recordings_dir: dir.clone(),
+            max_storage_bytes: u64::MAX,
+            max_age_secs: u64::MAX,
+            max_count: 100,
+            audio: false,
+            ffmpeg: None,
+        };
+        let id = Uuid::new_v4();
+        let rec = dir.join(id.to_string());
+        std::fs::create_dir_all(&rec).unwrap();
+        std::fs::write(rec.join("frames.jsonl"), "{\"t\":0,\"data\":\"a\"}\n").unwrap();
+        let busy = mark_busy(&[id]).unwrap();
+        assert!(is_busy(id));
+        assert!(
+            !delete_recording(&config, id).await,
+            "an export is reading it"
+        );
+        drop(busy);
+        assert!(!is_busy(id));
+        assert!(delete_recording(&config, id).await);
+
+        // A running recorder: not busy-able, not mergeable.
+        let session = Uuid::new_v4();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let first = ActiveGuard::new(a, session, Arc::new(AtomicBool::new(false)));
+        assert!(is_active(a) && mark_busy(&[a]).is_none());
+        assert!(merge_recordings(&config, &[a, b], false).await.is_err());
+        // A second recorder for the session stops the first.
+        let second = ActiveGuard::new(b, session, Arc::new(AtomicBool::new(false)));
+        assert!(first.stop.load(Ordering::SeqCst));
+        assert!(!second.stop.load(Ordering::SeqCst));
+        drop(first);
+        assert!(
+            is_active(b),
+            "the first one going does not unregister the second"
+        );
+        drop(second);
+        assert!(!is_active(a) && !is_active(b));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn proxied_frames_are_stamped_thinned_and_bounded() {
+        let clock = Arc::new(RecordingClock::new());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(FRAME_QUEUE);
+        let sender = FrameSender {
+            tx,
+            clock: clock.clone(),
+            last: Arc::default(),
+        };
+        let frame = |d: &str| ProxyRecordingFrame {
+            url: None,
+            title: None,
+            data: d.to_string(),
+        };
+        assert!(sender.send(frame("a")).is_ok());
+        // Too soon after the last one, and unchanged later: dropped.
+        assert!(sender.send(frame("b")).is_ok());
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err());
+        // While paused nothing is queued.
+        clock.set_paused(true);
+        assert!(sender.send(frame("c")).is_ok());
+        assert!(rx.try_recv().is_err());
+        clock.set_paused(false);
+        // A full queue drops, it does not block or grow.
+        for i in 0..(FRAME_QUEUE * 2) {
+            *sender.last.lock().unwrap() = None;
+            assert!(sender.send(frame(&format!("f{i}"))).is_ok());
+        }
+        let mut queued = 0;
+        while rx.try_recv().is_ok() {
+            queued += 1;
+        }
+        assert_eq!(queued, FRAME_QUEUE);
+        // Once the recorder is gone the sender says so.
+        drop(rx);
+        *sender.last.lock().unwrap() = None;
+        assert!(sender.send(frame("z")).is_err());
     }
 }

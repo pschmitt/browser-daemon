@@ -89,19 +89,29 @@ impl Sink {
     }
 }
 
-/// Unloaded whenever the browser goes away, including a failed launch.
+/// Unloaded whenever the browser goes away, including a failed launch. pactl
+/// takes a moment: off the async workers, which may be the ones dropping this.
 impl Drop for Sink {
     fn drop(&mut self) {
-        let res = std::process::Command::new(&self.cfg.pactl)
-            .arg("--server")
-            .arg(self.cfg.server_arg())
-            .arg("unload-module")
-            .arg(self.module.to_string())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if !res.is_ok_and(|s| s.success()) {
-            warn!(sink = %self.name, "Could not remove audio sink");
+        let (cfg, module, name) = (self.cfg.clone(), self.module, self.name.clone());
+        let unload = move || {
+            let res = std::process::Command::new(&cfg.pactl)
+                .arg("--server")
+                .arg(cfg.server_arg())
+                .arg("unload-module")
+                .arg(module.to_string())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            if !res.is_ok_and(|s| s.success()) {
+                warn!(sink = %name, "Could not remove audio sink");
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn_blocking(unload);
+            }
+            Err(_) => unload(),
         }
     }
 }
