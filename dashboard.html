@@ -243,6 +243,23 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .recordings .list-head, .recordings .row { grid-template-columns: 24px 40px minmax(0, 2.4fr) 110px 130px 80px 80px 44px; }
 .recording-select { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); cursor: pointer; }
 .recordings .row.selected { background: color-mix(in oklab, var(--accent-soft) 60%, transparent); }
+.rec-search { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 0 12px; height: 38px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--muted); }
+.rec-search[hidden] { display: none; }
+.rec-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.rec-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 13.5px; }
+.list-nomatch { padding: 18px 14px; color: var(--muted); font-size: 13.5px; }
+.list-nomatch[hidden] { display: none; }
+.merge-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.merge-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: grab; }
+.merge-list li.dragging { opacity: .45; }
+.merge-list li.over { border-color: var(--accent); }
+.merge-list .n { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 700; background: var(--accent-soft); color: var(--accent); }
+.merge-list .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.merge-list .t b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.merge-list .t span { font-size: 12px; color: var(--muted); }
+.merge-list .mv { flex: none; display: flex; gap: 2px; }
+.merge-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
+.merge-check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .avatar { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 13px; text-transform: uppercase; }
 .play-btn { width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); transition: background .15s, color .15s, transform .1s; }
 .play-btn:hover { background: var(--accent); color: var(--accent-fg); transform: scale(1.05); }
@@ -587,6 +604,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5"/></symbol>
   <symbol id="i-install" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
   <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
@@ -655,6 +673,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 
   <section class="view" id="view-sessions"><div class="session-grid" id="sessionGrid"></div></section>
   <section class="view profiles" id="view-profiles" hidden></section>
+  <label class="rec-search" id="recSearchWrap" hidden><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="recSearch" placeholder="Search recordings: title, address, profile, node, date…" autocomplete="off" spellcheck="false" aria-label="Search recordings"></label>
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view nodes" id="view-nodes" hidden>
@@ -842,6 +861,20 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </form>
 </div>
 
+<!-- Merge recordings -->
+<div class="modal" id="mergeModal">
+  <form class="sheet" id="mergeForm" style="max-width:520px">
+    <div class="sheet-head"><h2>Merge recordings</h2></div>
+    <div class="sheet-body">
+      <div class="muted" style="font-size:13.5px">They play one after the other, in this order, as one new recording (sound included). Drag them, or use the arrows, to change the order.</div>
+      <ol class="merge-list" id="mergeList"></ol>
+      <label class="merge-check"><input type="checkbox" id="mergeDelete">Delete the originals once the merge is done</label>
+      <div class="muted" id="mergeWarn" style="font-size:12.5px;color:var(--warn, #d97706)" hidden></div>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="mergeOk">Merge</button></div>
+  </form>
+</div>
+
 <!-- Player -->
 <div class="modal player" id="playerModal">
   <div class="player-modal-card">
@@ -854,6 +887,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="player-viewport-wrap" id="playerViewportContainer">
       <canvas id="playerCanvas" onclick="togglePlayPause()"></canvas>
+      <audio id="playerAudio" preload="auto" hidden></audio>
       <div class="player-center-play paused" id="playerCenterPlayBtn" onclick="togglePlayPause()"><svg viewBox="0 0 24 24" id="playerCenterPlayIcon"><polygon points="8 5 19 12 8 19 8 5"/></svg></div>
       <div class="player-loading-overlay" id="playerLoadingOverlay">
         <div class="player-loading-spinner"></div>
@@ -875,6 +909,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         </div>
         <div class="player-controls-right">
           <span id="playerFrameOffset" class="player-frames-text">+0.0s</span>
+          <button class="player-ctrl-btn" id="playerMuteBtn" onclick="togglePlayerMute()" title="Mute (m)" hidden><svg viewBox="0 0 24 24" id="playerMuteIcon"></svg></button>
           <button class="player-ctrl-btn" id="playerLoopBtn" onclick="togglePlayerLoop()" title="Loop (Shift+L)"><svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/></svg></button>
           <button class="player-ctrl-btn" id="playerSpeedCycleBtn" onclick="cyclePlaySpeed()" title="Playback speed">1x</button>
           <button class="player-ctrl-btn" id="playerFullscreenBtn" onclick="togglePlayerFullscreen()" title="Full screen (f)"><svg viewBox="0 0 24 24" id="playerFsIcon"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
@@ -1586,25 +1621,37 @@ function profileRow(p) {
 const isLive = (r) => r.status === 'recording' && byKey.sessions.has(`${r.node_name}|${r.session_id}`);
 // Recordings that never got a frame are noise.
 const visibleRecordings = () => [...byKey.recordings.values()].filter((r) => inFilter(r) && (r.frame_count > 0 || isLive(r)));
+// The search field: every word somewhere in the title, addresses, profile, node, id or start date.
+let recQuery = '';
+const recHaystack = (r) => [r.title, r.initial_url, r.final_url, r.profile, r.node_name, r.id, absTime(r.started_at_secs), r.audio && 'sound audio', r.merged_from?.length && 'merged'].filter(Boolean).join(' ').toLowerCase();
+const listedRecordings = () => {
+  const words = recQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  return visibleRecordings().filter((r) => !words.length || words.every((w) => recHaystack(r).includes(w)));
+};
+$('recSearch').addEventListener('input', (e) => { recQuery = e.target.value; renderRecordings(); });
 
 function renderRecordings() {
   const sec = $('view-recordings');
-  const list = visibleRecordings().sort((a, b) => b.started_at_secs - a.started_at_secs);
+  const all = visibleRecordings();
+  const list = listedRecordings().sort((a, b) => b.started_at_secs - a.started_at_secs);
   for (const key of selectedRecordings) if (!byKey.recordings.has(key)) selectedRecordings.delete(key);
   renderViewActions(list);
-  if (!list.length) {
+  if (!all.length) {
     setStatic(sec, emptyState('film', `No recordings${onNode()}`,
       'Sessions with recording enabled save a replayable screencast here. Old recordings are vacuumed automatically.'));
     return;
   }
   if (sec._static !== undefined || !sec.querySelector('.list')) {
     clearStatic(sec);
-    sec.innerHTML = `<div class="list"><div class="list-head"><span></span><span></span><span>Recording</span><span>Node</span><span class="c-started">Started</span><span class="c-dur">Length</span><span class="c-size">Size</span><span></span></div><div class="rows"></div></div>`;
+    sec.innerHTML = `<div class="list"><div class="list-head"><span></span><span></span><span>Recording</span><span>Node</span><span class="c-started">Started</span><span class="c-dur">Length</span><span class="c-size">Size</span><span></span></div><div class="rows"></div><div class="list-nomatch" hidden></div></div>`;
   }
   reconcile(sec.querySelector('.rows'), list, keyOf.recording, recordingRow);
+  const none = sec.querySelector('.list-nomatch');
+  none.hidden = list.length > 0;
+  if (!list.length) none.textContent = `No recordings match “${recQuery.trim()}”.`;
 }
 
-function renderViewActions(recordings = visibleRecordings()) {
+function renderViewActions(recordings = listedRecordings()) {
   const actions = $('viewActions');
   actions.classList.toggle('recording-actions', view === 'recordings');
   if (view === 'profiles') {
@@ -1627,7 +1674,7 @@ function renderViewActions(recordings = visibleRecordings()) {
   const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
   const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected</span>` : ''}
     <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
-    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button><button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
+    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button>${selected.length > 1 ? `<button class="btn sm" data-act="merge-selected-recordings" title="Merge the selected recordings into one, in an order you pick">${icon('layers', 'sm')}<span class="lbl">Merge ${selected.length}</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
   if (actions.innerHTML !== html) actions.innerHTML = html;
 }
 
@@ -1644,7 +1691,7 @@ function recordingRow(r) {
     <div><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
     <div class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
-      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${cached}</b><span>${esc(sub)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}</b><span>${esc(sub)}</span></div></div>
     <div class="c-node">${nodeChip(r.node_name)}</div>
     <div class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
     <div class="num c-dur">${formatUptime(r.duration_seconds)}</div>
@@ -1659,6 +1706,7 @@ function setView(v) {
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   for (const name of ['sessions', 'profiles', 'recordings', 'engines', 'nodes']) $('view-' + name).hidden = name !== v;
+  $('recSearchWrap').hidden = v !== 'recordings';
   document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   renderViewActions();
 }
@@ -1684,6 +1732,7 @@ const ACT = {
     setRecordingKeep(selected, selected.some((r) => !r.keep));
   },
   'uncache-selected-recordings': () => uncacheSelectedRecordings(),
+  'merge-selected-recordings': () => openMergeModal([...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean)),
   'view': (el) => {
     setView(el.dataset.view);
     if (el.classList.contains('stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1728,7 +1777,8 @@ const ACT = {
     openMenu(el, [
       { icon: 'takeover', label: 'Take over', run: () => { location.href = handoffUrl(s.node_name, { session: s.id }); } },
       { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
-      { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : 'Start recording', run: () => toggleRecording(s) },
+      { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : s.audio ? 'Start recording (with sound)' : 'Start recording', run: () => toggleRecording(s) },
+      !s.is_recording && s.audio && { icon: 'rec', label: 'Start recording without sound', run: () => toggleRecording(s, false) },
       { icon: 'clock', label: `Auto-stop when idle: ${idleLabel(s.idle_timeout_seconds)}…`, run: () => setIdleTimeout(s) },
       nodeProxies(s.node_name).length && { icon: 'route', label: 'Proxy', meta: s.proxy ? proxyName(s.node_name, s.proxy) : 'Direct', run: () => openMenu(el, [
         { label: 'Proxy (switches now)' },
@@ -1783,6 +1833,7 @@ const ACT = {
       { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
+      r.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
       { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
       cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
       '-',
@@ -2113,8 +2164,9 @@ async function stopSession(s) {
   if (ok) act('Stopping session', () => request('DELETE', api(s.node_name, `/sessions/${enc(s.id)}`)), 'Session stopped');
 }
 
-function toggleRecording(s) {
-  const path = `/sessions/${enc(s.id)}/${s.is_recording ? 'stop-record' : 'record'}`;
+// audio: false records without the session's sound (default: the node's setting).
+function toggleRecording(s, audio) {
+  const path = `/sessions/${enc(s.id)}/${s.is_recording ? 'stop-record' : 'record'}${!s.is_recording && audio === false ? '?audio=false' : ''}`;
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),
     s.is_recording ? 'Recording saved' : 'Recording started');
 }
@@ -2881,6 +2933,96 @@ async function vacuum() {
   }, 'Vacuum finished');
 }
 
+/* ================================================================ recordings: merge */
+let mergeOrder = [];
+function openMergeModal(recs) {
+  const nodesOf = new Set(recs.map((r) => r.node_name));
+  if (recs.length < 2) return;
+  if (nodesOf.size > 1) { showToast('Pick recordings of one node', 'danger', 6000, null, `Merging works within a node; these are on ${[...nodesOf].join(', ')}.`); return; }
+  const live = recs.filter(isLive);
+  if (live.length) { showToast('Still recording', 'danger', 6000, null, 'Stop the live recording first, then merge it.'); return; }
+  // Oldest first: the order they happened in.
+  mergeOrder = [...recs].sort((a, b) => a.started_at_secs - b.started_at_secs);
+  $('mergeDelete').checked = false;
+  renderMergeList();
+  openModal('mergeModal');
+  setTimeout(() => $('mergeOk').focus(), 30);
+}
+function renderMergeList() {
+  const total = mergeOrder.reduce((n, r) => n + (r.duration_seconds || 0), 0);
+  $('mergeList').innerHTML = mergeOrder.map((r, i) => {
+    const url = r.final_url || r.initial_url || '';
+    const title = (r.title !== 'about:blank' && r.title) || shortUrl(url) || 'Untitled session';
+    return `<li draggable="true" data-i="${i}"><span class="n">${i + 1}</span><span class="t"><b>${esc(title)}</b><span>${esc(absTime(r.started_at_secs))} · ${formatUptime(r.duration_seconds)}${r.audio ? ' · with sound' : ''}</span></span>`
+      + `<span class="mv"><button type="button" class="btn icon sm ghost" data-mv="-1" data-i="${i}" ${i ? '' : 'disabled'} aria-label="Move up" title="Move up" style="transform:rotate(180deg)">${icon('chev', 'sm')}</button>`
+      + `<button type="button" class="btn icon sm ghost" data-mv="1" data-i="${i}" ${i < mergeOrder.length - 1 ? '' : 'disabled'} aria-label="Move down" title="Move down">${icon('chev', 'sm')}</button></span></li>`;
+  }).join('');
+  $('mergeOk').textContent = `Merge ${mergeOrder.length} (${formatUptime(total)})`;
+  const kept = mergeOrder.filter((r) => r.keep).length;
+  $('mergeWarn').hidden = !($('mergeDelete').checked && kept);
+  $('mergeWarn').textContent = `${kept} of them ${kept === 1 ? 'is' : 'are'} marked to be kept, and will be deleted too.`;
+}
+function moveMerge(from, to) {
+  if (to < 0 || to >= mergeOrder.length || from === to) return;
+  const [r] = mergeOrder.splice(from, 1);
+  mergeOrder.splice(to, 0, r);
+  renderMergeList();
+}
+$('mergeList').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-mv]');
+  if (b) moveMerge(+b.dataset.i, +b.dataset.i + +b.dataset.mv);
+});
+let mergeDrag = null;
+$('mergeList').addEventListener('dragstart', (e) => {
+  const li = e.target.closest('li');
+  mergeDrag = li ? +li.dataset.i : null;
+  li?.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+});
+$('mergeList').addEventListener('dragover', (e) => {
+  const li = e.target.closest('li');
+  if (mergeDrag === null || !li) return;
+  e.preventDefault();
+  $('mergeList').querySelectorAll('li.over').forEach((x) => x.classList.remove('over'));
+  li.classList.add('over');
+});
+$('mergeList').addEventListener('drop', (e) => {
+  const li = e.target.closest('li');
+  e.preventDefault();
+  if (mergeDrag !== null && li) moveMerge(mergeDrag, +li.dataset.i);
+  mergeDrag = null;
+});
+$('mergeList').addEventListener('dragend', () => { mergeDrag = null; renderMergeList(); });
+$('mergeDelete').addEventListener('change', renderMergeList);
+$('mergeModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]') || e.target.id === 'mergeModal') closeModal('mergeModal'); });
+$('mergeForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const recs = mergeOrder, del = $('mergeDelete').checked, node = recs[0].node_name;
+  closeModal('mergeModal');
+  act(`Merging ${recs.length} recordings`, async () => {
+    const m = await request('POST', api(node, '/recordings/merge'), { ids: recs.map((r) => r.id), delete: del });
+    if (del) for (const r of recs) selectedRecordings.delete(keyOf.recording(r));
+    return m;
+  }, del ? 'Recordings merged, originals deleted' : 'Recordings merged');
+});
+
+async function saveRecordingAudio(r) {
+  try {
+    const res = await fetch(api(r.node_name, `/recordings/${enc(r.id)}/audio`), { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(res.statusText);
+    const u = URL.createObjectURL(await res.blob());
+    const a = document.createElement('a');
+    a.href = u;
+    a.download = `session-${r.id}-sound.webm`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 1000);
+  } catch (err) {
+    showToast('Could not save the sound', 'danger', 6000, null, err.message);
+  }
+}
+
 /* ================================================================ recordings: cache, downloads, player */
 const REC_DB_NAME = 'BrowserDaemonRecordings';
 const REC_DB_VERSION = 2;
@@ -3191,6 +3333,7 @@ function closePlayerModal() {
   }
   activePlayerModalId = null;
   activePlayerModalNode = null;
+  unloadPlayerAudio();
   if (activePlayer) {
     activePlayer.isPlaying = false;
     if (activePlayer.timer) clearTimeout(activePlayer.timer);
@@ -3393,6 +3536,66 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
   }
 }
 
+/* The recording's sound (recordings made with audio): fetched whole (seeking works
+   on a blob), and kept in step with the frames, which stay the clock: each frame
+   moves the audio there if it drifted, at the playback speed. */
+const playerSound = { id: null, url: '', muted: (() => { try { return localStorage.getItem('dash.playerMuted') === '1'; } catch { return false; } })() };
+const SPEAKER_ON = '<path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>';
+const SPEAKER_OFF = '<path d="M11 5 6 9H2v6h4l5 4zM22 9l-6 6M16 9l6 6"/>';
+function playerHasSound() { return !!(activePlayer && playerSound.id === activePlayer.id && playerSound.url); }
+function showMuteButton() {
+  const btn = $('playerMuteBtn');
+  btn.hidden = !playerSound.url;
+  $('playerMuteIcon').innerHTML = playerSound.muted ? SPEAKER_OFF : SPEAKER_ON;
+  btn.title = playerSound.muted ? 'Unmute (m)' : 'Mute (m)';
+  btn.classList.toggle('active', !playerSound.muted);
+  $('playerAudio').muted = playerSound.muted;
+}
+function unloadPlayerAudio() {
+  const a = $('playerAudio');
+  a.pause();
+  a.removeAttribute('src');
+  a.load();
+  if (playerSound.url) URL.revokeObjectURL(playerSound.url);
+  playerSound.id = null;
+  playerSound.url = '';
+  showMuteButton();
+}
+async function loadPlayerAudio(id, node, rec) {
+  unloadPlayerAudio();
+  if (!rec?.audio) return;
+  playerSound.id = id;
+  try {
+    const res = await fetch(api(node, `/recordings/${enc(id)}/audio`), { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(res.statusText);
+    const blob = await res.blob();
+    if (playerSound.id !== id) return; // another recording by now
+    playerSound.url = URL.createObjectURL(blob);
+    $('playerAudio').src = playerSound.url;
+    showMuteButton();
+    syncPlayerAudio();
+  } catch (err) {
+    if (playerSound.id === id) playerSound.id = null;
+    showToast('No sound', 'info', 4000, null, `Could not load the recording's audio (${err.message}).`);
+  }
+}
+// Called as frames go by (and on play, pause, seek): the audio follows the frames.
+function syncPlayerAudio() {
+  if (!playerHasSound()) return;
+  const a = $('playerAudio'), p = activePlayer;
+  const t = (p.frames[p.currentIndex]?.t || 0) / 1000;
+  const running = p.isPlaying && !p.waiting;
+  if (Math.abs(a.currentTime - t) > (running ? 0.3 : 0.05)) a.currentTime = t;
+  a.playbackRate = p.speed || 1;
+  if (running && a.paused) a.play().catch(() => {});
+  if (!running && !a.paused) a.pause();
+}
+function togglePlayerMute() {
+  playerSound.muted = !playerSound.muted;
+  try { localStorage.setItem('dash.playerMuted', playerSound.muted ? '1' : '0'); } catch { /* storage unavailable */ }
+  showMuteButton();
+}
+
 async function openPlayerModal(id, node) {
   const modal = document.getElementById('playerModal');
   playerHash = '#recordings/' + enc(id);
@@ -3419,6 +3622,7 @@ async function openPlayerModal(id, node) {
 
   // Open modal immediately so user sees the loading state
   modal.classList.add('open');
+  loadPlayerAudio(id, node, recInfo);
 
   const canvas = document.getElementById('playerCanvas');
   const ctx = canvas.getContext('2d');
@@ -3522,6 +3726,7 @@ function renderPlayerFrame(idx, { quiet = false } = {}) {
   document.getElementById('playerTimeDisplay').textContent =
     `${pad(Math.floor(curSec / 60))}:${pad(curSec % 60)} / ${pad(Math.floor(maxSec / 60))}:${pad(maxSec % 60)}`;
   document.getElementById('playerFrameOffset').textContent = `+${(frame.t / 1000).toFixed(1)}s`;
+  syncPlayerAudio();
 
   if (quiet) return;
   const frameTitle = (frame.title !== 'about:blank' && frame.title) || shortUrl(frame.url);
@@ -3634,6 +3839,7 @@ function togglePlayPause() {
     if (activePlayer.timer) clearTimeout(activePlayer.timer);
     resetPlayerControlsTimer();
   }
+  syncPlayerAudio();
 }
 
 function playNextFrame() {
@@ -3655,12 +3861,15 @@ function playNextFrame() {
     updatePlayPauseButton();
     updateCenterPlayButtonState();
     resetPlayerControlsTimer();
+    syncPlayerAudio();
     return;
   }
 
   const curr = activePlayer.frames[activePlayer.currentIndex];
   const next = activePlayer.frames[activePlayer.currentIndex + 1];
-  let delay = Math.max(25, Math.min(1200, (next.t - curr.t) / activePlayer.speed));
+  // Long still stretches are shortened, unless there's sound to keep in step with.
+  const cap = playerHasSound() ? Infinity : 1200;
+  let delay = Math.max(25, Math.min(cap, (next.t - curr.t) / activePlayer.speed));
 
   activePlayer.timer = setTimeout(() => {
     if (!activePlayer || !activePlayer.isPlaying) return;
@@ -3811,6 +4020,9 @@ window.addEventListener('keydown', e => {
       document.getElementById('playerScrubber').value = targetIdx;
       resetPlayerControlsTimer();
     }
+  } else if ((e.key === 'm' || e.key === 'M') && playerSound.url) {
+    e.preventDefault();
+    togglePlayerMute();
   } else if (e.key === 'f' || e.key === 'F') {
     e.preventDefault();
     togglePlayerFullscreen();

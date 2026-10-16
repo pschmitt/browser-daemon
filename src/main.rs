@@ -19,6 +19,7 @@ mod proc;
 mod profiles;
 mod proxies;
 mod proxy;
+mod rec_audio;
 mod recorder;
 mod relay;
 mod secrets;
@@ -131,6 +132,11 @@ pub struct Args {
 
     #[arg(long, default_value_t = true)]
     pub record_sessions: bool,
+
+    /// Record the session's sound with its recording (needs --pulse-server); a
+    /// recording can still be started without (`POST .../record?audio=false`).
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub record_audio: bool,
 
     #[arg(long, default_value_t = 2048)]
     pub recording_max_storage_mb: u64,
@@ -373,6 +379,7 @@ impl ManagedSession {
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
             recording_paused: recording.is_some_and(SessionRecorderHandle::is_paused),
+            recording_audio: recording.is_some_and(|r| r.audio),
         }
     }
 }
@@ -439,6 +446,9 @@ pub struct SessionSummary {
     pub is_recording: bool,
     #[serde(default)]
     pub recording_paused: bool,
+    /// The recording takes the session's sound too.
+    #[serde(default)]
+    pub recording_audio: bool,
 }
 
 #[derive(Clone)]
@@ -729,7 +739,7 @@ impl AppState {
         }
 
         if record.unwrap_or(self.recorder_config.enabled) {
-            self.start_recording(&session).await;
+            self.start_recording(&session, None).await;
         }
         self.persist_session(&session).await;
 
@@ -808,7 +818,7 @@ impl AppState {
                         .await
                         .insert(session.id, session.clone());
                     if rec.recording {
-                        self.start_recording(&session).await;
+                        self.start_recording(&session, None).await;
                     }
                     info!(session_id = %rec.id, engine = %rec.engine, profile = ?rec.profile, "Adopted session of the previous run");
                 }
@@ -877,7 +887,8 @@ impl AppState {
             })
     }
 
-    pub async fn start_recording(&self, session: &ManagedSession) -> Uuid {
+    /// `audio`: take the session's sound too (default: the node's --record-audio).
+    pub async fn start_recording(&self, session: &ManagedSession, audio: Option<bool>) -> Uuid {
         // Chromium with a display of its own: frames grabbed from the display, since
         // screenshots repaint the window the live video shows (flicker).
         let grab = match (&session.display, session.display_size, &self.config.video) {
@@ -899,6 +910,15 @@ impl AppState {
             self.node_name.clone(),
             (*self.recorder_config).clone(),
             grab,
+            audio
+                .unwrap_or(self.recorder_config.audio)
+                .then(|| {
+                    Some(rec_audio::Source {
+                        cfg: self.config.audio.clone()?,
+                        sink: session.audio_sink.clone()?,
+                    })
+                })
+                .flatten(),
         );
         // Firefox has no screencast: feed the recorder with BiDi screenshots instead.
         if let Some(ref hub) = session.bidi {
@@ -1864,6 +1884,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_storage_bytes: args.recording_max_storage_mb * 1024 * 1024,
         max_age_secs: args.recording_max_age_hours * 3600,
         max_count: args.recording_max_count,
+        audio: args.record_audio,
+        ffmpeg: Some(args.ffmpeg.clone()),
     });
     let active_recordings = Arc::new(RwLock::new(HashMap::new()));
     let orphaned = recorder::mark_orphaned_recordings(&recorder_config).await;
@@ -2161,6 +2183,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_recording).delete(api_delete_recording),
         )
         .route("/api/recordings/{id}/frames", get(api_get_recording_frames))
+        .route("/api/recordings/{id}/audio", get(api_get_recording_audio))
+        .route("/api/recordings/merge", post(api_merge_recordings))
+        .route(
+            "/api/peers/{peer}/recordings/{id}/audio",
+            get(api_peer_get_recording_audio),
+        )
+        .route(
+            "/api/peers/{peer}/recordings/merge",
+            post(api_peer_merge_recordings),
+        )
         .route("/api/recordings/{id}/keep", post(api_set_recording_keep))
         .route(
             "/api/peers/{peer}/recordings/{id}/keep",
@@ -5310,6 +5342,143 @@ async fn api_delete_recording(
     }
 }
 
+/// A recording's sound (`audio.webm`, Opus), with Range support for seeking.
+async fn api_get_recording_audio(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+) -> Response {
+    if let Err(e) = state.check_auth(req.headers()) {
+        return e.into_response();
+    }
+    let path = state
+        .recorder_config
+        .recordings_dir
+        .join(id.to_string())
+        .join(rec_audio::FILE);
+    if !path.exists() {
+        return api_error(StatusCode::NOT_FOUND, "This recording has no sound").into_response();
+    }
+    match tower_http::services::ServeFile::new(&path)
+        .try_call(req)
+        .await
+    {
+        Ok(res) => {
+            let mut res = res.map(axum::body::Body::new);
+            res.headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/webm"));
+            res
+        }
+        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+async fn api_peer_get_recording_audio(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            format!("Peer '{peer}' not found in mesh"),
+        )
+        .into_response();
+    };
+    let mut req = state
+        .peer_request(
+            state
+                .http_client
+                .get(format!("{peer_url}/api/recordings/{id}/audio")),
+        )
+        .timeout(Duration::from_secs(3600));
+    if let Some(range) = headers.get(header::RANGE) {
+        req = req.header(header::RANGE, range.clone());
+    }
+    match req.send().await {
+        Ok(r) => {
+            let status =
+                StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let mut builder = Response::builder().status(status);
+            for name in [
+                header::CONTENT_TYPE,
+                header::CONTENT_LENGTH,
+                header::CONTENT_RANGE,
+                header::ACCEPT_RANGES,
+            ] {
+                if let Some(v) = r.headers().get(name.as_str()) {
+                    if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {
+                        builder = builder.header(name, v);
+                    }
+                }
+            }
+            builder
+                .body(axum::body::Body::from_stream(r.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+        }
+        Err(e) => api_error(
+            StatusCode::BAD_GATEWAY,
+            format!("Peer communication failed: {e}"),
+        )
+        .into_response(),
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct MergeRequest {
+    /// The recordings to merge, in order.
+    ids: Vec<Uuid>,
+    /// Delete them once the merge is written.
+    #[serde(default)]
+    delete: bool,
+}
+
+/// Merges recordings of this node into a new one (see recorder::merge_recordings).
+async fn api_merge_recordings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<MergeRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let meta = recorder::merge_recordings(&state.recorder_config, &req.ids, req.delete)
+        .await
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(meta))
+}
+
+async fn api_peer_merge_recordings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(peer): AxumPath<String>,
+    Json(req): Json<MergeRequest>,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            format!("Peer '{peer}' not found in mesh"),
+        )
+        .into_response();
+    };
+    // Merging copies every frame: long recordings take a while.
+    let res = state
+        .peer_request(
+            state
+                .http_client
+                .post(format!("{peer_url}/api/recordings/merge")),
+        )
+        .timeout(Duration::from_secs(1800))
+        .json(&req)
+        .send()
+        .await;
+    proxy_response(res).await
+}
+
 async fn api_vacuum_recordings(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5319,8 +5488,16 @@ async fn api_vacuum_recordings(
     Ok(Json(stats))
 }
 
+#[derive(Deserialize)]
+struct RecordParams {
+    /// Take the session's sound too (default: the node's --record-audio).
+    #[serde(default)]
+    audio: Option<bool>,
+}
+
 async fn api_session_start_record(
     AxumPath(id): AxumPath<Uuid>,
+    Query(params): Query<RecordParams>,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -5339,7 +5516,7 @@ async fn api_session_start_record(
         ));
     }
 
-    let rec_id = state.start_recording(&session).await;
+    let rec_id = state.start_recording(&session, params.audio).await;
     Ok(Json(serde_json::json!({
         "status": "recording_started",
         "session_id": id,

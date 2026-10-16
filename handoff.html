@@ -205,6 +205,8 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
     border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 600 13px system-ui, sans-serif; cursor: pointer; }
   .sm-rec button:hover { border-color: var(--muted); }
   .sm-rec button.rec { color: var(--bad); }
+  .sm-rec-note { flex: none; display: inline-flex; align-items: center; padding: 0 8px; color: var(--muted); }
+  .sm-rec-note svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .sm-rec svg, .sm-item svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
   .sm-rec svg.fill { fill: currentColor; stroke: none; }
   .sm-item { display: flex; align-items: center; gap: 10px; width: 100%; height: 38px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent;
@@ -2963,6 +2965,8 @@ function agentBrand(c) {
 }
 const agentSvg = (c) => `<svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">${AGENT_SVG[agentBrand(c)]}</svg>`;
 const ICON = {
+  sound: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>',
+  mute: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM22 9l-6 6M16 9l6 6"/></svg>',
   rec: '<svg class="fill" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6"/></svg>',
   pause: '<svg class="fill" viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
   play: '<svg class="fill" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></svg>',
@@ -3647,11 +3651,19 @@ function renderSession() {
   if (layoutMode !== "window" && ((sess.client_count || 0) > 0) !== metricsYielding) applyMetrics();
   $("smStreamRow").hidden = !sess.video || !window.VideoDecoder;
   if (canVideo() && !video.ws) startVideo();
-  const btn = (act, icon, label, cls = "") => `<button data-rec="${act}" class="${cls}">${ICON[icon]}${label}</button>`;
+  const btn = (act, icon, label, cls = "", title = "") => `<button data-rec="${act}" class="${cls}"${title ? ` title="${title}"` : ""}>${ICON[icon]}${label}</button>`;
+  // With session audio: whether a new recording takes the sound (remembered here).
+  const sound = recSound();
   const html = !rec ? btn("record", "rec", "Start recording", "rec")
-    : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec");
+      + (sess.audio ? btn("sound", sound ? "sound" : "mute", sound ? "Sound" : "No sound", "", sound ? "The recording takes the session's sound: tap to record without" : "The recording is silent: tap to record the sound too") : "")
+    : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec")
+      + (sess.recording_audio ? `<span class="sm-rec-note" title="Recording the sound too">${ICON.sound}</span>` : "");
   const box = $("smRec");
   if (box._html !== html) { box.innerHTML = html; box._html = html; }
+}
+
+function recSound() {
+  try { return localStorage.getItem("bd.recSound") !== "0"; } catch { return true; }
 }
 
 function toggleSessMenu(open = E.sessMenu.hidden) {
@@ -3682,9 +3694,14 @@ $("smReload").onclick = () => { toggleSessMenu(false); E.reload.click(); };
 $("smRec").onclick = async (e) => {
   const b = e.target.closest("[data-rec]");
   if (!b) return;
+  if (b.dataset.rec === "sound") {
+    try { localStorage.setItem("bd.recSound", recSound() ? "0" : "1"); } catch { /* storage unavailable */ }
+    refreshSession();
+    return;
+  }
   b.disabled = true;
   try {
-    await sessionApi("POST", "/" + b.dataset.rec);
+    await sessionApi("POST", "/" + b.dataset.rec + (b.dataset.rec === "record" && sess?.audio ? `?audio=${recSound()}` : ""));
   } catch (err) {
     $("smStatus").textContent = "Failed: " + err.message;
   }

@@ -425,6 +425,16 @@ pub enum RecordingCmd {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Merge recordings of one node into a new one, in the order given (sound too).
+    Merge {
+        #[arg(required = true, num_args = 2..)]
+        recordings: Vec<String>,
+        /// Delete the originals once the merge is written.
+        #[arg(long)]
+        delete: bool,
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Download a recording's frames (JSON lines).
     Export {
         recording: String,
@@ -1297,6 +1307,53 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                 c.call(c.req(Method::DELETE, &path)).await?;
                 println!("deleted {}", short(r.recording.id));
             }
+        }
+        RecordingCmd::Merge {
+            recordings,
+            delete,
+            yes,
+        } => {
+            let mut targets = Vec::new();
+            for key in &recordings {
+                targets.push(c.recording(key)?);
+            }
+            let node = targets[0].node_name.clone();
+            if targets.iter().any(|r| r.node_name != node) {
+                return Err(
+                    "Merging works within one node: pick recordings of the same node".into(),
+                );
+            }
+            if delete {
+                let kept = targets.iter().filter(|r| r.recording.keep).count();
+                confirm(
+                    &format!(
+                        "Merge {} recordings and delete them{}?",
+                        targets.len(),
+                        if kept > 0 {
+                            format!(" ({kept} marked to be kept)")
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    yes,
+                )?;
+            }
+            let ids: Vec<_> = targets.iter().map(|r| r.recording.id).collect();
+            let body = json!({ "ids": ids, "delete": delete });
+            let path = c.api(&node, "/recordings/merge");
+            let v = c
+                .call(
+                    c.req(Method::POST, &path)
+                        .timeout(Duration::from_secs(1800))
+                        .json(&body),
+                )
+                .await?;
+            println!(
+                "merged into {}",
+                v["id"]
+                    .as_str()
+                    .map_or_else(String::new, |id| id.chars().take(8).collect())
+            );
         }
         RecordingCmd::Export { recording, output } => {
             let r = c.recording(&recording)?;

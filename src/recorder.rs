@@ -35,6 +35,12 @@ pub struct RecordingMeta {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub keep: bool,
     pub status: String, // "recording", "completed", "interrupted"
+    /// The recording has sound (`audio.webm`, see rec_audio.rs).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub audio: bool,
+    /// Made by merging these recordings, in this order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub merged_from: Vec<Uuid>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -54,6 +60,10 @@ pub struct RecorderConfig {
     pub max_storage_bytes: u64,
     pub max_age_secs: u64,
     pub max_count: usize,
+    /// Record the session's sound too, unless a recording is started without.
+    pub audio: bool,
+    /// ffmpeg, to join and merge recordings' audio.
+    pub ffmpeg: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -69,6 +79,8 @@ pub struct SessionRecorderHandle {
     pub stop_flag: Arc<AtomicBool>,
     pub clock: Arc<RecordingClock>,
     pub frame_tx: tokio::sync::mpsc::UnboundedSender<ProxyRecordingFrame>,
+    /// Recording the session's sound too.
+    pub audio: bool,
 }
 
 impl SessionRecorderHandle {
@@ -138,7 +150,9 @@ pub fn start_recording(
     node_name: String,
     config: RecorderConfig,
     grab: Option<DisplayGrab>,
+    audio: Option<crate::rec_audio::Source>,
 ) -> SessionRecorderHandle {
+    let has_audio = audio.is_some();
     let recording_id = Uuid::new_v4();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_clone = stop_flag.clone();
@@ -158,6 +172,7 @@ pub fn start_recording(
             clock_clone,
             frame_rx,
             grab,
+            audio,
         )
         .await;
     });
@@ -167,6 +182,7 @@ pub fn start_recording(
         stop_flag,
         clock,
         frame_tx,
+        audio: has_audio,
     }
 }
 
@@ -281,6 +297,7 @@ async fn record_session_loop(
     clock: Arc<RecordingClock>,
     mut frame_rx: tokio::sync::mpsc::UnboundedReceiver<ProxyRecordingFrame>,
     grab: Option<DisplayGrab>,
+    audio: Option<crate::rec_audio::Source>,
 ) {
     let rec_dir = config.recordings_dir.join(recording_id.to_string());
     if let Err(e) = fs::create_dir_all(&rec_dir).await {
@@ -313,9 +330,18 @@ async fn record_session_loop(
         favicon_type: None,
         keep: false,
         status: "recording".to_string(),
+        audio: false,
+        merged_from: Vec::new(),
     };
 
     let _ = write_meta(&meta_file, &meta).await;
+
+    // The sound, on the same clock; stopped once the frames are done (the loop
+    // also ends without the stop flag, when the session goes away).
+    let audio_stop = Arc::new(AtomicBool::new(false));
+    let audio_task = audio.map(|src| {
+        crate::rec_audio::spawn(src, rec_dir.clone(), clock.clone(), audio_stop.clone())
+    });
 
     info!(
         recording_id = %recording_id,
@@ -794,12 +820,18 @@ async fn record_session_loop(
     let _ = frames_writer.flush().await;
     drop(frames_writer);
 
+    // Before the audio is joined, which takes a moment of the clock.
+    let duration_seconds = clock.elapsed().as_secs();
+    audio_stop.store(true, Ordering::SeqCst);
+    if let Some(task) = audio_task {
+        meta.audio = task.await.unwrap_or(false);
+    }
+
     let ended_at_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
 
-    let duration_seconds = clock.elapsed().as_secs();
     let size_bytes = compute_rec_dir_size(&rec_dir).await;
 
     meta.ended_at_secs = Some(ended_at_secs);
@@ -987,10 +1019,11 @@ pub async fn mark_orphaned_recordings(config: &RecorderConfig) -> usize {
         }
         meta.status = "interrupted".to_string();
         meta.ended_at_secs = Some(meta.started_at_secs + meta.duration_seconds);
-        let meta_file = config
-            .recordings_dir
-            .join(meta.id.to_string())
-            .join("meta.json");
+        let rec_dir = config.recordings_dir.join(meta.id.to_string());
+        if let Some(ref ffmpeg) = config.ffmpeg {
+            meta.audio = crate::rec_audio::salvage(ffmpeg, &rec_dir).await;
+        }
+        let meta_file = rec_dir.join("meta.json");
         if write_meta(&meta_file, &meta).await.is_ok() {
             count += 1;
         }
@@ -1020,6 +1053,127 @@ pub async fn delete_recording(config: &RecorderConfig, id: Uuid) -> bool {
     } else {
         false
     }
+}
+
+/// Silence between merged recordings (ms), so the cut shows.
+const MERGE_GAP_MS: u64 = 500;
+
+/// Merges recordings, in the order given, into a new one: their frames one after
+/// the other on one clock, their sound (if any) where it belongs. With `delete`,
+/// the originals are removed once the merge is written.
+pub async fn merge_recordings(
+    config: &RecorderConfig,
+    ids: &[Uuid],
+    delete: bool,
+) -> Result<RecordingMeta, String> {
+    use tokio::io::AsyncBufReadExt;
+    let mut seen = std::collections::HashSet::new();
+    if ids.len() < 2 || !ids.iter().all(|id| seen.insert(*id)) {
+        return Err("Pick at least two different recordings".into());
+    }
+    let mut sources = Vec::new();
+    for id in ids {
+        let meta = get_recording(config, *id)
+            .await
+            .ok_or_else(|| format!("No recording {id} on this node"))?;
+        if meta.status == "recording" {
+            return Err(format!("Recording {id} is still running: stop it first"));
+        }
+        sources.push(meta);
+    }
+    let id = Uuid::new_v4();
+    let dir = config.recordings_dir.join(id.to_string());
+    fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    let work = async {
+        let mut out = fs::File::create(dir.join("frames.jsonl"))
+            .await
+            .map_err(|e| e.to_string())?;
+        let (mut offset, mut frames) = (0u64, 0u64);
+        let mut audio = Vec::new();
+        for src in &sources {
+            let src_dir = config.recordings_dir.join(src.id.to_string());
+            if src.audio {
+                audio.push((offset, src_dir.join(crate::rec_audio::FILE)));
+            }
+            let mut last_t = 0;
+            if let Ok(f) = fs::File::open(src_dir.join("frames.jsonl")).await {
+                let mut lines = tokio::io::BufReader::new(f).lines();
+                while let Some(line) = lines.next_line().await.map_err(|e| e.to_string())? {
+                    let Ok(mut frame) = serde_json::from_str::<RecordingFrame>(&line) else {
+                        continue;
+                    };
+                    last_t = frame.t;
+                    frame.t += offset;
+                    let line = serde_json::to_string(&frame).map_err(|e| e.to_string())?;
+                    out.write_all(line.as_bytes())
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    out.write_all(b"\n").await.map_err(|e| e.to_string())?;
+                    frames += 1;
+                }
+            }
+            offset += (last_t + MERGE_GAP_MS).max(src.duration_seconds * 1000);
+        }
+        out.flush().await.map_err(|e| e.to_string())?;
+        let first = &sources[0];
+        let last = &sources[sources.len() - 1];
+        let mut meta = RecordingMeta {
+            id,
+            session_id: first.session_id,
+            profile: first.profile.clone(),
+            node: first.node.clone(),
+            started_at_secs: first.started_at_secs,
+            ended_at_secs: last.ended_at_secs,
+            duration_seconds: offset / 1000,
+            frame_count: frames,
+            size_bytes: 0,
+            initial_url: first.initial_url.clone(),
+            final_url: last.final_url.clone(),
+            title: sources.iter().find_map(|s| s.title.clone()),
+            favicon_url: None,
+            favicon_type: None,
+            keep: false,
+            status: "completed".to_string(),
+            audio: false,
+            merged_from: ids.to_vec(),
+        };
+        // The first source's site icon.
+        for src in &sources {
+            let icon = config
+                .recordings_dir
+                .join(src.id.to_string())
+                .join("favicon.bin");
+            if src.favicon_type.is_some() && fs::copy(&icon, dir.join("favicon.bin")).await.is_ok()
+            {
+                meta.favicon_url = src.favicon_url.clone();
+                meta.favicon_type = src.favicon_type.clone();
+                break;
+            }
+        }
+        if let (false, Some(ffmpeg)) = (audio.is_empty(), config.ffmpeg.as_ref()) {
+            meta.audio =
+                crate::rec_audio::join(ffmpeg, &audio, &dir.join(crate::rec_audio::FILE)).await;
+        }
+        meta.size_bytes = compute_rec_dir_size(&dir).await;
+        write_meta(&dir.join("meta.json"), &meta)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok::<_, String>(meta)
+    };
+    let meta = match work.await {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&dir).await;
+            return Err(format!("Could not merge: {e}"));
+        }
+    };
+    info!(recording_id = %id, sources = ids.len(), frames = meta.frame_count, audio = meta.audio, "Merged recordings");
+    if delete {
+        for id in ids {
+            delete_recording(config, *id).await;
+        }
+    }
+    Ok(meta)
 }
 
 #[derive(Serialize, Debug)]
@@ -1235,6 +1389,8 @@ mod tests {
             max_storage_bytes: 0,
             max_age_secs: 60,
             max_count: 1000,
+            audio: false,
+            ffmpeg: None,
         };
         // Two old recordings, one of them kept; both are over the age and storage limits.
         let mut ids = Vec::new();
@@ -1281,6 +1437,8 @@ mod tests {
             max_storage_bytes: u64::MAX,
             max_age_secs: 86400 * 365,
             max_count: 3,
+            audio: false,
+            ffmpeg: None,
         };
         let mut ids = Vec::new();
         for i in 0..6u64 {
@@ -1334,5 +1492,57 @@ mod tests {
         assert!(real_favicon(&json!({"faviconUrl": ""})).is_none());
         assert!(real_favicon(&json!({"faviconUrl": "data:image/png;base64,AAAA"})).is_none());
         assert!(real_favicon(&json!({})).is_none());
+    }
+
+    #[tokio::test]
+    async fn merging_puts_recordings_one_after_the_other() {
+        let dir = std::env::temp_dir().join(format!("bd-merge-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = RecorderConfig {
+            enabled: true,
+            recordings_dir: dir.clone(),
+            max_storage_bytes: u64::MAX,
+            max_age_secs: 86400,
+            max_count: 100,
+            audio: false,
+            ffmpeg: None,
+        };
+        let mut ids = Vec::new();
+        for (i, ts) in [[0u64, 1000], [0, 3000]].iter().enumerate() {
+            let id = Uuid::new_v4();
+            let rec = dir.join(id.to_string());
+            std::fs::create_dir_all(&rec).unwrap();
+            let frames: String = ts
+                .iter()
+                .map(|t| format!("{{\"t\":{t},\"data\":\"x{i}\"}}\n"))
+                .collect();
+            std::fs::write(rec.join("frames.jsonl"), frames).unwrap();
+            let meta = json!({ "id": id, "session_id": id, "profile": null, "node": "n",
+                "started_at_secs": 100 + i as u64, "ended_at_secs": 200, "duration_seconds": 2,
+                "frame_count": 2, "size_bytes": 1, "initial_url": format!("https://{i}.test"),
+                "final_url": null, "title": format!("t{i}"), "status": "completed" });
+            std::fs::write(rec.join("meta.json"), meta.to_string()).unwrap();
+            ids.push(id);
+        }
+        // Second one first.
+        let order = [ids[1], ids[0]];
+        let m = merge_recordings(&config, &order, true).await.unwrap();
+        assert_eq!(m.merged_from, order);
+        assert_eq!((m.frame_count, m.title.as_deref()), (4, Some("t1")));
+        assert_eq!(m.initial_url.as_deref(), Some("https://1.test"));
+        let frames =
+            std::fs::read_to_string(dir.join(m.id.to_string()).join("frames.jsonl")).unwrap();
+        let ts: Vec<u64> = frames
+            .lines()
+            .map(|l| serde_json::from_str::<RecordingFrame>(l).unwrap().t)
+            .collect();
+        // 3 s of the first, then a gap of MERGE_GAP_MS.
+        assert_eq!(ts, [0, 3000, 3500, 4500]);
+        assert!(
+            ids.iter().all(|id| !dir.join(id.to_string()).exists()),
+            "originals deleted"
+        );
+        assert!(merge_recordings(&config, &[m.id], false).await.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

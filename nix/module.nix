@@ -190,6 +190,12 @@ in
       description = "Whether to automatically record browser sessions by default.";
     };
 
+    recordAudio = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Whether recordings take the session's sound too (needs `audio.enable`); a recording can still be started without.";
+    };
+
     recordingMaxStorageMB = lib.mkOption {
       type = lib.types.ints.positive;
       default = 2048;
@@ -414,6 +420,8 @@ in
               (toString cfg.recordingMaxAgeHours)
               "--recording-max-count"
               (toString cfg.recordingMaxCount)
+              "--record-audio"
+              (lib.boolToString cfg.recordAudio)
               "--max-sessions"
               (toString cfg.maxSessions)
               "--default-width"

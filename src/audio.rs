@@ -20,7 +20,7 @@ pub struct AudioConfig {
 }
 
 impl AudioConfig {
-    fn server_arg(&self) -> String {
+    pub fn server_arg(&self) -> String {
         format!("unix:{}", self.server.display())
     }
 }
