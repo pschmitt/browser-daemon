@@ -1,8 +1,11 @@
 // Browser Daemon recording downloader.
 //
-// Streams frames.jsonl, hands frames to the page in batches so playback can
-// start right away, and caches them in IndexedDB chunk by chunk. A recording
-// only counts as cached once its "recordings" entry (written last) exists.
+// Streams frames.jsonl, hands the page the frames' index (time, address, title
+// and which chunk holds the picture, never the picture itself) so playback can
+// start right away, and caches the full frames in IndexedDB chunk by chunk. The
+// page reads pictures on demand: from the cached chunk, or with a Range request
+// for the chunk's bytes. A recording only counts as cached once its
+// "recordings" entry (written last, with the index) exists.
 const REC_DB_NAME = 'BrowserDaemonRecordings';
 const REC_DB_VERSION = 2;
 const REC_STORE_NAME = 'recordings';
@@ -46,7 +49,7 @@ function tx(storeNames, mode, fn) {
 
 const putChunk = (id, seq, frames) => tx(CHUNK_STORE_NAME, 'readwrite', (t) => t.objectStore(CHUNK_STORE_NAME).put({ id, seq, frames }));
 // Spans the chunk store too, so it is ordered after the pending chunk writes.
-const putMeta = (id, chunks, frameCount) => tx([CHUNK_STORE_NAME, REC_STORE_NAME], 'readwrite', (t) => t.objectStore(REC_STORE_NAME).put({ id, chunks, frameCount, cachedAt: Date.now() }));
+const putMeta = (id, chunks, frameCount, index, chunkInfo) => tx([CHUNK_STORE_NAME, REC_STORE_NAME], 'readwrite', (t) => t.objectStore(REC_STORE_NAME).put({ id, chunks, frameCount, index, chunkInfo, cachedAt: Date.now() }));
 const dropChunks = (id) => tx(CHUNK_STORE_NAME, 'readwrite', (t) => t.objectStore(CHUNK_STORE_NAME).delete(IDBKeyRange.bound([id, 0], [id, Infinity])));
 
 const activeTasks = new Map();
@@ -89,6 +92,15 @@ async function download(id, url, headers, signal, expectedBytes = 0, maxRetries 
   let receivedBytes = 0;
   let totalBytes = expectedBytes || 0;
   let carry = '';
+  // Bytes of frames.jsonl before the line being parsed: where its chunk starts.
+  let pos = 0;
+  const encoder = new TextEncoder();
+  const byteLength = (str) => (/^[\x00-\x7f]*$/.test(str) ? str.length : encoder.encode(str).length);
+  // The page's light copy of the frames (no pictures), and where each chunk lies.
+  const index = [];
+  const chunkInfo = [];
+  let chunkStart = -1;
+  let chunkEnd = 0;
   let attempt = 0;
   let lastProgressPost = 0;
 
@@ -99,9 +111,15 @@ async function download(id, url, headers, signal, expectedBytes = 0, maxRetries 
     const frames = batch;
     batch = [];
     lastFlush = Date.now();
-    self.postMessage({ type: 'FRAMES', id, frames, offset: frameCount - frames.length });
+    const chunk = { first: frameCount - frames.length, count: frames.length, off: chunkStart, end: chunkEnd };
+    const light = frames.map((f) => ({ t: f.t, url: f.url, title: f.title, c: seq }));
+    chunkStart = -1;
+    chunkInfo.push(chunk);
+    for (const f of light) index.push(f);
+    self.postMessage({ type: 'FRAMES', id, frames: light, chunk, offset: chunk.first });
+    const thisSeq = seq++;
     if (cacheOk) {
-      putChunk(id, seq++, frames).catch((err) => {
+      putChunk(id, thisSeq, frames).catch((err) => {
         cacheOk = false;
         console.warn('Could not cache recording', id, err);
       });
@@ -113,8 +131,16 @@ async function download(id, url, headers, signal, expectedBytes = 0, maxRetries 
     const parts = carry.split('\n');
     carry = final ? '' : parts.pop();
     for (const line of parts) {
+      const start = pos;
+      const len = byteLength(line);
+      pos += len + 1;   // and the newline
       if (!line.trim()) continue;
-      try { batch.push(JSON.parse(line)); frameCount++; } catch (_) {}
+      try {
+        batch.push(JSON.parse(line));
+        frameCount++;
+        if (chunkStart < 0) chunkStart = start;
+        chunkEnd = start + len;
+      } catch (_) {}
     }
     flush(final);
   };
@@ -171,7 +197,7 @@ async function download(id, url, headers, signal, expectedBytes = 0, maxRetries 
   let cached = cacheOk;
   if (cached) {
     try {
-      await putMeta(id, seq, frameCount);
+      await putMeta(id, seq, frameCount, index, chunkInfo);
     } catch (err) {
       cached = false;
     }

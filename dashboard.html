@@ -3453,14 +3453,20 @@ async function getCachedRecording(id) {
       req.onsuccess = () => {
         const meta = req.result;
         if (!meta) return resolve(null);
-        if (meta.frames) return resolve(meta.frames);   // cached before chunking existed
-        const all = tx.objectStore(CHUNK_STORE_NAME).getAll(chunkRange(id));
-        all.onsuccess = () => {
-          const frames = [];
-          for (const c of all.result) for (const f of c.frames) frames.push(f);
-          resolve(frames.length ? frames : null);
+        if (meta.frames) return resolve(Object.assign(meta.frames, { chunks: [] }));   // cached before chunking existed: whole in memory
+        // The index (no pictures) was stored with the entry; the pictures stay in IndexedDB.
+        if (meta.index?.length) return resolve(Object.assign(meta.index, { chunks: meta.chunkInfo || [] }));
+        // Cached before the index existed: build it, one chunk in memory at a time.
+        const frames = [], chunks = [];
+        const cur = tx.objectStore(CHUNK_STORE_NAME).openCursor(chunkRange(id));
+        cur.onsuccess = () => {
+          const c = cur.result;
+          if (!c) return resolve(frames.length ? Object.assign(frames, { chunks }) : null);
+          chunks[c.value.seq] = { first: frames.length, count: c.value.frames.length, off: null, end: null };
+          for (const f of c.value.frames) frames.push({ t: f.t, url: f.url, title: f.title, c: c.value.seq });
+          c.continue();
         };
-        all.onerror = () => resolve(null);
+        cur.onerror = () => resolve(null);
       };
       req.onerror = () => resolve(null);
     });
@@ -3536,6 +3542,7 @@ function handleWorkerMessage(e) {
     if (!download) return;
     const frames = download.frames;
     for (const f of e.data.frames) frames.push(f);
+    if (e.data.chunk) frames.chunks[e.data.frames[0].c] = e.data.chunk;
     if (activePlayerModalId !== id) return;
     if (activePlayer?.id === id) streamProgress();
     else if (frames.length >= 2) startStreamingPlayer(id, download);
@@ -3587,6 +3594,7 @@ function handleWorkerMessage(e) {
 
     if (activePlayer?.id === id) {
       activePlayer.streaming = false;
+      if (e.data.cached) activePlayer.cached = true;
       streamProgress();
       if (e.data.cached) $('playerNodeBadge').textContent = `${activePlayerModalNode || 'local'} · cached`;
     } else if (activePlayerModalId === id && download?.frames.length) {
@@ -3892,6 +3900,12 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     streaming,
     expectedFrames,
     expectedMs,
+    // The pictures are not held for the whole recording: a few chunks of frames
+    // (see loadChunk), and the images made from them (cachedImages).
+    chunks: frames.chunks || [],
+    chunkCache: new Map(),
+    chunkLoading: new Map(),
+    cached: !!isCached,
     waiting: false,
     currentIndex: 0,
     isPlaying: false,
@@ -4105,7 +4119,7 @@ async function openPlayerModal(id, node) {
   const expectedBytes = (recMeta && recMeta.size_bytes > 0) ? recMeta.size_bytes : 0;
 
   pToast = createProgressToast(`rec-${id}`, `Session ${id.slice(0, 8)}`, `Connecting in background...`);
-  activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB', expectedBytes, frames: [] });
+  activeDownloadsMap.set(id, { pToast, node, lastPct: 0, lastSub: '0 MB', expectedBytes, frames: Object.assign([], { chunks: [] }) });
 
   const worker = getDownloadWorker();
   if (worker) {
@@ -4159,6 +4173,70 @@ function frameMeta(p, idx) {
   }
   return { title, url };
 }
+/* The pictures of a recording are base64 and add up to hundreds of MB: the player
+   keeps the index of all frames (time, address, title, chunk) and the pictures of a
+   few chunks at a time. A chunk (a batch of frames, see download-worker.js) is read
+   from the browser's cache when the recording is cached there, else fetched from the
+   node with a Range request for its bytes. Least recently used chunks are dropped. */
+const CHUNKS_KEPT = 6;
+const CHUNKS_AHEAD = 2;
+// The picture of a frame (base64) when it is in memory, else null.
+function peekFrameData(p, idx) {
+  const f = p.frames[idx];
+  if (!f) return null;
+  if (f.data) return f.data;   // a recording cached before chunking: held whole
+  const e = p.chunkCache.get(f.c);
+  const info = p.chunks[f.c];
+  if (!e || !info) return null;
+  p.chunkCache.delete(f.c);   // most recently used
+  p.chunkCache.set(f.c, e);
+  return e[idx - info.first]?.data ?? null;
+}
+async function readCachedChunk(id, seq) {
+  const db = await openRecordingsDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    const req = db.transaction(CHUNK_STORE_NAME, 'readonly').objectStore(CHUNK_STORE_NAME).get([id, seq]);
+    req.onsuccess = () => resolve(req.result?.frames || null);
+    req.onerror = () => resolve(null);
+  });
+}
+async function fetchChunk(p, info) {
+  if (info.off == null) throw new Error('chunk is not in the cache');
+  const res = await fetch(api(p.node, `/recordings/${enc(p.id)}/frames`), {
+    headers: { ...getAuthHeaders(), Range: `bytes=${info.off}-${info.end - 1}` },
+    cache: 'no-store',
+  });
+  if (res.status !== 206) throw new Error(`HTTP ${res.status}: the node did not send the range`);
+  const frames = [];
+  for (const line of (await res.text()).split('\n')) {
+    if (!line.trim()) continue;
+    try { frames.push(JSON.parse(line)); } catch { /* skipped when the index was made, too */ }
+  }
+  return frames;
+}
+// Makes the pictures of chunk `c` available to peekFrameData.
+function loadChunk(p, c) {
+  if (p.chunkCache.has(c)) return Promise.resolve();
+  if (p.chunkLoading.has(c)) return p.chunkLoading.get(c);
+  const info = p.chunks[c];
+  if (!info) return Promise.reject(new Error('unknown chunk'));
+  const job = (async () => {
+    let frames = p.cached ? await readCachedChunk(p.id, c) : null;
+    if (!frames) frames = await fetchChunk(p, info);
+    if (activePlayer !== p) return;
+    p.chunkCache.set(c, frames);
+    while (p.chunkCache.size > CHUNKS_KEPT) p.chunkCache.delete(p.chunkCache.keys().next().value);
+  })().finally(() => p.chunkLoading.delete(c));
+  p.chunkLoading.set(c, job);
+  return job;
+}
+async function ensureFrameData(p, idx) {
+  if (peekFrameData(p, idx) != null) return;
+  const c = p.frames[idx]?.c;
+  if (c != null) await loadChunk(p, c);
+}
+
 function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
   if (!activePlayer || !activePlayer.frames[idx]) return;
   const p = activePlayer;
@@ -4168,7 +4246,7 @@ function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
   const shownTotal = p.streaming ? Math.max(totalFrames, p.expectedFrames || 0) : totalFrames;
 
   updateScrubber(p, { moveThumb: !scrub });
-  $('playerViewportContainer').classList.toggle('buffering', !!p.waiting);
+  $('playerViewportContainer').classList.toggle('buffering', !!(p.waiting || p.dataWait));
   document.getElementById('playerFrameDisplay').textContent = p.waiting ? '(buffering…)'
     : `(${idx + 1} / ${shownTotal} frames${p.streaming ? ` · ${Math.round((totalFrames / Math.max(1, shownTotal)) * 100)}% loaded` : ''})`;
 
@@ -4187,8 +4265,26 @@ function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
 
   let img = activePlayer.cachedImages.get(idx);
   if (!img) {
+    const data = peekFrameData(p, idx);
+    if (data == null) {
+      // The picture is not in memory: fetch its chunk, then show this frame.
+      p.dataWait = true;
+      $('playerViewportContainer').classList.add('buffering');
+      loadChunk(p, frame.c).then(() => {
+        if (activePlayer !== p) return;
+        p.dataWait = false;
+        if (p.currentIndex === idx) renderPlayerFrame(idx);
+        else $('playerViewportContainer').classList.toggle('buffering', !!p.waiting);
+      }, () => {
+        if (activePlayer !== p) return;
+        p.dataWait = false;
+        $('playerViewportContainer').classList.toggle('buffering', !!p.waiting);
+        showToast('Could not load frames of the recording', 'danger', 5000);
+      });
+      return;
+    }
     img = new Image();
-    img.src = 'data:image/jpeg;base64,' + frame.data;
+    img.src = 'data:image/jpeg;base64,' + data;
     activePlayer.cachedImages.set(idx, img);
     if (activePlayer.cachedImages.size > 40) {
       const firstKey = activePlayer.cachedImages.keys().next().value;
@@ -4212,15 +4308,20 @@ function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
     };
   }
 
-  // Preload upcoming frames
+  // Preload upcoming frames, and the chunks after the one shown.
   for (let i = 1; i <= 8; i++) {
     const nextIdx = idx + i;
     if (nextIdx < totalFrames && !activePlayer.cachedImages.has(nextIdx)) {
-      const nextFrame = activePlayer.frames[nextIdx];
+      const data = peekFrameData(p, nextIdx);
+      if (data == null) continue;
       const preloadImg = new Image();
-      preloadImg.src = 'data:image/jpeg;base64,' + nextFrame.data;
+      preloadImg.src = 'data:image/jpeg;base64,' + data;
       activePlayer.cachedImages.set(nextIdx, preloadImg);
     }
+  }
+  const c = frame.c;
+  for (let k = 1; c != null && k <= CHUNKS_AHEAD && c + k < p.chunks.length; k++) {
+    if (p.chunks[c + k]) loadChunk(p, c + k).catch(() => {});
   }
 }
 
@@ -4419,6 +4520,8 @@ async function exportRecordingWebM() {
     player.isPlaying = false;
     const total = player.frames.length;
     for (let i = 0; i < total; i++) {
+      if (activePlayer !== player) throw new Error('The player was closed');
+      await ensureFrameData(player, i);
       if (activePlayer !== player) throw new Error('The player was closed');
       renderPlayerFrame(i);
       const pct = Math.round((i / total) * 100);
