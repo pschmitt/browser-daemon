@@ -400,8 +400,11 @@ pub enum ProfileCmd {
         file: PathBuf,
         #[arg(long)]
         node: Option<String>,
+        /// Replace a profile of that name (asks first).
         #[arg(long)]
         overwrite: bool,
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Copy or move a profile to another node.
     Transfer {
@@ -417,8 +420,11 @@ pub enum ProfileCmd {
         /// Delete the source afterwards.
         #[arg(long = "move")]
         move_: bool,
+        /// Replace a profile of that name on the target (asks first, as does --move).
         #[arg(long)]
         overwrite: bool,
+        #[arg(short, long)]
+        yes: bool,
     },
 }
 
@@ -454,6 +460,8 @@ pub enum BackupCmd {
         backup: String,
         #[arg(long)]
         node: Option<String>,
+        #[arg(short, long)]
+        yes: bool,
     },
 }
 
@@ -751,6 +759,16 @@ impl Client {
 
     fn print_json(&self, v: &Value) {
         println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+    }
+
+    /// One result: JSON with `--json` (a line per item when a command has several
+    /// targets), the short text otherwise.
+    fn say(&self, v: Value, text: impl std::fmt::Display) {
+        if self.json {
+            println!("{}", serde_json::to_string(&v).unwrap_or_default());
+        } else {
+            println!("{text}");
+        }
     }
 }
 
@@ -1096,7 +1114,10 @@ pub async fn session(args: SessionArgs) -> R<()> {
             for s in targets {
                 let path = c.api(&s.node_name, &format!("/sessions/{}", s.session.id));
                 match c.call(c.req(Method::DELETE, &path)).await {
-                    Ok(_) => println!("stopped {} ({})", s.session.name, s.node_name),
+                    Ok(_) => c.say(
+                        json!({ "stopped": s.session.id, "name": s.session.name, "node": s.node_name }),
+                        format!("stopped {} ({})", s.session.name, s.node_name),
+                    ),
                     Err(e) => tally.fail(&s.session.name, e.as_ref()),
                 }
             }
@@ -1247,7 +1268,7 @@ pub async fn session(args: SessionArgs) -> R<()> {
             let s = c.session(&session, node.as_deref())?;
             let path = c.devtools(&s.node_name, &format!("/json/close/{}", enc(&tab)));
             c.call(c.req(Method::PUT, &path)).await?;
-            println!("closed");
+            c.say(json!({ "closed": tab }), "closed");
         }
         SessionCmd::SaveAsProfile {
             session,
@@ -1274,7 +1295,8 @@ pub async fn session(args: SessionArgs) -> R<()> {
             }
         }
         SessionCmd::Url { session, node } => {
-            println!("{}", ws_url(c.session(&session, node.as_deref())?));
+            let url = ws_url(c.session(&session, node.as_deref())?);
+            c.say(json!({ "url": url }), &url);
         }
     }
     Ok(())
@@ -1502,8 +1524,18 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             file,
             node,
             overwrite,
+            yes,
         } => {
             let node = c.node_or_local(node.as_deref())?;
+            if overwrite {
+                confirm(
+                    &format!(
+                        "Replace any profile named {name} on {node} with {}?",
+                        file.display()
+                    ),
+                    yes,
+                )?;
+            }
             let data = std::fs::read(&file)?;
             let path = c.api(
                 &node,
@@ -1525,9 +1557,24 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             name,
             move_,
             overwrite,
+            yes,
         } => {
             c.check_node(&to)?;
             let p = c.profile(&profile, node.as_deref())?;
+            if move_ || overwrite {
+                let target = name.as_deref().unwrap_or(&p.profile.name);
+                let mut what = Vec::new();
+                if move_ {
+                    what.push(format!(
+                        "delete {} on {} once copied",
+                        p.profile.name, p.node_name
+                    ));
+                }
+                if overwrite {
+                    what.push(format!("replace any profile named {target} on {to}"));
+                }
+                confirm(&format!("This will {}. Continue?", what.join(" and ")), yes)?;
+            }
             let mut body =
                 json!({ "target_node": to, "delete_source": move_, "overwrite": overwrite });
             if let Some(n) = name {
@@ -1637,8 +1684,16 @@ async fn backup(c: &Client, cmd: BackupCmd) -> R<()> {
             profile,
             backup,
             node,
+            yes,
         } => {
             let p = c.profile(&profile, node.as_deref())?;
+            confirm(
+                &format!(
+                    "Delete backup {backup} of {} on {}?",
+                    p.profile.name, p.node_name
+                ),
+                yes,
+            )?;
             let path = c.api(
                 &p.node_name,
                 &format!(
@@ -1733,7 +1788,10 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
             for r in targets {
                 let path = c.api(&r.node_name, &format!("/recordings/{}", r.recording.id));
                 match c.call(c.req(Method::DELETE, &path)).await {
-                    Ok(_) => println!("deleted {}", short(r.recording.id)),
+                    Ok(_) => c.say(
+                        json!({ "deleted": r.recording.id, "node": r.node_name }),
+                        format!("deleted {}", short(r.recording.id)),
+                    ),
                     Err(e) => tally.fail(&short(r.recording.id), e.as_ref()),
                 }
             }
@@ -1779,12 +1837,13 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                         .json(&body),
                 )
                 .await?;
-            println!(
+            let text = format!(
                 "merged into {}",
                 v["id"]
                     .as_str()
                     .map_or_else(String::new, |id| id.chars().take(8).collect())
             );
+            c.say(v, text);
         }
         RecordingCmd::Export {
             recording,
@@ -1892,7 +1951,10 @@ async fn export_to(c: &Client, path: &str, file: &std::path::Path, force: bool) 
         return fail(1, download_error(res).await);
     }
     let size = save_stream(res, file, force).await?;
-    println!("{} ({})", file.display(), bytes(size));
+    c.say(
+        json!({ "file": file, "bytes": size }),
+        format!("{} ({})", file.display(), bytes(size)),
+    );
     Ok(())
 }
 
@@ -1915,10 +1977,13 @@ async fn keep_recordings(c: &Client, recordings: &[String], keep: bool) -> R<()>
             .call(c.req(Method::POST, &path).json(&json!({ "keep": keep })))
             .await
         {
-            Ok(_) => println!(
-                "{} {}",
-                if keep { "keeping" } else { "not keeping" },
-                short(r.recording.id)
+            Ok(_) => c.say(
+                json!({ "id": r.recording.id, "node": r.node_name, "keep": keep }),
+                format!(
+                    "{} {}",
+                    if keep { "keeping" } else { "not keeping" },
+                    short(r.recording.id)
+                ),
             ),
             Err(e) => tally.fail(key, e.as_ref()),
         }
