@@ -114,7 +114,7 @@ fn filled(answer: Option<&str>) -> Vec<String> {
 
 /// Frames of a page (top first) as (id, url), from a CDP frame tree or a BiDi
 /// context tree.
-fn frames(node: &Value, id: &str, children: &str, out: &mut Vec<(String, String)>) {
+pub(crate) fn frames(node: &Value, id: &str, children: &str, out: &mut Vec<(String, String)>) {
     let frame = if id == "context" {
         node
     } else {
@@ -128,7 +128,7 @@ fn frames(node: &Value, id: &str, children: &str, out: &mut Vec<(String, String)
     }
 }
 
-struct Cdp {
+pub(crate) struct Cdp {
     ws: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
@@ -136,7 +136,18 @@ struct Cdp {
 }
 
 impl Cdp {
-    async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) async fn connect(ws_url: &str) -> Result<Self, String> {
+        let (ws, _) = tokio_tungstenite::connect_async(ws_url)
+            .await
+            .map_err(|e| format!("Could not reach the page: {e}"))?;
+        Ok(Self { ws, id: 0 })
+    }
+
+    pub(crate) async fn close(mut self) {
+        let _ = self.ws.close(None).await;
+    }
+
+    pub(crate) async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.id += 1;
         let id = self.id;
         let msg = json!({ "id": id, "method": method, "params": params });

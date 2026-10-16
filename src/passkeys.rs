@@ -97,6 +97,13 @@ pub enum Status {
 struct Tracked {
     status: Status,
     since: Instant,
+    /// The helper took the request off the queue: only then may it answer it.
+    claimed: bool,
+    kind: String,
+    page_id: String,
+    rp_id: String,
+    /// A "fill" request lets the node put one login into its page, once.
+    fill_used: bool,
 }
 
 #[derive(Default)]
@@ -175,6 +182,11 @@ impl Broker {
             Tracked {
                 status: Status::Pending { note: None },
                 since: Instant::now(),
+                claimed: false,
+                kind: req.kind.clone(),
+                page_id: req.page_id.clone(),
+                rp_id: req.rp_id.clone(),
+                fill_used: false,
             },
         );
         let id = req.id;
@@ -210,9 +222,14 @@ impl Broker {
                     "logins" | "fill" if !autofill => {
                         "The passkey helper is too old to fill logins"
                     }
-                    _ => return Some(req),
+                    _ => {
+                        if let Some(t) = self.tracked.lock().unwrap().get_mut(&req.id) {
+                            t.claimed = true;
+                        }
+                        return Some(req);
+                    }
                 };
-                self.complete(
+                self.finish(
                     req.id,
                     Outcome {
                         ok: false,
@@ -234,6 +251,7 @@ impl Broker {
         match self.tracked.lock().unwrap().get_mut(&id) {
             Some(Tracked {
                 status: Status::Pending { note: n },
+                claimed: true,
                 ..
             }) => {
                 *n = Some(note);
@@ -243,9 +261,43 @@ impl Broker {
         }
     }
 
+    /// The helper answers a request it took (and only once).
     pub fn complete(&self, id: Uuid, outcome: Outcome) -> bool {
+        self.finish_if(id, outcome, true)
+    }
+
+    /// The broker answers a request itself (a helper that cannot serve it).
+    fn finish(&self, id: Uuid, outcome: Outcome) -> bool {
+        self.finish_if(id, outcome, false)
+    }
+
+    /// Whether the node may put a login into `page_id` on `host` for the "fill"
+    /// request `id`: the helper holds it, it is for that page and host, and
+    /// nothing was filled for it yet. Allows one fill.
+    pub fn authorize_fill(&self, id: Uuid, page_id: &str, host: &str) -> bool {
         match self.tracked.lock().unwrap().get_mut(&id) {
-            Some(t) if matches!(t.status, Status::Pending { .. }) => {
+            Some(t)
+                if t.kind == "fill"
+                    && t.claimed
+                    && !t.fill_used
+                    && matches!(t.status, Status::Pending { .. })
+                    && t.since.elapsed() <= ANSWER_TIMEOUT
+                    && t.page_id == page_id
+                    && t.rp_id.eq_ignore_ascii_case(host) =>
+            {
+                t.fill_used = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn finish_if(&self, id: Uuid, outcome: Outcome, must_be_claimed: bool) -> bool {
+        match self.tracked.lock().unwrap().get_mut(&id) {
+            Some(t)
+                if matches!(t.status, Status::Pending { .. })
+                    && (t.claimed || !must_be_claimed) =>
+            {
                 t.status = if outcome.ok {
                     Status::Ready { info: outcome.info }
                 } else {
@@ -294,6 +346,17 @@ mod tests {
             .unwrap();
         let req = b.next(Duration::from_secs(1), true, true).await.unwrap();
         assert_eq!(req.rp_id, "x.test");
+        assert!(
+            !b.complete(
+                Uuid::new_v4(),
+                Outcome {
+                    ok: true,
+                    error: None,
+                    info: None
+                }
+            ),
+            "unknown request"
+        );
         assert!(b.note(id, "unlock".into()));
         assert_eq!(
             b.status(id),
@@ -340,5 +403,51 @@ mod tests {
             .unwrap();
         let req = b.next(Duration::from_secs(1), true, true).await.unwrap();
         assert_eq!((req.id, req.kind.as_str()), (id, "fill"));
+    }
+
+    #[tokio::test]
+    async fn only_a_request_the_helper_took_can_be_answered_or_filled() {
+        let b = Broker::default();
+        assert!(b.next(Duration::from_millis(1), true, true).await.is_none());
+        let id = b
+            .start_autofill(
+                "page".into(),
+                "x.test".into(),
+                Autofill {
+                    entry: Some("e".into()),
+                    ..Autofill::default()
+                },
+            )
+            .unwrap();
+        let done = || Outcome {
+            ok: true,
+            error: None,
+            info: None,
+        };
+        // Queued but not taken: nobody may answer it, annotate it or fill for it.
+        assert!(!b.complete(id, done()));
+        assert!(!b.note(id, "x".into()));
+        assert!(!b.authorize_fill(id, "page", "x.test"));
+        b.next(Duration::from_secs(1), true, true).await.unwrap();
+        // Another page or host gets nothing, and one fill is all there is.
+        assert!(!b.authorize_fill(id, "other", "x.test"));
+        assert!(!b.authorize_fill(id, "page", "evil.test"));
+        assert!(b.authorize_fill(id, "page", "X.test"));
+        assert!(!b.authorize_fill(id, "page", "x.test"), "replay");
+        assert!(b.complete(id, done()));
+        assert!(!b.complete(id, done()), "answered once");
+        assert!(!b.authorize_fill(id, "page", "x.test"));
+        // Only fills may fill.
+        let find = b
+            .start(
+                "page".into(),
+                "x.test".into(),
+                "find",
+                None,
+                Signing::default(),
+            )
+            .unwrap();
+        b.next(Duration::from_secs(1), true, true).await.unwrap();
+        assert!(!b.authorize_fill(find, "page", "x.test"));
     }
 }

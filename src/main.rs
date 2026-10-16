@@ -6173,10 +6173,11 @@ async fn api_session_x_input(
 #[derive(Deserialize)]
 struct InsertTextRequest {
     text: String,
-    /// Only type while the page is on this host (as the browser's own page list
-    /// has it), so a navigation in between cannot send the text elsewhere.
+    /// The sites the text may go to (the vault entry's URIs): the page, as the
+    /// browser's own page list has it, and the focused frame must be on one,
+    /// so a navigation in between cannot send the text elsewhere.
     #[serde(default)]
-    host: Option<String>,
+    uris: Vec<secrets::Uri>,
     /// Press Enter afterwards.
     #[serde(default)]
     enter: bool,
@@ -6218,22 +6219,20 @@ async fn api_page_insert_text(
             "Page not found (Chromium sessions only)",
         ));
     };
-    if let Some(ref host) = req.host {
-        let actual = url::Url::parse(&page_url)
-            .ok()
-            .and_then(|u| u.host_str().map(str::to_ascii_lowercase));
-        if actual.as_deref() != Some(host.to_ascii_lowercase().as_str()) {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                format!("The page is not on {host} anymore"),
-            ));
-        }
+    if !secrets::url_matches(&page_url, &req.uris) {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "The page is not on a site the entry is saved for",
+        ));
     }
     session.activity.touch();
     let ws_url = format!("ws://127.0.0.1:{}/devtools/page/{}", session.port, page_id);
-    page_input::insert_text(&ws_url, &req.text, req.enter)
-        .await
-        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
+    let uris = req.uris;
+    page_input::insert_text(&ws_url, &req.text, req.enter, move |u| {
+        secrets::url_matches(u, &uris)
+    })
+    .await
+    .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -6272,28 +6271,34 @@ async fn api_session_passkey(
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
     session.activity.touch();
-    if !req.find {
-        info!(session_id = %id, rp_id = %req.rp_id, "Passkey approved in the live view");
-    }
     let kind = match (req.find, &req.challenge) {
         (true, _) => "find",
         (false, Some(_)) => "assert",
         (false, None) => "inject",
     };
-    // The origin to sign for comes from the browser's own page list, never from
-    // the page: a page must not obtain an assertion for another site.
-    let origin = if kind == "assert" {
-        let targets = get_local_targets(&state).await;
-        let page = targets
-            .iter()
-            .find(|t| t.id == req.page_id && t.session_id == Some(id))
-            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found in this session"))?;
-        let url = url::Url::parse(&page.url)
-            .map_err(|_| api_error(StatusCode::BAD_REQUEST, "The page has no web origin"))?;
-        Some(url.origin().ascii_serialization())
-    } else {
-        None
-    };
+    // The page comes from the browser's own page list, never from what the caller
+    // says, and must be one of this session's. The origin to sign for and the rp_id
+    // follow from it: a page must not obtain an assertion for another site.
+    let targets = get_local_targets(&state).await;
+    let page = targets
+        .iter()
+        .find(|t| t.id == req.page_id && t.session_id == Some(id))
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found in this session"))?;
+    let page_url = url::Url::parse(&page.url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page has no web origin"))?;
+    let rp_id = req.rp_id.trim().trim_end_matches('.').to_ascii_lowercase();
+    if !secrets::rp_id_valid_for(page_url.host_str().unwrap_or_default(), &rp_id) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            format!("The page is not on {rp_id} or a subdomain of it"),
+        ));
+    }
+    let origin = (kind == "assert").then(|| page_url.origin().ascii_serialization());
+    if !req.find {
+        info!(session_id = %id, rp_id = %rp_id, kind, "Passkey approved in the live view");
+    }
     let signing = passkeys::Signing {
         origin,
         challenge: req.challenge,
@@ -6301,7 +6306,7 @@ async fn api_session_passkey(
     };
     let request = state
         .passkeys
-        .start(req.page_id, req.rp_id, kind, req.entry, signing)
+        .start(req.page_id, rp_id, kind, req.entry, signing)
         .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
     Ok(Json(serde_json::json!({ "request": request })))
 }
@@ -6387,10 +6392,17 @@ async fn api_session_autofill(
 
 #[derive(Deserialize)]
 struct PageAutofill {
+    /// The "fill" request this answers: only one the helper took, for this page and
+    /// host, and only once.
+    request: Uuid,
     /// The page must still be on this host (the one the entry was checked for).
     host: String,
     /// The entry's URIs: only frames on these sites are filled.
     uris: Vec<secrets::Uri>,
+    /// The entry is not saved for the site and was picked anyway (the helper
+    /// told the user): only the page's own site is filled, then.
+    #[serde(default)]
+    any_site: bool,
     #[serde(flatten)]
     creds: autofill::Creds,
 }
@@ -6418,10 +6430,32 @@ async fn api_page_autofill(
             format!("The page is not on {} anymore", req.host),
         ));
     }
-    if !secrets::site_matches(&req.host, &req.uris) {
+    let uris = if req.any_site {
+        let origin = url::Url::parse(&page.url)
+            .ok()
+            .map(|u| u.origin().ascii_serialization())
+            .filter(|o| o.starts_with("http"))
+            .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+        vec![secrets::Uri {
+            uri: origin,
+            match_type: Some(1),
+        }]
+    } else {
+        req.uris
+    };
+    if !secrets::url_matches(&page.url, &uris) {
         return Err(api_error(
             StatusCode::FORBIDDEN,
             format!("The entry is not for {}", req.host),
+        ));
+    }
+    if !state
+        .passkeys
+        .authorize_fill(req.request, &page_id, &req.host)
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "No approved fill request for this page",
         ));
     }
     let sid = page
@@ -6435,14 +6469,7 @@ async fn api_page_autofill(
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
     session.activity.touch();
-    let uris = req.uris;
-    let frame_ok = move |u: &str| {
-        url::Url::parse(u)
-            .ok()
-            .filter(|u| matches!(u.scheme(), "http" | "https"))
-            .and_then(|u| u.host_str().map(str::to_string))
-            .is_some_and(|h| secrets::site_matches(&h, &uris))
-    };
+    let frame_ok = move |u: &str| secrets::url_matches(u, &uris);
     let filled = match session.bidi {
         Some(ref hub) => autofill::fill_firefox(hub, &page_id, frame_ok, &req.creds).await,
         None => {
