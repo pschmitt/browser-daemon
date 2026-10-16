@@ -346,13 +346,12 @@ async fn logins(
     let host = req.rp_id.as_str();
     // Every URI of a matching entry names the site's base domain, so a search for it
     // narrows the vault cheaply (`rbw list --raw` decrypts all of it); the URIs and
-    // their match types then decide.
-    let found = secrets::rbw(
-        &args.rbw,
-        &["search", secrets::base_domain(host), "--fields", "id"],
-    )
-    .await
-    .unwrap_or_default();
+    // their match types then decide. A search of the user's lists every login it
+    // finds, the site's first.
+    let term = req.query.as_deref().unwrap_or(secrets::base_domain(host));
+    let found = secrets::rbw(&args.rbw, &["search", "--fields", "id", "--", term])
+        .await
+        .unwrap_or_default();
     let ids: Vec<&str> = found
         .lines()
         .filter_map(|l| l.split('\t').next())
@@ -371,9 +370,8 @@ async fn logins(
             let raw: serde_json::Value = serde_json::from_str(&raw.ok()?).ok()?;
             let data = &raw["data"];
             let has = |f: &str| data[f].as_str().is_some_and(|v| !v.is_empty());
-            (secrets::site_matches(host, &secrets::uris(&raw))
-                && (has("username") || has("password")))
-            .then(|| {
+            let site = secrets::site_matches(host, &secrets::uris(&raw));
+            ((site || req.query.is_some()) && (has("username") || has("password"))).then(|| {
                 serde_json::json!({
                     "id": id,
                     "name": raw["name"],
@@ -381,11 +379,18 @@ async fn logins(
                     "folder": raw["folder"],
                     "password": has("password"),
                     "totp": has("totp"),
+                    "site": site,
                 })
             })
         })
         .collect();
-    out.sort_by_key(|e| e["name"].as_str().unwrap_or_default().to_lowercase());
+    // The site's entries first, then by name.
+    out.sort_by_key(|e| {
+        (
+            e["site"] != true,
+            e["name"].as_str().unwrap_or_default().to_lowercase(),
+        )
+    });
     Ok(serde_json::Value::Array(out))
 }
 
@@ -406,9 +411,17 @@ async fn fill(
     let raw: serde_json::Value =
         serde_json::from_str(&secrets::rbw(&args.rbw, &["get", "--raw", entry]).await?)
             .map_err(|_| "rbw: unexpected output".to_string())?;
-    let uris = secrets::uris(&raw);
+    let mut uris = secrets::uris(&raw);
     if !secrets::site_matches(&req.rp_id, &uris) {
-        return Err(format!("This entry is not saved for {}", req.rp_id));
+        if !req.any_site {
+            return Err(format!("This entry is not saved for {}", req.rp_id));
+        }
+        // Confirmed in the live view: only into the page's own host, no other frames.
+        info!(host = %req.rp_id, "Filling an entry not saved for the site, as confirmed");
+        uris = vec![secrets::Uri {
+            uri: format!("https://{}", req.rp_id),
+            match_type: Some(1),
+        }];
     }
     let want = |f: &str| req.fields.iter().any(|x| x == f);
     let field = |f: &str| {

@@ -45,6 +45,23 @@ pub struct Request {
     /// "logins": unlock the vault first (from the phone) instead of saying it's locked.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlock: bool,
+    /// "logins": search the whole vault for this instead of listing the site's entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// "fill": the user picked an entry not saved for the site (from a search) and
+    /// confirmed it; it may only go into frames on the page's own host.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub any_site: bool,
+}
+
+/// What a "logins" or "fill" request asks for (see Request).
+#[derive(Default)]
+pub struct Autofill {
+    pub entry: Option<String>,
+    pub fields: Vec<String>,
+    pub unlock: bool,
+    pub query: Option<String>,
+    pub any_site: bool,
 }
 
 /// What an "assert" request needs besides the site.
@@ -116,6 +133,8 @@ impl Broker {
             allow: signing.allow,
             fields: Vec::new(),
             unlock: false,
+            query: None,
+            any_site: false,
         })
     }
 
@@ -125,22 +144,22 @@ impl Broker {
         &self,
         page_id: String,
         host: String,
-        entry: Option<String>,
-        fields: Vec<String>,
-        unlock: bool,
+        a: Autofill,
     ) -> Result<Uuid, String> {
-        let kind = if entry.is_some() { "fill" } else { "logins" };
+        let kind = if a.entry.is_some() { "fill" } else { "logins" };
         self.enqueue(Request {
             id: Uuid::new_v4(),
             page_id,
             rp_id: host,
             kind: kind.into(),
-            entry,
+            entry: a.entry,
             origin: None,
             challenge: None,
             allow: Vec::new(),
-            fields,
-            unlock,
+            fields: a.fields,
+            unlock: a.unlock,
+            query: a.query,
+            any_site: a.any_site,
         })
     }
 
@@ -301,7 +320,7 @@ mod tests {
             .await
             .is_none());
         let id = b
-            .start_autofill("p".into(), "x.test".into(), None, Vec::new(), false)
+            .start_autofill("p".into(), "x.test".into(), Autofill::default())
             .unwrap();
         assert!(b
             .next(Duration::from_millis(10), true, false)
@@ -312,9 +331,11 @@ mod tests {
             .start_autofill(
                 "p".into(),
                 "x.test".into(),
-                Some("e".into()),
-                vec!["password".into()],
-                false,
+                Autofill {
+                    entry: Some("e".into()),
+                    fields: vec!["password".into()],
+                    ..Autofill::default()
+                },
             )
             .unwrap();
         let req = b.next(Duration::from_secs(1), true, true).await.unwrap();

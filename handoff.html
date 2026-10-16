@@ -149,6 +149,13 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   #vaultPop .vp-act { display: block; width: calc(100% - 12px); margin: 2px 6px 6px; height: 34px; border: 0; border-radius: 9px; background: var(--accent); color: #fff;
     font: 600 13px system-ui, sans-serif; cursor: pointer; }
   #vaultPop .vp-note { padding: 6px 10px 4px; font-size: 11.5px; color: var(--muted); }
+  #vaultPop .vp-search { display: block; width: calc(100% - 12px); box-sizing: border-box; height: 34px; margin: 2px 6px 6px; padding: 0 10px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 13.5px system-ui, sans-serif; }
+  #vaultPop .vp-search:focus { outline: none; border-color: var(--accent); }
+  #vaultPop .vp-sep { padding: 8px 10px 2px; font-size: 11px; font-weight: 600; color: var(--muted); }
+  #vaultPop .vp-entry.other .sp-eng { color: var(--muted); }
+  #vaultPop .vp-entry.armed { background: rgba(245, 158, 11, .14); }
+  #vaultPop .vp-entry.armed .sp-t span { color: #f59e0b; }
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
   #view:focus { outline: none; }
@@ -322,7 +329,7 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   </form>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
-  <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L20 3M17 6l3 3M14.5 8.5l2.5 2.5"/></svg><span class="vault-count" id="vaultCount" hidden></span></button>
+  <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M12 2.8l7.5 3v5.6c0 4.6-3.1 8.4-7.5 9.9-4.4-1.5-7.5-5.3-7.5-9.9V5.8z"/><circle cx="12" cy="10.6" r="2"/><path d="M12 12.6v3.4"/></svg><span class="vault-count" id="vaultCount" hidden></span></button>
   <a href="/" class="ib" id="dash" aria-label="Dashboard" title="Return to Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></a>
   <button class="ib chev" id="dashMore" aria-label="Other sessions" title="Other sessions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
@@ -2724,7 +2731,7 @@ function refreshRemoteSelection(delay = 120) {
   }, delay);
 }
 const localTyping = () => !drv || document.activeElement === E.kb || document.activeElement === E.urlInput
-  || !!document.activeElement?.closest?.("#sessMenu, #tabsModal, dialog");
+  || !!document.activeElement?.closest?.("#sessMenu, #tabsModal, #vaultPop, dialog");
 const SHORTCUTS = { a: "selectAll", z: "undo", y: "redo" };
 window.addEventListener("keydown", (e) => {
   if (localTyping()) return;
@@ -3464,54 +3471,115 @@ function placeVaultPop() {
   pop.style.top = r.bottom + 6 + "px";
   pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8)) + "px";
 }
-async function openVaultPop(unlock = false) {
+// The popup: a search field over the vault and, below it, the site's logins (or what
+// the search found: the site's first, then the rest of the vault).
+function openVaultPop() {
   const pop = $("vaultPop"), host = pageHost();
-  const head = `<div class="sp-head" title="${esc(host)}">Vault${host ? " · " + esc(host) : ""}</div>`;
-  const show = (html) => { if (!pop.hidden) { pop.innerHTML = head + html; placeVaultPop(); } };
+  pop.innerHTML = `<div class="sp-head" title="${esc(host)}">Vault${host ? " · " + esc(host) : ""}</div>`
+    + '<input class="vp-search" id="vaultSearch" type="search" placeholder="Search the vault" autocomplete="off" spellcheck="false" aria-label="Search the vault">'
+    + '<div id="vaultList"></div>';
   pop.hidden = false;
   $("vaultBtn").setAttribute("aria-expanded", "true");
-  if (!host) return show('<div class="sp-empty">This page is not on a website: there is nothing to fill.</div>');
-  if (!target?.sessionId) return show('<div class="sp-empty">Not connected to a session yet.</div>');
-  const fresh = !unlock && vault.host === host && Array.isArray(vault.list) && Date.now() - vault.at < VAULT_FRESH;
-  let found = fresh ? vault.list : null;
-  if (!found) {
-    show(`<div class="sp-empty checking">${unlock ? "Unlocking the vault…" : "Looking in the vault…"}</div>`);
-    try {
-      found = await vaultCall({ unlock }, (note) => show(`<div class="sp-empty locked checking">${esc(note)}</div>`));
-    } catch (err) {
-      return show(`<div class="sp-empty bad">${esc(err.message)}</div>`);
-    }
-    if (pop.hidden || pageHost() !== host) return;
-    if (found?.locked) {
-      show('<div class="sp-empty locked">rbw is locked.</div><button class="vp-act" id="vaultUnlock">Unlock from your phone</button>');
-      $("vaultUnlock").onclick = () => openVaultPop(true);
-      return;
-    }
+  placeVaultPop();
+  const search = $("vaultSearch");
+  let timer = 0;
+  search.oninput = () => {
+    clearTimeout(timer);
+    const q = search.value.trim();
+    // Right away: the site's logins that match; the vault's answer follows.
+    if (q && Array.isArray(vault.list) && vault.host === host) vaultRender(vaultFilter(vault.list, q), host, q, true);
+    timer = setTimeout(() => vaultLoad(host, false, q), q ? 350 : 0);
+  };
+  search.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); $("vaultList").querySelector(".vp-entry")?.click(); }
+    if (e.key === "ArrowDown") { e.preventDefault(); $("vaultList").querySelector(".vp-entry")?.focus(); }
+  };
+  // Desktop: type right away. Phones: the keyboard would cover the list.
+  if (matchMedia("(hover: hover) and (pointer: fine)").matches) search.focus();
+  vaultLoad(host);
+}
+const vaultFilter = (list, q) => list.filter((e) => `${e.name || ""} ${e.user || ""} ${e.folder || ""}`.toLowerCase().includes(q.toLowerCase()));
+let vaultSeq = 0;
+async function vaultLoad(host, unlock = false, query = "") {
+  const seq = ++vaultSeq;
+  const pop = $("vaultPop");
+  const body = (html) => { if (!pop.hidden && seq === vaultSeq) { $("vaultList").innerHTML = html; placeVaultPop(); } };
+  if (!host) return body('<div class="sp-empty">This page is not on a website: there is nothing to fill.</div>');
+  if (!target?.sessionId) return body('<div class="sp-empty">Not connected to a session yet.</div>');
+  const fresh = !unlock && !query && vault.host === host && Array.isArray(vault.list) && Date.now() - vault.at < VAULT_FRESH;
+  if (fresh) return vaultRender(vault.list, host, "");
+  if (!query || !$("vaultList").querySelector(".vp-entry")) {
+    body(`<div class="sp-empty checking">${unlock ? "Unlocking the vault…" : query ? "Searching the vault…" : "Looking in the vault…"}</div>`);
+  }
+  let found;
+  try {
+    found = await vaultCall({ unlock, query: query || null }, (note) => body(`<div class="sp-empty locked checking">${esc(note)}</div>`));
+  } catch (err) {
+    return body(`<div class="sp-empty bad">${esc(err.message)}</div>`);
+  }
+  if (pop.hidden || seq !== vaultSeq || pageHost() !== host) return;
+  if (found?.locked) {
+    body('<div class="sp-empty locked">rbw is locked.</div><button class="vp-act" id="vaultUnlock">Unlock from your phone</button>');
+    $("vaultUnlock").onclick = () => vaultLoad(host, true, query);
+    return;
+  }
+  found = Array.isArray(found) ? found : [];
+  if (!query) {
     vault.host = host;
     vault.at = Date.now();
-    vault.list = Array.isArray(found) ? found : [];
-    found = vault.list;
+    vault.list = found;
     vaultBadge();
   }
-  if (!found.length) return show(`<div class="sp-empty">No logins for ${esc(host)} in your vault.</div>`);
-  show(found.map((e, i) => `<div class="vp-row"><button class="vp-entry" data-i="${i}" role="menuitem" title="Fill this login">`
-    + `<span class="sp-eng">${esc((e.name || "?").slice(0, 1).toUpperCase())}</span>`
-    + `<span class="sp-t"><b>${esc(e.name || "?")}</b><span>${esc(e.user || "no username")}${e.folder ? " · " + esc(e.folder) : ""}</span></span></button>`
-    + (e.totp ? `<button class="vp-totp" data-i="${i}" title="Fill only the one-time code">TOTP</button>` : "") + "</div>").join("")
-    + '<div class="vp-note">Filled straight from the vault: passwords never reach this view.</div>');
-  pop.querySelectorAll(".vp-entry").forEach((b) => { b.onclick = () => vaultFill(found[+b.dataset.i], ["username", "password", "totp"]); });
-  pop.querySelectorAll(".vp-totp").forEach((b) => { b.onclick = () => vaultFill(found[+b.dataset.i], ["totp"]); });
+  vaultRender(found, host, query);
+}
+// partial: the site's logins filtered here while the vault search runs.
+function vaultRender(found, host, query, partial = false) {
+  const list = $("vaultList");
+  if (!found.length) {
+    list.innerHTML = partial ? '<div class="sp-empty checking">Searching the vault…</div>'
+      : `<div class="sp-empty">${query ? `Nothing in your vault matches “${esc(query)}”.` : `No logins for ${esc(host)} in your vault: search for one above.`}</div>`;
+    return placeVaultPop();
+  }
+  const row = (e, i) => {
+    const other = e.site === false;
+    return `<div class="vp-row"><button class="vp-entry${other ? " other" : ""}" data-i="${i}" role="menuitem" title="${other ? `Not saved for ${esc(host)}` : "Fill this login"}">`
+      + `<span class="sp-eng">${esc((e.name || "?").slice(0, 1).toUpperCase())}</span>`
+      + `<span class="sp-t"><b>${esc(e.name || "?")}</b><span>${esc(e.user || "no username")}${e.folder ? " · " + esc(e.folder) : ""}</span></span></button>`
+      + (e.totp ? `<button class="vp-totp" data-i="${i}" title="Fill only the one-time code">TOTP</button>` : "") + "</div>";
+  };
+  const firstOther = found.findIndex((e) => e.site === false);
+  list.innerHTML = found.map((e, i) => (i === firstOther ? `<div class="vp-sep">${firstOther ? "Other logins" : `Not saved for ${esc(host)}`}</div>` : "") + row(e, i)).join("")
+    + '<div class="vp-note">Filled straight from the vault: passwords never reach this view.</div>';
+  // A login saved for another site fills only after a second click (it may be a
+  // phishing page asking for it): the first one says so.
+  const pick = (b, fields) => {
+    const e = found[+b.dataset.i];
+    if (e.site !== false) return vaultFill(e, fields);
+    const entryBtn = b.closest(".vp-row").querySelector(".vp-entry");
+    if (!entryBtn.classList.contains("armed")) {
+      list.querySelectorAll(".vp-entry.armed").forEach((x) => { x.classList.remove("armed"); x.querySelector(".sp-t span").textContent = x.dataset.sub; });
+      entryBtn.classList.add("armed");
+      const sub = entryBtn.querySelector(".sp-t span");
+      entryBtn.dataset.sub = sub.textContent;
+      sub.textContent = `Not saved for ${host}: click again to fill`;
+      return;
+    }
+    vaultFill(e, fields, true);
+  };
+  list.querySelectorAll(".vp-entry").forEach((b) => { b.onclick = () => pick(b, ["username", "password", "totp"]); });
+  list.querySelectorAll(".vp-totp").forEach((b) => { b.onclick = () => pick(b, ["totp"]); });
+  placeVaultPop();
 }
 function closeVaultPop() {
   $("vaultPop").hidden = true;
   $("vaultBtn").setAttribute("aria-expanded", "false");
 }
-async function vaultFill(entry, fields) {
+async function vaultFill(entry, fields, anySite = false) {
   closeVaultPop();
   toast(`Filling ${entry.name || "the login"}…`, 0);
   let shown = "";
   try {
-    const res = await vaultCall({ entry: entry.id, fields }, (note) => { if (note !== shown) { shown = note; toast(note, 0); } });
+    const res = await vaultCall({ entry: entry.id, fields, any_site: anySite }, (note) => { if (note !== shown) { shown = note; toast(note, 0); } });
     const names = (res?.filled || []).map((f) => (f === "totp" ? "one-time code" : f));
     toast(`Filled ${names.join(" and ") || "the login"}`, 2000);
   } catch (err) {

@@ -5918,6 +5918,12 @@ struct AutofillRequest {
     /// Listing: unlock the vault (from the phone) if it's locked.
     #[serde(default)]
     unlock: bool,
+    /// Listing: search the whole vault for this instead.
+    #[serde(default)]
+    query: Option<String>,
+    /// Filling: the user confirmed an entry that isn't saved for the site.
+    #[serde(default)]
+    any_site: bool,
 }
 
 /// The vault button of the live view: list the logins for the page's site, or
@@ -5944,8 +5950,17 @@ async fn api_session_autofill(
         session.activity.touch();
     }
     if req.entry.is_some() {
-        info!(session_id = %id, host = %host, "Login fill approved in the live view");
+        info!(
+            session_id = %id,
+            host = %host,
+            any_site = req.any_site,
+            "Login fill approved in the live view"
+        );
     }
+    let query = req
+        .query
+        .map(|q| q.trim().chars().take(100).collect::<String>())
+        .filter(|q| !q.is_empty());
     let fields = if req.fields.is_empty() {
         vec!["username".into(), "password".into()]
     } else {
@@ -5953,7 +5968,17 @@ async fn api_session_autofill(
     };
     let request = state
         .passkeys
-        .start_autofill(req.page_id, host.clone(), req.entry, fields, req.unlock)
+        .start_autofill(
+            req.page_id,
+            host.clone(),
+            passkeys::Autofill {
+                entry: req.entry,
+                fields,
+                unlock: req.unlock,
+                query,
+                any_site: req.any_site,
+            },
+        )
         .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
     Ok(Json(
         serde_json::json!({ "request": request, "host": host }),
