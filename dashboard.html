@@ -611,6 +611,11 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .mobile-meta { display: none !important; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 @media (hover: none) { .tab-row .go { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+.dl-rows { list-style: none; margin: 12px 0 0; padding: 0; }
+.dl-rows li { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.dl-rows li:first-child { border-top: 0; }
+.dl-rows .dl-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dl-rows .dl-t b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -829,6 +834,14 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="tabsSave"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
   </form>
+</dialog>
+
+<dialog class="modal" id="downloadsModal" aria-labelledby="downloadsTitle">
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="downloadsTitle">Downloads</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body"><span class="hint">What the session's pages downloaded, kept on its node until the session ends.</span><div id="downloadsList"></div></div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Close</button></div>
+  </div>
 </dialog>
 
 <dialog class="modal" id="newProfileModal" aria-label="New profile">
@@ -1210,6 +1223,24 @@ function placeOverlays() {
     try { if (el.matches(':popover-open')) el.hidePopover(); el.showPopover(); } catch { /* no popover support: stacked by z-index */ }
   }
 }
+// The files a session's pages downloaded (downloads.rs), to save here.
+async function showDownloads(s) {
+  const base = api(s.node_name, `/sessions/${enc(s.id)}/downloads`);
+  const box = $('downloadsList');
+  $('downloadsTitle').textContent = `Downloads of ${s.name}`;
+  box.innerHTML = '<p class="hint">Loading…</p>';
+  openModal('downloadsModal');
+  let list;
+  try { list = await request('GET', base); } catch (e) { box.innerHTML = `<p class="hint">${esc(e.message)}</p>`; return; }
+  const state = (d) => d.state === 'completed' ? formatBytes(d.received_bytes)
+    : d.state === 'canceled' ? 'Cancelled'
+    : d.total_bytes ? `${Math.floor((100 * d.received_bytes) / d.total_bytes)} % of ${formatBytes(d.total_bytes)}` : 'Downloading…';
+  box.innerHTML = list.length ? `<ul class="dl-rows">${list.map((d) => `<li>
+      <div class="dl-t"><b title="${esc(d.url)}">${esc(d.name)}</b><span class="muted">${esc(state(d))} · ${relTime(d.started_at_secs)}</span></div>
+      ${d.state === 'completed' ? `<a class="btn sm" href="${esc(`${base}/${enc(d.id)}`)}" download="${esc(d.name)}"><svg class="i sm"><use href="#i-download"/></svg>Save</a>` : ''}
+    </li>`).join('')}</ul>` : '<p class="hint">Nothing downloaded yet.</p>';
+}
+
 function openModal(id) {
   const d = $(id);
   closeMenu();
@@ -2012,6 +2043,7 @@ const ACT = {
         ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
       ]) },
       '-',
+      { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
       { icon: 'copy', label: 'Copy WebSocket URL', run: () => copyText(wsUrl) },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
       !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },

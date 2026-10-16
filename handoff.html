@@ -314,6 +314,23 @@
   .file-ask[hidden] { display: none; }
   .file-ask span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-ask .btn-xs.quiet { background: var(--btn); color: var(--fg); }
+  /* Downloads of the page: the latest one, with Save once it is done. */
+  .dl-tray { bottom: calc(64px + env(safe-area-inset-bottom)); min-width: 240px; }
+  .dl-tray .dl-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .dl-tray .dl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .dl-tray .dl-sub { color: var(--muted); font-size: 12px; }
+  .dl-tray a.btn-xs { text-decoration: none; }
+  #downloadsDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(460px, calc(100vw - 32px)); }
+  #downloadsDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #downloadsDialog h2 { margin: 0 0 10px; font-size: 16px; }
+  .dl-list { list-style: none; margin: 0 0 14px; padding: 0; max-height: 50vh; overflow: auto; }
+  .dl-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .dl-list li:first-child { border-top: 0; }
+  .dl-list .dl-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .dl-list .dl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl-list .dl-sub, .dl-empty { color: var(--muted); font-size: 12px; }
+  .dl-list a.btn-xs { text-decoration: none; }
+  .dl-list .btn-xs.quiet { background: var(--btn); color: var(--fg); }
   .btn-xs { padding: 6px 12px; border-radius: 999px; border: 0; background: var(--accent-btn); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
   .btn-close { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.15); color: #ef4444; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; }
   .btn-close:hover { background: #ef4444; color: #fff; border-color: #ef4444; }
@@ -377,6 +394,7 @@
   <div class="sm-label">Browser</div>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search<select id="smSearch" aria-label="Search engine"></select></label>
+  <button class="sm-item" id="smDownloads" hidden><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span id="smDownloadsText">Downloads</span></button>
  <button class="sm-item" id="smSave" hidden title="Keep this session's logins, cookies and storage as a new profile"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
   <hr>
@@ -447,6 +465,18 @@
   <button type="button" class="btn-xs" id="fileAskChoose">Choose…</button>
   <button type="button" class="btn-xs quiet" id="fileAskCancel">Cancel</button>
 </div>
+<div id="dlTray" class="file-ask dl-tray" role="status" aria-live="polite" hidden>
+  <div class="dl-text"><span class="dl-name" id="dlTrayName"></span><span class="dl-sub" id="dlTraySub"></span></div>
+  <a class="btn-xs" id="dlTraySave" download hidden>Save</a>
+  <button type="button" class="btn-xs quiet" id="dlTrayClose" aria-label="Dismiss">✕</button>
+</div>
+<dialog id="downloadsDialog" aria-labelledby="downloadsTitle">
+  <form method="dialog">
+    <h2 id="downloadsTitle">Downloads of this session</h2>
+    <ul class="dl-list" id="dlList"></ul>
+    <div class="ltd-actions"><button value="close" autofocus>Close</button></div>
+  </form>
+</dialog>
 <dialog id="passkeyDialog">
   <form method="dialog">
     <h2>Sign in with a passkey?</h2>
@@ -857,7 +887,7 @@ class CdpDriver {
     await sendFilesToPage({ multiple: p.mode === "selectMultiple", accept, recent: this.inputRecent() },
       (files) => this.cdp.call("DOM.setFileInputFiles", { files, backendNodeId: p.backendNodeId }));
   }
-  inputRecent() { return performance.now() - (this.lastInput || -1e9) < FILE_PICK_WINDOW; }
+  inputRecent(ms = FILE_PICK_WINDOW) { return performance.now() - (this.lastInput || -1e9) < ms; }
   async evaluate(expression) {
     const r = await this.cdp.call("Runtime.evaluate", { expression, returnByValue: true });
     return r && r.result ? r.result.value : undefined;
@@ -1019,7 +1049,7 @@ class BidiDriver {
     await sendFilesToPage({ multiple: !!p.multiple, accept, recent: this.inputRecent() },
       (files) => this.rpc("input.setFiles", { context: this.ctx, element: el, files }));
   }
-  inputRecent() { return performance.now() - (this.lastInput || -1e9) < FILE_PICK_WINDOW; }
+  inputRecent(ms = FILE_PICK_WINDOW) { return performance.now() - (this.lastInput || -1e9) < ms; }
   async start() {
     this.chromeH = await this.evaluate("outerWidth === innerWidth ? outerHeight - innerHeight : null").catch(() => null);
     await this.rpc("session.subscribe", { events: BIDI_EVENTS, contexts: [this.ctx] });
@@ -3455,6 +3485,115 @@ E.audioBtn.onclick = () => {
 };
 renderAudioButton();
 
+/* ---------------------------------------------------------------- downloads */
+// What the page downloads is saved on the browser's node (see downloads.rs); the
+// node tells this view as it goes. A download that started right after this view's
+// own click or tap is saved to this device by itself once it is done; any other
+// waits in the tray (and the Downloads menu) for Save.
+const DL_WANT_WINDOW = 5000;
+const downloads = { session: null, list: new Map(), wanted: new Set(), shown: null };
+const dlUrl = (id) => `/api/sessions/${encodeURIComponent(downloads.session)}/downloads/${encodeURIComponent(id)}`;
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
+}
+function dlStatus(d) {
+  if (d.state === "completed") return fmtBytes(d.received_bytes) || "Done";
+  if (d.state === "canceled") return "Cancelled";
+  if (d.total_bytes) return `${Math.floor((100 * d.received_bytes) / d.total_bytes)} % of ${fmtBytes(d.total_bytes)}`;
+  return d.received_bytes ? `${fmtBytes(d.received_bytes)}…` : "Downloading…";
+}
+async function loadDownloads(sessionId) {
+  if (downloads.session !== sessionId) Object.assign(downloads, { session: sessionId, list: new Map(), wanted: new Set(), shown: null });
+  $("dlTray").hidden = true;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/downloads`, { headers: authHeaders() });
+    if (!res.ok || downloads.session !== sessionId) return;
+    for (const d of await res.json()) downloads.list.set(d.id, d);
+  } catch { /* the menu stays as it is */ }
+  renderDownloadsMenu();
+}
+function downloadEvent(d) {
+  if (d.removed) { downloads.list.delete(d.id); if (downloads.shown === d.id) $("dlTray").hidden = true; renderDownloadsMenu(); return; }
+  const fresh = !downloads.list.has(d.id);
+  downloads.list.set(d.id, d);
+  if (fresh && d.state === "in_progress" && drv?.inputRecent?.(DL_WANT_WINDOW)) downloads.wanted.add(d.id);
+  if (d.state === "completed" && downloads.wanted.delete(d.id)) { saveDownload(d); toast(`Saved ${d.name}`, 2500); }
+  showTray(d);
+  renderDownloadsMenu();
+}
+function saveDownload(d) {
+  const a = document.createElement("a");
+  a.href = dlUrl(d.id);
+  a.download = d.name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
+function showTray(d) {
+  downloads.shown = d.id;
+  $("dlTrayName").textContent = d.name;
+  $("dlTraySub").textContent = dlStatus(d);
+  const save = $("dlTraySave");
+  save.hidden = d.state !== "completed";
+  save.href = dlUrl(d.id);
+  save.download = d.name;
+  $("dlTray").hidden = false;
+  clearTimeout(showTray.timer);
+  // Finished ones go away after a while; Save stays reachable in the menu.
+  if (d.state !== "in_progress") showTray.timer = setTimeout(() => { if (downloads.shown === d.id) $("dlTray").hidden = true; }, 20000);
+}
+$("dlTrayClose").onclick = () => { $("dlTray").hidden = true; };
+$("dlTraySave").addEventListener("click", () => setTimeout(() => { $("dlTray").hidden = true; }, 0));
+function renderDownloadsMenu() {
+  const n = downloads.list.size;
+  $("smDownloads").hidden = !n;
+  $("smDownloadsText").textContent = n ? `Downloads (${n})` : "Downloads";
+  if ($("downloadsDialog").open) renderDownloadsList();
+}
+function renderDownloadsList() {
+  const ul = $("dlList");
+  ul.replaceChildren();
+  const items = [...downloads.list.values()].sort((a, b) => b.started_at_secs - a.started_at_secs);
+  if (!items.length) { const li = document.createElement("li"); li.className = "dl-empty"; li.textContent = "Nothing downloaded yet"; ul.append(li); }
+  for (const d of items) {
+    const li = document.createElement("li");
+    const text = document.createElement("div");
+    text.className = "dl-text";
+    const name = document.createElement("span");
+    name.className = "dl-name";
+    name.textContent = d.name;
+    name.title = d.url;
+    const sub = document.createElement("span");
+    sub.className = "dl-sub";
+    sub.textContent = dlStatus(d);
+    text.append(name, sub);
+    li.append(text);
+    if (d.state === "completed") {
+      const a = document.createElement("a");
+      a.className = "btn-xs";
+      a.textContent = "Save";
+      a.href = dlUrl(d.id);
+      a.download = d.name;
+      li.append(a);
+    }
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "btn-xs quiet";
+    del.textContent = "Remove";
+    del.title = "Delete it from the browser's node";
+    del.onclick = async () => {
+      const res = await fetch(dlUrl(d.id), { method: "DELETE", headers: authHeaders() }).catch(() => null);
+      if (res?.ok) { downloads.list.delete(d.id); renderDownloadsMenu(); renderDownloadsList(); } else toast("Could not remove it", 2500);
+    };
+    li.append(del);
+    ul.append(li);
+  }
+}
+$("smDownloads").addEventListener("click", () => { renderDownloadsList(); $("downloadsDialog").showModal(); });
+
 /* ---------------------------------------------------------------- shared Native size */
 // Every view of a session tells the node its screen size while in Native or Phone
 // layout and gets back the smallest width and height among those views.
@@ -3465,12 +3604,14 @@ function connectViewers() {
   try { viewers.ws?.close(); } catch { /* closed */ }
   Object.assign(viewers, { ws: null, session: sessionId, native: null, forced: false, heard: false, sent: undefined, count: 1 });
   if (!sessionId) return;
+  loadDownloads(sessionId);
   const scheme = location.protocol === "https:" ? "wss://" : "ws://";
   const ws = new WebSocket(`${scheme}${location.host}/viewers?session_id=${encodeURIComponent(sessionId)}`);
   ws.onopen = () => reportViewerSize(viewers.own);
   ws.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
+    if (m.download) { downloadEvent(m.download); return; }
     viewers.count = m.viewers || 1;
     viewers.native = m.native;
     viewers.forced = !!m.forced;
