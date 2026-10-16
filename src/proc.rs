@@ -161,10 +161,20 @@ impl Proc {
     }
 
     fn signal(&self, sig: i32) {
+        // The main process is gone for good once its pid belongs to another process
+        // (a reused pid may even lead a group of someone else's): leave the group
+        // alone then. A pid that is simply gone cannot be reused while stragglers of
+        // its group are left, so those are still reached.
+        if !group_is_ours(start_ticks(self.pid), self.start) {
+            return;
+        }
+        let Ok(pid) = i32::try_from(self.pid) else {
+            return;
+        };
         // Its own process group: the whole browser (renderers, helpers) at once.
         // SAFETY: plain kill(2) on a group this daemon created or adopted.
         unsafe {
-            libc::kill(-(self.pid as i32), sig);
+            libc::kill(-pid, sig);
         }
     }
 
@@ -210,6 +220,13 @@ impl Drop for Proc {
     }
 }
 
+/// Whether the group led by the recorded process may be signalled, given the
+/// start time `/proc` shows for that pid now: nothing there (the leader is gone,
+/// maybe with stragglers behind) or the very process; not another one.
+fn group_is_ours(current_start: Option<u64>, recorded_start: u64) -> bool {
+    current_start.is_none_or(|now| now == recorded_start)
+}
+
 /// Put the child in a process group of its own (pgid = pid).
 pub fn own_group(cmd: &mut Command) {
     cmd.process_group(0);
@@ -249,6 +266,13 @@ mod tests {
         assert!(!is_session_main(
             "/nix/store/x-chromium/bin/chromium --type=renderer --user-data-dir=/p"
         ));
+    }
+
+    #[test]
+    fn a_reused_pid_is_not_signalled() {
+        assert!(group_is_ours(Some(42), 42));
+        assert!(group_is_ours(None, 42));
+        assert!(!group_is_ours(Some(43), 42));
     }
 
     #[test]

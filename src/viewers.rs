@@ -65,6 +65,11 @@ impl Viewers {
         broadcast(viewers);
     }
 
+    /// The session is over: its viewers' sockets end (their channels close).
+    pub fn close_session(&self, session: Uuid) {
+        self.sessions.lock().unwrap().remove(&session);
+    }
+
     pub fn leave(&self, session: Uuid, id: u64) {
         let mut sessions = self.sessions.lock().unwrap();
         let Some(viewers) = sessions.get_mut(&session) else {
@@ -109,6 +114,22 @@ mod tests {
             Some((1280, 1000))
         );
         assert_eq!(smallest(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn viewers_end_with_their_session() {
+        let v = Viewers::default();
+        let s = Uuid::new_v4();
+        let (a, mut ra) = v.join(s);
+        assert!(ra.try_recv().is_ok());
+        v.close_session(s);
+        assert!(matches!(
+            ra.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
+        // A late report or departure of a viewer of the ended session is harmless.
+        v.set(s, a, Some((1, 1)), false);
+        v.leave(s, a);
     }
 
     #[test]

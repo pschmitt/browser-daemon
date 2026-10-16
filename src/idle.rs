@@ -11,6 +11,15 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+/// Longest idle timeout that can be asked for: a year. Anything more is a
+/// "never" in all but name, and must not overflow when turned into seconds.
+pub const MAX_TIMEOUT_MINUTES: u64 = 366 * 24 * 60;
+
+/// An idle timeout given in minutes, as seconds; 0 stays "never".
+pub fn minutes_to_secs(minutes: u64) -> u64 {
+    minutes.min(MAX_TIMEOUT_MINUTES) * 60
+}
+
 pub struct Activity {
     last: AtomicU64,
     /// 0 disables the idle stop for this session.
@@ -107,6 +116,14 @@ mod tests {
         ));
         assert!(is_interactive(r#"{"id":6,"method":"Page.navigate"}"#));
         assert!(!is_interactive("not json"));
+    }
+
+    #[test]
+    fn huge_timeouts_do_not_wrap() {
+        assert_eq!(minutes_to_secs(0), 0);
+        assert_eq!(minutes_to_secs(30), 1800);
+        assert_eq!(minutes_to_secs(u64::MAX), MAX_TIMEOUT_MINUTES * 60);
+        assert!(minutes_to_secs(u64::MAX / 60 + 1) > 0);
     }
 
     #[test]
