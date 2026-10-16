@@ -121,6 +121,34 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   #sessPop .sp-t span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #sessPop .sp-empty { padding: 10px; color: var(--muted); font-size: 13px; }
   #sessPop hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
+  /* Logins of the vault for the page's site, from the key button (see "vault logins"). */
+  #vaultBtn { position: relative; }
+  .vault-count { position: absolute; top: 5px; right: 4px; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box; border-radius: 99px;
+    background: var(--accent); color: #fff; font: 700 9.5px/15px system-ui, sans-serif; text-align: center; pointer-events: none; }
+  .vault-count[hidden] { display: none; }
+  #vaultPop { position: fixed; z-index: 61; top: 52px; left: 8px; width: 320px; max-width: calc(100vw - 16px); max-height: min(70vh, 480px); overflow-y: auto;
+    padding: 6px; background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
+  #vaultPop[hidden] { display: none; }
+  #vaultPop .sp-head { padding: 6px 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #vaultPop .sp-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+  #vaultPop .sp-empty.bad { color: var(--bad); }
+  #vaultPop .sp-empty.locked { color: #f59e0b; }
+  #vaultPop .sp-empty.checking::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 8px; vertical-align: -1px;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: vspin .8s linear infinite; }
+  @keyframes vspin { to { transform: rotate(360deg); } }
+  #vaultPop .vp-row { display: flex; align-items: center; gap: 4px; }
+  #vaultPop .vp-entry { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent;
+    color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  #vaultPop .vp-entry:hover, #vaultPop .vp-entry:focus-visible, #vaultPop .vp-totp:hover { background: var(--btn); outline: none; }
+  #vaultPop .sp-eng { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--btn); color: var(--accent); }
+  #vaultPop .sp-t { min-width: 0; display: flex; flex-direction: column; }
+  #vaultPop .sp-t b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #vaultPop .sp-t span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #vaultPop .vp-totp { flex: none; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted);
+    font: 600 11px system-ui, sans-serif; cursor: pointer; }
+  #vaultPop .vp-act { display: block; width: calc(100% - 12px); margin: 2px 6px 6px; height: 34px; border: 0; border-radius: 9px; background: var(--accent); color: #fff;
+    font: 600 13px system-ui, sans-serif; cursor: pointer; }
+  #vaultPop .vp-note { padding: 6px 10px 4px; font-size: 11.5px; color: var(--muted); }
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
   #view:focus { outline: none; }
@@ -294,11 +322,13 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
   </form>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
+  <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L20 3M17 6l3 3M14.5 8.5l2.5 2.5"/></svg><span class="vault-count" id="vaultCount" hidden></span></button>
   <a href="/" class="ib" id="dash" aria-label="Dashboard" title="Return to Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></a>
   <button class="ib chev" id="dashMore" aria-label="Other sessions" title="Other sessions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
 </div>
 <div id="sessPop" role="menu" hidden></div>
+<div id="vaultPop" role="menu" hidden></div>
 <div id="sessMenu" role="menu" hidden>
   <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle" title="Rename this session" role="button" tabindex="0">Session</span></div>
   <div class="sm-status" id="smStatus"></div>
@@ -1124,14 +1154,19 @@ let passkeyPending = null;
 // calls. The helper may wait minutes for the phone unlock, and a request held open
 // that long gets dropped (Firefox gave up on it after ~2 s). onNote: progress notes.
 async function passkeyHelper(rpId, find, onNote = () => {}, entry = null, signing = {}) {
+  return helperRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
+    { page_id: pageId, rp_id: rpId, find, entry, ...signing }, onNote);
+}
+// Any request for the passkey helper (passkeys, vault logins): started at `url`, then
+// polled until the helper has answered.
+async function helperRequest(url, body, onNote = () => {}) {
   const call = async (url, opts = {}) => {
     const res = await fetch(url, { ...opts, headers: authHeaders(opts.body ? { "Content-Type": "application/json" } : {}) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || res.statusText);
     return body;
   };
-  const { request } = await call(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
-    { method: "POST", body: JSON.stringify({ page_id: pageId, rp_id: rpId, find, entry, ...signing }) });
+  const { request } = await call(url, { method: "POST", body: JSON.stringify(body) });
   for (const until = Date.now() + 340000; Date.now() < until;) {
     await new Promise((r) => setTimeout(r, 1000));
     const st = await call(`/api/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
@@ -1469,6 +1504,7 @@ async function refreshInfo() {
       if (info.u && info.u !== "about:blank") currentUrl = info.u;
       if (document.activeElement !== E.urlInput && currentUrl) E.urlInput.value = currentUrl;
       document.title = (info.t ? info.t + " · " : "") + "Browser handoff";
+      vaultPeek();
     }
     const h = await drv.historyState();
     E.back.disabled = h ? !h.back : false;
@@ -3387,6 +3423,105 @@ if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
 }
 document.addEventListener("pointerdown", (e) => { if (!$("sessPop").hidden && !e.target.closest("#sessPop, #dashMore, #dash")) closeSessPop(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sessPop").hidden) closeSessPop(); });
+
+/* ---------------------------------------------------------------- vault logins */
+// The key button fills logins as the Bitwarden extension does: it lists the vault's
+// entries for the page's site and fills the picked one into the page's login form.
+// The passkey helper holds the vault and the node fills the page (autofill.rs), so
+// this view only ever sees entry names and users, never a password or code.
+const vault = { host: "", list: null, at: 0, peeking: null, off: 0 };
+const VAULT_FRESH = 120000;
+function pageHost() {
+  try {
+    const u = new URL(currentUrl);
+    return /^https?:$/.test(u.protocol) ? u.hostname.toLowerCase() : "";
+  } catch { return ""; }
+}
+const vaultCall = (body, onNote) =>
+  helperRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/autofill`, { page_id: pageId, ...body }, onNote);
+function vaultBadge() {
+  const n = vault.host === pageHost() && Array.isArray(vault.list) ? vault.list.length : 0;
+  $("vaultCount").textContent = n > 9 ? "9+" : String(n);
+  $("vaultCount").hidden = !n;
+}
+// After a page load: how many logins the vault has for the site (the button's badge).
+// Never asks for an unlock; a node without a (new enough) helper is left alone a while.
+function vaultPeek() {
+  const host = pageHost();
+  vaultBadge();
+  if (!host || !target?.sessionId || vault.peeking || Date.now() < vault.off) return;
+  if (vault.host === host && Date.now() - vault.at < VAULT_FRESH) return;
+  vault.peeking = vaultCall({}).then((found) => {
+    vault.host = host;
+    vault.at = Date.now();
+    vault.list = Array.isArray(found) ? found : null; // locked: not known
+  }, (err) => {
+    if (/helper/i.test(err.message)) vault.off = Date.now() + 300000;
+  }).finally(() => { vault.peeking = null; vaultBadge(); });
+}
+function placeVaultPop() {
+  const pop = $("vaultPop"), r = $("vaultBtn").getBoundingClientRect();
+  pop.style.top = r.bottom + 6 + "px";
+  pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8)) + "px";
+}
+async function openVaultPop(unlock = false) {
+  const pop = $("vaultPop"), host = pageHost();
+  const head = `<div class="sp-head" title="${esc(host)}">Vault${host ? " · " + esc(host) : ""}</div>`;
+  const show = (html) => { if (!pop.hidden) { pop.innerHTML = head + html; placeVaultPop(); } };
+  pop.hidden = false;
+  $("vaultBtn").setAttribute("aria-expanded", "true");
+  if (!host) return show('<div class="sp-empty">This page is not on a website: there is nothing to fill.</div>');
+  if (!target?.sessionId) return show('<div class="sp-empty">Not connected to a session yet.</div>');
+  const fresh = !unlock && vault.host === host && Array.isArray(vault.list) && Date.now() - vault.at < VAULT_FRESH;
+  let found = fresh ? vault.list : null;
+  if (!found) {
+    show(`<div class="sp-empty checking">${unlock ? "Unlocking the vault…" : "Looking in the vault…"}</div>`);
+    try {
+      found = await vaultCall({ unlock }, (note) => show(`<div class="sp-empty locked checking">${esc(note)}</div>`));
+    } catch (err) {
+      return show(`<div class="sp-empty bad">${esc(err.message)}</div>`);
+    }
+    if (pop.hidden || pageHost() !== host) return;
+    if (found?.locked) {
+      show('<div class="sp-empty locked">rbw is locked.</div><button class="vp-act" id="vaultUnlock">Unlock from your phone</button>');
+      $("vaultUnlock").onclick = () => openVaultPop(true);
+      return;
+    }
+    vault.host = host;
+    vault.at = Date.now();
+    vault.list = Array.isArray(found) ? found : [];
+    found = vault.list;
+    vaultBadge();
+  }
+  if (!found.length) return show(`<div class="sp-empty">No logins for ${esc(host)} in your vault.</div>`);
+  show(found.map((e, i) => `<div class="vp-row"><button class="vp-entry" data-i="${i}" role="menuitem" title="Fill this login">`
+    + `<span class="sp-eng">${esc((e.name || "?").slice(0, 1).toUpperCase())}</span>`
+    + `<span class="sp-t"><b>${esc(e.name || "?")}</b><span>${esc(e.user || "no username")}${e.folder ? " · " + esc(e.folder) : ""}</span></span></button>`
+    + (e.totp ? `<button class="vp-totp" data-i="${i}" title="Fill only the one-time code">TOTP</button>` : "") + "</div>").join("")
+    + '<div class="vp-note">Filled straight from the vault: passwords never reach this view.</div>');
+  pop.querySelectorAll(".vp-entry").forEach((b) => { b.onclick = () => vaultFill(found[+b.dataset.i], ["username", "password", "totp"]); });
+  pop.querySelectorAll(".vp-totp").forEach((b) => { b.onclick = () => vaultFill(found[+b.dataset.i], ["totp"]); });
+}
+function closeVaultPop() {
+  $("vaultPop").hidden = true;
+  $("vaultBtn").setAttribute("aria-expanded", "false");
+}
+async function vaultFill(entry, fields) {
+  closeVaultPop();
+  toast(`Filling ${entry.name || "the login"}…`, 0);
+  let shown = "";
+  try {
+    const res = await vaultCall({ entry: entry.id, fields }, (note) => { if (note !== shown) { shown = note; toast(note, 0); } });
+    const names = (res?.filled || []).map((f) => (f === "totp" ? "one-time code" : f));
+    toast(`Filled ${names.join(" and ") || "the login"}`, 2000);
+  } catch (err) {
+    toast(`Not filled: ${err.message}`, 5000);
+  }
+  $("view").focus();
+}
+$("vaultBtn").onclick = (e) => { e.stopPropagation(); $("vaultPop").hidden ? openVaultPop() : closeVaultPop(); };
+document.addEventListener("pointerdown", (e) => { if (!$("vaultPop").hidden && !e.target.closest("#vaultPop, #vaultBtn")) closeVaultPop(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("vaultPop").hidden) closeVaultPop(); });
 
 $("smStream").value = streamPref();
 $("smStream").onchange = () => {

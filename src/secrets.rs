@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::process::Stdio;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::process::Command;
 
@@ -19,6 +20,7 @@ pub struct Secret {
     pub uris: Vec<Uri>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Uri {
     pub uri: String,
     /// Bitwarden's match type: None/0 base domain, 1 host, 2 starts with,
@@ -26,7 +28,7 @@ pub struct Uri {
     pub match_type: Option<u64>,
 }
 
-async fn rbw(rbw: &Path, args: &[&str]) -> Result<String, String> {
+pub async fn rbw(rbw: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new(rbw)
         .args(args)
         .stdin(Stdio::null())
@@ -87,7 +89,7 @@ pub async fn lookup(
 }
 
 /// A field of `rbw get --raw` output: password, username or a custom field.
-fn pick_field(raw: &Value, field: &str) -> Option<String> {
+pub fn pick_field(raw: &Value, field: &str) -> Option<String> {
     match field {
         "password" | "username" => raw["data"][field].as_str().map(str::to_string),
         _ => raw["fields"].as_array()?.iter().find_map(|f| {
@@ -98,7 +100,7 @@ fn pick_field(raw: &Value, field: &str) -> Option<String> {
     }
 }
 
-fn uris(raw: &Value) -> Vec<Uri> {
+pub fn uris(raw: &Value) -> Vec<Uri> {
     raw["data"]["uris"]
         .as_array()
         .map(|a| {
@@ -114,7 +116,7 @@ fn uris(raw: &Value) -> Vec<Uri> {
         .unwrap_or_default()
 }
 
-fn host_of(uri: &str) -> Option<String> {
+pub fn host_of(uri: &str) -> Option<String> {
     let parsed = url::Url::parse(uri)
         .ok()
         .filter(|u| u.host_str().is_some())
@@ -129,7 +131,7 @@ fn host_of(uri: &str) -> Option<String> {
 
 /// The registrable part of a host, roughly: the last two labels, three for
 /// country suffixes like co.uk. IP addresses stay whole.
-fn base_domain(host: &str) -> &str {
+pub fn base_domain(host: &str) -> &str {
     if host.parse::<std::net::IpAddr>().is_ok() || host.starts_with('[') {
         return host;
     }

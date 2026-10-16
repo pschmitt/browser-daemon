@@ -6,6 +6,9 @@
 //! The view doesn't wait on one long request (browsers and proxies drop those):
 //! it starts a request and polls its status, which the helper may annotate
 //! ("confirm the unlock on your phone") before finishing it.
+//!
+//! The same helper fills logins (autofill.rs): "logins" lists the vault entries
+//! for the page's site (rp_id holds its host), "fill" fills one into the page.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
@@ -36,6 +39,12 @@ pub struct Request {
     pub challenge: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
+    /// "fill": the fields of the entry to fill (username, password, totp).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    /// "logins": unlock the vault first (from the phone) instead of saying it's locked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlock: bool,
 }
 
 /// What an "assert" request needs besides the site.
@@ -96,11 +105,7 @@ impl Broker {
         entry: Option<String>,
         signing: Signing,
     ) -> Result<Uuid, String> {
-        let helper = *self.helper_seen.lock().unwrap();
-        if helper.is_none_or(|t| t.elapsed() > HELPER_GONE) {
-            return Err("No passkey helper is running for this node".into());
-        }
-        let req = Request {
+        self.enqueue(Request {
             id: Uuid::new_v4(),
             page_id,
             rp_id,
@@ -109,7 +114,41 @@ impl Broker {
             origin: signing.origin,
             challenge: signing.challenge,
             allow: signing.allow,
-        };
+            fields: Vec::new(),
+            unlock: false,
+        })
+    }
+
+    /// Queue a login lookup ("logins", no `entry`) or fill ("fill") for the page
+    /// on `host`.
+    pub fn start_autofill(
+        &self,
+        page_id: String,
+        host: String,
+        entry: Option<String>,
+        fields: Vec<String>,
+        unlock: bool,
+    ) -> Result<Uuid, String> {
+        let kind = if entry.is_some() { "fill" } else { "logins" };
+        self.enqueue(Request {
+            id: Uuid::new_v4(),
+            page_id,
+            rp_id: host,
+            kind: kind.into(),
+            entry,
+            origin: None,
+            challenge: None,
+            allow: Vec::new(),
+            fields,
+            unlock,
+        })
+    }
+
+    fn enqueue(&self, req: Request) -> Result<Uuid, String> {
+        let helper = *self.helper_seen.lock().unwrap();
+        if helper.is_none_or(|t| t.elapsed() > HELPER_GONE) {
+            return Err("No passkey helper is running for this node".into());
+        }
         let mut tracked = self.tracked.lock().unwrap();
         tracked.retain(|_, t| t.since.elapsed() < 2 * ANSWER_TIMEOUT);
         tracked.insert(
@@ -138,22 +177,27 @@ impl Broker {
     }
 
     /// The helper's long poll: the next request, or None after `wait`. A helper
-    /// that predates "find" requests (it would inject instead) gets none of them.
-    pub async fn next(&self, wait: Duration, finds: bool) -> Option<Request> {
+    /// that predates "find" or autofill requests (it would inject instead) gets
+    /// none of them.
+    pub async fn next(&self, wait: Duration, finds: bool, autofill: bool) -> Option<Request> {
         let deadline = Instant::now() + wait;
         loop {
             *self.helper_seen.lock().unwrap() = Some(Instant::now());
             let woken = self.wake.notified();
             let popped = self.queue.lock().unwrap().pop_front();
             if let Some(req) = popped {
-                if req.kind != "find" || finds {
-                    return Some(req);
-                }
+                let error = match req.kind.as_str() {
+                    "find" if !finds => "The passkey helper is too old to look entries up",
+                    "logins" | "fill" if !autofill => {
+                        "The passkey helper is too old to fill logins"
+                    }
+                    _ => return Some(req),
+                };
                 self.complete(
                     req.id,
                     Outcome {
                         ok: false,
-                        error: Some("The passkey helper is too old to look entries up".into()),
+                        error: Some(error.into()),
                         info: None,
                     },
                 );
@@ -216,7 +260,10 @@ mod tests {
             .is_err(),
             "no helper yet"
         );
-        assert!(b.next(Duration::from_millis(10), true).await.is_none());
+        assert!(b
+            .next(Duration::from_millis(10), true, true)
+            .await
+            .is_none());
         let id = b
             .start(
                 "p".into(),
@@ -226,7 +273,7 @@ mod tests {
                 Signing::default(),
             )
             .unwrap();
-        let req = b.next(Duration::from_secs(1), true).await.unwrap();
+        let req = b.next(Duration::from_secs(1), true, true).await.unwrap();
         assert_eq!(req.rp_id, "x.test");
         assert!(b.note(id, "unlock".into()));
         assert_eq!(
@@ -244,5 +291,33 @@ mod tests {
             }
         ));
         assert_eq!(b.status(id), Some(Status::Ready { info: None }));
+    }
+
+    #[tokio::test]
+    async fn old_helpers_get_no_autofill_requests() {
+        let b = Broker::default();
+        assert!(b
+            .next(Duration::from_millis(1), true, false)
+            .await
+            .is_none());
+        let id = b
+            .start_autofill("p".into(), "x.test".into(), None, Vec::new(), false)
+            .unwrap();
+        assert!(b
+            .next(Duration::from_millis(10), true, false)
+            .await
+            .is_none());
+        assert!(matches!(b.status(id), Some(Status::Failed { .. })));
+        let id = b
+            .start_autofill(
+                "p".into(),
+                "x.test".into(),
+                Some("e".into()),
+                vec!["password".into()],
+                false,
+            )
+            .unwrap();
+        let req = b.next(Duration::from_secs(1), true, true).await.unwrap();
+        assert_eq!((req.id, req.kind.as_str()), (id, "fill"));
     }
 }

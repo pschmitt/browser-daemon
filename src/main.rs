@@ -1,5 +1,6 @@
 mod audible;
 mod audio;
+mod autofill;
 mod backups;
 mod bidi;
 mod browser;
@@ -271,7 +272,7 @@ pub enum Command {
     Mcp(mcp::McpArgs),
     /// Print a shell completion script (bash, zsh, fish, ...).
     Completions { shell: clap_complete::Shell },
-    /// Serve passkeys approved in live views from the local rbw vault.
+    /// Serve passkeys and vault logins approved in live views from the local rbw vault.
     PasskeyHelper(passkey_helper::HelperArgs),
 }
 
@@ -2076,6 +2077,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route("/api/pages/{page_id}/insert-text", post(api_page_insert_text))
+        .route("/api/sessions/{id}/autofill", post(api_session_autofill))
+        .route("/api/pages/{page_id}/autofill", post(api_page_autofill))
         .route("/api/sessions/{id}/name", post(api_session_rename))
         .route("/api/sessions/{id}/history", get(api_session_history))
         .route("/api/sessions/{id}/screenshot", get(api_session_screenshot))
@@ -5903,6 +5906,135 @@ async fn api_session_passkey(
     Ok(Json(serde_json::json!({ "request": request })))
 }
 
+#[derive(Deserialize)]
+struct AutofillRequest {
+    page_id: String,
+    /// Vault entry id to fill; without one, the entries for the page's site are listed.
+    #[serde(default)]
+    entry: Option<String>,
+    /// Fields of the entry to fill (default: username and password).
+    #[serde(default)]
+    fields: Vec<String>,
+    /// Listing: unlock the vault (from the phone) if it's locked.
+    #[serde(default)]
+    unlock: bool,
+}
+
+/// The vault button of the live view: list the logins for the page's site, or
+/// fill one. The site is the page's host as the browser has it, never what the
+/// view says. Answers with the request's id, polled at /api/passkey/{id}.
+async fn api_session_autofill(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AutofillRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let targets = get_local_targets(&state).await;
+    let page = targets
+        .iter()
+        .find(|t| t.id == req.page_id && t.session_id == Some(id))
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found in this session"))?;
+    let host = url::Url::parse(&page.url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https"))
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+    if let Some(session) = state.sessions.read().await.get(&id) {
+        session.activity.touch();
+    }
+    if req.entry.is_some() {
+        info!(session_id = %id, host = %host, "Login fill approved in the live view");
+    }
+    let fields = if req.fields.is_empty() {
+        vec!["username".into(), "password".into()]
+    } else {
+        req.fields
+    };
+    let request = state
+        .passkeys
+        .start_autofill(req.page_id, host.clone(), req.entry, fields, req.unlock)
+        .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
+    Ok(Json(
+        serde_json::json!({ "request": request, "host": host }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct PageAutofill {
+    /// The page must still be on this host (the one the entry was checked for).
+    host: String,
+    /// The entry's URIs: only frames on these sites are filled.
+    uris: Vec<secrets::Uri>,
+    #[serde(flatten)]
+    creds: autofill::Creds,
+}
+
+/// The passkey helper fills a vault entry into a page (see autofill.rs). The
+/// values are never logged.
+async fn api_page_autofill(
+    AxumPath(page_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PageAutofill>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let targets = get_local_targets(&state).await;
+    let page = targets
+        .iter()
+        .find(|t| t.id == page_id)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found"))?;
+    let actual = url::Url::parse(&page.url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase));
+    if actual.as_deref() != Some(req.host.to_ascii_lowercase().as_str()) {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("The page is not on {} anymore", req.host),
+        ));
+    }
+    if !secrets::site_matches(&req.host, &req.uris) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            format!("The entry is not for {}", req.host),
+        ));
+    }
+    let sid = page
+        .session_id
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found"))?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&sid)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    session.activity.touch();
+    let uris = req.uris;
+    let frame_ok = move |u: &str| {
+        url::Url::parse(u)
+            .ok()
+            .filter(|u| matches!(u.scheme(), "http" | "https"))
+            .and_then(|u| u.host_str().map(str::to_string))
+            .is_some_and(|h| secrets::site_matches(&h, &uris))
+    };
+    let filled = match session.bidi {
+        Some(ref hub) => autofill::fill_firefox(hub, &page_id, frame_ok, &req.creds).await,
+        None => {
+            let ws_url = format!("ws://127.0.0.1:{}/devtools/page/{}", session.port, page_id);
+            autofill::fill_chromium(&ws_url, frame_ok, &req.creds).await
+        }
+    }
+    .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
+    if filled.is_empty() {
+        return Err(api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "No login form found on this page",
+        ));
+    }
+    Ok(Json(serde_json::json!({ "filled": filled })))
+}
+
 async fn api_passkey_status(
     AxumPath(req): AxumPath<Uuid>,
     State(state): State<AppState>,
@@ -5940,6 +6072,9 @@ struct HelperPoll {
     /// The helper handles "find" requests (newer helpers say so).
     #[serde(default)]
     finds: bool,
+    /// The helper handles "logins" and "fill" requests.
+    #[serde(default)]
+    autofill: bool,
 }
 
 async fn api_passkey_helper_next(
@@ -5951,7 +6086,7 @@ async fn api_passkey_helper_next(
     Ok(
         match state
             .passkeys
-            .next(Duration::from_secs(25), poll.finds)
+            .next(Duration::from_secs(25), poll.finds, poll.autofill)
             .await
         {
             Some(req) => Json(req).into_response(),

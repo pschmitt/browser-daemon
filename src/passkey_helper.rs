@@ -1,5 +1,6 @@
 //! `browser-daemon passkey-helper`: runs as the vault's user and serves the
-//! passkeys approved in live views (see passkeys.rs) with `rbw passkey inject`.
+//! passkeys approved in live views (see passkeys.rs) with `rbw passkey inject`,
+//! and the logins picked from their vault button (see autofill.rs).
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -10,6 +11,7 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::passkeys::{Outcome, Request};
+use crate::secrets;
 
 #[derive(clap::Args, Debug)]
 pub struct HelperArgs {
@@ -66,7 +68,9 @@ async fn poll(
     info!(node = %node, "Serving passkeys");
     loop {
         let res = client
-            .get(format!("{node}/api/passkey-helper/next?finds=true"))
+            .get(format!(
+                "{node}/api/passkey-helper/next?finds=true&autofill=true"
+            ))
             .header("X-Browser-Cluster-Secret", &secret)
             .send()
             .await;
@@ -96,6 +100,8 @@ async fn poll(
         tokio::spawn(async move {
             let result = match req.kind.as_str() {
                 "find" => find(&req, &args).await.map(Some),
+                "logins" => logins(&node, &secret, &req, &client, &args).await.map(Some),
+                "fill" => fill(&node, &secret, &req, &client, &args).await.map(Some),
                 "assert" => assert(&node, &secret, &req, &client, &args).await.map(Some),
                 _ => serve(&node, &secret, &req, &client, &args)
                     .await
@@ -174,7 +180,7 @@ async fn ensure_unlocked(
         let hook = args.unlock_webhook.as_ref().ok_or("The vault is locked")?;
         client
             .post(hook)
-            .json(&serde_json::json!({ "host": args.unlock_host, "agent": format!("Passkey for {}", req.rp_id) }))
+            .json(&serde_json::json!({ "host": args.unlock_host, "agent": format!("{} for {}", if matches!(req.kind.as_str(), "logins" | "fill") { "Login" } else { "Passkey" }, req.rp_id) }))
             .send()
             .await
             .map_err(|e| format!("Could not ask for an unlock: {e}"))?;
@@ -317,4 +323,135 @@ async fn serve(
     } else {
         last_err
     })
+}
+
+/// At most this many vault entries are checked for a site.
+const MAX_CANDIDATES: usize = 30;
+
+/// The login entries for the page's site (rp_id is its host), as Bitwarden's
+/// autofill would pick them: name, user and whether there's a TOTP, no secrets.
+/// A locked vault is reported, or unlocked first when the user asked.
+async fn logins(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    args: &HelperArgs,
+) -> Result<serde_json::Value, String> {
+    if req.unlock {
+        ensure_unlocked(node, secret, req, client, args).await?;
+    } else if !unlocked(&args.rbw).await {
+        return Ok(serde_json::json!({ "locked": true }));
+    }
+    let host = req.rp_id.as_str();
+    // Every URI of a matching entry names the site's base domain, so a search for it
+    // narrows the vault cheaply (`rbw list --raw` decrypts all of it); the URIs and
+    // their match types then decide.
+    let found = secrets::rbw(
+        &args.rbw,
+        &["search", secrets::base_domain(host), "--fields", "id"],
+    )
+    .await
+    .unwrap_or_default();
+    let ids: Vec<&str> = found
+        .lines()
+        .filter_map(|l| l.split('\t').next())
+        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+        .take(MAX_CANDIDATES)
+        .collect();
+    let entries = futures_util::future::join_all(
+        ids.iter()
+            .map(|id| async move { secrets::rbw(&args.rbw, &["get", "--raw", id]).await }),
+    )
+    .await;
+    let mut out: Vec<serde_json::Value> = ids
+        .iter()
+        .zip(entries)
+        .filter_map(|(id, raw)| {
+            let raw: serde_json::Value = serde_json::from_str(&raw.ok()?).ok()?;
+            let data = &raw["data"];
+            let has = |f: &str| data[f].as_str().is_some_and(|v| !v.is_empty());
+            (secrets::site_matches(host, &secrets::uris(&raw))
+                && (has("username") || has("password")))
+            .then(|| {
+                serde_json::json!({
+                    "id": id,
+                    "name": raw["name"],
+                    "user": data["username"],
+                    "folder": raw["folder"],
+                    "password": has("password"),
+                    "totp": has("totp"),
+                })
+            })
+        })
+        .collect();
+    out.sort_by_key(|e| e["name"].as_str().unwrap_or_default().to_lowercase());
+    Ok(serde_json::Value::Array(out))
+}
+
+/// Fills the picked entry into the page: read here, checked against the page's
+/// site, then sent to the node, which puts it into the login form.
+async fn fill(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    args: &HelperArgs,
+) -> Result<serde_json::Value, String> {
+    let entry = req.entry.as_deref().ok_or("No entry")?;
+    if uuid::Uuid::parse_str(entry).is_err() {
+        return Err("Not a vault entry id".into());
+    }
+    ensure_unlocked(node, secret, req, client, args).await?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&secrets::rbw(&args.rbw, &["get", "--raw", entry]).await?)
+            .map_err(|_| "rbw: unexpected output".to_string())?;
+    let uris = secrets::uris(&raw);
+    if !secrets::site_matches(&req.rp_id, &uris) {
+        return Err(format!("This entry is not saved for {}", req.rp_id));
+    }
+    let want = |f: &str| req.fields.iter().any(|x| x == f);
+    let field = |f: &str| {
+        want(f)
+            .then(|| secrets::pick_field(&raw, f))
+            .flatten()
+            .filter(|v| !v.is_empty())
+    };
+    let totp = if want("totp") && raw["data"]["totp"].as_str().is_some_and(|t| !t.is_empty()) {
+        Some(
+            secrets::rbw(&args.rbw, &["code", entry])
+                .await?
+                .trim()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let body = serde_json::json!({
+        "host": req.rp_id,
+        "uris": uris,
+        "username": field("username"),
+        "password": field("password"),
+        "totp": totp,
+    });
+    if body["username"].is_null() && body["password"].is_null() && body["totp"].is_null() {
+        return Err("The entry has nothing to fill".into());
+    }
+    let res = client
+        .post(format!("{node}/api/pages/{}/autofill", req.page_id))
+        .header("X-Browser-Cluster-Secret", secret)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach the node: {e}"))?;
+    let ok = res.status().is_success();
+    let answer: serde_json::Value = res.json().await.unwrap_or_default();
+    if !ok {
+        return Err(answer["error"]
+            .as_str()
+            .unwrap_or("The node could not fill the page")
+            .to_string());
+    }
+    info!(host = %req.rp_id, fields = %answer["filled"], "Login filled");
+    Ok(answer)
 }
