@@ -933,6 +933,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            overview::invalidate_after_changes,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             auth::layer,
         ));
 

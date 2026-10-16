@@ -13,6 +13,32 @@ pub struct OverviewHub {
     pub(crate) latest: tokio::sync::watch::Sender<Option<Arc<OverviewSnapshot>>>,
     /// One computation at a time; the ones waiting reuse its result.
     pub(crate) compute: Mutex<()>,
+    /// Something changed since the latest one: the next reader computes anew, so
+    /// `session new` followed by `session open` finds the session.
+    pub(crate) stale: AtomicBool,
+}
+
+impl OverviewHub {
+    pub(crate) fn invalidate(&self) {
+        self.stale.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Marks the overview stale after every request that may change something.
+pub(crate) async fn invalidate_after_changes(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let changes = !matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    let res = next.run(req).await;
+    if changes {
+        state.overview.invalidate();
+    }
+    res
 }
 
 impl AppState {
@@ -23,7 +49,7 @@ impl AppState {
             hub.latest
                 .borrow()
                 .clone()
-                .filter(|s| s.at.elapsed() <= max_age)
+                .filter(|s| !hub.stale.load(Ordering::Relaxed) && s.at.elapsed() <= max_age)
         };
         if let Some(s) = recent(&self.overview) {
             return s;
@@ -32,6 +58,8 @@ impl AppState {
         if let Some(s) = recent(&self.overview) {
             return s;
         }
+        // Changes from here on are not in this one: they mark it stale again.
+        self.overview.stale.store(false, Ordering::Relaxed);
         let at = Instant::now();
         let overview = fetch_mesh_overview(self).await;
         let snapshot = Arc::new(OverviewSnapshot {
