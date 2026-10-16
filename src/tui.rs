@@ -150,7 +150,11 @@ fn subst(v: &Value, input: &str) -> Value {
     match v {
         Value::String(s) => Value::String(s.replace(INPUT, input)),
         Value::Array(a) => Value::Array(a.iter().map(|x| subst(x, input)).collect()),
-        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), subst(x, input))).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, x)| (k.clone(), subst(x, input)))
+                .collect(),
+        ),
         other => other.clone(),
     }
 }
@@ -160,11 +164,25 @@ enum Action {
     Api(Call),
     Open(String),
     Say(String),
-    Menu { title: String, items: Vec<(String, Action)> },
+    Menu {
+        title: String,
+        items: Vec<(String, Action)>,
+    },
     /// Ask for a line of text, then do `then` with it in place of `$INPUT`.
-    Input { title: String, prompt: String, initial: String, then: Box<Action> },
-    Confirm { question: String, then: Box<Action> },
-    Text { title: String, lines: Vec<String> },
+    Input {
+        title: String,
+        prompt: String,
+        initial: String,
+        then: Box<Action>,
+    },
+    Confirm {
+        question: String,
+        then: Box<Action>,
+    },
+    Text {
+        title: String,
+        lines: Vec<String>,
+    },
     /// The form for a new session or profile; the node it starts on.
     Form(FormKind, Option<String>),
     /// Stop these sessions (node, id), as counted when the confirmation was asked.
@@ -190,7 +208,10 @@ fn item(label: impl Into<String>, action: Action) -> (String, Action) {
 }
 
 fn confirm_then(question: impl Into<String>, then: Action) -> Action {
-    Action::Confirm { question: question.into(), then: Box::new(then) }
+    Action::Confirm {
+        question: question.into(),
+        then: Box::new(then),
+    }
 }
 
 fn ask(title: &str, prompt: &str, initial: &str, then: Action) -> Action {
@@ -216,16 +237,25 @@ struct Field {
 enum FieldKind {
     Text(String),
     /// (value, shown) options and the chosen one.
-    Choice { options: Vec<(String, String)>, sel: usize },
+    Choice {
+        options: Vec<(String, String)>,
+        sel: usize,
+    },
 }
 
 impl Field {
     fn text(label: &'static str) -> Self {
-        Self { label, kind: FieldKind::Text(String::new()) }
+        Self {
+            label,
+            kind: FieldKind::Text(String::new()),
+        }
     }
 
     fn choice(label: &'static str, options: Vec<(String, String)>) -> Self {
-        Self { label, kind: FieldKind::Choice { options, sel: 0 } }
+        Self {
+            label,
+            kind: FieldKind::Choice { options, sel: 0 },
+        }
     }
 
     fn value(&self) -> String {
@@ -245,10 +275,26 @@ struct Form {
 }
 
 enum Modal {
-    Menu { title: String, items: Vec<(String, Action)>, sel: usize },
-    Input { title: String, prompt: String, buf: String, then: Box<Action> },
-    Confirm { question: String, then: Box<Action> },
-    Text { title: String, lines: Vec<String>, scroll: usize },
+    Menu {
+        title: String,
+        items: Vec<(String, Action)>,
+        sel: usize,
+    },
+    Input {
+        title: String,
+        prompt: String,
+        buf: String,
+        then: Box<Action>,
+    },
+    Confirm {
+        question: String,
+        then: Box<Action>,
+    },
+    Text {
+        title: String,
+        lines: Vec<String>,
+        scroll: usize,
+    },
     Form(Form),
 }
 
@@ -258,7 +304,11 @@ enum Msg {
     /// The overview, or why it could not be fetched.
     Overview(Result<MeshOverview, String>),
     /// An action finished: its message (empty: "done"), or its error.
-    Done { label: String, result: Result<String, String>, refresh: bool },
+    Done {
+        label: String,
+        result: Result<String, String>,
+        refresh: bool,
+    },
     /// A profile's backups, for its data menu.
     Backups(MeshProfile, Result<Vec<Value>, String>),
 }
@@ -308,7 +358,11 @@ impl App {
     fn api(&self, node: &str, path: &str) -> String {
         let local = node.is_empty() || self.ov.as_ref().is_some_and(|o| o.local_node.name == node);
         // DevTools endpoints (`/json/...`) sit at the root of a node.
-        let root = if path.starts_with("/json") { "" } else { "/api" };
+        let root = if path.starts_with("/json") {
+            ""
+        } else {
+            "/api"
+        };
         if local {
             format!("{root}{path}")
         } else {
@@ -354,7 +408,11 @@ impl App {
                     self.refresh();
                 }
             }
-            Msg::Done { label, result, refresh } => {
+            Msg::Done {
+                label,
+                result,
+                refresh,
+            } => {
                 self.pending = self.pending.saturating_sub(1);
                 match result {
                     Ok(text) if text.is_empty() => self.set_status(format!("{label}: done"), false),
@@ -645,9 +703,7 @@ impl App {
                 self.recording().map(|r| Action::Open(play_url(&r)))
             }
             (Tab::Recordings, KeyCode::Char('K')) => self.recording().map(|r| keep_recording(&r)),
-            (Tab::Recordings, KeyCode::Char('E')) => {
-                self.recording().map(|r| export_recording(&r))
-            }
+            (Tab::Recordings, KeyCode::Char('E')) => self.recording().map(|r| export_recording(&r)),
             (Tab::Recordings, KeyCode::Char('v')) => {
                 let node = self.selected_node().unwrap_or_else(|| self.local_node());
                 Some(vacuum(&node))
@@ -660,7 +716,9 @@ impl App {
                         Some(true) => Some(false),
                         Some(false) => None,
                     };
-                    self.engine_patch(&r, &format!("Ad blocker: {}", tri_label(next)), |d| d.adblock = next)
+                    self.engine_patch(&r, &format!("Ad blocker: {}", tri_label(next)), |d| {
+                        d.adblock = next
+                    })
                 })
             }
             (Tab::Engines, KeyCode::Char('c')) => {
@@ -671,14 +729,20 @@ impl App {
                         Some(ColorScheme::Dark) => Some(ColorScheme::Light),
                         Some(ColorScheme::Light) => None,
                     };
-                    self.engine_patch(&r, &format!("Appearance: {}", scheme_label(next)), |d| d.color_scheme = next)
+                    self.engine_patch(&r, &format!("Appearance: {}", scheme_label(next)), |d| {
+                        d.color_scheme = next
+                    })
                 })
             }
             (Tab::Engines, KeyCode::Char('t')) => {
                 let row = self.engine_row();
                 row.map(|r| {
                     let next = !r.defaults.show_touches;
-                    self.engine_patch(&r, &format!("Show touches: {}", if next { "on" } else { "off" }), |d| d.show_touches = next)
+                    self.engine_patch(
+                        &r,
+                        &format!("Show touches: {}", if next { "on" } else { "off" }),
+                        |d| d.show_touches = next,
+                    )
                 })
             }
             (Tab::Nodes, KeyCode::Char('a')) => Some(add_peer()),
@@ -737,12 +801,13 @@ impl App {
             ov.local_node.supported_engines.clone(),
             Some(ov.local_node.settings.clone()),
         )];
-        nodes.extend(
-            ov.peers
-                .iter()
-                .filter(|p| p.status == "online")
-                .map(|p| (p.name.clone(), p.supported_engines.clone(), p.settings.clone())),
-        );
+        nodes.extend(ov.peers.iter().filter(|p| p.status == "online").map(|p| {
+            (
+                p.name.clone(),
+                p.supported_engines.clone(),
+                p.settings.clone(),
+            )
+        }));
         let mut rows = Vec::new();
         for (node, engines, settings) in nodes {
             if !self.keep(&node) {
@@ -753,7 +818,11 @@ impl App {
                     .as_ref()
                     .map(|s| s.engines.of(engine).clone())
                     .unwrap_or_default();
-                rows.push(EngineRow { node: node.clone(), engine, defaults });
+                rows.push(EngineRow {
+                    node: node.clone(),
+                    engine,
+                    defaults,
+                });
             }
         }
         rows
@@ -804,13 +873,17 @@ impl App {
         let adblock = [None, Some(true), Some(false)].map(|v| {
             item(
                 format!("{}{}", mark(d.adblock == v), tri_label(v)),
-                self.engine_patch(row, &format!("Ad blocker: {}", tri_label(v)), |e| e.adblock = v),
+                self.engine_patch(row, &format!("Ad blocker: {}", tri_label(v)), |e| {
+                    e.adblock = v
+                }),
             )
         });
         let scheme = [None, Some(ColorScheme::Dark), Some(ColorScheme::Light)].map(|v| {
             item(
                 format!("{}{}", mark(d.color_scheme == v), scheme_label(v)),
-                self.engine_patch(row, &format!("Appearance: {}", scheme_label(v)), |e| e.color_scheme = v),
+                self.engine_patch(row, &format!("Appearance: {}", scheme_label(v)), |e| {
+                    e.color_scheme = v
+                }),
             )
         });
         Action::Menu {
@@ -818,21 +891,36 @@ impl App {
             items: vec![
                 item(
                     format!("Ad blocker: {}…", tri_label(d.adblock)),
-                    Action::Menu { title: "Ad blocker".into(), items: adblock.to_vec() },
+                    Action::Menu {
+                        title: "Ad blocker".into(),
+                        items: adblock.to_vec(),
+                    },
                 ),
                 item(
                     format!("Appearance: {}…", scheme_label(d.color_scheme)),
-                    Action::Menu { title: "Appearance".into(), items: scheme.to_vec() },
+                    Action::Menu {
+                        title: "Appearance".into(),
+                        items: scheme.to_vec(),
+                    },
                 ),
                 item(
-                    format!("Show touches: {}", if d.show_touches { "on" } else { "off" }),
+                    format!(
+                        "Show touches: {}",
+                        if d.show_touches { "on" } else { "off" }
+                    ),
                     self.engine_patch(
                         row,
-                        &format!("Show touches: {}", if d.show_touches { "off" } else { "on" }),
+                        &format!(
+                            "Show touches: {}",
+                            if d.show_touches { "off" } else { "on" }
+                        ),
                         |e| e.show_touches = !d.show_touches,
                     ),
                 ),
-                item("Details", details(&format!("{} on {}", row.engine, row.node), d)),
+                item(
+                    "Details",
+                    details(&format!("{} on {}", row.engine, row.node), d),
+                ),
             ],
         }
     }
@@ -844,7 +932,10 @@ impl App {
         make: impl Fn(Option<&str>) -> Action,
     ) -> Vec<(String, Action)> {
         let mark = |on: bool| if on { "✓ " } else { "  " };
-        let mut items = vec![item(format!("{}Direct", mark(current.is_none())), make(None))];
+        let mut items = vec![item(
+            format!("{}Direct", mark(current.is_none())),
+            make(None),
+        )];
         for p in self.node_proxies(node) {
             items.push(item(
                 format!("{}{}", mark(current == Some(p.id.as_str())), p.name),
@@ -857,12 +948,18 @@ impl App {
     fn cycle_session_proxy(&self, s: &MeshSession) -> Option<Action> {
         let proxies = self.node_proxies(&s.node_name);
         if proxies.is_empty() {
-            return Some(Action::Say(format!("{} has no proxies configured", s.node_name)));
+            return Some(Action::Say(format!(
+                "{} has no proxies configured",
+                s.node_name
+            )));
         }
         let choices: Vec<Option<String>> = std::iter::once(None)
             .chain(proxies.into_iter().map(|x| Some(x.id)))
             .collect();
-        let cur = choices.iter().position(|c| *c == s.session.proxy).unwrap_or(0);
+        let cur = choices
+            .iter()
+            .position(|c| *c == s.session.proxy)
+            .unwrap_or(0);
         let next = choices[(cur + 1) % choices.len()].clone();
         Some(set_session_proxy(self, s, next.as_deref()))
     }
@@ -870,12 +967,18 @@ impl App {
     fn cycle_profile_proxy(&self, p: &MeshProfile) -> Option<Action> {
         let proxies = self.node_proxies(&p.node_name);
         if proxies.is_empty() {
-            return Some(Action::Say(format!("{} has no proxies configured", p.node_name)));
+            return Some(Action::Say(format!(
+                "{} has no proxies configured",
+                p.node_name
+            )));
         }
         let choices: Vec<Option<String>> = std::iter::once(None)
             .chain(proxies.into_iter().map(|x| Some(x.id)))
             .collect();
-        let cur = choices.iter().position(|c| *c == p.profile.proxy).unwrap_or(0);
+        let cur = choices
+            .iter()
+            .position(|c| *c == p.profile.proxy)
+            .unwrap_or(0);
         let next = choices[(cur + 1) % choices.len()].clone();
         Some(set_profile_proxy(self, p, next.as_deref()))
     }
@@ -930,7 +1033,10 @@ impl App {
             Tab::Sessions => (
                 "Sessions",
                 vec![
-                    item("New session…", Action::Form(FormKind::Session, self.filter.clone())),
+                    item(
+                        "New session…",
+                        Action::Form(FormKind::Session, self.filter.clone()),
+                    ),
                     item("Stop all sessions…", self.stop_all_action()),
                 ],
             ),
@@ -951,10 +1057,16 @@ impl App {
             Tab::Nodes => ("Nodes", vec![item("Add a peer…", add_peer())]),
             Tab::Engines => (
                 "Engines",
-                vec![item("Defaults apply to new sessions of the engine: pick a row, then m", Action::Say("Select a row, then press m".into()))],
+                vec![item(
+                    "Defaults apply to new sessions of the engine: pick a row, then m",
+                    Action::Say("Select a row, then press m".into()),
+                )],
             ),
         };
-        Action::Menu { title: title.into(), items }
+        Action::Menu {
+            title: title.into(),
+            items,
+        }
     }
 
     fn session_menu(&self, s: &MeshSession) -> Action {
@@ -964,7 +1076,10 @@ impl App {
             item("New tab…", new_tab(s)),
             item("Rename…", rename_session(s)),
             item(
-                format!("Auto-stop when idle: {}…", idle_label(x.idle_timeout_seconds)),
+                format!(
+                    "Auto-stop when idle: {}…",
+                    idle_label(x.idle_timeout_seconds)
+                ),
                 idle_timeout(s),
             ),
             item(
@@ -1017,7 +1132,10 @@ impl App {
         }
         items.push(item("Details", details(&x.name, s)));
         items.push(item("Stop session", stop_session(s)));
-        Action::Menu { title: x.name.clone(), items }
+        Action::Menu {
+            title: x.name.clone(),
+            items,
+        }
     }
 
     fn profile_menu(&self, p: &MeshProfile) -> Action {
@@ -1063,11 +1181,18 @@ impl App {
             }
         };
         let mut items = vec![item(
-            if x.session_id.is_some() { "Take over" } else { "Launch" },
+            if x.session_id.is_some() {
+                "Take over"
+            } else {
+                "Launch"
+            },
             launch_profile(p),
         )];
         if x.session_id.is_none() && !x.tabs.is_empty() {
-            items.push(item("Launch without the default tabs", launch_profile_blank(p)));
+            items.push(item(
+                "Launch without the default tabs",
+                launch_profile_blank(p),
+            ));
         }
         items.push(item("Details", details(&x.name, p)));
         items.push(item("Rename…", rename_profile(p)));
@@ -1085,8 +1210,14 @@ impl App {
             Action::Menu {
                 title: "Appearance".into(),
                 items: vec![
-                    item("Dark", patch("Appearance: dark", json!({ "color_scheme": "dark" }))),
-                    item("Light", patch("Appearance: light", json!({ "color_scheme": "light" }))),
+                    item(
+                        "Dark",
+                        patch("Appearance: dark", json!({ "color_scheme": "dark" })),
+                    ),
+                    item(
+                        "Light",
+                        patch("Appearance: light", json!({ "color_scheme": "light" })),
+                    ),
                 ],
             },
         ));
@@ -1106,8 +1237,13 @@ impl App {
                 "Name of the copy",
                 "",
                 Action::Api(
-                    Call::new("Duplicating", Method::POST, &p.node_name, format!("{base}/clone"))
-                        .body(json!({ "target_name": INPUT })),
+                    Call::new(
+                        "Duplicating",
+                        Method::POST,
+                        &p.node_name,
+                        format!("{base}/clone"),
+                    )
+                    .body(json!({ "target_name": INPUT })),
                 ),
             ),
         ));
@@ -1117,7 +1253,10 @@ impl App {
         }
         items.push(item("Backups & data…", Action::DataMenu(p.clone())));
         items.push(item("Delete", delete_profile(p)));
-        Action::Menu { title: x.name.clone(), items }
+        Action::Menu {
+            title: x.name.clone(),
+            items,
+        }
     }
 
     fn node_menu(&self, name: &str) -> Action {
@@ -1125,7 +1264,11 @@ impl App {
         let only = self.filter.as_deref() == Some(name);
         let mut items = vec![
             item(
-                if only { "Show every node".to_string() } else { format!("Show only {name}") },
+                if only {
+                    "Show every node".to_string()
+                } else {
+                    format!("Show only {name}")
+                },
                 Action::Filter(if only { None } else { Some(name.to_string()) }),
             ),
             item(
@@ -1174,7 +1317,10 @@ impl App {
         if !is_local {
             items.push(item("Remove peer", remove_peer(name)));
         }
-        Action::Menu { title: name.to_string(), items }
+        Action::Menu {
+            title: name.to_string(),
+            items,
+        }
     }
 
     fn node_at_selection(&mut self) -> Option<String> {
@@ -1195,16 +1341,34 @@ impl App {
             Action::Open(url) => self.open(&url),
             Action::Say(text) => self.set_status(text, false),
             Action::Menu { title, items } => {
-                self.modal = Some(Modal::Menu { title, items, sel: 0 });
+                self.modal = Some(Modal::Menu {
+                    title,
+                    items,
+                    sel: 0,
+                });
             }
-            Action::Input { title, prompt, initial, then } => {
-                self.modal = Some(Modal::Input { title, prompt, buf: initial, then });
+            Action::Input {
+                title,
+                prompt,
+                initial,
+                then,
+            } => {
+                self.modal = Some(Modal::Input {
+                    title,
+                    prompt,
+                    buf: initial,
+                    then,
+                });
             }
             Action::Confirm { question, then } => {
                 self.modal = Some(Modal::Confirm { question, then });
             }
             Action::Text { title, lines } => {
-                self.modal = Some(Modal::Text { title, lines, scroll: 0 });
+                self.modal = Some(Modal::Text {
+                    title,
+                    lines,
+                    scroll: 0,
+                });
             }
             Action::Form(kind, node) => self.open_form(kind, node),
             Action::StopAll(targets) => self.stop_all(targets),
@@ -1231,7 +1395,11 @@ impl App {
         let refresh = call.save_to.is_none();
         tokio::spawn(async move {
             let result = run_call(req, call.upload, call.save_to).await;
-            let _ = tx.send(Msg::Done { label: call.label, result, refresh });
+            let _ = tx.send(Msg::Done {
+                label: call.label,
+                result,
+                refresh,
+            });
         });
     }
 
@@ -1260,9 +1428,16 @@ impl App {
             let result = if failed == 0 {
                 Ok(format!("Stopped {} sessions", results.len()))
             } else {
-                Err(format!("{failed} of {} could not be stopped", results.len()))
+                Err(format!(
+                    "{failed} of {} could not be stopped",
+                    results.len()
+                ))
             };
-            let _ = tx.send(Msg::Done { label, result, refresh: true });
+            let _ = tx.send(Msg::Done {
+                label,
+                result,
+                refresh: true,
+            });
         });
     }
 
@@ -1305,7 +1480,11 @@ impl App {
                 "{id}  {}  {}  {}{}",
                 ago(b["created_at_secs"].as_u64()),
                 bytes(b["size_bytes"].as_u64().unwrap_or(0)),
-                if b["automatic"].as_bool().unwrap_or(false) { "auto" } else { "manual" },
+                if b["automatic"].as_bool().unwrap_or(false) {
+                    "auto"
+                } else {
+                    "manual"
+                },
                 b["label"]
                     .as_str()
                     .filter(|l| !l.is_empty())
@@ -1341,7 +1520,11 @@ impl App {
                 },
             ));
         }
-        let force = if p.profile.is_active { "&force=true" } else { "" };
+        let force = if p.profile.is_active {
+            "&force=true"
+        } else {
+            ""
+        };
         items.push(item(
             "Clear data…",
             confirm_then(
@@ -1495,7 +1678,11 @@ impl App {
                 Field::text("Default tabs"),
             ],
         };
-        self.modal = Some(Modal::Form(Form { kind, fields, sel: 0 }));
+        self.modal = Some(Modal::Form(Form {
+            kind,
+            fields,
+            sel: 0,
+        }));
     }
 
     /// The node changed: its proxies are the ones to choose from.
@@ -1593,10 +1780,16 @@ impl App {
     // ----------------------------------------------------------------- modals
 
     fn modal_key(&mut self, k: KeyEvent) {
-        let Some(modal) = self.modal.take() else { return };
+        let Some(modal) = self.modal.take() else {
+            return;
+        };
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match modal {
-            Modal::Menu { title, items, mut sel } => {
+            Modal::Menu {
+                title,
+                items,
+                mut sel,
+            } => {
                 let last = items.len().saturating_sub(1);
                 match k.code {
                     KeyCode::Esc | KeyCode::Char('q') => return,
@@ -1624,7 +1817,12 @@ impl App {
                 }
                 self.modal = Some(Modal::Menu { title, items, sel });
             }
-            Modal::Input { title, prompt, mut buf, then } => {
+            Modal::Input {
+                title,
+                prompt,
+                mut buf,
+                then,
+            } => {
                 match k.code {
                     KeyCode::Esc => return,
                     KeyCode::Enter => {
@@ -1639,7 +1837,12 @@ impl App {
                     KeyCode::Char(c) if !ctrl => buf.push(c),
                     _ => {}
                 }
-                self.modal = Some(Modal::Input { title, prompt, buf, then });
+                self.modal = Some(Modal::Input {
+                    title,
+                    prompt,
+                    buf,
+                    then,
+                });
             }
             Modal::Confirm { then, .. } => {
                 if matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
@@ -1648,7 +1851,11 @@ impl App {
                     self.set_status("Cancelled", false);
                 }
             }
-            Modal::Text { title, lines, mut scroll } => {
+            Modal::Text {
+                title,
+                lines,
+                mut scroll,
+            } => {
                 let last = lines.len().saturating_sub(1);
                 match k.code {
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => return,
@@ -1660,7 +1867,11 @@ impl App {
                     KeyCode::End | KeyCode::Char('G') => scroll = last,
                     _ => {}
                 }
-                self.modal = Some(Modal::Text { title, lines, scroll });
+                self.modal = Some(Modal::Text {
+                    title,
+                    lines,
+                    scroll,
+                });
             }
             Modal::Form(mut f) => {
                 let n = f.fields.len();
@@ -1738,11 +1949,18 @@ impl App {
 // ------------------------------------------------------- actions of one row
 
 fn handoff_url(node_url: &str, session: impl std::fmt::Display) -> String {
-    format!("{}/handoff/?session={session}", node_url.trim_end_matches('/'))
+    format!(
+        "{}/handoff/?session={session}",
+        node_url.trim_end_matches('/')
+    )
 }
 
 fn play_url(r: &MeshRecording) -> String {
-    format!("{}/?play={}", r.node_url.trim_end_matches('/'), r.recording.id)
+    format!(
+        "{}/?play={}",
+        r.node_url.trim_end_matches('/'),
+        r.recording.id
+    )
 }
 
 fn ws_url(s: &MeshSession) -> String {
@@ -1851,7 +2069,10 @@ fn idle_timeout(s: &MeshSession) -> Action {
 
 fn set_session_proxy(app: &App, s: &MeshSession, proxy: Option<&str>) -> Action {
     let label = match proxy {
-        Some(id) => format!("Session now goes through {}", app.proxy_name(&s.node_name, id)),
+        Some(id) => format!(
+            "Session now goes through {}",
+            app.proxy_name(&s.node_name, id)
+        ),
         None => "Session now connects directly".to_string(),
     };
     Action::Api(
@@ -1877,7 +2098,11 @@ fn profile_base(p: &MeshProfile) -> String {
 
 fn set_profile_proxy(app: &App, p: &MeshProfile, proxy: Option<&str>) -> Action {
     let label = match proxy {
-        Some(id) => format!("{} now uses {}", p.profile.name, app.proxy_name(&p.node_name, id)),
+        Some(id) => format!(
+            "{} now uses {}",
+            p.profile.name,
+            app.proxy_name(&p.node_name, id)
+        ),
         None => format!("{} now connects directly", p.profile.name),
     };
     Action::Api(
@@ -1935,7 +2160,11 @@ fn rename_profile(p: &MeshProfile) -> Action {
 }
 
 fn delete_profile(p: &MeshProfile) -> Action {
-    let force = if p.profile.is_active { "?force=true" } else { "" };
+    let force = if p.profile.is_active {
+        "?force=true"
+    } else {
+        ""
+    };
     confirm_then(
         format!(
             "Delete profile {} on {}? Cookies and logins are wiped.",
@@ -1962,7 +2191,11 @@ fn recording_menu(r: &MeshRecording) -> Action {
         items: vec![
             item("Play", Action::Open(play_url(r))),
             item(
-                if r.recording.keep { "Stop keeping (the cleanup may remove it)" } else { "Keep (the cleanup never removes it)" },
+                if r.recording.keep {
+                    "Stop keeping (the cleanup may remove it)"
+                } else {
+                    "Keep (the cleanup never removes it)"
+                },
                 keep_recording(r),
             ),
             item("Details", details("Recording", r)),
@@ -1978,7 +2211,11 @@ fn keep_recording(r: &MeshRecording) -> Action {
     let keep = !r.recording.keep;
     Action::Api(
         Call::new(
-            if keep { "Keeping the recording" } else { "No longer keeping the recording" },
+            if keep {
+                "Keeping the recording"
+            } else {
+                "No longer keeping the recording"
+            },
             Method::POST,
             &r.node_name,
             format!("/recordings/{}/keep", r.recording.id),
@@ -2009,7 +2246,11 @@ fn delete_recording(r: &MeshRecording) -> Action {
         format!(
             "Delete recording {}?{}",
             r.recording.title.as_deref().unwrap_or("(untitled)"),
-            if r.recording.keep { " It is marked to be kept." } else { "" }
+            if r.recording.keep {
+                " It is marked to be kept."
+            } else {
+                ""
+            }
         ),
         Action::Api(Call::new(
             "Deleting recording",
@@ -2236,7 +2477,8 @@ fn draw(f: &mut Frame, app: &mut App) {
                 ],
             )
             .header(header(&[
-                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Clients", "Agent", "",
+                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Clients", "Agent",
+                "",
             ]))
             .row_highlight_style(highlight)
             .block(block);
@@ -2509,7 +2751,13 @@ fn draw(f: &mut Frame, app: &mut App) {
                     Constraint::Length(14),
                 ],
             )
-            .header(header(&["Node", "Engine", "Ad blocker", "Appearance", "Show touches"]))
+            .header(header(&[
+                "Node",
+                "Engine",
+                "Ad blocker",
+                "Appearance",
+                "Show touches",
+            ]))
             .row_highlight_style(highlight)
             .block(block);
             f.render_stateful_widget(table, body, &mut app.tables[i]);
@@ -2561,7 +2809,9 @@ fn draw_detail(f: &mut Frame, area: Rect, lines: Option<Vec<Line<'static>>>) {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let hints = match app.tab {
-        Tab::Sessions => "⏎ take over  s stop  p proxy  R record  t tab  e rename  N new  X stop all  m menu",
+        Tab::Sessions => {
+            "⏎ take over  s stop  p proxy  R record  t tab  e rename  N new  X stop all  m menu"
+        }
         Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
         Tab::Recordings => "⏎ play  K keep  E export  d delete  v vacuum  m menu",
         Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
@@ -2590,11 +2840,17 @@ fn help_lines() -> Vec<Line<'static>> {
     [
         ("Tab / ← →  1-5", "switch view"),
         ("↑ ↓  j k  g G", "move"),
-        ("m / Space", "menu of the selected row: everything the dashboard offers"),
+        (
+            "m / Space",
+            "menu of the selected row: everything the dashboard offers",
+        ),
         ("M", "menu of the view (new session, stop all, ...)"),
         ("f", "show only the selected row's node (again: all nodes)"),
         ("i", "details"),
-        ("r", "refresh now (requests run in the background; the spinner shows while they do)"),
+        (
+            "r",
+            "refresh now (requests run in the background; the spinner shows while they do)",
+        ),
         ("", ""),
         ("Sessions", ""),
         ("  ⏎ / o", "open the handoff view in your browser"),
@@ -2603,23 +2859,38 @@ fn help_lines() -> Vec<Line<'static>> {
         ("  p", "switch its proxy now (direct, then each proxy)"),
         ("  R", "start or stop recording"),
         ("  t / e / T", "new tab / rename / auto-stop timeout"),
-        ("  n / N", "throwaway session on that node / new session form"),
+        (
+            "  n / N",
+            "throwaway session on that node / new session form",
+        ),
         ("  w", "show the session's WebSocket URL"),
         ("Profiles", ""),
         ("  ⏎ / o", "launch it, or take over its session"),
         ("  p", "cycle its default proxy (from the next launch)"),
-        ("  b", "backups & data: back up, restore, clear, export, import"),
+        (
+            "  b",
+            "backups & data: back up, restore, clear, export, import",
+        ),
         ("  e / N", "rename / new profile form"),
         ("  d", "delete it"),
         ("Recordings", ""),
         ("  ⏎ / o", "play it in the dashboard"),
-        ("  K", "keep it (the cleanup never removes it) / stop keeping it"),
+        (
+            "  K",
+            "keep it (the cleanup never removes it) / stop keeping it",
+        ),
         ("  E / v", "export its frames / apply the retention limits"),
         ("  d", "delete it"),
         ("Nodes", ""),
-        ("  n / a / x", "session there / add a peer / remove the peer"),
+        (
+            "  n / a / x",
+            "session there / add a peer / remove the peer",
+        ),
         ("Engines", ""),
-        ("  a / c / t", "cycle ad blocker / appearance, toggle show touches (defaults of new sessions)"),
+        (
+            "  a / c / t",
+            "cycle ad blocker / appearance, toggle show touches (defaults of new sessions)",
+        ),
         ("In a menu or form", ""),
         ("  ⏎  Esc", "choose / cancel   (1-9 pick an item)"),
         ("  ← →  Tab", "change a choice / next field"),
@@ -2651,7 +2922,8 @@ fn window(all: Vec<Line<'static>>, sel: usize, max: usize) -> Vec<Line<'static>>
 
 fn draw_modal(f: &mut Frame, modal: &Modal) {
     let room = f.area().height.saturating_sub(6) as usize;
-    let selected = |text: String| Line::from(Span::raw(format!("▸ {text}")).fg(Color::Magenta).bold());
+    let selected =
+        |text: String| Line::from(Span::raw(format!("▸ {text}")).fg(Color::Magenta).bold());
     let hint = |text: &str| Line::from(Span::raw(text.to_string())).dim();
     match modal {
         Modal::Menu { title, items, sel } => {
@@ -2659,7 +2931,11 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
                 .iter()
                 .enumerate()
                 .map(|(i, (label, _))| {
-                    let n = if i < 9 { format!("{} ", i + 1) } else { "  ".to_string() };
+                    let n = if i < 9 {
+                        format!("{} ", i + 1)
+                    } else {
+                        "  ".to_string()
+                    };
                     if i == *sel {
                         selected(format!("{n}{label}"))
                     } else {
@@ -2672,12 +2948,18 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
             lines.push(hint("⏎ choose   Esc close   1-9 pick"));
             popup(f, title, lines);
         }
-        Modal::Input { title, prompt, buf, .. } => popup(
+        Modal::Input {
+            title, prompt, buf, ..
+        } => popup(
             f,
             title,
             vec![
                 Line::from(prompt.clone()),
-                Line::from(vec![Span::raw("› "), Span::raw(buf.clone()), Span::raw("▏")]),
+                Line::from(vec![
+                    Span::raw("› "),
+                    Span::raw(buf.clone()),
+                    Span::raw("▏"),
+                ]),
                 Line::from(""),
                 hint("⏎ ok   Esc cancel   ^U clear"),
             ],
@@ -2691,7 +2973,11 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
                 hint("y: yes   any other key: no"),
             ],
         ),
-        Modal::Text { title, lines, scroll } => {
+        Modal::Text {
+            title,
+            lines,
+            scroll,
+        } => {
             let mut shown: Vec<Line> = lines
                 .iter()
                 .skip(*scroll)
@@ -2710,7 +2996,11 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
                 .map(|(i, field)| {
                     let value = match &field.kind {
                         FieldKind::Text(t) => {
-                            if i == form.sel { format!("{t}▏") } else { t.clone() }
+                            if i == form.sel {
+                                format!("{t}▏")
+                            } else {
+                                t.clone()
+                            }
                         }
                         FieldKind::Choice { options, sel } => format!(
                             "‹ {} ›",
@@ -2718,7 +3008,11 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
                         ),
                     };
                     let text = format!("{:<12} {value}", field.label);
-                    if i == form.sel { selected(text) } else { Line::from(format!("  {text}")) }
+                    if i == form.sel {
+                        selected(text)
+                    } else {
+                        Line::from(format!("  {text}"))
+                    }
                 })
                 .collect();
             lines.push(Line::from(""));
@@ -2871,9 +3165,10 @@ fn event_loop(
 /// Fetch the overview; an error reads as the status line does.
 async fn fetch_overview(req: reqwest::RequestBuilder, base: &str) -> Result<MeshOverview, String> {
     match req.send().await {
-        Ok(r) if r.status().is_success() => {
-            r.json::<MeshOverview>().await.map_err(|e| format!("Unexpected answer: {e}"))
-        }
+        Ok(r) if r.status().is_success() => r
+            .json::<MeshOverview>()
+            .await
+            .map_err(|e| format!("Unexpected answer: {e}")),
         Ok(r) if r.status() == reqwest::StatusCode::UNAUTHORIZED => {
             Err("Unauthorized: pass --secret-file (or set BROWSER_DAEMON_SECRET_FILE)".to_string())
         }
@@ -2901,7 +3196,13 @@ async fn run_call(
         let text = res.text().await.unwrap_or_default();
         let body: Value = serde_json::from_str(&text).unwrap_or_default();
         return Err(body["error"].as_str().map_or_else(
-            || if text.is_empty() { status.to_string() } else { text.clone() },
+            || {
+                if text.is_empty() {
+                    status.to_string()
+                } else {
+                    text.clone()
+                }
+            },
             str::to_string,
         ));
     }

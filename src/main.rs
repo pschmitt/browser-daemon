@@ -1233,8 +1233,7 @@ impl AppState {
         // After the browser is gone and out of the session: a periodic save can no
         // longer write the record again.
         persist::remove(self.config.state_dir(), *id).await;
-        self.history
-            .forget(&history_key(None, *id));
+        self.history.forget(&history_key(None, *id));
         terminated
     }
 }
@@ -1721,7 +1720,9 @@ fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> {
 }
 
 /// Report a failed client command on one line and exit non-zero.
-fn ctl_exit(result: Result<(), Box<dyn std::error::Error>>) -> Result<(), Box<dyn std::error::Error>> {
+fn ctl_exit(
+    result: Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = result {
         eprintln!("error: {e}");
         std::process::exit(ctl::exit_code(e.as_ref()));
@@ -1819,7 +1820,11 @@ async fn api_session_history(
         if let Some(profile) = profiles::find(&state.config.profiles_dir, &pid.to_string()).await {
             for tab in profile.meta.tabs {
                 if query.is_empty() || tab.to_lowercase().contains(&query) {
-                    out.push(Suggestion { url: tab, title: None, kind: "tab" });
+                    out.push(Suggestion {
+                        url: tab,
+                        title: None,
+                        kind: "tab",
+                    });
                 }
             }
         }
@@ -1830,7 +1835,11 @@ async fn api_session_history(
     {
         match out.iter_mut().find(|o| o.url == e.url) {
             Some(known) => known.title = e.title,
-            None => out.push(Suggestion { url: e.url, title: e.title, kind: "history" }),
+            None => out.push(Suggestion {
+                url: e.url,
+                title: e.title,
+                kind: "history",
+            }),
         }
     }
     out.truncate(limit);
@@ -2019,7 +2028,10 @@ async fn remove_stale_imports(profiles_dir: &Path) {
 }
 
 fn meta_profile(profile: &Profile, meta: profiles::ProfileMeta) -> Profile {
-    Profile { meta, dir: profile.dir.clone() }
+    Profile {
+        meta,
+        dir: profile.dir.clone(),
+    }
 }
 
 #[tokio::main]
@@ -2300,7 +2312,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let removed = proc::sweep_leftover_files(&persist::dir(state.config.state_dir()), &files);
         if removed > 0 {
-            info!(count = removed, "Removed temporary profiles and logs no session claimed");
+            info!(
+                count = removed,
+                "Removed temporary profiles and logs no session claimed"
+            );
         }
     }
     if let Some(ref cfg) = state.config.audio {
@@ -2445,7 +2460,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
-        .route("/api/pages/{page_id}/insert-text", post(api_page_insert_text))
+        .route(
+            "/api/pages/{page_id}/insert-text",
+            post(api_page_insert_text),
+        )
         .route("/api/sessions/{id}/autofill", post(api_session_autofill))
         .route("/api/pages/{page_id}/autofill", post(api_page_autofill))
         .route("/api/sessions/{id}/name", post(api_session_rename))
@@ -2533,7 +2551,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/recordings/merge", post(api_merge_recordings))
         .route("/api/recordings/{id}/keep", post(api_set_recording_keep))
         .route("/api/favicon", get(api_site_favicon))
-        .route("/api/recordings/{id}/favicon", get(api_get_recording_favicon))
+        .route(
+            "/api/recordings/{id}/favicon",
+            get(api_get_recording_favicon),
+        )
         .route("/api/recordings/vacuum", post(api_vacuum_recordings))
         // Peer-to-Peer Mesh APIs
         .route("/api/mesh/node", get(api_mesh_node))
@@ -5500,7 +5521,9 @@ async fn api_delete_recording(
     if recorder::is_active(id) || recorder::is_busy(id) {
         return Err((
             StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "The recording is in use (being recorded, exported or merged)" })),
+            Json(
+                serde_json::json!({ "error": "The recording is in use (being recorded, exported or merged)" }),
+            ),
         ));
     }
     if recorder::delete_recording(&state.recorder_config, id).await {
@@ -6642,7 +6665,7 @@ async fn copy_dir_all(src: PathBuf, dst: PathBuf) -> std::io::Result<()> {
         copy_all(&src, &dst)
     })
     .await
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+    .map_err(std::io::Error::other)?
 }
 
 /// `{peer}/api/profiles/{name}[/{action}]`, the name encoded as one path segment.
@@ -6692,12 +6715,27 @@ mod tests {
 
     #[test]
     fn default_tabs_come_as_a_list_or_as_words() {
-        let req = |json: &str| serde_json::from_str::<UpdateProfileRequest>(json).unwrap().tabs;
-        assert_eq!(req(r#"{"tabs":["a.test","b.test"]}"#), Some(vec!["a.test".into(), "b.test".into()]));
-        assert_eq!(req(r#"{"tabs":"a.test  b.test,c.test"}"#).map(|t| t.len()), Some(3));
+        let req = |json: &str| {
+            serde_json::from_str::<UpdateProfileRequest>(json)
+                .unwrap()
+                .tabs
+        };
+        assert_eq!(
+            req(r#"{"tabs":["a.test","b.test"]}"#),
+            Some(vec!["a.test".into(), "b.test".into()])
+        );
+        assert_eq!(
+            req(r#"{"tabs":"a.test  b.test,c.test"}"#).map(|t| t.len()),
+            Some(3)
+        );
         assert_eq!(req(r#"{"tabs":[]}"#), Some(vec![]));
         assert_eq!(req(r#"{}"#), None);
-        let urls = tab_urls(&["outlook.office.com".into(), "".into(), "https://outlook.office.com/".into()]).unwrap();
+        let urls = tab_urls(&[
+            "outlook.office.com".into(),
+            "".into(),
+            "https://outlook.office.com/".into(),
+        ])
+        .unwrap();
         assert_eq!(urls, vec!["https://outlook.office.com/".to_string()]);
         assert!(tab_urls(&["ftp://x.test/".into()]).is_err());
     }

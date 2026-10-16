@@ -7,6 +7,7 @@ use crate::idle::Activity;
 use crate::recorder::{FrameSender, ProxyRecordingFrame};
 use std::sync::Arc;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn bridge_websockets(
     client_ws: ClientWs,
     server_ws: tokio_tungstenite::WebSocketStream<
@@ -38,7 +39,11 @@ pub async fn bridge_websockets(
             let server_msg = match msg {
                 ClientMsg::Text(text) => {
                     let text = if use_profile_context {
-                        alias.lock().unwrap().request(text.as_str()).map_or(text, Into::into)
+                        alias
+                            .lock()
+                            .unwrap()
+                            .request(text.as_str())
+                            .map_or(text, Into::into)
                     } else {
                         text
                     };
@@ -173,7 +178,9 @@ impl ContextAlias {
     /// A request of the client: the one that creates a context is noted; calls aimed at
     /// the client's context are sent to the default one (no id), except its disposal.
     fn request(&mut self, text: &str) -> Option<String> {
-        if !text.contains("rowserContext") || text.contains("\"sessionId\"") && !text.contains("Target.createTarget") {
+        if !text.contains("rowserContext")
+            || text.contains("\"sessionId\"") && !text.contains("Target.createTarget")
+        {
             return None;
         }
         let mut msg: serde_json::Value = serde_json::from_str(text).ok()?;
@@ -198,7 +205,9 @@ impl ContextAlias {
         if self.create_id != 0 && self.client.is_none() && text.contains("browserContextId") {
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(text) {
                 if msg["id"].as_u64() == Some(self.create_id) {
-                    self.client = msg["result"]["browserContextId"].as_str().map(str::to_string);
+                    self.client = msg["result"]["browserContextId"]
+                        .as_str()
+                        .map(str::to_string);
                     return None;
                 }
             }
@@ -265,7 +274,9 @@ mod tests {
         assert!(alias
             .request(r#"{"id":4,"method":"Target.createBrowserContext","params":{"disposeOnDetach":true}}"#)
             .is_none());
-        assert!(alias.event(r#"{"id":4,"result":{"browserContextId":"CLIENT"}}"#).is_none());
+        assert!(alias
+            .event(r#"{"id":4,"result":{"browserContextId":"CLIENT"}}"#)
+            .is_none());
         // Its pages are created in the default context: no id.
         let sent = alias
             .request(r#"{"id":6,"method":"Target.createTarget","params":{"url":"about:blank","browserContextId":"CLIENT"}}"#)
@@ -275,7 +286,10 @@ mod tests {
         let seen = alias
             .event(r#"{"method":"Target.targetCreated","params":{"targetInfo":{"targetId":"t","type":"page","browserContextId":"PROFILE"}}}"#)
             .unwrap();
-        assert!(seen.contains(r#""browserContextId":"CLIENT""#) && !seen.contains("PROFILE"), "{seen}");
+        assert!(
+            seen.contains(r#""browserContextId":"CLIENT""#) && !seen.contains("PROFILE"),
+            "{seen}"
+        );
         // Later messages, and calls about the client's context, follow the same rule.
         assert!(alias
             .event(r#"{"method":"Target.attachedToTarget","params":{"targetInfo":{"browserContextId":"PROFILE"}}}"#)
@@ -290,8 +304,12 @@ mod tests {
             .request(r#"{"id":9,"method":"Target.disposeBrowserContext","params":{"browserContextId":"CLIENT"}}"#)
             .is_none());
         // Nothing to rewrite in unrelated messages.
-        assert!(alias.event(r#"{"method":"Page.frameNavigated","params":{}}"#).is_none());
-        assert!(alias.request(r#"{"id":8,"method":"Page.navigate","params":{}}"#).is_none());
+        assert!(alias
+            .event(r#"{"method":"Page.frameNavigated","params":{}}"#)
+            .is_none());
+        assert!(alias
+            .request(r#"{"id":8,"method":"Page.navigate","params":{}}"#)
+            .is_none());
     }
 
     #[test]

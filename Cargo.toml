@@ -2,7 +2,7 @@
 name = "browser-daemon"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.88"
 authors = ["Philipp Schmitt <philipp@schmitt.co>"]
 description = "Native headless/headful browser daemon for NixOS with CDP multiplexing and handoff"
 license = "GPL-3.0-only"

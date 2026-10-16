@@ -36,7 +36,10 @@ impl std::fmt::Display for ExitError {
 impl std::error::Error for ExitError {}
 
 fn fail<T>(code: i32, msg: impl Into<String>) -> R<T> {
-    Err(Box::new(ExitError { code, msg: msg.into() }))
+    Err(Box::new(ExitError {
+        code,
+        msg: msg.into(),
+    }))
 }
 
 /// The exit status for an error of a command.
@@ -609,7 +612,13 @@ impl Client {
             return fail(EXIT_UNREACHABLE, format!("{base}: HTTP {}", res.status()));
         }
         let ov = res.json().await?;
-        Ok(Self { http, base, secret, json: conn.json, ov })
+        Ok(Self {
+            http,
+            base,
+            secret,
+            json: conn.json,
+            ov,
+        })
     }
 
     fn req(&self, method: Method, path: &str) -> reqwest::RequestBuilder {
@@ -639,8 +648,18 @@ impl Client {
             let msg = value["error"]
                 .as_str()
                 .map(str::to_string)
-                .unwrap_or_else(|| if text.is_empty() { status.to_string() } else { text });
-            let code = if status == reqwest::StatusCode::NOT_FOUND { EXIT_NOT_FOUND } else { 1 };
+                .unwrap_or_else(|| {
+                    if text.is_empty() {
+                        status.to_string()
+                    } else {
+                        text
+                    }
+                });
+            let code = if status == reqwest::StatusCode::NOT_FOUND {
+                EXIT_NOT_FOUND
+            } else {
+                1
+            };
             return fail(code, msg);
         }
         Ok(value)
@@ -764,7 +783,10 @@ fn resolve<'a, T>(
                     1,
                     format!(
                         "'{key}' matches several {what}s (use --node, or more of the id):\n  {}",
-                        many.iter().map(|x| describe(x)).collect::<Vec<_>>().join("\n  ")
+                        many.iter()
+                            .map(|x| describe(x))
+                            .collect::<Vec<_>>()
+                            .join("\n  ")
                     ),
                 )
             }
@@ -787,7 +809,11 @@ struct Tally {
 
 impl Tally {
     fn new(total: usize) -> Self {
-        Self { failed: 0, total, code: 1 }
+        Self {
+            failed: 0,
+            total,
+            code: 1,
+        }
     }
 
     fn fail(&mut self, what: &str, e: &(dyn std::error::Error + 'static)) {
@@ -802,7 +828,10 @@ impl Tally {
         if self.failed == 0 {
             Ok(())
         } else {
-            fail(self.code, format!("{} of {} could not be {verb}", self.failed, self.total))
+            fail(
+                self.code,
+                format!("{} of {} could not be {verb}", self.failed, self.total),
+            )
         }
     }
 }
@@ -906,7 +935,11 @@ pub fn agents(clients: &[crate::clients::ClientInfo]) -> String {
             seen.push(label);
         }
     }
-    if seen.is_empty() { "-".to_string() } else { seen.join("; ") }
+    if seen.is_empty() {
+        "-".to_string()
+    } else {
+        seen.join("; ")
+    }
 }
 
 fn ws_url(s: &MeshSession) -> String {
@@ -931,12 +964,11 @@ pub async fn session(args: SessionArgs) -> R<()> {
             if let Some(ref n) = node {
                 c.check_node(n)?;
             }
-            let sessions: Vec<&MeshSession> = c
-                .ov
-                .sessions
-                .iter()
-                .filter(|s| node.as_deref().is_none_or(|n| s.node_name == n))
-                .collect();
+            let sessions: Vec<&MeshSession> =
+                c.ov.sessions
+                    .iter()
+                    .filter(|s| node.as_deref().is_none_or(|n| s.node_name == n))
+                    .collect();
             if c.json {
                 c.print_json(&serde_json::to_value(&sessions)?);
                 return Ok(());
@@ -965,7 +997,10 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 })
                 .collect();
             table(
-                &["ID", "NAME", "NODE", "ENGINE", "PROFILE", "UP", "TABS", "REC", "PROXY", "AGENT"],
+                &[
+                    "ID", "NAME", "NODE", "ENGINE", "PROFILE", "UP", "TABS", "REC", "PROXY",
+                    "AGENT",
+                ],
                 &rows,
             );
         }
@@ -982,20 +1017,48 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 body["default_tabs"] = json!(false);
             }
             let mut set = |k: &str, v: Value| body[k] = v;
-            if let Some(v) = a.name { set("name", json!(v)) }
-            if let Some(v) = a.engine { set("engine", json!(format!("{v:?}").to_lowercase())) }
-            if let Some(v) = a.profile { set("profile", json!(v)) }
-            if let Some(v) = a.width { set("width", json!(v)) }
-            if let Some(v) = a.height { set("height", json!(v)) }
-            if a.record { set("record", json!(true)) }
-            if a.no_record { set("record", json!(false)) }
-            if a.adblock { set("adblock", json!(true)) }
-            if a.no_adblock { set("adblock", json!(false)) }
-            if let Some(v) = a.proxy { set("proxy", json!(v)) }
-            if let Some(v) = a.color_scheme { set("color_scheme", json!(format!("{v:?}").to_lowercase())) }
-            if let Some(v) = a.idle_timeout { set("idle_timeout_minutes", json!(v)) }
-            if let Some(v) = a.max_memory_mb { set("max_memory_mb", json!(v)) }
-            if let Some(v) = a.screen { set("screen", json!(format!("{v:?}").to_lowercase())) }
+            if let Some(v) = a.name {
+                set("name", json!(v))
+            }
+            if let Some(v) = a.engine {
+                set("engine", json!(format!("{v:?}").to_lowercase()))
+            }
+            if let Some(v) = a.profile {
+                set("profile", json!(v))
+            }
+            if let Some(v) = a.width {
+                set("width", json!(v))
+            }
+            if let Some(v) = a.height {
+                set("height", json!(v))
+            }
+            if a.record {
+                set("record", json!(true))
+            }
+            if a.no_record {
+                set("record", json!(false))
+            }
+            if a.adblock {
+                set("adblock", json!(true))
+            }
+            if a.no_adblock {
+                set("adblock", json!(false))
+            }
+            if let Some(v) = a.proxy {
+                set("proxy", json!(v))
+            }
+            if let Some(v) = a.color_scheme {
+                set("color_scheme", json!(format!("{v:?}").to_lowercase()))
+            }
+            if let Some(v) = a.idle_timeout {
+                set("idle_timeout_minutes", json!(v))
+            }
+            if let Some(v) = a.max_memory_mb {
+                set("max_memory_mb", json!(v))
+            }
+            if let Some(v) = a.screen {
+                set("screen", json!(format!("{v:?}").to_lowercase()))
+            }
             let created = c
                 .call(c.req(Method::POST, &c.api(&node, "/sessions")).json(&body))
                 .await?;
@@ -1007,7 +1070,11 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 let base = if node == c.ov.local_node.name {
                     c.ov.local_node.url.clone()
                 } else {
-                    c.ov.peers.iter().find(|p| p.name == node).map(|p| p.url.clone()).unwrap_or_default()
+                    c.ov.peers
+                        .iter()
+                        .find(|p| p.name == node)
+                        .map(|p| p.url.clone())
+                        .unwrap_or_default()
                 };
                 println!("{id}");
                 eprintln!(
@@ -1039,12 +1106,11 @@ pub async fn session(args: SessionArgs) -> R<()> {
             if let Some(ref n) = node {
                 c.check_node(n)?;
             }
-            let sessions: Vec<&MeshSession> = c
-                .ov
-                .sessions
-                .iter()
-                .filter(|s| node.as_deref().is_none_or(|n| s.node_name == n))
-                .collect();
+            let sessions: Vec<&MeshSession> =
+                c.ov.sessions
+                    .iter()
+                    .filter(|s| node.as_deref().is_none_or(|n| s.node_name == n))
+                    .collect();
             if sessions.is_empty() {
                 println!("No sessions");
                 return Ok(());
@@ -1054,7 +1120,9 @@ pub async fn session(args: SessionArgs) -> R<()> {
                     "Stop {} session{}{}?",
                     sessions.len(),
                     if sessions.len() == 1 { "" } else { "s" },
-                    node.as_deref().map(|n| format!(" on {n}")).unwrap_or_default()
+                    node.as_deref()
+                        .map(|n| format!(" on {n}"))
+                        .unwrap_or_default()
                 ),
                 yes,
             )?;
@@ -1070,22 +1138,42 @@ pub async fn session(args: SessionArgs) -> R<()> {
                     tally.fail(&s.session.name, e.as_ref());
                 }
             }
-            println!("Stopped {} of {}", sessions.len() - tally.failed, sessions.len());
+            println!(
+                "Stopped {} of {}",
+                sessions.len() - tally.failed,
+                sessions.len()
+            );
             tally.finish("stopped")?;
         }
-        SessionCmd::Rename { session, name, node } => {
+        SessionCmd::Rename {
+            session,
+            name,
+            node,
+        } => {
             let s = c.session(&session, node.as_deref())?;
             let path = c.api(&s.node_name, &format!("/sessions/{}/name", s.session.id));
-            let v = c.call(c.req(Method::POST, &path).json(&json!({ "name": name }))).await?;
+            let v = c
+                .call(c.req(Method::POST, &path).json(&json!({ "name": name })))
+                .await?;
             done(&c, v, "renamed");
         }
-        SessionCmd::Proxy { session, proxy, node } => {
+        SessionCmd::Proxy {
+            session,
+            proxy,
+            node,
+        } => {
             let s = c.session(&session, node.as_deref())?;
             let path = c.api(&s.node_name, &format!("/sessions/{}/proxy", s.session.id));
-            let v = c.call(c.req(Method::POST, &path).json(&json!({ "proxy": proxy }))).await?;
+            let v = c
+                .call(c.req(Method::POST, &path).json(&json!({ "proxy": proxy })))
+                .await?;
             done(&c, v, "proxy switched");
         }
-        SessionCmd::IdleTimeout { session, minutes, node } => {
+        SessionCmd::IdleTimeout {
+            session,
+            minutes,
+            node,
+        } => {
             let s = c.session(&session, node.as_deref())?;
             let path = c.api(
                 &s.node_name,
@@ -1094,7 +1182,11 @@ pub async fn session(args: SessionArgs) -> R<()> {
             let v = c.call(c.req(Method::POST, &path)).await?;
             done(&c, v, "idle timeout set");
         }
-        SessionCmd::Record { session, action, node } => {
+        SessionCmd::Record {
+            session,
+            action,
+            node,
+        } => {
             let s = c.session(&session, node.as_deref())?;
             let verb = match action {
                 RecordAction::Start => "record",
@@ -1108,12 +1200,13 @@ pub async fn session(args: SessionArgs) -> R<()> {
         }
         SessionCmd::Tabs { session, node } => {
             let s = c.session(&session, node.as_deref())?;
-            let tabs: Vec<_> = c
-                .ov
-                .targets
-                .iter()
-                .filter(|t| t.target.session_id == Some(s.session.id) && t.target.target_type == "page")
-                .collect();
+            let tabs: Vec<_> =
+                c.ov.targets
+                    .iter()
+                    .filter(|t| {
+                        t.target.session_id == Some(s.session.id) && t.target.target_type == "page"
+                    })
+                    .collect();
             if c.json {
                 c.print_json(&serde_json::to_value(&tabs)?);
                 return Ok(());
@@ -1131,7 +1224,11 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 .collect();
             table(&["TAB", "SOUND", "TITLE", "URL"], &rows);
         }
-        SessionCmd::Open { session, page, node } => {
+        SessionCmd::Open {
+            session,
+            page,
+            node,
+        } => {
             let s = c.session(&session, node.as_deref())?;
             let path = format!(
                 "{}?url={}&session_id={}",
@@ -1152,9 +1249,16 @@ pub async fn session(args: SessionArgs) -> R<()> {
             c.call(c.req(Method::PUT, &path)).await?;
             println!("closed");
         }
-        SessionCmd::SaveAsProfile { session, name, node } => {
+        SessionCmd::SaveAsProfile {
+            session,
+            name,
+            node,
+        } => {
             let s = c.session(&session, node.as_deref())?;
-            let path = c.api(&s.node_name, &format!("/sessions/{}/save-as-profile", s.session.id));
+            let path = c.api(
+                &s.node_name,
+                &format!("/sessions/{}/save-as-profile", s.session.id),
+            );
             let v = c
                 .call(
                     c.req(Method::POST, &path)
@@ -1194,12 +1298,11 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             if let Some(ref n) = node {
                 c.check_node(n)?;
             }
-            let profiles: Vec<&MeshProfile> = c
-                .ov
-                .profiles
-                .iter()
-                .filter(|p| node.as_deref().is_none_or(|n| p.node_name == n))
-                .collect();
+            let profiles: Vec<&MeshProfile> =
+                c.ov.profiles
+                    .iter()
+                    .filter(|p| node.as_deref().is_none_or(|n| p.node_name == n))
+                    .collect();
             if c.json {
                 c.print_json(&serde_json::to_value(&profiles)?);
                 return Ok(());
@@ -1225,7 +1328,9 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
                 })
                 .collect();
             table(
-                &["NAME", "NODE", "ENGINE", "SIZE", "ACTIVE", "PROXY", "SCHEME", "TABS"],
+                &[
+                    "NAME", "NODE", "ENGINE", "SIZE", "ACTIVE", "PROXY", "SCHEME", "TABS",
+                ],
                 &rows,
             );
         }
@@ -1234,42 +1339,112 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             let path = c.api(&p.node_name, &format!("/profiles/{}", enc(&p.profile.name)));
             c.print_json(&c.call(c.req(Method::GET, &path)).await?);
         }
-        ProfileCmd::New { name, node, engine, clone_from, proxy, color_scheme, tabs, record, record_audio } => {
+        ProfileCmd::New {
+            name,
+            node,
+            engine,
+            clone_from,
+            proxy,
+            color_scheme,
+            tabs,
+            record,
+            record_audio,
+        } => {
             let node = c.node_or_local(node.as_deref())?;
             let mut body = json!({ "name": name });
-            if let Some(v) = engine { body["engine"] = json!(format!("{v:?}").to_lowercase()) }
-            if let Some(v) = clone_from { body["clone_from"] = json!(v) }
-            if let Some(v) = proxy { body["proxy"] = json!(v) }
-            if let Some(v) = color_scheme { body["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
-            if !tabs.is_empty() { body["tabs"] = json!(tabs) }
-            if let Some(v) = record { body["record"] = v.json() }
-            if let Some(v) = record_audio { body["record_audio"] = v.json() }
-            let v = c.call(c.req(Method::POST, &c.api(&node, "/profiles")).json(&body)).await?;
+            if let Some(v) = engine {
+                body["engine"] = json!(format!("{v:?}").to_lowercase())
+            }
+            if let Some(v) = clone_from {
+                body["clone_from"] = json!(v)
+            }
+            if let Some(v) = proxy {
+                body["proxy"] = json!(v)
+            }
+            if let Some(v) = color_scheme {
+                body["color_scheme"] = json!(format!("{v:?}").to_lowercase())
+            }
+            if !tabs.is_empty() {
+                body["tabs"] = json!(tabs)
+            }
+            if let Some(v) = record {
+                body["record"] = v.json()
+            }
+            if let Some(v) = record_audio {
+                body["record_audio"] = v.json()
+            }
+            let v = c
+                .call(c.req(Method::POST, &c.api(&node, "/profiles")).json(&body))
+                .await?;
             done(&c, v, &format!("created {name} on {node}"));
         }
-        ProfileCmd::Set { profile, node, name, proxy, color_scheme, tabs, clear_tabs, record, record_audio } => {
+        ProfileCmd::Set {
+            profile,
+            node,
+            name,
+            proxy,
+            color_scheme,
+            tabs,
+            clear_tabs,
+            record,
+            record_audio,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
             let mut body = json!({});
-            if let Some(v) = name { body["name"] = json!(v) }
-            if let Some(v) = proxy { body["proxy"] = json!(v) }
-            if let Some(v) = color_scheme { body["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
-            if clear_tabs { body["tabs"] = json!([]) } else if !tabs.is_empty() { body["tabs"] = json!(tabs) }
-            if let Some(v) = record { body["record"] = v.json() }
-            if let Some(v) = record_audio { body["record_audio"] = v.json() }
+            if let Some(v) = name {
+                body["name"] = json!(v)
+            }
+            if let Some(v) = proxy {
+                body["proxy"] = json!(v)
+            }
+            if let Some(v) = color_scheme {
+                body["color_scheme"] = json!(format!("{v:?}").to_lowercase())
+            }
+            if clear_tabs {
+                body["tabs"] = json!([])
+            } else if !tabs.is_empty() {
+                body["tabs"] = json!(tabs)
+            }
+            if let Some(v) = record {
+                body["record"] = v.json()
+            }
+            if let Some(v) = record_audio {
+                body["record_audio"] = v.json()
+            }
             let path = c.api(&p.node_name, &format!("/profiles/{}", enc(&p.profile.name)));
             let v = c.call(c.req(Method::PATCH, &path).json(&body)).await?;
             done(&c, v, "updated");
         }
-        ProfileCmd::Clone { profile, new_name, node } => {
+        ProfileCmd::Clone {
+            profile,
+            new_name,
+            node,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
-            let path = c.api(&p.node_name, &format!("/profiles/{}/clone", enc(&p.profile.name)));
-            let v = c.call(c.req(Method::POST, &path).json(&json!({ "target_name": new_name }))).await?;
+            let path = c.api(
+                &p.node_name,
+                &format!("/profiles/{}/clone", enc(&p.profile.name)),
+            );
+            let v = c
+                .call(
+                    c.req(Method::POST, &path)
+                        .json(&json!({ "target_name": new_name })),
+                )
+                .await?;
             done(&c, v, "cloned");
         }
-        ProfileCmd::Delete { profile, node, force, yes } => {
+        ProfileCmd::Delete {
+            profile,
+            node,
+            force,
+            yes,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
             confirm(
-                &format!("Delete profile {} on {}? Cookies and logins are wiped.", p.profile.name, p.node_name),
+                &format!(
+                    "Delete profile {} on {}? Cookies and logins are wiped.",
+                    p.profile.name, p.node_name
+                ),
                 yes,
             )?;
             let path = c.api(
@@ -1279,10 +1454,19 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             let v = c.call(c.req(Method::DELETE, &path)).await?;
             done(&c, v, "deleted");
         }
-        ProfileCmd::Clear { profile, node, force, no_backup, yes } => {
+        ProfileCmd::Clear {
+            profile,
+            node,
+            force,
+            no_backup,
+            yes,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
             confirm(
-                &format!("Wipe the data of profile {} on {}?", p.profile.name, p.node_name),
+                &format!(
+                    "Wipe the data of profile {} on {}?",
+                    p.profile.name, p.node_name
+                ),
                 yes,
             )?;
             let path = c.api(
@@ -1297,31 +1481,68 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             done(&c, v, "cleared");
         }
         ProfileCmd::Backup(cmd) => backup(&c, cmd).await?,
-        ProfileCmd::Export { profile, node, output, force } => {
+        ProfileCmd::Export {
+            profile,
+            node,
+            output,
+            force,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
-            let path = c.api(&p.node_name, &format!("/profiles/{}/export", enc(&p.profile.name)));
-            let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.tar.gz", safe_filename(&p.profile.name))));
+            let path = c.api(
+                &p.node_name,
+                &format!("/profiles/{}/export", enc(&p.profile.name)),
+            );
+            let file = output.unwrap_or_else(|| {
+                PathBuf::from(format!("{}.tar.gz", safe_filename(&p.profile.name)))
+            });
             export_to(&c, &path, &file, force).await?;
         }
-        ProfileCmd::Import { name, file, node, overwrite } => {
+        ProfileCmd::Import {
+            name,
+            file,
+            node,
+            overwrite,
+        } => {
             let node = c.node_or_local(node.as_deref())?;
             let data = std::fs::read(&file)?;
-            let path = c.api(&node, &format!("/profiles/{}/import?overwrite={overwrite}", enc(&name)));
+            let path = c.api(
+                &node,
+                &format!("/profiles/{}/import?overwrite={overwrite}", enc(&name)),
+            );
             let v = c
-                .call(c.req(Method::POST, &path).timeout(Duration::from_secs(3600)).body(data))
+                .call(
+                    c.req(Method::POST, &path)
+                        .timeout(Duration::from_secs(3600))
+                        .body(data),
+                )
                 .await?;
             done(&c, v, &format!("imported {name} on {node}"));
         }
-        ProfileCmd::Transfer { profile, to, node, name, move_, overwrite } => {
+        ProfileCmd::Transfer {
+            profile,
+            to,
+            node,
+            name,
+            move_,
+            overwrite,
+        } => {
             c.check_node(&to)?;
             let p = c.profile(&profile, node.as_deref())?;
-            let mut body = json!({ "target_node": to, "delete_source": move_, "overwrite": overwrite });
+            let mut body =
+                json!({ "target_node": to, "delete_source": move_, "overwrite": overwrite });
             if let Some(n) = name {
                 body["target_name"] = json!(n);
             }
-            let path = c.api(&p.node_name, &format!("/profiles/{}/transfer", enc(&p.profile.name)));
+            let path = c.api(
+                &p.node_name,
+                &format!("/profiles/{}/transfer", enc(&p.profile.name)),
+            );
             let v = c
-                .call(c.req(Method::POST, &path).timeout(Duration::from_secs(3600)).json(&body))
+                .call(
+                    c.req(Method::POST, &path)
+                        .timeout(Duration::from_secs(3600))
+                        .json(&body),
+                )
                 .await?;
             done(&c, v, "transferred");
         }
@@ -1333,7 +1554,10 @@ async fn backup(c: &Client, cmd: BackupCmd) -> R<()> {
     match cmd {
         BackupCmd::List { profile, node } => {
             let p = c.profile(&profile, node.as_deref())?;
-            let path = c.api(&p.node_name, &format!("/profiles/{}/backups", enc(&p.profile.name)));
+            let path = c.api(
+                &p.node_name,
+                &format!("/profiles/{}/backups", enc(&p.profile.name)),
+            );
             let v = c.call(c.req(Method::GET, &path)).await?;
             if c.json {
                 c.print_json(&v);
@@ -1348,41 +1572,80 @@ async fn backup(c: &Client, cmd: BackupCmd) -> R<()> {
                         b["id"].as_str().unwrap_or("").to_string(),
                         ago(b["created_at_secs"].as_u64().unwrap_or(0)),
                         bytes(b["size_bytes"].as_u64().unwrap_or(0)),
-                        if b["automatic"].as_bool().unwrap_or(false) { "auto" } else { "manual" }.to_string(),
+                        if b["automatic"].as_bool().unwrap_or(false) {
+                            "auto"
+                        } else {
+                            "manual"
+                        }
+                        .to_string(),
                         b["label"].as_str().unwrap_or("").to_string(),
                     ]
                 })
                 .collect();
             table(&["ID", "CREATED", "SIZE", "KIND", "LABEL"], &rows);
         }
-        BackupCmd::Create { profile, label, node } => {
+        BackupCmd::Create {
+            profile,
+            label,
+            node,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
-            let path = c.api(&p.node_name, &format!("/profiles/{}/backups", enc(&p.profile.name)));
-            let v = c.call(c.req(Method::POST, &path).json(&json!({ "label": label }))).await?;
+            let path = c.api(
+                &p.node_name,
+                &format!("/profiles/{}/backups", enc(&p.profile.name)),
+            );
+            let v = c
+                .call(c.req(Method::POST, &path).json(&json!({ "label": label })))
+                .await?;
             if c.json {
                 c.print_json(&v);
             } else {
                 println!("{}", v["id"].as_str().unwrap_or("created"));
             }
         }
-        BackupCmd::Restore { profile, backup, node, yes } => {
+        BackupCmd::Restore {
+            profile,
+            backup,
+            node,
+            yes,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
             confirm(
-                &format!("Replace the data of {} on {} with backup {backup}?", p.profile.name, p.node_name),
+                &format!(
+                    "Replace the data of {} on {} with backup {backup}?",
+                    p.profile.name, p.node_name
+                ),
                 yes,
             )?;
             let path = c.api(
                 &p.node_name,
-                &format!("/profiles/{}/backups/{}/restore", enc(&p.profile.name), enc(&backup)),
+                &format!(
+                    "/profiles/{}/backups/{}/restore",
+                    enc(&p.profile.name),
+                    enc(&backup)
+                ),
             );
-            let v = c.call(c.req(Method::POST, &path).timeout(Duration::from_secs(3600))).await?;
+            let v = c
+                .call(
+                    c.req(Method::POST, &path)
+                        .timeout(Duration::from_secs(3600)),
+                )
+                .await?;
             done(c, v, "restored");
         }
-        BackupCmd::Delete { profile, backup, node } => {
+        BackupCmd::Delete {
+            profile,
+            backup,
+            node,
+        } => {
             let p = c.profile(&profile, node.as_deref())?;
             let path = c.api(
                 &p.node_name,
-                &format!("/profiles/{}/backups/{}", enc(&p.profile.name), enc(&backup)),
+                &format!(
+                    "/profiles/{}/backups/{}",
+                    enc(&p.profile.name),
+                    enc(&backup)
+                ),
             );
             let v = c.call(c.req(Method::DELETE, &path)).await?;
             done(c, v, "deleted");
@@ -1400,12 +1663,11 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
             if let Some(ref n) = node {
                 c.check_node(n)?;
             }
-            let recs: Vec<&MeshRecording> = c
-                .ov
-                .recordings
-                .iter()
-                .filter(|r| node.as_deref().is_none_or(|n| r.node_name == n))
-                .collect();
+            let recs: Vec<&MeshRecording> =
+                c.ov.recordings
+                    .iter()
+                    .filter(|r| node.as_deref().is_none_or(|n| r.node_name == n))
+                    .collect();
             if c.json {
                 c.print_json(&serde_json::to_value(&recs)?);
                 return Ok(());
@@ -1423,12 +1685,17 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                         bytes(x.size_bytes),
                         x.status.clone(),
                         if x.keep { "kept" } else { "" }.to_string(),
-                        x.title.clone().or_else(|| x.final_url.clone()).unwrap_or_default(),
+                        x.title
+                            .clone()
+                            .or_else(|| x.final_url.clone())
+                            .unwrap_or_default(),
                     ]
                 })
                 .collect();
             table(
-                &["ID", "NODE", "STARTED", "LENGTH", "FRAMES", "SIZE", "STATUS", "KEEP", "TITLE"],
+                &[
+                    "ID", "NODE", "STARTED", "LENGTH", "FRAMES", "SIZE", "STATUS", "KEEP", "TITLE",
+                ],
                 &rows,
             );
         }
@@ -1455,7 +1722,11 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                     "Delete {} recording{}{}?",
                     targets.len(),
                     if targets.len() == 1 { "" } else { "s" },
-                    if kept > 0 { format!(" ({kept} marked to be kept)") } else { String::new() }
+                    if kept > 0 {
+                        format!(" ({kept} marked to be kept)")
+                    } else {
+                        String::new()
+                    }
                 ),
                 yes,
             )?;
@@ -1523,14 +1794,19 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
         } => {
             let r = c.recording(&recording)?;
             let what = if webm { "export.webm" } else { "frames" };
-            let path = c.api(&r.node_name, &format!("/recordings/{}/{what}", r.recording.id));
+            let path = c.api(
+                &r.node_name,
+                &format!("/recordings/{}/{what}", r.recording.id),
+            );
             let ext = if webm { "webm" } else { "jsonl" };
             let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.{ext}", r.recording.id)));
             export_to(&c, &path, &file, force).await?;
         }
         RecordingCmd::Vacuum { node } => {
             let node = c.node_or_local(node.as_deref())?;
-            let v = c.call(c.req(Method::POST, &c.api(&node, "/recordings/vacuum"))).await?;
+            let v = c
+                .call(c.req(Method::POST, &c.api(&node, "/recordings/vacuum")))
+                .await?;
             c.print_json(&v);
         }
     }
@@ -1541,10 +1817,20 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
 pub fn safe_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let cleaned = cleaned.trim_start_matches('.');
-    if cleaned.is_empty() { "export".to_string() } else { cleaned.chars().take(100).collect() }
+    if cleaned.is_empty() {
+        "export".to_string()
+    } else {
+        cleaned.chars().take(100).collect()
+    }
 }
 
 /// What the API said was wrong with a failed download.
@@ -1555,7 +1841,10 @@ pub async fn download_error(res: reqwest::Response) -> String {
         .await
         .ok()
         .and_then(|v| v["error"].as_str().map(str::to_string));
-    format!("export failed: {}", why.unwrap_or_else(|| format!("HTTP {status}")))
+    format!(
+        "export failed: {}",
+        why.unwrap_or_else(|| format!("HTTP {status}"))
+    )
 }
 
 /// Stream a successful download to `file` through a temporary file next to it,
@@ -1564,7 +1853,10 @@ pub async fn save_stream(res: reqwest::Response, file: &std::path::Path, force: 
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
     if !force && file.exists() {
-        return fail(1, format!("{} exists (use --force to replace it)", file.display()));
+        return fail(
+            1,
+            format!("{} exists (use --force to replace it)", file.display()),
+        );
     }
     let dir = match file.parent() {
         Some(d) if !d.as_os_str().is_empty() => d,
@@ -1615,9 +1907,19 @@ async fn keep_recordings(c: &Client, recordings: &[String], keep: bool) -> R<()>
                 continue;
             }
         };
-        let path = c.api(&r.node_name, &format!("/recordings/{}/keep", r.recording.id));
-        match c.call(c.req(Method::POST, &path).json(&json!({ "keep": keep }))).await {
-            Ok(_) => println!("{} {}", if keep { "keeping" } else { "not keeping" }, short(r.recording.id)),
+        let path = c.api(
+            &r.node_name,
+            &format!("/recordings/{}/keep", r.recording.id),
+        );
+        match c
+            .call(c.req(Method::POST, &path).json(&json!({ "keep": keep })))
+            .await
+        {
+            Ok(_) => println!(
+                "{} {}",
+                if keep { "keeping" } else { "not keeping" },
+                short(r.recording.id)
+            ),
             Err(e) => tally.fail(key, e.as_ref()),
         }
     }
@@ -1647,7 +1949,9 @@ pub async fn node(args: NodeArgs) -> R<()> {
             for p in &c.ov.peers {
                 rows.push(vec![
                     p.name.clone(),
-                    p.error.clone().map_or_else(|| p.status.clone(), |e| format!("{} ({e})", p.status)),
+                    p.error
+                        .clone()
+                        .map_or_else(|| p.status.clone(), |e| format!("{} ({e})", p.status)),
                     format!("{}/{}", p.active_sessions, p.max_sessions),
                     p.profiles_count.to_string(),
                     p.latency_ms.map_or("-".into(), |ms| format!("{ms} ms")),
@@ -1655,7 +1959,12 @@ pub async fn node(args: NodeArgs) -> R<()> {
                     duration(p.uptime_seconds),
                 ]);
             }
-            table(&["NODE", "STATUS", "SESSIONS", "PROFILES", "LATENCY", "VERSION", "UP"], &rows);
+            table(
+                &[
+                    "NODE", "STATUS", "SESSIONS", "PROFILES", "LATENCY", "VERSION", "UP",
+                ],
+                &rows,
+            );
         }
         NodeCmd::Show { node } => {
             let node = c.node_or_local(node.as_deref())?;
@@ -1666,7 +1975,14 @@ pub async fn node(args: NodeArgs) -> R<()> {
                 c.print_json(&serde_json::to_value(p)?);
             }
         }
-        NodeCmd::Set { node, default_proxy, engine, adblock, color_scheme, show_touches } => {
+        NodeCmd::Set {
+            node,
+            default_proxy,
+            engine,
+            adblock,
+            color_scheme,
+            show_touches,
+        } => {
             let node = c.node_or_local(node.as_deref())?;
             let path = c.api(&node, "/settings");
             // The overview carries every node's settings (a peer's route only takes PATCH).
@@ -1690,9 +2006,15 @@ pub async fn node(args: NodeArgs) -> R<()> {
                 if !engines[&key].is_object() {
                     engines[&key] = json!({});
                 }
-                if let Some(v) = adblock { engines[&key]["adblock"] = json!(v) }
-                if let Some(v) = color_scheme { engines[&key]["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
-                if let Some(v) = show_touches { engines[&key]["show_touches"] = json!(v) }
+                if let Some(v) = adblock {
+                    engines[&key]["adblock"] = json!(v)
+                }
+                if let Some(v) = color_scheme {
+                    engines[&key]["color_scheme"] = json!(format!("{v:?}").to_lowercase())
+                }
+                if let Some(v) = show_touches {
+                    engines[&key]["show_touches"] = json!(v)
+                }
                 body["engines"] = engines;
             }
             if body.as_object().is_some_and(|o| o.is_empty()) {
@@ -1703,12 +2025,17 @@ pub async fn node(args: NodeArgs) -> R<()> {
         }
         NodeCmd::Add { peer, name } => {
             let v = c
-                .call(c.req(Method::POST, "/api/peers").json(&json!({ "url": peer, "name": name })))
+                .call(
+                    c.req(Method::POST, "/api/peers")
+                        .json(&json!({ "url": peer, "name": name })),
+                )
                 .await?;
             done(&c, v, "added");
         }
         NodeCmd::Remove { node } => {
-            let v = c.call(c.req(Method::DELETE, &format!("/api/peers/{}", enc(&node)))).await?;
+            let v = c
+                .call(c.req(Method::DELETE, &format!("/api/peers/{}", enc(&node))))
+                .await?;
             done(&c, v, "removed");
         }
     }
@@ -1759,7 +2086,11 @@ mod tests {
 
     #[test]
     fn exact_id_beats_name_beats_prefix() {
-        let items = [Item("abcd1111", "web"), Item("abcd2222", "abcd1111"), Item("web99999", "x")];
+        let items = [
+            Item("abcd1111", "web"),
+            Item("abcd2222", "abcd1111"),
+            Item("web99999", "x"),
+        ];
         // An exact id wins over another item named like it.
         assert_eq!(find(&items, "abcd1111").unwrap().1, "web");
         // An exact name wins over an id prefix.
@@ -1772,11 +2103,17 @@ mod tests {
     fn ambiguity_and_misses_are_explained() {
         let items = [Item("abcd1111", "a"), Item("abcd2222", "b")];
         let err = find(&items, "abcd").unwrap_err().to_string();
-        assert!(err.contains("abcd1111") && err.contains("abcd2222"), "{err}");
+        assert!(
+            err.contains("abcd1111") && err.contains("abcd2222"),
+            "{err}"
+        );
         let err = find(&items, "ab").unwrap_err();
         assert!(err.to_string().contains("at least 4"), "{err}");
         assert_eq!(exit_code(err.as_ref()), EXIT_NOT_FOUND);
-        assert_eq!(exit_code(find(&items, "zzzzzz").unwrap_err().as_ref()), EXIT_NOT_FOUND);
+        assert_eq!(
+            exit_code(find(&items, "zzzzzz").unwrap_err().as_ref()),
+            EXIT_NOT_FOUND
+        );
     }
 
     #[test]
@@ -1790,24 +2127,29 @@ mod tests {
 
     #[test]
     fn agents_show_name_and_topic() {
-        let client = |agent_name: Option<&str>, topic: Option<&str>, agent: bool| crate::clients::ClientInfo {
-            kind: "Playwright".into(),
-            agent,
-            from: "n".into(),
-            addr: None,
-            user_agent: None,
-            since: 0,
-            agent_name: agent_name.map(str::to_string),
-            conversation: None,
-            cwd: None,
-            machine: None,
-            topic: topic.map(str::to_string),
+        let client = |agent_name: Option<&str>, topic: Option<&str>, agent: bool| {
+            crate::clients::ClientInfo {
+                kind: "Playwright".into(),
+                agent,
+                from: "n".into(),
+                addr: None,
+                user_agent: None,
+                since: 0,
+                agent_name: agent_name.map(str::to_string),
+                conversation: None,
+                cwd: None,
+                machine: None,
+                topic: topic.map(str::to_string),
+            }
         };
         assert_eq!(agents(&[]), "-");
         assert_eq!(agents(&[client(None, None, false)]), "-");
         assert_eq!(agents(&[client(None, None, true)]), "Playwright");
         assert_eq!(
-            agents(&[client(Some("claude"), Some("netbox"), true), client(Some("claude"), Some("netbox"), true)]),
+            agents(&[
+                client(Some("claude"), Some("netbox"), true),
+                client(Some("claude"), Some("netbox"), true)
+            ]),
             "claude: netbox"
         );
     }

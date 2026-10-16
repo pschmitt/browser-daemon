@@ -16,19 +16,14 @@ use crate::profiles::{ColorScheme, Profile};
 use crate::proxies::{self, Proxy};
 use crate::relay::Relay;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BrowserEngine {
+    #[default]
     #[serde(alias = "Chromium", alias = "CHROMIUM")]
     Chromium,
     #[serde(alias = "Firefox", alias = "FIREFOX")]
     Firefox,
-}
-
-impl Default for BrowserEngine {
-    fn default() -> Self {
-        BrowserEngine::Chromium
-    }
 }
 
 impl std::fmt::Display for BrowserEngine {
@@ -221,7 +216,12 @@ impl ActiveBrowser {
                     cmd.arg("--restore-last-session");
                     let default = user_data_dir.join("Default");
                     let _ = fs::remove_dir_all(default.join("Sessions")).await;
-                    for old in ["Current Session", "Current Tabs", "Last Session", "Last Tabs"] {
+                    for old in [
+                        "Current Session",
+                        "Current Tabs",
+                        "Last Session",
+                        "Last Tabs",
+                    ] {
                         let _ = fs::remove_file(default.join(old)).await;
                     }
                 }
@@ -360,7 +360,10 @@ impl ActiveBrowser {
                     // A profile keeps the cookies without an expiry that logins often
                     // use (Firefox's restore mode; the command line's pages open, not
                     // the old tabs); throwaways start blank.
-                    ("browser.startup.page", if temp_dir.is_none() { "3" } else { "1" }),
+                    (
+                        "browser.startup.page",
+                        if temp_dir.is_none() { "3" } else { "1" },
+                    ),
                     // 2 = block: sites can't ask to show notifications.
                     ("permissions.default.desktop-notification", "2"),
                     // Same for location requests (a popup the view can't answer).
@@ -528,17 +531,17 @@ impl ActiveBrowser {
         }
         .await;
         let Some(ws) = ws else { return };
-        let Ok(Ok((mut socket, _))) = tokio::time::timeout(
-            Duration::from_secs(2),
-            tokio_tungstenite::connect_async(ws),
-        )
-        .await
+        let Ok(Ok((mut socket, _))) =
+            tokio::time::timeout(Duration::from_secs(2), tokio_tungstenite::connect_async(ws))
+                .await
         else {
             return;
         };
         let close = serde_json::json!({ "id": 1, "method": "Browser.close" });
         let _ = socket
-            .send(tokio_tungstenite::tungstenite::Message::Text(close.to_string().into()))
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                close.to_string().into(),
+            ))
             .await;
         if !self.proc.wait_exit(Duration::from_secs(12)).await {
             warn!(session_id = %self.id, "Chromium did not close in time");

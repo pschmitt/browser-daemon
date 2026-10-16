@@ -31,7 +31,11 @@ impl Thumbnails {
 
     /// The last capture whatever its age (better than nothing while a new one fails).
     pub fn stale(&self, id: Uuid) -> Option<Vec<u8>> {
-        self.cache.lock().unwrap().get(&id).map(|(_, jpeg)| jpeg.clone())
+        self.cache
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|(_, jpeg)| jpeg.clone())
     }
 
     pub fn store(&self, id: Uuid, jpeg: Vec<u8>) {
@@ -64,13 +68,19 @@ pub async fn chromium(http: &reqwest::Client, port: u16) -> Option<Vec<u8>> {
         let mut next = 0u64;
         let mut ask = |method: &str, params: serde_json::Value| {
             next += 1;
-            (next, serde_json::json!({ "id": next, "method": method, "params": params }))
+            (
+                next,
+                serde_json::json!({ "id": next, "method": method, "params": params }),
+            )
         };
         let (id, cmd) = ask("Page.getLayoutMetrics", serde_json::json!({}));
         ws.send(Message::Text(cmd.to_string().into())).await.ok()?;
         let metrics = answer(&mut ws, id).await?;
         let vp = metrics.get("cssVisualViewport")?;
-        let (w, h) = (vp.get("clientWidth")?.as_f64()?, vp.get("clientHeight")?.as_f64()?);
+        let (w, h) = (
+            vp.get("clientWidth")?.as_f64()?,
+            vp.get("clientHeight")?.as_f64()?,
+        );
         if w < 1.0 || h < 1.0 {
             return None;
         }

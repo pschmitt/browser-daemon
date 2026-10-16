@@ -507,11 +507,16 @@ impl State {
         if let Some(ref s) = self.secret {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
-        let res = req.send().await.map_err(|e| format!("{}: {e}", self.base))?;
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("{}: {e}", self.base))?;
         if !res.status().is_success() {
             return Err(format!("{}: HTTP {}", self.base, res.status()));
         }
-        res.json().await.map_err(|e| format!("Unexpected answer: {e}"))
+        res.json()
+            .await
+            .map_err(|e| format!("Unexpected answer: {e}"))
     }
 
     /// (name, base URL, active sessions, capacity) of the nodes that take sessions.
@@ -522,12 +527,14 @@ impl State {
             ov.local_node.active_sessions,
             ov.local_node.max_sessions,
         )];
-        nodes.extend(
-            ov.peers
-                .iter()
-                .filter(|p| p.status == "online")
-                .map(|p| (p.name.clone(), p.url.clone(), p.active_sessions, p.max_sessions)),
-        );
+        nodes.extend(ov.peers.iter().filter(|p| p.status == "online").map(|p| {
+            (
+                p.name.clone(),
+                p.url.clone(),
+                p.active_sessions,
+                p.max_sessions,
+            )
+        }));
         nodes
     }
 
@@ -546,7 +553,11 @@ impl State {
                 .ok_or_else(|| {
                     format!(
                         "No node '{name}' online. Nodes: {}",
-                        nodes.iter().map(|n| n.0.as_str()).collect::<Vec<_>>().join(", ")
+                        nodes
+                            .iter()
+                            .map(|n| n.0.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )
                 });
         }
@@ -564,12 +575,22 @@ impl State {
     async fn default_target(&self) -> Result<Target, String> {
         let ov = self.overview().await?;
         let (node, url) = Self::pick_node(&ov, None)?;
-        Ok(Target { node, ws_base: Self::ws_base(&url), url, profile: None })
+        Ok(Target {
+            node,
+            ws_base: Self::ws_base(&url),
+            url,
+            profile: None,
+        })
     }
 
     async fn status(&self) -> Result<String, String> {
         let ov = self.overview().await?;
-        let current = self.child.lock().await.as_ref().map(|c| c.target.describe());
+        let current = self
+            .child
+            .lock()
+            .await
+            .as_ref()
+            .map(|c| c.target.describe());
         let nodes: Vec<Value> = Self::nodes(&ov)
             .iter()
             .map(|n| json!({ "node": n.0, "sessions": format!("{}/{}", n.2, n.3) }))
@@ -598,8 +619,14 @@ impl State {
     }
 
     async fn use_browser(&self, args: &Value) -> Result<String, String> {
-        let profile = args["profile"].as_str().map(str::trim).filter(|s| !s.is_empty());
-        let node = args["node"].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let profile = args["profile"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let node = args["node"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let ov = self.overview().await?;
         let target = match profile {
             Some(name) => {
@@ -616,7 +643,10 @@ impl State {
                     .collect();
                 let [p] = hits.as_slice() else {
                     return Err(if hits.is_empty() {
-                        format!("No profile '{name}'{}", node.map(|n| format!(" on {n}")).unwrap_or_default())
+                        format!(
+                            "No profile '{name}'{}",
+                            node.map(|n| format!(" on {n}")).unwrap_or_default()
+                        )
                     } else {
                         format!("Profile '{name}' exists on several nodes: name one with `node`")
                     });
@@ -630,7 +660,12 @@ impl State {
             }
             None => {
                 let (node, url) = Self::pick_node(&ov, node)?;
-                Target { node, ws_base: Self::ws_base(&url), url, profile: None }
+                Target {
+                    node,
+                    ws_base: Self::ws_base(&url),
+                    url,
+                    profile: None,
+                }
             }
         };
         let child = self.spawn_child(&target).await?;
@@ -751,8 +786,12 @@ impl State {
             let mut tools = Vec::new();
             let mut cursor: Option<String> = None;
             loop {
-                let params = cursor.as_ref().map_or(json!({}), |c| json!({ "cursor": c }));
-                let page = child.request("tools/list", params, Duration::from_secs(30)).await?;
+                let params = cursor
+                    .as_ref()
+                    .map_or(json!({}), |c| json!({ "cursor": c }));
+                let page = child
+                    .request("tools/list", params, Duration::from_secs(30))
+                    .await?;
                 tools.extend(page["tools"].as_array().cloned().unwrap_or_default());
                 cursor = page["nextCursor"].as_str().map(str::to_string);
                 if cursor.is_none() {
@@ -790,9 +829,13 @@ async fn read_child(child: Arc<Child>, stdout: tokio::process::ChildStdout) {
             // A request of the child: no roots, nothing else.
             (Some(method), Some(id)) => {
                 let reply = match method {
-                    "roots/list" => json!({ "jsonrpc": "2.0", "id": id, "result": { "roots": [] } }),
+                    "roots/list" => {
+                        json!({ "jsonrpc": "2.0", "id": id, "result": { "roots": [] } })
+                    }
                     "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
-                    _ => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Method not found" } }),
+                    _ => {
+                        json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Method not found" } })
+                    }
                 };
                 child.write(&reply).await;
             }
@@ -802,7 +845,8 @@ async fn read_child(child: Arc<Child>, stdout: tokio::process::ChildStdout) {
     // The child ended: whoever still waits gets an error.
     let waiting: Vec<_> = child.pending.lock().await.drain().collect();
     for (_, tx) in waiting {
-        let _ = tx.send(json!({ "error": { "code": -32000, "message": "The browser tools stopped" } }));
+        let _ =
+            tx.send(json!({ "error": { "code": -32000, "message": "The browser tools stopped" } }));
     }
 }
 
@@ -832,7 +876,11 @@ mod tests {
 
     #[test]
     fn the_node_with_the_most_room_is_picked() {
-        let ov = overview(&[("fnuc", 4, 5, "online"), ("a", 1, 10, "online"), ("b", 5, 10, "online")]);
+        let ov = overview(&[
+            ("fnuc", 4, 5, "online"),
+            ("a", 1, 10, "online"),
+            ("b", 5, 10, "online"),
+        ]);
         assert_eq!(State::pick_node(&ov, None).unwrap().0, "a");
         assert_eq!(State::pick_node(&ov, Some("b")).unwrap().0, "b");
         assert!(State::pick_node(&ov, Some("nope")).is_err());
@@ -840,7 +888,11 @@ mod tests {
 
     #[test]
     fn full_and_offline_nodes_are_skipped() {
-        let ov = overview(&[("fnuc", 5, 5, "online"), ("a", 0, 10, "offline"), ("b", 9, 10, "online")]);
+        let ov = overview(&[
+            ("fnuc", 5, 5, "online"),
+            ("a", 0, 10, "offline"),
+            ("b", 9, 10, "online"),
+        ]);
         assert_eq!(State::pick_node(&ov, None).unwrap().0, "b");
         let full = overview(&[("fnuc", 5, 5, "online")]);
         assert!(State::pick_node(&full, None).is_err());
@@ -890,8 +942,14 @@ mod tests {
 
     #[test]
     fn web_addresses_become_websocket_ones() {
-        assert_eq!(State::ws_base("https://browser.x.test/"), "wss://browser.x.test");
-        assert_eq!(State::ws_base("http://127.0.0.1:3001"), "ws://127.0.0.1:3001");
+        assert_eq!(
+            State::ws_base("https://browser.x.test/"),
+            "wss://browser.x.test"
+        );
+        assert_eq!(
+            State::ws_base("http://127.0.0.1:3001"),
+            "ws://127.0.0.1:3001"
+        );
     }
 
     #[test]
