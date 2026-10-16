@@ -157,6 +157,10 @@ pub(crate) async fn handle_chromium_ws(
         match tokio_tungstenite::connect_async(&backend_ws_url).await {
             Ok((server_ws, _)) => {
                 let activity = Some((session.activity.clone(), false));
+                let sd = state
+                    .downloads
+                    .session(state.config.state_dir(), session.id)
+                    .await;
                 bridge_websockets(
                     socket,
                     server_ws,
@@ -170,6 +174,7 @@ pub(crate) async fn handle_chromium_ws(
                     None,
                     true,
                     session.profile_id.is_some(),
+                    Some(crate::downloads::Claim::new(sd)),
                 )
                 .await;
             }
@@ -244,7 +249,17 @@ pub(crate) async fn handle_firefox_ws(
         info!(session_id = %session.id, observer = !counted, "Client attached to Firefox WebDriver BiDi");
 
         session.activity.touch();
-        hub.serve_client(socket, session.activity.clone(), !counted)
+        // An automation client may set where downloads go (see downloads.rs).
+        let claim = if counted {
+            let sd = state
+                .downloads
+                .session(state.config.state_dir(), session.id)
+                .await;
+            Some(crate::downloads::Claim::new(sd))
+        } else {
+            None
+        };
+        hub.serve_client(socket, session.activity.clone(), !counted, claim)
             .await;
         drop(slot);
     })
@@ -294,6 +309,7 @@ pub(crate) async fn handle_page_ws(
                     initial_title,
                     false,
                     false,
+                    None,
                 )
                 .await;
             }

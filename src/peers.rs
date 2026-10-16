@@ -174,6 +174,9 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("POST", ["recordings", "vacuum" | "merge"]) => (false, Long),
         ("GET" | "DELETE", ["recordings", _]) => (false, Short),
         ("GET", ["recordings", _, "frames" | "audio" | "export.webm"]) => (false, Long),
+        ("GET", ["sessions", _, "downloads"]) => (false, Short),
+        ("GET", ["sessions", _, "downloads", _]) => (false, Long),
+        ("DELETE", ["sessions", _, "downloads", _]) => (false, Short),
         ("GET", ["recordings", _, "favicon"]) => (false, Short),
         ("POST", ["recordings", _, "keep"]) => (false, Short),
         ("PUT", ["json", "new"]) => (true, Short),
@@ -533,6 +536,14 @@ mod tests {
                 .wait,
             PeerWait::Long
         );
+        assert_eq!(
+            target(Method::GET, "sessions/abc/downloads/g1")
+                .unwrap()
+                .wait,
+            PeerWait::Long
+        );
+        assert!(target(Method::GET, "sessions/abc/downloads").is_some());
+        assert!(target(Method::DELETE, "sessions/abc/downloads/g1").is_some());
         assert!(target(Method::PUT, "json/new").unwrap().devtools);
         assert!(target(Method::PUT, "json/close/ABC").unwrap().devtools);
         // The method matters.

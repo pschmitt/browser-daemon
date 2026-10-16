@@ -10,6 +10,7 @@ mod cdp_ws;
 mod clients;
 mod ctl;
 mod display;
+mod downloads;
 mod favicon;
 mod history;
 mod idle;
@@ -634,6 +635,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         profile_locks: Arc::default(),
         dir_sizes: Arc::default(),
         overview: Arc::default(),
+        downloads: Arc::default(),
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -673,6 +675,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(b) = session.browser.lock().await.as_ref() {
                 files.extend(b.files().cloned());
             }
+        }
+        let live: std::collections::HashSet<Uuid> = adopted.iter().map(|s| s.id).collect();
+        let swept_downloads = downloads::sweep(state.config.state_dir(), &live).await;
+        if swept_downloads > 0 {
+            info!(
+                count = swept_downloads,
+                "Removed downloads of sessions that are gone"
+            );
         }
         let removed = proc::sweep_leftover_files(&persist::dir(state.config.state_dir()), &files);
         if removed > 0 {
@@ -854,6 +864,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/sessions/{id}/files",
             put(api_session_upload_file)
                 .layer(axum::extract::DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+        .route("/api/sessions/{id}/downloads", get(downloads::api_list))
+        .route(
+            "/api/sessions/{id}/downloads/{dl}",
+            get(downloads::api_get).delete(downloads::api_delete),
         )
         .route(
             "/api/sessions/{id}/stop-record",

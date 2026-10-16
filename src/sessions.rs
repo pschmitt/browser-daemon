@@ -267,6 +267,7 @@ impl AppState {
             let mut guard = self.sessions.write().await;
             guard.insert(session.id, session.clone());
         }
+        crate::downloads::watch(self.clone(), &session);
         // In the map: the reservation is no longer needed.
         drop(reservation);
 
@@ -371,6 +372,7 @@ impl AppState {
                         .write()
                         .await
                         .insert(session.id, session.clone());
+                    crate::downloads::watch(self.clone(), &session);
                     if rec.recording {
                         self.start_recording(&session, rec.recording_audio).await;
                     }
@@ -520,6 +522,7 @@ impl AppState {
         };
 
         let _ = fs::remove_dir_all(upload_dir(id)).await;
+        self.downloads.forget(self.config.state_dir(), id).await;
         // Live views of the session end with it.
         self.viewers.close_session(*id);
         self.thumbnails.forget(*id);

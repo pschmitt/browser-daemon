@@ -234,6 +234,8 @@ pub struct AppState {
     pub dir_sizes: Arc<DirSizes>,
     /// The mesh overview, computed once for everybody who wants it.
     pub overview: Arc<OverviewHub>,
+    /// What the sessions' pages downloaded (see downloads.rs).
+    pub downloads: Arc<downloads::Downloads>,
 }
 
 /// How long a profile directory's size is taken as it was.

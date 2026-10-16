@@ -65,6 +65,15 @@ impl Viewers {
         broadcast(viewers);
     }
 
+    /// A message for every live view of `session` (downloads, see downloads.rs).
+    pub fn send(&self, session: Uuid, msg: String) {
+        if let Some(viewers) = self.sessions.lock().unwrap().get(&session) {
+            for v in viewers.values() {
+                let _ = v.tx.send(msg.clone());
+            }
+        }
+    }
+
     /// The session is over: its viewers' sockets end (their channels close).
     pub fn close_session(&self, session: Uuid) {
         self.sessions.lock().unwrap().remove(&session);

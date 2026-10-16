@@ -35,7 +35,11 @@ pub async fn bridge_websockets(
     // does, and its context lives in memory only) get the profile's own, so
     // what they log in to is kept with the profile.
     use_profile_context: bool,
+    // Automation clients: one that sets its own download behaviour keeps it while
+    // connected (see downloads.rs).
+    downloads: Option<crate::downloads::Claim>,
 ) {
+    let downloads = std::sync::Mutex::new(downloads);
     let (client_tx, mut client_rx) = client_ws.split();
     let client_tx = tokio::sync::Mutex::new(client_tx);
     let (mut server_tx, mut server_rx) = server_ws.split();
@@ -50,6 +54,9 @@ pub async fn bridge_websockets(
             }
             let server_msg = match msg {
                 ClientMsg::Text(text) => {
+                    if let Some(c) = downloads.lock().unwrap().as_mut() {
+                        c.note(text.as_str());
+                    }
                     if frame_tx.is_some() {
                         targets.lock().unwrap().request(text.as_str());
                     }

@@ -707,12 +707,34 @@ impl BidiHub {
         self.deliver(client, msg.to_string()).await;
     }
 
+    /// Events for the daemon itself (downloads): a client of the hub whose messages
+    /// go to the returned receiver. Dropping it ends the subscription.
+    pub async fn listen(&self, events: &[&str]) -> mpsc::Receiver<String> {
+        let events: Vec<String> = events.iter().map(|e| (*e).to_string()).collect();
+        let client = self.next_client.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel::<String>(QUEUE);
+        self.clients.lock().unwrap().insert(
+            client,
+            Client {
+                tx,
+                subs: vec![Subscription {
+                    id: format!("daemon-{client}"),
+                    events: events.clone(),
+                    contexts: None,
+                }],
+            },
+        );
+        self.ensure_backend_events(&events).await;
+        rx
+    }
+
     /// Serve one `/firefox` WebSocket client until either side closes.
     pub async fn serve_client(
         self: Arc<Self>,
         socket: ClientWs,
         activity: Arc<crate::idle::Activity>,
         observer: bool,
+        mut downloads: Option<crate::downloads::Claim>,
     ) {
         let client = self.next_client.fetch_add(1, Ordering::SeqCst);
         let (tx, mut rx) = mpsc::channel::<String>(QUEUE);
@@ -739,6 +761,9 @@ impl BidiHub {
                 match msg {
                     ClientMsg::Text(text) => {
                         activity.note_command(text.as_str(), observer);
+                        if let Some(c) = downloads.as_mut() {
+                            c.note(text.as_str());
+                        }
                         self.handle_client_command(client, text.as_str()).await
                     }
                     ClientMsg::Close(_) => break,
