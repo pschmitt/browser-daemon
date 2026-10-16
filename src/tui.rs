@@ -392,7 +392,13 @@ impl App {
                 self.refreshing = false;
                 match res {
                     Ok(ov) => {
+                        // The selection stays on its item when rows come and go.
+                        let keep: Vec<Option<String>> =
+                            TABS.iter().map(|t| self.selected_key(*t)).collect();
                         self.ov = Some(ov);
+                        for (t, key) in TABS.iter().zip(keep) {
+                            self.reselect(*t, key);
+                        }
                         // Only the refresh's own error goes away with it; an action's stays.
                         if self.refresh_error {
                             self.refresh_error = false;
@@ -482,6 +488,55 @@ impl App {
             Tab::Recordings => self.recordings().len(),
             Tab::Nodes => 1 + ov.peers.len(),
             Tab::Engines => self.engine_rows().len(),
+        }
+    }
+
+    /// What identifies each row of a tab: node and id for sessions, profiles and
+    /// recordings; none for the others (they keep the row number).
+    fn row_keys(&self, tab: Tab) -> Option<Vec<String>> {
+        Some(match tab {
+            Tab::Sessions => self
+                .sessions()
+                .iter()
+                .map(|s| format!("{}/{}", s.node_name, s.session.id))
+                .collect(),
+            Tab::Profiles => self
+                .profiles()
+                .iter()
+                .map(|p| {
+                    let id = p.profile.id.map(|i| i.to_string());
+                    format!(
+                        "{}/{}",
+                        p.node_name,
+                        id.unwrap_or_else(|| p.profile.name.clone())
+                    )
+                })
+                .collect(),
+            Tab::Recordings => self
+                .recordings()
+                .iter()
+                .map(|r| format!("{}/{}", r.node_name, r.recording.id))
+                .collect(),
+            Tab::Nodes | Tab::Engines => return None,
+        })
+    }
+
+    fn selected_key(&self, tab: Tab) -> Option<String> {
+        let i = TABS.iter().position(|t| *t == tab)?;
+        let row = self.tables[i].selected()?;
+        self.row_keys(tab)?.into_iter().nth(row)
+    }
+
+    fn reselect(&mut self, tab: Tab, key: Option<String>) {
+        let Some(key) = key else { return };
+        let Some(row) = self
+            .row_keys(tab)
+            .and_then(|k| k.iter().position(|x| *x == key))
+        else {
+            return;
+        };
+        if let Some(i) = TABS.iter().position(|t| *t == tab) {
+            self.tables[i].select(Some(row));
         }
     }
 
