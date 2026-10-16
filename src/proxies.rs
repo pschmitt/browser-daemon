@@ -97,6 +97,9 @@ impl Proxy {
 pub fn chromium_args(relay_port: u16) -> Vec<String> {
     vec![
         format!("--proxy-server=socks5://127.0.0.1:{relay_port}"),
+        // Chromium skips proxies for loopback unless told otherwise: the relay
+        // must see it to refuse it (the daemon listens there).
+        "--proxy-bypass-list=<-loopback>".to_string(),
         // WebRTC must not reach out around the relay and reveal the real address.
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string(),
     ]
@@ -110,6 +113,9 @@ pub fn firefox_prefs(relay_port: u16) -> Vec<String> {
         format!("user_pref(\"network.proxy.socks_port\", {relay_port});"),
         "user_pref(\"network.proxy.socks_version\", 5);".to_string(),
         "user_pref(\"network.proxy.socks_remote_dns\", true);".to_string(),
+        // Same for Firefox: loopback goes through the relay, which refuses it.
+        "user_pref(\"network.proxy.allow_hijacking_localhost\", true);".to_string(),
+        "user_pref(\"network.proxy.no_proxies_on\", \"\");".to_string(),
         "user_pref(\"media.peerconnection.ice.proxy_only\", true);".to_string(),
     ]
 }
