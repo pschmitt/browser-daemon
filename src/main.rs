@@ -4957,9 +4957,18 @@ struct UpdateSettingsRequest {
     /// Proxy id; "none" or "" for direct. Absent: unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_proxy: Option<String>,
-    /// Engine defaults, replaced as a whole. Absent: unchanged.
+    /// Engine defaults, each engine replaced as a whole. Absent: unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    engines: Option<settings::Engines>,
+    engines: Option<EnginesPatch>,
+}
+
+/// The engines of an `UpdateSettingsRequest` that change; one left out stays.
+#[derive(Deserialize, Serialize)]
+struct EnginesPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chromium: Option<settings::EngineDefaults>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    firefox: Option<settings::EngineDefaults>,
 }
 
 async fn api_get_settings(
@@ -4976,23 +4985,34 @@ async fn api_update_settings(
     Json(req): Json<UpdateSettingsRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let mut settings = state.settings.get();
-    if let Some(ref key) = req.default_proxy {
-        settings.default_proxy = if key.trim().is_empty() {
-            None
-        } else {
-            state.check_proxy(key)?
-        };
-    }
-    if let Some(engines) = req.engines {
-        settings.engines = engines;
-    }
-    state.settings.set(settings.clone()).await.map_err(|e| {
-        api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Could not save the settings: {e}"),
-        )
-    })?;
+    let settings = state
+        .settings
+        .update(|settings| {
+            if let Some(ref key) = req.default_proxy {
+                settings.default_proxy = if key.trim().is_empty() {
+                    None
+                } else {
+                    state.check_proxy(key)?
+                };
+            }
+            if let Some(engines) = req.engines {
+                if let Some(chromium) = engines.chromium {
+                    settings.engines.chromium = chromium;
+                }
+                if let Some(firefox) = engines.firefox {
+                    settings.engines.firefox = firefox;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| match e {
+            settings::UpdateError::Rejected(e) => e,
+            settings::UpdateError::Io(e) => api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Could not save the settings: {e}"),
+            ),
+        })?;
     info!(settings = ?settings, "Node settings changed");
     Ok(Json(settings))
 }
