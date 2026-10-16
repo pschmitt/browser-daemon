@@ -599,6 +599,7 @@ impl ActiveBrowser {
             video: state.video,
             created_at_secs: wall.saturating_sub(self.created_at.elapsed().as_secs()),
             recording: state.recording,
+            recording_audio: Some(state.recording_audio),
         }
     }
 
@@ -705,6 +706,7 @@ pub struct SessionState {
     pub shared_display: Option<String>,
     pub video: bool,
     pub recording: bool,
+    pub recording_audio: bool,
 }
 
 /// The profile's `Preferences` with the password manager and autofill switched

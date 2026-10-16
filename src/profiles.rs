@@ -41,6 +41,12 @@ pub struct ProfileMeta {
     /// Pages a session of the profile opens with (its default tabs).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabs: Vec<String>,
+    /// Record the profile's sessions (the node's default when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<bool>,
+    /// Their recordings take the sound too (the node's default when unset).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_audio: Option<bool>,
     /// The single start page of earlier versions: folded into `tabs` when read.
     #[serde(default, rename = "homepage", skip_serializing)]
     legacy_homepage: Option<String>,
@@ -137,6 +143,8 @@ pub async fn create(
         proxy: None,
         color_scheme: None,
         tabs: Vec::new(),
+        record: None,
+        record_audio: None,
         legacy_homepage: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
@@ -147,8 +155,12 @@ pub async fn create(
 
 /// Give a directory fresh metadata (after a copy or an import).
 pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::Result<Profile> {
-    // A copied or imported profile keeps its proxy, appearance and default tabs.
+    // A copied or imported profile keeps its proxy, appearance, default tabs and
+    // recording settings.
     let old = read_meta(&dir).await;
+    let (record, record_audio) = old
+        .as_ref()
+        .map_or((None, None), |m| (m.record, m.record_audio));
     let proxy = old.as_ref().and_then(|m| m.proxy.clone());
     let tabs = old.as_ref().map(|m| m.tabs.clone()).unwrap_or_default();
     let color_scheme = old.and_then(|m| m.color_scheme);
@@ -164,6 +176,8 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         proxy,
         color_scheme,
         tabs,
+        record,
+        record_audio,
         legacy_homepage: None,
     };
     write_meta(&dir, &meta).await?;
@@ -218,6 +232,8 @@ pub async fn migrate(profiles_dir: &Path) {
             proxy: None,
             color_scheme: None,
             tabs: Vec::new(),
+            record: None,
+            record_audio: None,
             legacy_homepage: None,
         };
         let new = profiles_dir.join(id.to_string());

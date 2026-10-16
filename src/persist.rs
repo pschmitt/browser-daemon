@@ -65,6 +65,9 @@ pub struct SessionRecord {
     pub created_at_secs: u64,
     /// A recording was running: a new one continues it after the restart.
     pub recording: bool,
+    /// ...with the sound (None: the node's default; records of older versions).
+    #[serde(default)]
+    pub recording_audio: Option<bool>,
 }
 
 impl SessionRecord {

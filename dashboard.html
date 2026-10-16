@@ -1777,8 +1777,8 @@ const ACT = {
     openMenu(el, [
       { icon: 'takeover', label: 'Take over', run: () => { location.href = handoffUrl(s.node_name, { session: s.id }); } },
       { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
-      { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : s.audio ? 'Start recording (with sound)' : 'Start recording', run: () => toggleRecording(s) },
-      !s.is_recording && s.audio && { icon: 'rec', label: 'Start recording without sound', run: () => toggleRecording(s, false) },
+      { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : !s.audio ? 'Start recording' : s.record_audio ? 'Start recording (with sound)' : 'Start recording (silent)', run: () => toggleRecording(s) },
+      !s.is_recording && s.audio && { icon: 'rec', label: s.record_audio ? 'Start recording without sound' : 'Start recording with sound', run: () => toggleRecording(s, !s.record_audio) },
       { icon: 'clock', label: `Auto-stop when idle: ${idleLabel(s.idle_timeout_seconds)}…`, run: () => setIdleTimeout(s) },
       nodeProxies(s.node_name).length && { icon: 'route', label: 'Proxy', meta: s.proxy ? proxyName(s.node_name, s.proxy) : 'Direct', run: () => openMenu(el, [
         { label: 'Proxy (switches now)' },
@@ -1816,6 +1816,12 @@ const ACT = {
       { icon: p.color_scheme === 'light' ? 'sun' : 'moon', label: 'Appearance', meta: schemeName(p.color_scheme), run: () => openMenu(el, [
         { label: p.session ? 'Appearance (from the next launch)' : 'Appearance' },
         ...['dark', 'light'].map((v) => ({ label: schemeName(v), on: (p.color_scheme || 'dark') === v, run: () => setProfileScheme(p, v) })),
+      ]) },
+      { icon: 'rec', label: 'Recording', meta: recordingSummary(p), run: () => openMenu(el, [
+        { label: p.session ? 'Record its sessions (from the next launch)' : 'Record its sessions' },
+        ...[[undefined, "Node's default"], [true, 'Always'], [false, 'Never']].map(([v, label]) => ({ label, on: p.record === v, run: () => setProfileRecording(p, { record: v ?? null }) })),
+        { label: 'Sound in its recordings' },
+        ...[[undefined, "Node's default"], [true, 'With sound'], [false, 'Without sound']].map(([v, label]) => ({ label, on: p.record_audio === v, run: () => setProfileRecording(p, { record_audio: v ?? null }) })),
       ]) },
       { icon: 'home', label: 'Default tabs…', meta: p.tabs?.length ? `${p.tabs.length}` : 'blank', run: () => setProfileTabs(p) },
       { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
@@ -2164,9 +2170,10 @@ async function stopSession(s) {
   if (ok) act('Stopping session', () => request('DELETE', api(s.node_name, `/sessions/${enc(s.id)}`)), 'Session stopped');
 }
 
-// audio: false records without the session's sound (default: the node's setting).
+// audio: whether the recording takes the sound (default: the session's, from its
+// profile or node).
 function toggleRecording(s, audio) {
-  const path = `/sessions/${enc(s.id)}/${s.is_recording ? 'stop-record' : 'record'}${!s.is_recording && audio === false ? '?audio=false' : ''}`;
+  const path = `/sessions/${enc(s.id)}/${s.is_recording ? 'stop-record' : 'record'}${!s.is_recording && audio !== undefined ? `?audio=${audio}` : ''}`;
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),
     s.is_recording ? 'Recording saved' : 'Recording started');
 }
@@ -2405,6 +2412,16 @@ function setSessionProxy(s, id) {
 function setProfileScheme(p, v) {
   act('Setting the appearance', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { color_scheme: v }),
     `${p.display} is ${v}` + (p.session ? ' from its next launch' : ''));
+}
+// The profile's own recording settings; unset ones follow the node.
+function recordingSummary(p) {
+  if (p.record === false) return 'never';
+  const what = p.record === true ? 'always' : 'default';
+  return p.record_audio === false ? `${what}, silent` : p.record_audio === true ? `${what}, sound` : what;
+}
+function setProfileRecording(p, change) {
+  act('Setting how it records', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), change),
+    `${p.display}: ${recordingSummary({ ...p, ...Object.fromEntries(Object.entries(change).map(([k, v]) => [k, v ?? undefined])) })}` + (p.session ? ' from its next launch' : ''));
 }
 function setProfileProxy(p, id) {
   const label = id === 'none' ? 'direct connections' : proxyName(p.node_name, id);

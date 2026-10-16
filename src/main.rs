@@ -296,6 +296,9 @@ pub struct ManagedSession {
     pub profile: Option<String>,
     pub profile_id: Option<Uuid>,
     pub persistent: bool,
+    /// Whether a recording started without saying takes the sound (the
+    /// profile's setting, else the node's).
+    pub record_audio: bool,
     pub created_at: Instant,
     pub client_count: Arc<AtomicUsize>,
     pub activity: Arc<idle::Activity>,
@@ -380,6 +383,7 @@ impl ManagedSession {
             is_recording: recording.is_some(),
             recording_paused: recording.is_some_and(SessionRecorderHandle::is_paused),
             recording_audio: recording.is_some_and(|r| r.audio),
+            record_audio: self.record_audio,
         }
     }
 }
@@ -449,6 +453,9 @@ pub struct SessionSummary {
     /// The recording takes the session's sound too.
     #[serde(default)]
     pub recording_audio: bool,
+    /// A recording started without saying would take the sound.
+    #[serde(default)]
+    pub record_audio: bool,
 }
 
 #[derive(Clone)]
@@ -612,6 +619,9 @@ impl AppState {
             Some(key) => Some(self.resolve_or_create_profile(key, engine).await?),
             None => None,
         };
+        let (profile_record, profile_record_audio) = profile
+            .as_ref()
+            .map_or((None, None), |p| (p.meta.record, p.meta.record_audio));
 
         // A profile runs in at most one browser: attach to its session if it has one.
         if let Some(ref profile) = profile {
@@ -709,6 +719,7 @@ impl AppState {
             profile: browser.profile_name.clone(),
             profile_id: browser.profile_id,
             persistent,
+            record_audio: profile_record_audio.unwrap_or(self.recorder_config.audio),
             created_at: browser.created_at,
             client_count: Arc::new(AtomicUsize::new(0)),
             activity: Arc::new(idle::Activity::new(
@@ -738,7 +749,11 @@ impl AppState {
             guard.insert(session.id, session.clone());
         }
 
-        if record.unwrap_or(self.recorder_config.enabled) {
+        // The request's choice, then the profile's, then the node's.
+        if record
+            .or(profile_record)
+            .unwrap_or(self.recorder_config.enabled)
+        {
             self.start_recording(&session, None).await;
         }
         self.persist_session(&session).await;
@@ -748,11 +763,12 @@ impl AppState {
 
     /// Save what a restarted daemon needs to adopt the session's browser.
     pub async fn persist_session(&self, session: &ManagedSession) {
-        let recording = self
+        let (recording, recording_audio) = self
             .active_recordings
             .read()
             .await
-            .contains_key(&session.id);
+            .get(&session.id)
+            .map_or((false, false), |r| (true, r.audio));
         let guard = session.browser.lock().await;
         let Some(browser) = guard.as_ref() else {
             return;
@@ -771,6 +787,7 @@ impl AppState {
                 .flatten(),
             video: session.video,
             recording,
+            recording_audio,
         });
         if let Err(e) = persist::save(self.config.state_dir(), &record).await {
             warn!(session_id = %session.id, error = %e, "Could not save the session record");
@@ -792,6 +809,7 @@ impl AppState {
                         profile: browser.profile_name.clone(),
                         profile_id: browser.profile_id,
                         persistent: rec.persistent,
+                        record_audio: self.profile_record_audio(browser.profile_id).await,
                         created_at: browser.created_at,
                         client_count: Arc::new(AtomicUsize::new(0)),
                         activity: Arc::new(idle::Activity::new(rec.idle_timeout_secs)),
@@ -818,7 +836,7 @@ impl AppState {
                         .await
                         .insert(session.id, session.clone());
                     if rec.recording {
-                        self.start_recording(&session, None).await;
+                        self.start_recording(&session, rec.recording_audio).await;
                     }
                     info!(session_id = %rec.id, engine = %rec.engine, profile = ?rec.profile, "Adopted session of the previous run");
                 }
@@ -887,7 +905,18 @@ impl AppState {
             })
     }
 
-    /// `audio`: take the session's sound too (default: the node's --record-audio).
+    /// A profile's sound setting for recordings, else the node's.
+    async fn profile_record_audio(&self, profile: Option<Uuid>) -> bool {
+        let meta = match profile {
+            Some(id) => profiles::find(&self.config.profiles_dir, &id.to_string()).await,
+            None => None,
+        };
+        meta.and_then(|p| p.meta.record_audio)
+            .unwrap_or(self.recorder_config.audio)
+    }
+
+    /// `audio`: take the session's sound too (default: the session's, see
+    /// `ManagedSession::record_audio`).
     pub async fn start_recording(&self, session: &ManagedSession, audio: Option<bool>) -> Uuid {
         // Chromium with a display of its own: frames grabbed from the display, since
         // screenshots repaint the window the live video shows (flicker).
@@ -911,7 +940,7 @@ impl AppState {
             (*self.recorder_config).clone(),
             grab,
             audio
-                .unwrap_or(self.recorder_config.audio)
+                .unwrap_or(session.record_audio)
                 .then(|| {
                     Some(rec_audio::Source {
                         cfg: self.config.audio.clone()?,
@@ -1136,6 +1165,12 @@ fn default_true() -> bool {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ProfileInfo {
+    /// Record the profile's sessions; the node's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<bool>,
+    /// Their recordings take the sound; the node's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_audio: Option<bool>,
     /// Stable id; also the name of the profile's directory.
     #[serde(default)]
     pub id: Option<Uuid>,
@@ -1183,6 +1218,12 @@ pub struct CreateProfileRequest {
     /// Pages its sessions open with: a list, or addresses separated by spaces.
     #[serde(default, deserialize_with = "tabs_field")]
     pub tabs: Option<Vec<String>>,
+    /// Record its sessions (the node's default when absent or null).
+    #[serde(default)]
+    pub record: Option<bool>,
+    /// Its recordings take the sound (the node's default when absent or null).
+    #[serde(default)]
+    pub record_audio: Option<bool>,
 }
 
 /// Default tabs as a JSON list, or as one string of addresses separated by
@@ -1214,6 +1255,19 @@ pub struct UpdateProfileRequest {
     /// Pages new sessions open with; empty clears them.
     #[serde(default, deserialize_with = "tabs_field")]
     pub tabs: Option<Vec<String>>,
+    /// Record new sessions (true/false), or null for the node's default.
+    #[serde(default, deserialize_with = "nullable")]
+    pub record: Option<Option<bool>>,
+    /// Recordings take the sound (true/false), or null for the node's default.
+    #[serde(default, deserialize_with = "nullable")]
+    pub record_audio: Option<Option<bool>>,
+}
+
+/// A field that may be set to null (Some(None)) as well as left out (None).
+fn nullable<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(d).map(Some)
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -3118,6 +3172,8 @@ async fn profile_info(state: &AppState, profile: &Profile) -> ProfileInfo {
         proxy: profile.meta.proxy.clone(),
         color_scheme: profile.meta.color_scheme.unwrap_or_default(),
         tabs: profile.meta.tabs.clone(),
+        record: profile.meta.record,
+        record_audio: profile.meta.record_audio,
     }
 }
 
@@ -3375,9 +3431,20 @@ async fn api_create_profile(
     };
 
     let tabs = req.tabs.as_deref().map(tab_urls).transpose()?;
-    if proxy.is_some() || req.color_scheme.is_some() || tabs.is_some() {
+    if proxy.is_some()
+        || req.color_scheme.is_some()
+        || tabs.is_some()
+        || req.record.is_some()
+        || req.record_audio.is_some()
+    {
         if let Some(proxy) = proxy {
             profile.meta.proxy = proxy;
+        }
+        if req.record.is_some() {
+            profile.meta.record = req.record;
+        }
+        if req.record_audio.is_some() {
+            profile.meta.record_audio = req.record_audio;
         }
         if req.color_scheme.is_some() {
             profile.meta.color_scheme = req.color_scheme;
@@ -3513,6 +3580,19 @@ async fn api_update_profile(
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             info!(profile = %profile.meta.name, tabs = ?profile.meta.tabs, "Profile default tabs changed");
         }
+    }
+    let (record, record_audio) = (
+        req.record.unwrap_or(profile.meta.record),
+        req.record_audio.unwrap_or(profile.meta.record_audio),
+    );
+    if (record, record_audio) != (profile.meta.record, profile.meta.record_audio) {
+        profile.meta.record = record;
+        profile.meta.record_audio = record_audio;
+        profiles::write_meta(&profile.dir, &profile.meta)
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        // A running session keeps recording as it does until it is restarted.
+        info!(profile = %profile.meta.name, record = ?record, record_audio = ?record_audio, "Profile recording settings changed");
     }
     Ok(Json(profile_info(&state, &profile).await))
 }
@@ -6815,5 +6895,13 @@ mod tests {
             peer_profile_url("https://browser.h.ts.example", "a b", None),
             "https://browser.h.ts.example/api/profiles/a%20b"
         );
+    }
+
+    #[test]
+    fn profile_recording_settings_can_be_left_set_or_cleared() {
+        let req: UpdateProfileRequest = serde_json::from_str(r#"{"record_audio": false}"#).unwrap();
+        assert_eq!((req.record, req.record_audio), (None, Some(Some(false))));
+        let req: UpdateProfileRequest = serde_json::from_str(r#"{"record": null}"#).unwrap();
+        assert_eq!(req.record, Some(None));
     }
 }

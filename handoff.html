@@ -3662,8 +3662,11 @@ function renderSession() {
   if (box._html !== html) { box.innerHTML = html; box._html = html; }
 }
 
+// Whether a recording started here takes the sound: the session's default (its
+// profile's setting, else the node's) until toggled for this session.
+const recSoundPick = new Map();
 function recSound() {
-  try { return localStorage.getItem("bd.recSound") !== "0"; } catch { return true; }
+  return recSoundPick.get(target?.sessionId) ?? sess?.record_audio ?? true;
 }
 
 function toggleSessMenu(open = E.sessMenu.hidden) {
@@ -3695,7 +3698,7 @@ $("smRec").onclick = async (e) => {
   const b = e.target.closest("[data-rec]");
   if (!b) return;
   if (b.dataset.rec === "sound") {
-    try { localStorage.setItem("bd.recSound", recSound() ? "0" : "1"); } catch { /* storage unavailable */ }
+    recSoundPick.set(target?.sessionId, !recSound());
     refreshSession();
     return;
   }

@@ -214,6 +214,24 @@ pub enum Scheme {
     Light,
 }
 
+/// A profile setting: on, off, or the node's default.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum Toggle {
+    On,
+    Off,
+    Default,
+}
+
+impl Toggle {
+    fn json(self) -> Value {
+        match self {
+            Toggle::On => json!(true),
+            Toggle::Off => json!(false),
+            Toggle::Default => Value::Null,
+        }
+    }
+}
+
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 pub enum Screen {
     Window,
@@ -260,6 +278,12 @@ pub enum ProfileCmd {
         /// Page its sessions open with (repeat for several tabs).
         #[arg(long = "tab")]
         tabs: Vec<String>,
+        /// Record its sessions (default: the node's setting).
+        #[arg(long, value_enum)]
+        record: Option<Toggle>,
+        /// Its recordings take the sound (default: the node's setting).
+        #[arg(long, value_enum)]
+        record_audio: Option<Toggle>,
     },
     /// Change a profile's name or defaults.
     Set {
@@ -279,6 +303,12 @@ pub enum ProfileCmd {
         /// Remove all default tabs.
         #[arg(long)]
         clear_tabs: bool,
+        /// Record its sessions: on, off, or the node's default.
+        #[arg(long, value_enum)]
+        record: Option<Toggle>,
+        /// Its recordings take the sound: on, off, or the node's default.
+        #[arg(long, value_enum)]
+        record_audio: Option<Toggle>,
     },
     /// Copy a profile under a new name (same node).
     Clone {
@@ -1078,7 +1108,7 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             let path = c.api(&p.node_name, &format!("/profiles/{}", enc(&p.profile.name)));
             c.print_json(&c.call(c.req(Method::GET, &path)).await?);
         }
-        ProfileCmd::New { name, node, engine, clone_from, proxy, color_scheme, tabs } => {
+        ProfileCmd::New { name, node, engine, clone_from, proxy, color_scheme, tabs, record, record_audio } => {
             let node = c.node_or_local(node.as_deref())?;
             let mut body = json!({ "name": name });
             if let Some(v) = engine { body["engine"] = json!(format!("{v:?}").to_lowercase()) }
@@ -1086,16 +1116,20 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             if let Some(v) = proxy { body["proxy"] = json!(v) }
             if let Some(v) = color_scheme { body["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
             if !tabs.is_empty() { body["tabs"] = json!(tabs) }
+            if let Some(v) = record { body["record"] = v.json() }
+            if let Some(v) = record_audio { body["record_audio"] = v.json() }
             let v = c.call(c.req(Method::POST, &c.api(&node, "/profiles")).json(&body)).await?;
             done(&c, v, &format!("created {name} on {node}"));
         }
-        ProfileCmd::Set { profile, node, name, proxy, color_scheme, tabs, clear_tabs } => {
+        ProfileCmd::Set { profile, node, name, proxy, color_scheme, tabs, clear_tabs, record, record_audio } => {
             let p = c.profile(&profile, node.as_deref())?;
             let mut body = json!({});
             if let Some(v) = name { body["name"] = json!(v) }
             if let Some(v) = proxy { body["proxy"] = json!(v) }
             if let Some(v) = color_scheme { body["color_scheme"] = json!(format!("{v:?}").to_lowercase()) }
             if clear_tabs { body["tabs"] = json!([]) } else if !tabs.is_empty() { body["tabs"] = json!(tabs) }
+            if let Some(v) = record { body["record"] = v.json() }
+            if let Some(v) = record_audio { body["record_audio"] = v.json() }
             let path = c.api(&p.node_name, &format!("/profiles/{}", enc(&p.profile.name)));
             let v = c.call(c.req(Method::PATCH, &path).json(&body)).await?;
             done(&c, v, "updated");
