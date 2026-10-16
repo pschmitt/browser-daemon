@@ -125,8 +125,17 @@ pub async fn describe_origin(
         else {
             continue;
         };
-        let found = tokio::net::lookup_host(format!("{host}:443")).await;
-        if found.is_ok_and(|mut addrs| addrs.any(|a| a.ip() == addr)) {
+        // A slow resolver must not hold a connecting client up.
+        let found = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::lookup_host(format!("{host}:443")),
+        )
+        .await;
+        if found
+            .ok()
+            .and_then(Result::ok)
+            .is_some_and(|mut addrs| addrs.any(|a| a.ip() == addr))
+        {
             return name.clone();
         }
     }
