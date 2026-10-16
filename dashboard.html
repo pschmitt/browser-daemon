@@ -26,8 +26,9 @@
 <style>
 :root {
   --bg: #0b0d12; --surface: #11141c; --raised: #161a24; --hover: #1b2030; --line: #232836; --line-strong: #30364a;
-  --fg: #e8eaf2; --muted: #98a0b8; --faint: #6b7289;
-  --accent: #7c6cf0; --accent-fg: #fff; --accent-soft: rgba(124, 108, 240, .16);
+  --fg: #e8eaf2; --muted: #98a0b8; --faint: #7f87a0;
+  --accent: #7c6cf0; --accent-btn: #6556e0; --accent-fg: #fff; --accent-soft: rgba(124, 108, 240, .16);
+  --bad-btn: #d4213f; --node-l: 68%;
   --ok: #10b981; --ok-soft: rgba(16, 185, 129, .14); --warn: #f59e0b; --warn-soft: rgba(245, 158, 11, .14);
   --bad: #f43f5e; --bad-soft: rgba(244, 63, 94, .14);
   --chromium: #60a5fa; --firefox: #ff7a3d;
@@ -38,19 +39,24 @@
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
     --bg: #f4f5fa; --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
-    --fg: #141725; --muted: #646a82; --faint: #8b91a7;
-    --accent-soft: rgba(124, 108, 240, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
+    --fg: #141725; --muted: #646a82; --faint: #656b82;
+    --accent: #5b4bd6; --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
+    --ok: #047857; --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c; --node-l: 36%;
   }
 }
 :root[data-theme="light"] {
   --bg: #f4f5fa; --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
-  --fg: #141725; --muted: #646a82; --faint: #8b91a7;
-  --accent-soft: rgba(124, 108, 240, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
+  --fg: #141725; --muted: #646a82; --faint: #656b82;
+  --accent: #5b4bd6; --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
+  --ok: #047857; --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c; --node-l: 36%;
 }
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
+/* A dialog is open: the page behind stays put. */
+html:has(dialog.modal[open]) { overflow: hidden; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 body {
   margin: 0; background: var(--bg); color: var(--fg); min-height: 100vh;
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
@@ -77,10 +83,10 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; pointer-events: none; }
 .btn.primary, .btn.primary .label, .btn.primary .lbl, .btn.primary .i { color: #fff !important; -webkit-text-fill-color: #fff !important; }
-.btn.primary { background: var(--accent); border-color: transparent; }
-.btn.primary:hover { background: color-mix(in oklab, var(--accent) 88%, #fff); }
-.btn.danger { background: var(--bad); border-color: transparent; color: #fff; }
-.btn.danger:hover { background: color-mix(in oklab, var(--bad) 88%, #fff); }
+.btn.primary { background: var(--accent-btn); border-color: transparent; }
+.btn.primary:hover { background: color-mix(in oklab, var(--accent-btn) 88%, #fff); }
+.btn.danger { background: var(--bad-btn); border-color: transparent; color: #fff; }
+.btn.danger:hover { background: color-mix(in oklab, var(--bad-btn) 88%, #fff); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .btn.ghost:hover { background: var(--hover); color: var(--fg); }
 .btn.sm { height: 30px; padding: 0 10px; font-size: 12.5px; border-radius: 8px; }
@@ -144,6 +150,9 @@ header.top {
 
 /* ------------------------------------------------------------ layout */
 main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-inset-right)) 60px max(20px, env(safe-area-inset-left)); }
+.offline-banner { margin: 0 0 14px; padding: 9px 13px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent); font-size: 13px; font-weight: 600; }
+.offline-banner[hidden] { display: none; }
+main.stale .stats, main.stale .view { opacity: .55; filter: grayscale(.4); transition: opacity .3s; }
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
 .stat {
   position: relative; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; min-height: 104px;
@@ -166,6 +175,8 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
 .views { display: flex; gap: 4px; border-bottom: 1px solid var(--line); flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .views::-webkit-scrollbar { display: none; }
+/* More tabs off to the right: the edge fades out as a hint to scroll. */
+.views.more-right { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
 .views button {
   position: relative; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border: 0;
   background: transparent; color: var(--muted); font-weight: 600; white-space: nowrap;
@@ -188,6 +199,14 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .engine-badge.firefox { background: color-mix(in oklab, var(--firefox) 16%, transparent); color: var(--firefox); }
 .engine-badge .i { width: 19px; height: 19px; }
 .scard-title { font-weight: 700; font-size: 14.5px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.scard-agent { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12.5px; font-weight: 600; color: var(--accent); cursor: pointer; min-width: 0; }
+.scard.driven { border-color: color-mix(in oklab, var(--accent) 40%, var(--line)); }
+.scard.stale { opacity: .55; filter: grayscale(.5); }
+.scard.stale .scard-head { padding-bottom: 14px; }
+.sess-tools { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
+.sess-tools .rec-search { flex: 1; min-width: 0; margin: 0; }
+.sess-tools .btn { height: 38px; }
+.btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--fg); }
 .scard-title em { font-style: normal; color: var(--muted); font-weight: 600; }
 .scard-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 3px; font-size: 12px; color: var(--muted); }
 .scard-meta .sep { color: var(--faint); }
@@ -262,8 +281,15 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .merge-check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .avatar { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 13px; text-transform: uppercase; }
 .play-btn { width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); transition: background .15s, color .15s, transform .1s; }
-.play-btn:hover { background: var(--accent); color: var(--accent-fg); transform: scale(1.05); }
+.play-btn:hover { background: var(--accent-btn); color: var(--accent-fg); transform: scale(1.05); }
 .play-btn .i { width: 13px; height: 13px; margin-left: 2px; }
+.fav-letter { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; font: 700 10px/1 system-ui, sans-serif;
+  color: hsl(var(--h) 65% var(--node-l)); background: hsl(var(--h) 65% 50% / .18); }
+.site-fav .fav-letter { width: 18px; height: 18px; }
+.list-more { display: flex; align-items: center; gap: 12px; padding: 10px 14px; font-size: 12.5px; }
+.list-more[hidden] { display: none; }
+.stat-hit { position: absolute; inset: 0; width: 100%; border: 0; background: transparent; border-radius: inherit; }
+.stat-action { z-index: 1; }
 .site-fav { width: 18px; height: 18px; border-radius: 4px; flex: none; display: grid; place-items: center; color: var(--faint); }
 .site-fav img { width: 18px; height: 18px; border-radius: 4px; object-fit: contain; }
 .cached { color: var(--ok); display: inline-flex; }
@@ -281,7 +307,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 
 /* ------------------------------------------------------------ menu */
 .menu {
-  position: fixed; z-index: 90; min-width: 200px; padding: 5px; background: var(--raised); border: 1px solid var(--line-strong);
+  position: fixed; inset: auto; margin: 0; overflow: visible; color: var(--fg); z-index: 90; min-width: 200px; padding: 5px; background: var(--raised); border: 1px solid var(--line-strong);
   border-radius: 12px; box-shadow: var(--shadow); display: none; animation: pop .12s ease-out;
 }
 .menu.open { display: block; }
@@ -295,16 +321,19 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 @keyframes pop { from { opacity: 0; transform: scale(.97) translateY(-3px); } to { opacity: 1; transform: none; } }
 
 /* ------------------------------------------------------------ modals */
-/* Opened from the player too: above it. */
-#detailsModal, #askModal { z-index: 75; }
-.modal {
-  position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; padding: 20px;
+/* Native <dialog>s (showModal): focus trap, Esc, inert page and stacking come with them.
+   --vvh/--vvt follow the visual viewport, so a phone's keyboard does not cover the sheet. */
+dialog.modal {
+  position: fixed; inset: 0; top: var(--vvt, 0); width: 100%; height: var(--vvh, 100%); max-width: none; max-height: none; margin: 0;
+  padding: 20px; border: 0; color: inherit; align-items: center; justify-content: center; overflow: hidden;
   background: rgba(5, 7, 12, .62); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
 }
-.modal.open { display: flex; animation: fade .15s ease-out; }
+dialog.modal:not([open]) { display: none; }
+dialog.modal[open] { display: flex; animation: fade .15s ease-out; }
+dialog.modal::backdrop { background: transparent; }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
 .sheet {
-  width: 100%; max-width: 520px; max-height: calc(100vh - 40px); display: flex; flex-direction: column;
+  width: 100%; max-width: 520px; max-height: calc(var(--vvh, 100vh) - 40px); display: flex; flex-direction: column;
   background: var(--raised); border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden;
   animation: rise .18s ease-out;
 }
@@ -361,10 +390,11 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 @keyframes rise { from { transform: translateY(10px); opacity: .6; } to { transform: none; opacity: 1; } }
 .sheet-head { display: flex; align-items: center; gap: 10px; padding: 16px 18px 12px; }
 .sheet-head h2 { margin: 0; font-size: 16px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#askTitle { white-space: normal; }
 .sheet-body { padding: 4px 18px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .sheet-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
-.x-btn { width: 32px; height: 32px; border-radius: 9px; border: 0; background: var(--bad-soft); color: var(--bad); display: grid; place-items: center; flex: none; }
-.x-btn:hover { background: var(--bad); color: #fff; }
+.x-btn { width: 32px; height: 32px; border-radius: 9px; border: 0; background: var(--hover); color: var(--muted); display: grid; place-items: center; flex: none; }
+.x-btn:hover { background: var(--line-strong); color: var(--fg); }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field > label, .field-label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .hint { font-size: 12px; color: var(--faint); }
@@ -408,7 +438,7 @@ details.adv .adv-sum { font-weight: 400; color: var(--muted); overflow: hidden; 
 .kv dt { font-size: 11.5px; color: var(--faint); font-weight: 600; margin-bottom: 3px; }
 .kv dd { margin: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* IDs and paths wrap: shown whole rather than cut off. */
-.kv dd:has(> .mono) { white-space: normal; overflow-wrap: anywhere; }
+.kv dd:has(> .mono), .kv dd:has(> br) { white-space: normal; overflow-wrap: anywhere; }
 .kv .kv-copy { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s, background .12s; }
 .kv > div:hover .kv-copy, .kv .kv-copy:focus-visible { opacity: 1; }
 .kv .kv-copy:hover { background: var(--hover); color: var(--fg); }
@@ -430,6 +460,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .node-setting { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; }
 .node-setting > span:first-child { display: inline-flex; align-items: center; gap: 6px; min-width: 120px; color: var(--muted); }
 .node-setting select { max-width: 320px; }
+.node-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 6px; }
 .node-card .avatar { color: var(--node); background: color-mix(in oklab, var(--node) 16%, transparent); }
 .node-card .t { flex: 1; min-width: 0; }
 .node-card .t > b { display: flex; align-items: center; gap: 7px; }
@@ -437,7 +468,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .node-card .bars { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
 
 /* ------------------------------------------------------------ toasts */
-.toasts { position: fixed; z-index: 100; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; width: min(360px, calc(100vw - 36px)); pointer-events: none; }
+.toasts { position: fixed; inset: auto; margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; z-index: 100; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); width: min(360px, calc(100vw - 36px)); pointer-events: none; }
+.toasts:popover-open { display: flex; flex-direction: column; gap: 8px; }
 .toast-item {
   pointer-events: auto; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 12px;
   background: var(--raised); border: 1px solid var(--line-strong); box-shadow: var(--shadow); transition: opacity .2s, transform .2s; animation: rise .18s ease-out;
@@ -456,6 +488,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .toast-close:hover { background: var(--hover); color: var(--fg); }
 .toast-progress-wrap { height: 4px; border-radius: 999px; background: var(--hover); overflow: hidden; }
 .toast-progress-bar { height: 100%; background: var(--accent); border-radius: inherit; transition: width .25s; }
+.toast-progress-bar.indeterminate { width: 35%; transition: none; animation: slide 1.1s ease-in-out infinite alternate; }
+.toast-count { font: 600 11px var(--mono); color: var(--muted); }
 .toast-pct { font: 600 11.5px var(--mono); color: var(--accent); }
 .toast-action-btn { align-self: flex-start; }
 .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
@@ -485,6 +519,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .player-loading-text { font-weight: 600; font-size: 14px; }
 .player-loading-bar-wrap { width: min(320px, 80%); height: 5px; border-radius: 999px; background: rgba(255, 255, 255, .15); overflow: hidden; }
 .player-loading-bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.player-loading-bar.indeterminate { width: 35%; transition: none; animation: slide 1.1s ease-in-out infinite alternate; }
+@keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
+/* The first frame is drawn when it is ready: no half-sized canvas flashes while it loads. */
+.player-viewport-wrap.loading #playerCanvas { visibility: hidden; }
+.player-viewport-wrap.buffering::after { content: ""; position: absolute; right: 14px; top: 14px; width: 22px; height: 22px; border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, .25); border-top-color: #fff; animation: spin .8s linear infinite; pointer-events: none; }
 .player-controls-wrap { padding: 4px 12px 10px; background: linear-gradient(to top, rgba(0, 0, 0, .9), rgba(0, 0, 0, .75)); transition: opacity .25s; }
 .player-buffer { height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; margin: 0 2px -2px; }
 .player-buffer.done { visibility: hidden; }
@@ -506,7 +546,13 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .player-volume.off .player-ctrl-btn { cursor: not-allowed; }
 .player-volume-slider { width: 84px; accent-color: var(--accent); cursor: pointer; }
 .player-volume.off .player-volume-slider { cursor: not-allowed; }
-@media (max-width: 640px) { .player-volume-slider { width: 56px; } }
+/* Phones: what does not fit goes (loop, volume slider, frame time), the rest wraps. */
+@media (max-width: 640px) {
+  .player-volume-slider, #playerLoopBtn, #playerFrameOffset { display: none; }
+  .player-buttons-row { flex-wrap: wrap; row-gap: 0; }
+  .player-ctrl-btn { min-width: 32px; padding: 0 6px; }
+  .player-time-text { margin-left: 2px; font-size: 11.5px; }
+}
 .player-ctrl-btn:disabled { opacity: .4; }
 .player-time-text { font: 600 12.5px var(--mono); margin-left: 6px; white-space: nowrap; }
 .player-frames-text { font: 11.5px var(--mono); color: rgba(255, 255, 255, .55); margin-left: 6px; white-space: nowrap; }
@@ -529,10 +575,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   .top-actions .label { display: none; }
   .top-actions .btn.primary { width: 34px; padding: 0; }
   main { padding: 16px 14px 60px; }
-  .stats { gap: 10px; margin-bottom: 18px; }
-  .stat { min-height: 84px; padding: 11px 12px; gap: 4px; }
-  .stat-value { font-size: 21px; }
-  .stat-sub { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
+  .stat { min-height: 0; padding: 8px 9px; gap: 2px; border-radius: 12px; }
+  .stat-label { font-size: 11px; gap: 4px; }
+  .stat-label .i, .live-dot, .spark, .meter, .stat-sub, .stat-action { display: none; }
+  .stat-value { font-size: 18px; }
+  .stat-value small { font-size: 11px; margin-left: 1px; }
   .session-grid { grid-template-columns: 1fr; }
   .toolbar { gap: 8px; }
   .views button { padding: 0 8px; gap: 5px; font-size: 13px; }
@@ -540,6 +588,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   .views button > .i { display: none; }
   .view-actions .btn { width: 34px; padding: 0; }
   .view-actions .btn .lbl { display: none; }
+  .views { flex: 1 1 100%; }
+  .sess-tools .btn { padding: 0 10px; }
+  .view-actions .btn.keep { width: auto; padding: 0 10px; }
+  .view-actions .btn.keep .lbl { display: inline; }
   .view-actions.recording-actions { width: 100%; flex-wrap: wrap; }
   .view-actions.recording-actions .btn { width: auto; padding: 0 10px; }
   .view-actions.recording-actions .btn .lbl { display: inline; }
@@ -553,9 +605,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   .recordings .row .c-node, .recordings .row .c-dur { display: none; }
   .recordings .row .mobile-meta { display: flex !important; grid-column: 3 / 5; }
   .row2 { grid-template-columns: 1fr; }
-  .modal { padding: 0; align-items: flex-end; }
-  .sheet { max-width: none; border-radius: 18px 18px 0 0; max-height: 92vh; padding-bottom: env(safe-area-inset-bottom); }
-  .modal.player { align-items: center; }
+  dialog.modal { padding: 0; align-items: flex-end; }
+  .sheet { max-width: none; border-radius: 18px 18px 0 0; max-height: min(92vh, var(--vvh, 100vh)); padding-bottom: env(safe-area-inset-bottom); }
+  dialog.modal.player { align-items: center; }
   .player-modal-card { border-radius: 0; max-height: 100vh; height: 100%; border: 0; }
   .player-top { padding-top: calc(10px + env(safe-area-inset-top)); }
   .player-frames-text { display: none; }
@@ -638,6 +690,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </header>
 
 <main>
+  <div class="offline-banner" id="offlineBanner" role="status" hidden></div>
   <section class="stats">
     <div class="stat nav" role="button" tabindex="0" data-act="view" data-view="sessions" title="Show sessions">
       <div class="stat-label"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="live-dot" id="liveDot" title="Live updates"></span></div>
@@ -658,9 +711,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="stat-value" id="statProfiles">0</div>
       <div class="stat-sub" id="statProfilesSub">0 B on disk</div>
     </button>
-    <div class="stat nav" role="button" tabindex="0" data-act="view" data-view="recordings" title="Show recordings">
+    <div class="stat nav" data-view="recordings">
+      <button class="stat-hit" data-act="view" data-view="recordings" title="Show recordings" aria-label="Show recordings"></button>
       <div class="stat-label"><svg class="i sm"><use href="#i-db"/></svg>Recordings</div>
-      <button class="btn ghost icon sm stat-action" data-act="vacuum" title="Vacuum: apply the retention policy now" aria-label="Vacuum recordings"><svg class="i sm"><use href="#i-broom"/></svg></button>
+      <button class="btn ghost icon sm stat-action" data-act="vacuum" title="Clean up now: apply the retention policy" aria-label="Clean up recordings now"><svg class="i sm"><use href="#i-broom"/></svg></button>
       <div class="stat-value" id="statStorage">0 B</div>
       <div class="stat-sub" id="statStorageSub">of 0 B</div>
       <div class="meter"><span id="statStorageBar"></span></div>
@@ -681,7 +735,13 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="view-actions" id="viewActions"></div>
   </div>
 
-  <section class="view" id="view-sessions"><div class="session-grid" id="sessionGrid"></div></section>
+  <section class="view" id="view-sessions">
+    <div class="sess-tools" id="sessTools" hidden>
+      <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="sessSearch" placeholder="Filter sessions: name, agent, topic, address…" autocomplete="off" spellcheck="false" aria-label="Filter sessions"></label>
+      <button class="btn" id="agentsOnlyBtn" data-act="agents-only" aria-pressed="false" title="Only the sessions an agent is driving"><svg class="i sm"><use href="#i-bot"/></svg>Agents only</button>
+    </div>
+    <div class="session-grid" id="sessionGrid"></div>
+  </section>
   <section class="view profiles" id="view-profiles" hidden></section>
   <label class="rec-search" id="recSearchWrap" hidden><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="recSearch" placeholder="Search recordings: title, address, profile, node, date…" autocomplete="off" spellcheck="false" aria-label="Search recordings"></label>
   <section class="view recordings" id="view-recordings" hidden></section>
@@ -694,11 +754,11 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </section>
 </main>
 
-<div class="menu" id="menu" role="menu"></div>
-<div class="toasts" id="toastContainer"></div>
+<div class="menu" id="menu" role="menu" popover="manual"></div>
+<div class="toasts" id="toastContainer" popover="manual" role="status" aria-live="polite"></div>
 
 <!-- New session -->
-<div class="modal" id="newSessionModal">
+<dialog class="modal" id="newSessionModal" aria-label="New browser session">
   <form class="sheet" id="newSessionForm">
     <div class="sheet-head"><h2>New browser session</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
@@ -718,13 +778,13 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         <span class="hint" id="sessionProfileHint"></span>
       </div>
       <label class="switch" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
-      <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Open handoff</b><span>Take over the browser right after launch</span></span></label>
+      <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Take over right away</b><span>Open the live view as soon as it is up</span></span></label>
       <details class="adv">
         <summary><svg class="i sm"><use href="#i-more"/></svg>Advanced<span class="adv-sum" id="advSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
         <div class="adv-body">
           <div class="adv-group">Session</div>
           <div class="field"><span class="field-label">Name</span><input class="input" id="sessionName" placeholder="Optional, e.g. Drive upload (auto-generated by default)" autocomplete="off" spellcheck="false" maxlength="64"></div>
-          <label class="switch"><input type="checkbox" id="sessionPersistent"><span class="track"></span><span class="txt"><b>Keep alive</b><span>Don't stop the browser when the last client disconnects</span></span></label>
+          <label class="switch"><input type="checkbox" id="sessionPersistent" checked><span class="track"></span><span class="txt"><b>Persistent</b><span>Keep the browser running when its last client disconnects (off: ephemeral)</span></span></label>
           <label class="switch"><input type="checkbox" id="sessionRecord"><span class="track"></span><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
           <div class="field"><label for="sessionIdle">Stop when idle for</label>
             <select class="input" id="sessionIdle">
@@ -766,10 +826,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="sessionSubmit"><svg class="i"><use href="#i-play"/></svg><span id="sessionSubmitText">Launch</span></button></div>
   </form>
-</div>
+</dialog>
 
 <!-- New profile -->
-<div class="modal" id="tabsModal">
+<dialog class="modal" id="tabsModal" aria-labelledby="tabsTitle">
   <form class="sheet" id="tabsForm">
     <div class="sheet-head"><h2 id="tabsTitle">Default tabs</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
@@ -778,9 +838,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="tabsSave"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
   </form>
-</div>
+</dialog>
 
-<div class="modal" id="newProfileModal">
+<dialog class="modal" id="newProfileModal" aria-label="New profile">
   <form class="sheet" id="newProfileForm">
     <div class="sheet-head"><h2>New profile</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
@@ -793,10 +853,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-plus"/></svg>Create</button></div>
   </form>
-</div>
+</dialog>
 
 <!-- Transfer profile -->
-<div class="modal" id="transferModal">
+<dialog class="modal" id="transferModal" aria-labelledby="transferTitle">
   <form class="sheet" id="transferForm">
     <div class="sheet-head"><h2 id="transferTitle">Move profile</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
@@ -807,19 +867,19 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-transfer"/></svg>Transfer</button></div>
   </form>
-</div>
+</dialog>
 
 <!-- Nodes -->
 <!-- Connect / API -->
-<div class="modal" id="connectModal">
+<dialog class="modal" id="connectModal" aria-label="Connect and API">
   <div class="sheet wide">
     <div class="sheet-head"><h2>Connect &amp; API</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body" id="endpointsList"></div>
   </div>
-</div>
+</dialog>
 
 <!-- About -->
-<div class="modal" id="aboutModal" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+<dialog class="modal" id="aboutModal" aria-labelledby="aboutTitle">
   <div class="sheet">
     <div class="sheet-head"><h2 id="aboutTitle">About Browser Daemon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
@@ -829,10 +889,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn primary" data-close>Close</button></div>
   </div>
-</div>
+</dialog>
 
 <!-- Backups & data -->
-<div class="modal" id="backupsModal">
+<dialog class="modal" id="backupsModal" aria-labelledby="backupsTitle">
   <form class="sheet" id="backupsForm" autocomplete="off">
     <div class="sheet-head"><h2 id="backupsTitle">Backups</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
@@ -849,10 +909,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       </div>
     </div>
   </form>
-</div>
+</dialog>
 
 <!-- Details -->
-<div class="modal" id="detailsModal">
+<dialog class="modal" id="detailsModal" aria-labelledby="detailsTitle">
   <div class="sheet wide">
     <div class="sheet-head"><h2 id="detailsTitle">Details</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
@@ -860,19 +920,19 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="field"><div style="display:flex;align-items:center;justify-content:space-between"><span class="field-label">Raw</span><button class="btn ghost sm" data-act="copy-details"><svg class="i sm"><use href="#i-copy"/></svg>Copy JSON</button></div><pre class="json" id="detailsJson"></pre></div>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- Confirm / prompt -->
-<div class="modal" id="askModal">
+<dialog class="modal" id="askModal" aria-labelledby="askTitle">
   <form class="sheet" id="askForm" style="max-width:420px">
     <div class="sheet-head"><h2 id="askTitle"></h2></div>
     <div class="sheet-body"><div id="askText" class="muted" style="font-size:13.5px"></div><input class="input" id="askInput" autocomplete="off" spellcheck="false"></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="askOk">OK</button></div>
   </form>
-</div>
+</dialog>
 
 <!-- Merge recordings -->
-<div class="modal" id="mergeModal">
+<dialog class="modal" id="mergeModal" aria-label="Merge recordings">
   <form class="sheet" id="mergeForm" style="max-width:520px">
     <div class="sheet-head"><h2>Merge recordings</h2></div>
     <div class="sheet-body">
@@ -883,13 +943,13 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="mergeOk">Merge</button></div>
   </form>
-</div>
+</dialog>
 
 <!-- Player -->
-<div class="modal player" id="playerModal">
+<dialog class="modal player" id="playerModal" aria-label="Recording player">
   <div class="player-modal-card">
     <div class="player-top">
-      <div class="site"><span class="site-fav" id="playerFav"></span><div class="t"><b id="playerPageTitle">Ready</b><span id="playerPageUrl">about:blank</span></div></div>
+      <div class="site"><span class="site-fav" id="playerFav"></span><div class="t"><b id="playerPageTitle">Ready</b><span id="playerPageUrl" title="Address of the page in the frame shown">about:blank</span></div></div>
       <span class="chip node" id="playerNodeBadge">local</span>
       <button class="btn ghost sm icon" id="playerMoreBtn" onclick="openPlayerMenu(this)" title="More: details, copy, save, delete" aria-label="More" aria-haspopup="menu"><svg class="i sm"><use href="#i-more"/></svg></button>
       <button class="x-btn" onclick="closePlayerModal()" title="Close (Esc)"><svg class="i"><use href="#i-x"/></svg></button>
@@ -898,7 +958,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <canvas id="playerCanvas" onclick="togglePlayPause()"></canvas>
       <audio id="playerAudio" preload="auto" controls tabindex="-1" aria-hidden="true"></audio>
       <div class="player-center-play paused" id="playerCenterPlayBtn" onclick="togglePlayPause()"><svg viewBox="0 0 24 24" id="playerCenterPlayIcon"><polygon points="8 5 19 12 8 19 8 5"/></svg></div>
-      <div class="player-loading-overlay" id="playerLoadingOverlay">
+      <div class="player-loading-overlay" id="playerLoadingOverlay" role="status" aria-live="polite">
         <div class="player-loading-spinner"></div>
         <div class="player-loading-text" id="playerLoadingText">Downloading recording…</div>
         <div class="player-loading-bar-wrap"><div class="player-loading-bar" id="playerLoadingBar"></div></div>
@@ -907,7 +967,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="player-controls-wrap">
       <div class="player-buffer" id="playerBufferWrap"><span id="playerBuffered"></span></div>
-      <input type="range" id="playerScrubber" class="player-scrubber" min="0" max="0" value="0" oninput="onScrubberInput(this.value)" aria-label="Seek">
+      <input type="range" id="playerScrubber" class="player-scrubber" min="0" max="0" value="0" step="1" oninput="onScrubberInput(this.value)" aria-label="Seek" aria-valuetext="00:00 of 00:00">
       <div class="player-buttons-row">
         <div class="player-controls-left">
           <button class="player-ctrl-btn play" id="playerPlayBtn" onclick="togglePlayPause()" title="Play (k)"><svg viewBox="0 0 24 24" id="playerPlayIcon"><polygon points="6 4 20 12 6 20 6 4"/></svg></button>
@@ -917,7 +977,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
           <span id="playerFrameDisplay" class="player-frames-text"></span>
         </div>
         <div class="player-controls-right">
-          <span id="playerFrameOffset" class="player-frames-text">+0.0s</span>
+          <span id="playerFrameOffset" class="player-frames-text" title="Time of the frame shown, from the start of the recording">frame at 0.0s</span>
           <span class="player-volume" id="playerVolumeWrap">
             <button class="player-ctrl-btn" id="playerMuteBtn" onclick="togglePlayerMute()" title="Mute (m)"><svg viewBox="0 0 24 24" id="playerMuteIcon"></svg></button>
             <input type="range" id="playerVolume" class="player-volume-slider" min="0" max="1" step="0.01" value="1" oninput="setPlayerVolume(this.value)" aria-label="Volume">
@@ -929,7 +989,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       </div>
     </div>
   </div>
-</div>
+</dialog>
 <script>
 "use strict";
 // Signed in by the cookie the page came with (HttpOnly: no script ever sees a
@@ -987,9 +1047,10 @@ function formatBytes(bytes) {
   if (!bytes) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  return parseFloat((bytes / 1024 ** i).toFixed(1)) + ' ' + units[i];
+  return (bytes / 1024 ** i).toFixed(i < 2 ? 0 : 1) + ' ' + units[i];
 }
 
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 function formatUptime(secs) {
   if (!secs || secs < 0) return '0s';
   const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
@@ -1003,9 +1064,9 @@ function relTime(secs) {
   if (!secs) return '–';
   const diff = Date.now() / 1000 - secs;
   if (diff < 45) return 'just now';
-  if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
-  if (diff < 7 * 86400) return `${Math.round(diff / 86400)}d ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 7 * 86400) return `${Math.floor(diff / 86400)}d ago`;
   return new Date(secs * 1000).toLocaleDateString();
 }
 const absTime = (secs) => (secs ? new Date(secs * 1000).toLocaleString() : '');
@@ -1021,10 +1082,10 @@ function shortUrl(url) {
   } catch { return url || ''; }
 }
 
-// Site icons come from DuckDuckGo; private/mesh hosts get a globe instead.
-// The icon the recorder grabbed from the site during the session. Fetched with the
-// auth headers into a blob (an <img> can't send them, and the secret stays out of URLs);
-// nothing until it has arrived.
+// Site icons: this node fetches them (/api/favicon), so neither the sites nor an icon
+// service ever see this browser. The icon the recorder grabbed during a recording
+// comes first: fetched with the auth headers into a blob (an <img> can't send them,
+// and the secret stays out of URLs). Without an icon: the site's first letter.
 const recIcons = new Map();   // recording key -> blob URL, or '' when there is none
 function recFavicon(r) {
   if (!r.favicon_type) return '';
@@ -1038,35 +1099,41 @@ function recFavicon(r) {
       recIcons.set(key, URL.createObjectURL(blob));
       if (ov) renderRecordings();
     })
-    .catch(() => { /* the stored URL or the icon service steps in */ });
+    .catch(() => { /* the node's icon lookup steps in */ });
   return '';
 }
+const lettered = (host) => (host
+  ? `<span class="fav-letter" style="--h:${hueOf(host)}" aria-hidden="true">${esc(host.replace(/^www\./, '').charAt(0).toUpperCase())}</span>`
+  : icon('globe', 'sm'));
 function favicon(url, ...stored) {
   const host = hostOf(url);
-  const usable = host && host !== 'localhost' && !/^\d+\.\d+\.\d+\.\d+$/.test(host) && !host.endsWith('.ts.brkn.lol');
-  const ddg = usable ? `https://icons.duckduckgo.com/ip3/${host}.ico` : '';
-  // The site's own icon (kept with the recording) first, then the URL it was found at;
-  // when neither loads (a guessed /favicon.ico often 404s), the icon service, then the globe.
-  const src = [...stored, ddg].find((u) => u && !failedFavicons.has(u)) || '';
-  const globe = icon('globe', 'sm');
-  if (!src) return globe;
-  return `<img src="${esc(src)}" alt="" loading="lazy" data-fallback="${esc(ddg)}" onerror="faviconFailed(this)">`;
+  // Local and single-label hosts are not on the public web: nothing to look up.
+  const lookable = host && host.includes('.') && !/^[\d.]+$/.test(host) && !host.includes(':');
+  const remote = lookable ? `/api/favicon?url=${enc(new URL(url).origin)}` : '';
+  const src = [...stored, remote].find((u) => u && !failedFavicons.has(u)) || '';
+  if (!src) return lettered(host);
+  return `<img src="${esc(src)}" alt="" loading="lazy" data-fav="${esc(host)}" data-fallback="${esc(remote)}">`;
 }
 // Favicons that didn't load: skipped straight away next time (a redrawn card would
 // otherwise try again and flash).
 const failedFavicons = new Set();
-function faviconFailed(img) {
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || img.dataset.fav === undefined) return;
   failedFavicons.add(img.getAttribute('src'));
   const next = img.dataset.fallback;
   if (next && !failedFavicons.has(next) && img.getAttribute('src') !== next) { img.src = next; return; }
-  img.replaceWith(Object.assign(document.createElement('span'), { innerHTML: icon('globe', 'sm') }));
-}
+  const span = document.createElement('span');
+  span.innerHTML = lettered(img.dataset.fav);
+  img.replaceWith(span.firstElementChild);
+}, true);
 
 /* ================================================================ nodes & colors */
-const NODE_COLORS = { 'fnuc': '#34d399', 'rofl-13': '#c084fc', 'rofl-14': '#fbbf24', 'rofl-10': '#38bdf8' };
-const PALETTE = ['#f472b6', '#a3e635', '#2dd4bf', '#fb7185', '#60a5fa', '#f59e0b'];
 function hashOf(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
-const nodeColor = (name) => NODE_COLORS[String(name || '').toLowerCase()] || PALETTE[hashOf(name) % PALETTE.length];
+// Names that differ in one character (rofl-13, rofl-14) land far apart on the colour wheel.
+const hueOf = (name) => Math.round((hashOf(String(name || '').toLowerCase()) * 137.508) % 360);
+// Lightness comes from the theme (--node-l), so the colour reads on light and dark.
+const nodeColor = (name) => `hsl(${hueOf(name)} 68% var(--node-l))`;
 // Proxies are per node: ids only mean something on the node that defines them.
 const nodeProxies = (node) => nodes.find((n) => n.name === node)?.proxies || [];
 const proxyName = (node, id) => nodeProxies(node).find((x) => x.id === id)?.name || id;
@@ -1085,7 +1152,8 @@ const api = (node, path) => (isLocal(node) ? `/api${path}` : `/api/peers/${enc(n
 const jsonNewUrl = (node, qs) => (isLocal(node) ? `/json/new?${qs}` : `/api/peers/${enc(node)}/json/new?${qs}`);
 function nodeBase(node) {
   if (isLocal(node)) return location.origin;
-  return (nodes.find((n) => n.name === node)?.url || '').replace(/\/$/, '');
+  const url = (nodes.find((n) => n.name === node)?.url || '').replace(/\/$/, '');
+  return /^https?:\/\//i.test(url) ? url : '';
 }
 function handoffUrl(node, { page, session } = {}) {
   const qs = page ? `?page=${enc(page)}` : session ? `?session=${enc(session)}` : '';
@@ -1114,6 +1182,7 @@ function toastShell(type, title, extra = '') {
 }
 function dismissToast(item) {
   if (!item || !item.isConnected) return;
+  item.dataset.dying = '1';
   item.style.opacity = '0'; item.style.transform = 'translateY(8px)';
   setTimeout(() => item.remove(), 200);
 }
@@ -1123,11 +1192,26 @@ function actionHtml(action) {
   return '';
 }
 function showToast(title, type = 'info', durationMs = 4500, action = null, desc = '') {
+  // The same message again (a failing poll, a repeated click) counts up instead of stacking.
+  const key = `${type}|${title}|${desc}`;
+  const dup = [...$('toastContainer').children].find((t) => t.dataset.key === key && !t.dataset.dying);
+  if (dup) {
+    dup.dataset.n = String(+dup.dataset.n + 1);
+    let badge = dup.querySelector('.toast-count');
+    if (!badge) { badge = document.createElement('span'); badge.className = 'toast-count'; dup.querySelector('.toast-title')?.appendChild(badge); }
+    badge.textContent = `×${dup.dataset.n}`;
+    clearTimeout(dup._timer);
+    if (durationMs > 0) dup._timer = setTimeout(() => dismissToast(dup), durationMs);
+    return dup;
+  }
   const item = document.createElement('div');
+  item.dataset.key = key;
+  item.dataset.n = '1';
   item.className = `toast-item toast-${type}`;
   item.innerHTML = toastShell(type, title, (desc ? `<div class="toast-desc">${esc(desc)}</div>` : '') + actionHtml(action));
   $('toastContainer').appendChild(item);
-  if (durationMs > 0) setTimeout(() => dismissToast(item), durationMs);
+  placeOverlays();
+  if (durationMs > 0) item._timer = setTimeout(() => dismissToast(item), durationMs);
   return item;
 }
 function createProgressToast(id, title, initialDesc) {
@@ -1138,12 +1222,13 @@ function createProgressToast(id, title, initialDesc) {
     $('toastContainer').appendChild(item);
   }
   item.className = 'toast-item toast-info';
+  // pct null: no honest number, so the bar just moves.
   const render = (pct, desc, sub) => {
-    item.innerHTML = `<div class="toast-header"><div class="toast-title"><span class="spinner"></span><span class="ellipsis">${esc(title)}</span></div><span class="toast-pct">${pct}%</span></div>
+    item.innerHTML = `<div class="toast-header"><div class="toast-title"><span class="spinner"></span><span class="ellipsis">${esc(title)}</span></div>${pct == null ? '' : `<span class="toast-pct">${pct}%</span>`}</div>
       <div class="toast-desc">${esc(desc || '')}${sub ? ` · ${esc(sub)}` : ''}</div>
-      <div class="toast-progress-wrap"><div class="toast-progress-bar" style="width:${pct}%"></div></div>`;
+      <div class="toast-progress-wrap"><div class="toast-progress-bar${pct == null ? ' indeterminate' : ''}"${pct == null ? '' : ` style="width:${pct}%"`}></div></div>`;
   };
-  render(0, initialDesc, '');
+  render(null, initialDesc, '');
   const finish = (type, t, d, action, ms) => {
     item.className = `toast-item toast-${type}`;
     item.innerHTML = toastShell(type, t, (d ? `<div class="toast-desc">${esc(d)}</div>` : '') + actionHtml(action));
@@ -1159,10 +1244,10 @@ function createProgressToast(id, title, initialDesc) {
 // Run an API action with a spinner toast and a refresh afterwards.
 async function act(label, fn, okText) {
   const t = createProgressToast('act-' + hashOf(label + Date.now()), label, 'Working…');
-  t.update(40, 'Working…');
   try {
     const r = await fn();
-    t.done(okText || label, '');
+    // null: the caller shows its own message (e.g. one with a button).
+    if (okText === null) t.remove(); else t.done(okText || label, '');
     refreshData();
     return r;
   } catch (e) {
@@ -1173,8 +1258,40 @@ async function act(label, fn, okText) {
 
 /* ================================================================ modals & dialogs */
 let playerHash = '';
-function openModal(id) { $(id).classList.add('open'); closeMenu(); }
-function closeModal(id) { $(id).classList.remove('open'); }
+// Open dialogs, the one opened last on top: Escape and Back close that one. The menu and
+// the toasts live in the top layer too, inside the top dialog (everything outside a modal
+// dialog is inert), so they stay visible and clickable above it.
+const modalStack = [];
+const topModal = () => modalStack[modalStack.length - 1] || null;
+function placeOverlays() {
+  const host = topModal() || document.body;
+  for (const el of [$('toastContainer'), $('menu')]) {
+    const wasOpen = el.id === 'toastContainer' || el.classList.contains('open');
+    if (el.parentElement !== host) {
+      el.remove();
+      host.appendChild(el);
+    }
+    if (!wasOpen) continue;
+    try { if (el.matches(':popover-open')) el.hidePopover(); el.showPopover(); } catch { /* no popover support: stacked by z-index */ }
+  }
+}
+function openModal(id) {
+  const d = $(id);
+  closeMenu();
+  if (!d.open) d.showModal();
+  d.classList.add('open');
+  const at = modalStack.indexOf(d);
+  if (at >= 0) modalStack.splice(at, 1);
+  modalStack.push(d);
+  placeOverlays();
+}
+function closeModal(id) {
+  const d = $(id);
+  d.classList.remove('open');
+  if (d.open) d.close();
+  const at = modalStack.indexOf(d);
+  if (at >= 0) { modalStack.splice(at, 1); placeOverlays(); }
+}
 // Dialogs are history entries: Back (Android's back gesture too) closes the top one
 // instead of leaving the dashboard, e.g. for the live view it was opened from.
 // Watching the 'open' class covers every way a dialog opens and closes.
@@ -1193,28 +1310,59 @@ new MutationObserver((changes) => {
 }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
 addEventListener('popstate', () => {
   if (modalPopping) { modalPopping = false; return; }
-  const open = [...document.querySelectorAll('.modal.open')].pop();
+  const open = topModal();
   if (!open) return;
   modalPopping = true;   // closing it below must not go back once more
   if (open.id === 'playerModal') closePlayerModal();
-  else { open.classList.remove('open'); if (open.id === 'askModal') askResolve?.(null); }
+  else { closeModal(open.id); if (open.id === 'askModal') askResolve?.(null); }
   setTimeout(() => { modalPopping = false; }, 0);
 });
+// Escape closes the top dialog natively (a 'cancel' event). The player turns that into its own
+// close (fullscreen first); the confirm dialog answers "no".
+document.addEventListener('cancel', (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDialogElement)) return;
+  if (d.id === 'playerModal') {
+    e.preventDefault();
+    const card = document.querySelector('.player-modal-card');
+    if (document.fullscreenElement || document.webkitFullscreenElement || card?.classList.contains('fullscreen-mode')) togglePlayerFullscreen();
+    else closePlayerModal();
+  }
+}, true);
+// However a dialog was closed, its state follows.
+document.addEventListener('close', (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDialogElement) || d.open || !d.classList.contains('open')) return;   // closed in code, or reopened since
+  if (d.id === 'askModal') askResolve?.(null);
+  closeModal(d.id);
+}, true);
+// A click on the backdrop closes the dialog, unless the press began inside it (text selection).
+let pressOnBackdrop = false;
+document.addEventListener('pointerdown', (e) => { pressOnBackdrop = e.target instanceof HTMLDialogElement; }, true);
 document.addEventListener('click', (e) => {
   const closer = e.target.closest('[data-close]');
-  if (closer) { closer.closest('.modal')?.classList.remove('open'); return; }
-  if (e.target.classList?.contains('modal')) {
+  if (closer) { const m = closer.closest('dialog.modal'); if (m) closeModal(m.id); return; }
+  if (e.target instanceof HTMLDialogElement && e.target.classList.contains('modal') && pressOnBackdrop) {
     if (e.target.id === 'playerModal') closePlayerModal();
-    else e.target.classList.remove('open');
+    else { closeModal(e.target.id); if (e.target.id === 'askModal') askResolve?.(null); }
   }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
-  if ($('menu').classList.contains('open')) { closeMenu(); return; }
-  if ($('playerModal').classList.contains('open')) return;   // the player handles Esc itself
-  const open = [...document.querySelectorAll('.modal.open')].pop();
-  if (open) { open.classList.remove('open'); if (open.id === 'askModal') askResolve?.(null); }
+  if ($('menu').classList.contains('open')) { e.preventDefault(); closeMenu(); }
 });
+placeOverlays();
+// On a phone the on-screen keyboard shrinks the visual viewport, not the layout one.
+if (window.visualViewport) {
+  const syncViewport = () => {
+    const root = document.documentElement.style;
+    root.setProperty('--vvh', visualViewport.height + 'px');
+    root.setProperty('--vvt', visualViewport.offsetTop + 'px');
+  };
+  visualViewport.addEventListener('resize', syncViewport);
+  visualViewport.addEventListener('scroll', syncViewport);
+  syncViewport();
+}
 
 // Promise-based replacement for confirm()/prompt().
 let askResolve = null;
@@ -1240,7 +1388,7 @@ $('askForm').addEventListener('submit', (e) => {
   askResolve?.($('askInput').hidden ? true : $('askInput').value.trim());
 });
 $('askModal').addEventListener('click', (e) => {
-  if (e.target.closest('[data-close]') || e.target.id === 'askModal') askResolve?.(null);
+  if (e.target.closest('[data-close]')) askResolve?.(null);
 });
 
 /* ================================================================ menu */
@@ -1274,7 +1422,9 @@ function openMenu(anchor, items, { align = 'right' } = {}) {
       + (anyTick ? `<span class="tick">${it.on ? icon('check', 'sm') : ''}</span>` : '')
       + (it.lead ? `<span class="lead">${it.lead}</span>` : icon(it.icon || 'info-c'))
       + esc(it.label) + (it.meta ? `<span class="meta">${esc(it.meta)}</span>` : '') + '</button>').join('');
+  placeOverlays();
   menu.classList.add('open');
+  try { if (!menu.matches(':popover-open')) menu.showPopover(); } catch { /* no popover support */ }
   const r = anchor.getBoundingClientRect();
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
   let left = Math.min(align === 'left' ? r.left : r.right - mw, innerWidth - mw - 8);
@@ -1285,7 +1435,11 @@ function openMenu(anchor, items, { align = 'right' } = {}) {
   menu.style.top = top + 'px';
   menu.querySelector('button')?.focus({ preventScroll: true });
 }
-function closeMenu() { $('menu').classList.remove('open'); }
+function closeMenu() {
+  const menu = $('menu');
+  menu.classList.remove('open');
+  try { if (menu.matches(':popover-open')) menu.hidePopover(); } catch { /* no popover support */ }
+}
 $('menu').addEventListener('click', (e) => {
   const b = e.target.closest('[data-mi]');
   if (!b) return;
@@ -1298,6 +1452,12 @@ document.addEventListener('pointerdown', (e) => {
 });
 addEventListener('resize', closeMenu);
 addEventListener('scroll', closeMenu, { passive: true });
+
+// Choice buttons say which one is on.
+const syncPressed = (b) => { if (b.matches?.('.seg button')) b.setAttribute('aria-pressed', String(b.classList.contains('on'))); };
+document.querySelectorAll('.seg button').forEach(syncPressed);
+new MutationObserver((changes) => changes.forEach(({ target }) => syncPressed(target)))
+  .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
 
 /* ================================================================ keyed rendering */
 // Only items whose markup changed are replaced, so scroll positions, focus and
@@ -1364,11 +1524,36 @@ function profileInfo(p) {
 }
 // Name to send for a rename/copy/transfer target; legacy nodes need the directory name.
 const profileTargetName = (p, name) => (!p.id && p.engine === 'firefox' ? 'firefox_' + name : name);
+// An agent (Playwright, Puppeteer, ...) that is connected to a session; "" when none is.
+const driverOf = (s) => { const a = (s?.clients || []).find((c) => c.agent); return a ? agentLabel(a) : ''; };
+const drivenAttr = (s) => { const who = driverOf(s); return who ? ` data-driven="${esc(who)}"` : ''; };
+const confirmTakeOver = (who) => ask({
+  title: 'Take over a session an agent is using?',
+  text: `${who} is driving this browser right now. What you click or type there happens while it works.`,
+  ok: 'Take over',
+});
+async function takeOver(node, opts, session) {
+  const who = driverOf(session);
+  if (who && !(await confirmTakeOver(who))) return;
+  location.href = handoffUrl(node, opts);
+}
+// Links to a driven session ask first (new-tab clicks too).
+async function drivenClick(e) {
+  const a = e.target.closest?.('a[data-driven]');
+  if (!a || (e.type === 'auxclick' && e.button !== 1) || (e.type === 'click' && e.button !== 0)) return;
+  e.preventDefault();
+  const newTab = e.type === 'auxclick' || e.ctrlKey || e.metaKey || e.shiftKey;
+  if (!(await confirmTakeOver(a.dataset.driven))) return;
+  if (newTab) window.open(a.href, '_blank', 'noopener'); else location.href = a.href;
+}
+document.addEventListener('click', drivenClick);
+document.addEventListener('auxclick', drivenClick);
 function pagesOf(session) {
   return (ov?.targets || []).filter((t) => t.type === 'page' && t.node_name === session.node_name && t.sessionId === session.id);
 }
 
 /* ================================================================ render */
+const VIEWS = ['sessions', 'profiles', 'recordings', 'engines', 'nodes'];
 let view = 'sessions';
 const selectedRecordings = new Set();
 
@@ -1382,6 +1567,11 @@ function render() {
   byKey.sessions = new Map(ov.sessions.map((s) => [keyOf.session(s), s]));
   byKey.profiles = new Map(ov.profiles.map((p) => [keyOf.profile(p), profileInfo(p)]));
   byKey.recordings = new Map((ov.recordings || []).map((r) => [keyOf.recording(r), r]));
+  for (const [key, url] of recIcons) {
+    if (byKey.recordings.has(key.replace('/', '|'))) continue;
+    if (url) URL.revokeObjectURL(url);
+    recIcons.delete(key);
+  }
   renderHeader();
   renderStats();
   renderSessions();
@@ -1458,19 +1648,62 @@ function emptyState(ico, title, text, button = '') {
 }
 const onNode = () => (filter === 'all' ? '' : ` on ${esc(filter)}`);
 
+// Sessions of a node that dropped out stay on screen, greyed out, as last seen.
+const lastSeen = new Map();   // node -> { at, sessions }
+function trackSeen(data) {
+  const online = [data.local_node.name, ...data.peers.filter((n) => n.status === 'online').map((n) => n.name)];
+  for (const n of online) lastSeen.set(n, { at: Date.now(), sessions: data.sessions.filter((s) => s.node_name === n) });
+}
+function staleSessions() {
+  const out = [];
+  for (const [node, { at, sessions }] of lastSeen) {
+    const n = nodes.find((x) => x.name === node);
+    if (!n || n.status === 'online') continue;
+    for (const s of sessions) if (!byKey.sessions.has(keyOf.session(s))) out.push({ ...s, _stale: at });
+  }
+  return out;
+}
+function staleCard(s) {
+  const engine = s.engine === 'firefox' ? 'firefox' : 'chromium';
+  return `<article class="scard stale" data-key="${esc(keyOf.session(s))}">
+    <div class="scard-head"><div class="engine-badge ${engine}">${icon(engine)}</div>
+      <div style="min-width:0;flex:1"><div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span></div>
+        <div class="scard-sub">${nodeChip(s.node_name)}<span>offline, last seen ${esc(relTime(s._stale / 1000))}</span></div></div></div>
+  </article>`;
+}
+let sessQuery = '', agentsOnly = false;
+$('sessSearch').addEventListener('input', (e) => { sessQuery = e.target.value; renderSessions(); });
+const sessHaystack = (s) => [sessName(s), s.profile, s.node_name, s.engine, s.id,
+  ...(s.clients || []).flatMap((c) => [c.agent_name, c.topic, c.conversation, c.cwd, c.machine, c.from]),
+  ...pagesOf(s).flatMap((t) => [t.title, t.url])].filter(Boolean).join(' ').toLowerCase();
 function renderSessions() {
   const grid = $('sessionGrid');
-  const list = ov.sessions.filter(inFilter).sort((a, b) => a.uptime_seconds - b.uptime_seconds);
-  if (!list.length) {
+  const all = ov.sessions.filter(inFilter);
+  const words = sessQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  // Sessions an agent drives first (that is usually the one you are looking for), then the newest.
+  const list = all.filter((s) => (!agentsOnly || driverOf(s)) && words.every((w) => sessHaystack(s).includes(w)))
+    .sort((a, b) => (!!driverOf(b) - !!driverOf(a)) || a.uptime_seconds - b.uptime_seconds);
+  const stale = words.length || agentsOnly ? [] : staleSessions().filter(inFilter);
+  $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery;
+  $('agentsOnlyBtn').setAttribute('aria-pressed', String(agentsOnly));
+  $('agentsOnlyBtn').innerHTML = `${icon('bot', 'sm')}Agents only`;
+  if (!list.length && !stale.length) {
     grid.style.display = 'block';
-    setStatic(grid, emptyState('layers', `No running sessions${onNode()}`,
-      'Launch one here, or connect a CDP / WebDriver BiDi client — every connection gets its own isolated browser.',
-      `<button class="btn primary" data-act="new-session">${icon('plus')}New session</button>`));
+    if (all.length) {
+      setStatic(grid, emptyState('search', 'No session matches', 'Nothing driven by an agent or matching the filter.',
+        `<button class="btn" data-act="clear-session-filter">Clear the filter</button>`));
+    } else {
+      setStatic(grid, emptyState('layers', `No running sessions${onNode()}`,
+        'Launch one here, or connect a CDP / WebDriver BiDi client — every connection gets its own isolated browser.',
+        `<button class="btn primary" data-act="new-session">${icon('plus')}New session</button>`
+        + (filter === 'all' ? '' : ` <button class="btn" data-act="filter" data-node="all">Show all nodes</button>`)));
+    }
     return;
   }
   grid.style.display = '';
   clearStatic(grid);
-  reconcile(grid, list, keyOf.session, sessionCard, (el, s) => {
+  reconcile(grid, [...list, ...stale], keyOf.session, (s) => (s._stale ? staleCard(s) : sessionCard(s)), (el, s) => {
+    if (s._stale) return;
     showShot(el, keyOf.session(s));
     const up = el.querySelector('[data-up]');
     if (up) {
@@ -1551,14 +1784,14 @@ function idleLabel(secs) {
 }
 
 function sessionCard(s) {
-  const key = esc(keyOf.session(s));
-  const engine = s.engine || 'chromium';
+  const key = esc(keyOf.session(s)), drv = drivenAttr(s);
+  const engine = s.engine === 'firefox' ? 'firefox' : 'chromium';
   const all = pagesOf(s);
   const real = all.filter((p) => p.url && p.url !== 'about:blank');
   const pages = real.length ? real : all;
   const shown = pages.slice(0, 4);
   const tabs = shown.map((p) => `
-    <a class="tab-row" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="Take over this tab">
+    <a class="tab-row" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="Take over this tab"${drv}>
       <span class="fav">${favicon(p.url)}</span>
       <span class="t"><b>${p.audible ? `<span class="audible" title="Playing sound" aria-label="Playing sound">${icon('speaker', 'sm')}</span>` : ''}${esc(p.url === 'about:blank' ? 'New tab' : p.title || shortUrl(p.url) || 'New tab')}</b><span>${esc(shortUrl(p.url) || 'about:blank')}</span></span>
       <span class="go">${icon('arrow', 'sm')}</span>
@@ -1568,38 +1801,39 @@ function sessionCard(s) {
   // Who is connected (an older node reports only the count): agents are Playwright/Puppeteer.
   const clients = s.clients || [];
   const agents = clients.filter((c) => c.agent), others = clients.filter((c) => !c.agent);
+  const lead = agents[0];
+  const agentRow = lead ? `<div class="scard-agent" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(`An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`)}" aria-label="${esc(`An agent drives this session: ${agentLabel(lead)}. Show details`)}">${agentIcon(lead)}<span class="ellipsis">${esc(agentLabel(lead))}</span>${agents.length > 1 ? `<span class="chip accent">+${agents.length - 1}</span>` : ''}</div>` : '';
   const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const clientsFact = (cls, ico, text, title) => `<span class="fact clickable ${cls}" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
     fact('', icon(s.profile ? 'folder' : 'trash', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
-    !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Stops when its last client disconnects'),
+    !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Ephemeral: stops when its last client disconnects'),
     s.audible && fact('accent', icon('speaker', 'sm'), 'Playing', 'Playing sound'),
     s.is_recording && (s.recording_paused
       ? fact('', icon('pause', 'sm'), 'REC paused', 'Recording paused')
       : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
-    agents.length && clientsFact('accent', [...new Map(agents.map((a) => [agentBrand(a), a])).values()].slice(0, 3).map((a) => agentIcon(a)).join(''), agents.length === 1 ? agentLabel(agents[0]) : `${agents.length} agents`,
-      `An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`),
     others.length && clientsFact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
       `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
     !clients.length && n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
   ].filter(Boolean).join('') + '<span data-idle hidden></span>';
   return `
-  <article class="scard" data-key="${key}">
+  <article class="scard${lead ? ' driven' : ''}" data-key="${key}">
     <div class="scard-head">
       <div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span></div>
+        ${agentRow}
         <div class="scard-sub">${nodeChip(s.node_name)}<span data-up title="Uptime"></span></div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
     </div>
     <div class="scard-facts">${facts}</div>
-    <a class="shot" data-shot hidden href="${esc(handoffUrl(s.node_name, { session: s.id }))}" title="Take over" tabindex="-1" aria-hidden="true"></a>
+    <a class="shot" data-shot hidden href="${esc(handoffUrl(s.node_name, { session: s.id }))}" title="Take over" tabindex="-1" aria-hidden="true"${drv}></a>
     <div class="tabs-list">${tabs || '<div class="tabs-empty">No open tabs</div>'}${more}</div>
     <div class="scard-foot">
-      <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}">${icon('takeover', 'sm')}Take over</a>
+      <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}Take over</a>
     </div>
   </article>`;
 }
@@ -1623,10 +1857,10 @@ function renderProfiles() {
 
 function profileRow(p) {
   const key = esc(keyOf.profile(p));
-  const color = PALETTE[hashOf(p.display) % PALETTE.length];
-  const status = p.session ? `<span style="color:var(--ok)">● Running</span> · ${formatUptime(p.session.uptime_seconds)}` : 'Stored';
+  const color = nodeColor(p.display);
+  const status = p.session ? `<span style="color:var(--ok)">● Running</span> · ${formatUptime(p.session.uptime_seconds)}` : 'Not running';
   const primary = p.session
-    ? `<a class="btn sm primary" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}">${icon('takeover', 'sm')}Take over</a>`
+    ? `<a class="btn sm primary" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)}>${icon('takeover', 'sm')}Take over</a>`
     : `<button class="btn sm" data-act="launch-profile" data-key="${key}">${icon('play', 'sm fill')}Launch</button>`;
   return `
   <div class="row" data-key="${key}">
@@ -1647,11 +1881,18 @@ const visibleRecordings = () => [...byKey.recordings.values()].filter((r) => inF
 // The search field: every word somewhere in the title, addresses, profile, node, id or start date.
 let recQuery = '';
 const recHaystack = (r) => [r.title, r.initial_url, r.final_url, r.profile, r.node_name, r.id, absTime(r.started_at_secs), r.audio && 'sound audio', r.merged_from?.length && 'merged'].filter(Boolean).join(' ').toLowerCase();
+const REC_PAGE = 50;
+let recLimit = REC_PAGE;
 const listedRecordings = () => {
   const words = recQuery.toLowerCase().split(/\s+/).filter(Boolean);
   return visibleRecordings().filter((r) => !words.length || words.every((w) => recHaystack(r).includes(w)));
 };
-$('recSearch').addEventListener('input', (e) => { recQuery = e.target.value; renderRecordings(); });
+$('recSearch').addEventListener('input', (e) => { recQuery = e.target.value; recLimit = REC_PAGE; renderRecordings(); });
+// The selected recordings that the list (with its search) shows: what the actions apply to.
+function selectedListed() {
+  const shown = new Set(listedRecordings().map(keyOf.recording));
+  return [...selectedRecordings].filter((key) => shown.has(key)).map((key) => byKey.recordings.get(key)).filter(Boolean);
+}
 
 function renderRecordings() {
   const sec = $('view-recordings');
@@ -1666,12 +1907,16 @@ function renderRecordings() {
   }
   if (sec._static !== undefined || !sec.querySelector('.list')) {
     clearStatic(sec);
-    sec.innerHTML = `<div class="list"><div class="list-head"><span></span><span></span><span>Recording</span><span>Node</span><span class="c-started">Started</span><span class="c-dur">Length</span><span class="c-size">Size</span><span></span></div><div class="rows"></div><div class="list-nomatch" hidden></div></div>`;
+    sec.innerHTML = `<div class="list"><div class="list-head"><span></span><span></span><span>Recording</span><span>Node</span><span class="c-started">Started</span><span class="c-dur">Length</span><span class="c-size">Size</span><span></span></div><div class="rows"></div><div class="list-nomatch" hidden></div><div class="list-more" hidden></div></div>`;
   }
-  reconcile(sec.querySelector('.rows'), list, keyOf.recording, recordingRow);
+  reconcile(sec.querySelector('.rows'), list.slice(0, recLimit), keyOf.recording, recordingRow);
   const none = sec.querySelector('.list-nomatch');
   none.hidden = list.length > 0;
   if (!list.length) none.textContent = `No recordings match “${recQuery.trim()}”.`;
+  const more = sec.querySelector('.list-more');
+  more.hidden = list.length <= recLimit;
+  more.innerHTML = list.length > recLimit
+    ? `<button class="btn sm" data-act="more-recordings">Show ${Math.min(REC_PAGE, list.length - recLimit)} more</button><span class="muted">${recLimit} of ${list.length} shown</span>` : '';
 }
 
 function renderViewActions(recordings = listedRecordings()) {
@@ -1684,29 +1929,31 @@ function renderViewActions(recordings = listedRecordings()) {
   }
   if (view === 'sessions') {
     const n = ov ? ov.sessions.filter(inFilter).length : 0;
-    const html = n ? `<button class="btn sm danger-ghost" data-act="stop-all" title="Stop every session${filter === 'all' ? '' : ` on ${esc(filter)}`}">${icon('power', 'sm')}<span class="lbl">Stop all</span></button>` : '';
+    const html = n ? `<button class="btn sm danger-ghost keep" data-act="stop-all" title="Stop every session${filter === 'all' ? '' : ` on ${esc(filter)}`}">${icon('power', 'sm')}<span class="lbl">Stop all</span></button>` : '';
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
   if (view !== 'recordings') { if (actions.innerHTML) actions.innerHTML = ''; return; }
 
   const keys = recordings.map(keyOf.recording);
-  const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean);
-  const visibleSelected = recordings.filter((r) => selectedRecordings.has(keyOf.recording(r)));
+  const selected = recordings.filter((r) => selectedRecordings.has(keyOf.recording(r)));
+  const hidden = selectedRecordings.size - selected.length;
+  const visibleSelected = selected;
   const allSelected = keys.length > 0 && visibleSelected.length === keys.length;
   const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
-  const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected</span>` : ''}
+  const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected${hidden > 0 ? ` (${hidden} more hidden by the search)` : ''}</span>` : ''}
     <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
     ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button>${selected.length > 1 ? `<button class="btn sm" data-act="merge-selected-recordings" title="Merge the selected recordings into one, in an order you pick">${icon('layers', 'sm')}<span class="lbl">Merge ${selected.length}</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
   if (actions.innerHTML !== html) actions.innerHTML = html;
 }
 
+const recordingTitle = (r) => (r.title !== 'about:blank' && r.title) || shortUrl(r.final_url || r.initial_url || '') || (r.profile ? `Profile ${r.profile}` : 'Untitled session');
 function recordingRow(r) {
   const key = esc(keyOf.recording(r));
   const selected = selectedRecordings.has(keyOf.recording(r));
   const url = r.final_url || r.initial_url || '';
-  const title = (r.title !== 'about:blank' && r.title) || shortUrl(url) || (r.profile ? `Profile ${r.profile}` : 'Untitled session');
-  const sub = [shortUrl(url), r.profile && `profile ${r.profile}`].filter(Boolean).join(' · ') || `${r.frame_count} frames`;
+  const title = recordingTitle(r);
+  const sub = [shortUrl(url), r.profile && `profile ${r.profile}`].filter(Boolean).join(' · ') || plural(r.frame_count, 'frame');
   const live = isLive(r);
   const cached = cachedRecordingsSet.has(r.id) ? `<span class="cached" title="Saved in this browser: plays without the server">${icon('saved', 'sm')}</span>` : '';
   return `
@@ -1724,13 +1971,22 @@ function recordingRow(r) {
   </div>`;
 }
 
+function syncTabHint() {
+  const nav = document.querySelector('.views');
+  nav.classList.toggle('more-right', nav.scrollWidth - nav.clientWidth - nav.scrollLeft > 4);
+}
+document.querySelector('.views').addEventListener('scroll', syncTabHint, { passive: true });
+addEventListener('resize', syncTabHint);
 function setView(v) {
   view = v;
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
-  for (const name of ['sessions', 'profiles', 'recordings', 'engines', 'nodes']) $('view-' + name).hidden = name !== v;
+  for (const name of VIEWS) $('view-' + name).hidden = name !== v;
   $('recSearchWrap').hidden = v !== 'recordings';
   document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+  document.querySelectorAll('.views button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === v)));
+  document.querySelector(`.views button[data-view="${v}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  syncTabHint();
   renderViewActions();
 }
 
@@ -1738,9 +1994,13 @@ function setView(v) {
 const ACT = {
   // The node's button toggles; the chip passes 'all'.
   'stop-all': () => stopAllSessions(),
+  'agents-only': () => { agentsOnly = !agentsOnly; renderSessions(); },
+  'clear-session-filter': () => { agentsOnly = false; sessQuery = ''; $('sessSearch').value = ''; renderSessions(); },
+  'retry': () => { pollFailures = 0; refreshData(true); },
   'filter': (el) => { el.blur(); filter = el.dataset.node === filter ? 'all' : el.dataset.node; render(); },
+  'more-recordings': () => { recLimit += REC_PAGE; renderRecordings(); },
   'select-all-recordings': () => {
-    const list = visibleRecordings();
+    const list = listedRecordings();
     const allSelected = list.length > 0 && list.every((r) => selectedRecordings.has(keyOf.recording(r)));
     for (const r of list) {
       if (allSelected) selectedRecordings.delete(keyOf.recording(r));
@@ -1751,14 +2011,14 @@ const ACT = {
   'clear-recording-selection': () => { selectedRecordings.clear(); renderRecordings(); },
   'delete-selected-recordings': () => deleteSelectedRecordings(),
   'keep-selected-recordings': () => {
-    const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean);
+    const selected = selectedListed();
     setRecordingKeep(selected, selected.some((r) => !r.keep));
   },
   'uncache-selected-recordings': () => uncacheSelectedRecordings(),
-  'merge-selected-recordings': () => openMergeModal([...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean)),
+  'merge-selected-recordings': () => openMergeModal(selectedListed()),
   'view': (el) => {
     setView(el.dataset.view);
-    if (el.classList.contains('stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    if (el.closest('.stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   },
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
@@ -1766,15 +2026,16 @@ const ACT = {
   'take-over-latest': () => {
     const pages = (ov?.targets || []).filter((t) => t.type === 'page' && inFilter(t));
     const lead = pages.find((p) => p.url && p.url !== 'about:blank') || pages[0];
-    if (lead) location.href = handoffUrl(lead.node_name, { page: lead.id });
+    if (lead) takeOver(lead.node_name, { page: lead.id }, ov.sessions.find((s) => s.node_name === lead.node_name && s.id === lead.sessionId));
   },
   'vacuum': () => vacuum(),
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
   'app-menu': (el) => openMenu(el, [
     { icon: 'plug', label: 'Connect & API', run: openConnect },
-    { icon: 'handoff', label: 'Open handoff', run: () => { location.href = '/handoff/'; } },
+    { icon: 'handoff', label: 'Live view', run: () => { location.href = '/handoff/'; } },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
+    { icon: 'broom', label: 'Clean up recordings…', run: () => vacuum() },
     { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], run: () => openMenu(el, [
       { label: 'Theme' },
       ...Object.entries(THEMES).map(([id, name]) => ({ label: name, on: id === theme(), run: () => setTheme(id) })),
@@ -1787,7 +2048,6 @@ const ACT = {
     { icon: 'info-c', label: 'About', run: () => {
       renderAbout();
       openModal('aboutModal');
-      $('aboutModal').querySelector('[data-close]').focus();
     } },
   ]),
   'session-clients': (el) => {
@@ -1797,20 +2057,26 @@ const ACT = {
   'session-menu': (el) => {
     const s = byKey.sessions.get(el.dataset.key); if (!s) return;
     const wsUrl = `${nodeBase(s.node_name).replace(/^http/, 'ws')}/${s.engine === 'firefox' ? 'firefox' : 'chromium'}?session_id=${s.id}`;
-    openMenu(el, [
-      { icon: 'takeover', label: 'Take over', run: () => { location.href = handoffUrl(s.node_name, { session: s.id }); } },
-      { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
+    const rec = [
       { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : !s.audio ? 'Start recording' : s.record_audio ? 'Start recording (with sound)' : 'Start recording (silent)', run: () => toggleRecording(s) },
       !s.is_recording && s.audio && { icon: 'rec', label: s.record_audio ? 'Start recording without sound' : 'Start recording with sound', run: () => toggleRecording(s, !s.record_audio) },
+      s.is_recording && (s.recording_paused
+        ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
+        : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
+    ];
+    openMenu(el, [
+      { icon: 'takeover', label: 'Take over', run: () => takeOver(s.node_name, { session: s.id }, s) },
+      { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
+      '-',
+      ...rec,
+      '-',
       { icon: 'clock', label: `Auto-stop when idle: ${idleLabel(s.idle_timeout_seconds)}…`, run: () => setIdleTimeout(s) },
       nodeProxies(s.node_name).length && { icon: 'route', label: 'Proxy', meta: s.proxy ? proxyName(s.node_name, s.proxy) : 'Direct', run: () => openMenu(el, [
         { label: 'Proxy (switches now)' },
         { label: 'Direct', on: !s.proxy, run: () => setSessionProxy(s, 'none') },
         ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
       ]) },
-      s.is_recording && (s.recording_paused
-        ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
-        : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
+      '-',
       { icon: 'copy', label: 'Copy WebSocket URL', run: () => copyText(wsUrl) },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
       !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },
@@ -1826,7 +2092,7 @@ const ACT = {
     const others = nodes.filter((n) => n.name !== p.node_name && n.status === 'online');
     openMenu(el, [
       p.session
-        ? { icon: 'takeover', label: 'Take over', run: () => { location.href = handoffUrl(p.node_name, { session: p.session.id }); } }
+        ? { icon: 'takeover', label: 'Take over', run: () => takeOver(p.node_name, { session: p.session.id }, p.session) }
         : { icon: 'play', label: `Launch in ${p.engine === 'firefox' ? 'Firefox' : 'Chromium'}`, run: () => launchProfile(p) },
       !p.session && p.tabs?.length && { icon: 'play', label: 'Launch without the default tabs', run: () => launchProfile(p, { tabs: false }) },
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
@@ -1840,7 +2106,7 @@ const ACT = {
         { label: p.session ? 'Appearance (from the next launch)' : 'Appearance' },
         ...['dark', 'light'].map((v) => ({ label: schemeName(v), on: (p.color_scheme || 'dark') === v, run: () => setProfileScheme(p, v) })),
       ]) },
-      { icon: 'rec', label: 'Recording', meta: recordingSummary(p), run: () => openMenu(el, [
+      { icon: 'rec', label: 'Recording', meta: recordingSummary(p).replace(/^./, (c) => c.toUpperCase()), run: () => openMenu(el, [
         { label: p.session ? 'Record its sessions (from the next launch)' : 'Record its sessions' },
         ...[[undefined, "Node's default"], [true, 'Always'], [false, 'Never']].map(([v, label]) => ({ label, on: p.record === v, run: () => setProfileRecording(p, { record: v ?? null }) })),
         { label: 'Sound in its recordings' },
@@ -1863,7 +2129,7 @@ const ACT = {
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: r.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
       r.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
-      { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
+      !Object.keys(getAuthHeaders()).length && { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
       cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
       '-',
       { icon: 'trash', label: 'Delete', danger: true, run: () => deleteRecording(r.id, r.node_name) },
@@ -1917,7 +2183,7 @@ function nodePills(container, selected, onPick, { onlineOnly = false, exclude = 
   const list = nodes.filter((n) => n.name !== exclude);
   container.innerHTML = list.map((n) => {
     const off = n.status !== 'online';
-    return `<button type="button" data-node="${esc(n.name)}" class="${n.name === selected ? 'on' : ''} ${off ? 'off' : ''}" style="--node:${nodeColor(n.name)}" ${off && onlineOnly ? 'disabled' : ''}>
+    return `<button type="button" data-node="${esc(n.name)}" aria-pressed="${n.name === selected}" class="${n.name === selected ? 'on' : ''} ${off ? 'off' : ''}" style="--node:${nodeColor(n.name)}" ${off && onlineOnly ? 'disabled' : ''}>
       <span class="dot"></span>${esc(n.name)}${n.isLocal ? ' <span class="muted" style="font-weight:500">· here</span>' : ''}</button>`;
   }).join('');
   container.onclick = (e) => {
@@ -2081,7 +2347,7 @@ function renderAdvSummary() {
   const parts = [];
   if ($('sessionName').value.trim()) parts.push($('sessionName').value.trim());
   parts.push(sessionScreen === 'window' ? `${$('sessionWidth').value}×${$('sessionHeight').value}` : sessionScreen === 'native' ? 'Native' : 'Phone');
-  if ($('sessionPersistent').checked) parts.push('kept alive');
+  if (!$('sessionPersistent').checked) parts.push('ephemeral');
   if ($('sessionRecord').checked) parts.push('recorded');
   if (sessionScheme) parts.push(sessionScheme);
   if (sessionProxy) parts.push(sessionProxy === 'none' ? 'direct' : proxyName(sessionNode, sessionProxy));
@@ -2133,17 +2399,17 @@ $('newSessionForm').addEventListener('submit', async (e) => {
   if (mem > 0) payload.max_memory_mb = mem;
   if ($('sessionIdle').value !== '') payload.idle_timeout_minutes = parseInt($('sessionIdle').value, 10);
   const t = createProgressToast('launch', `Starting ${sessionEngine === 'firefox' ? 'Firefox' : 'Chromium'} on ${node}`, 'Spawning the browser…');
-  t.update(30, 'Spawning the browser…');
+  t.update(null, 'Spawning the browser…');
   try {
     const picked = pickedProfile();
     if (picked && picked.node_name !== node) {
       // From another node: copy it here first (the original stays where it is).
-      t.update(15, `Copying ${picked.display} from ${picked.node_name}…`);
+      t.update(null, `Copying ${picked.display} from ${picked.node_name}…`);
       const clash = [...byKey.profiles.values()].some((p) => p.node_name === node && p.display === picked.display);
       await request('POST', api(picked.node_name, `/profiles/${enc(picked.key)}/transfer`), {
         target_node: node, target_name: profileTargetName(picked, picked.display), delete_source: false, overwrite: clash,
       });
-      t.update(60, 'Spawning the browser…');
+      t.update(null, 'Spawning the browser…');
     }
     // A new profile remembers the proxy and appearance it was first launched with.
     const newProxy = sessionProxy && sessionProxy !== 'none' ? sessionProxy : null;
@@ -2155,7 +2421,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     const start = toTarget($('sessionUrl').value);
     let tab = null;
     if (start) {
-      t.update(85, 'Opening the start page…');
+      t.update(null, 'Opening the start page…');
       tab = await request('PUT', jsonNewUrl(node, `url=${enc(start)}&session_id=${enc(s.id)}`))
         .catch((err) => { showToast('Could not open the start page', 'danger', 6000, null, err.message); return null; });
     }
@@ -2176,9 +2442,11 @@ async function stopAllSessions() {
   const list = ov.sessions.filter(inFilter);
   if (!list.length) return;
   const where = filter === 'all' ? '' : ` on ${filter}`;
+  const driven = list.filter((s) => driverOf(s));
   const ok = await ask({
     title: `Stop ${list.length} session${list.length === 1 ? '' : 's'}${where}?`,
-    text: `Every browser session${where} is closed, with whatever is open in it. Profiles stay on disk and recordings are saved.`,
+    text: `Every browser session${where} is closed, with whatever is open in it. Profiles stay on disk and recordings are saved.`
+      + (driven.length ? ` ${driven.length} of them ${driven.length === 1 ? 'is' : 'are'} being driven by an agent: ${driven.map((s) => `${sessName(s)} (${driverOf(s)})`).join(', ')}.` : ''),
     ok: 'Stop all', danger: true,
   });
   if (!ok) return;
@@ -2372,8 +2640,8 @@ function highlightJson(json) {
 function showSessionDetails(s) {
   showDetails(sessName(s), [
     ['Name', esc(sessName(s))], ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
-    ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Kept alive' : 'Ends with last client'],
-    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Screen', { native: 'Native', phone: 'Phone' }[s.screen] || 'Window'], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', (s.clients || []).length ? (s.clients || []).map((c) => esc(clientInfo(c)).replace(/\n/g, '<br>')).join('<br><br>') : s.client_count], ['Tabs', s.tabs_count], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
+    ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Persistent: runs until stopped' : 'Ephemeral: ends with its last client'],
+    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Screen', { native: 'Native', phone: 'Phone' }[s.screen] || 'Window'], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', (s.clients || []).length ? (s.clients || []).map((c) => esc(clientInfo(c)).replace(/\n/g, '<br>')).join('<br><br>') : esc(s.client_count)], ['Tabs', esc(s.tabs_count)], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);
 }
 
@@ -2413,15 +2681,16 @@ function launchProfile(p, { tabs = true } = {}) {
     const s = await request('POST', api(p.node_name, '/sessions'), { profile: p.id || p.display, engine: p.engine, persistent: true, default_tabs: tabs });
     showToast(`${p.display} is running`, 'success', 6000, { text: 'Take over', url: handoffUrl(p.node_name, { session: s.id }) });
     return s;
-  }, `${p.display} launched`);
+  }, null);
 }
 // Keep a throwaway session's logins, cookies and storage as a new profile: the browser
 // restarts on the same pages as a session of that profile.
 async function saveSessionAsProfile(s) {
   const name = await ask({ title: 'Save as a profile', text: `Keeps the logins, cookies and storage of ${s.name || 'this session'} under a new profile. The browser restarts on the same pages.`, input: '', placeholder: 'e.g. Google (me@example.com)', ok: 'Save' });
   if (!name || !name.trim()) return;
-  const r = await act('Saving the profile', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/save-as-profile`), { name: name.trim() }), `Saved as ${name.trim()}`);
-  if (r?.session) showToast(`${name.trim()} is running`, 'success', 8000, { text: 'Take over', url: handoffUrl(s.node_name, { session: r.session.id }) });
+  const r = await act('Saving the profile', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/save-as-profile`), { name: name.trim() }), null);
+  if (r?.session) showToast(`Saved as ${name.trim()}, and running`, 'success', 8000, { text: 'Take over', url: handoffUrl(s.node_name, { session: r.session.id }) });
+  else if (r !== undefined) showToast(`Saved as ${name.trim()}`, 'success');
 }
 async function renameProfile(p) {
   const name = await ask({ title: `Rename ${p.display}`, input: p.display, ok: 'Rename' });
@@ -2669,7 +2938,6 @@ async function bkRun(label, fn, okText) {
   bk.confirm = null;
   renderBackups();
   const t = createProgressToast('bk-' + hashOf(label + Date.now()), label, 'Working…');
-  t.update(40, 'Working…');
   try { await fn(p); t.done(okText, ''); } catch (e) { t.error(label + ' failed', e.message || String(e)); }
   refreshData();
   await loadBackups();
@@ -2685,7 +2953,7 @@ $('backupsModal').addEventListener('click', (e) => {
     case 'delete': bkRun('Deleting backup', (p) => request('DELETE', backupPath(p, `/${enc(id)}`)), 'Backup deleted'); break;
     case 'restore-go': bkRun('Restoring backup', (p) => request('POST', backupPath(p, `/${enc(id)}/restore`) + (p.session ? '?force=true' : '')), 'Profile restored'); break;
     case 'clear-go': bkRun('Clearing data', (p) => request('POST', api(p.node_name, `/profiles/${enc(p.key)}/clear`) + (p.session ? '?force=true' : '')), 'Data cleared'); break;
-    case 'export': { const p = bkProfile(); if (p) location.href = api(p.node_name, `/profiles/${enc(p.key)}/export`); break; }
+    case 'export': { const p = bkProfile(); if (p) exportProfile(p); break; }
     case 'import': { const p = bkProfile(); if (p) restoreProfile(p, loadBackups); break; }
   }
 });
@@ -2695,6 +2963,25 @@ $('backupsForm').addEventListener('submit', (e) => {
   $('backupLabel').value = '';
   bkRun('Backing up profile', (p) => request('POST', backupPath(p), label ? { label } : {}), 'Profile backed up');
 });
+// A plain link when no secret has to travel in a header (the browser streams the file
+// to disk); otherwise fetched with the headers into a blob.
+async function exportProfile(p) {
+  const url = api(p.node_name, `/profiles/${enc(p.key)}/export`);
+  if (!Object.keys(getAuthHeaders()).length) { location.href = url; return; }
+  const t = createProgressToast('export-' + hashOf(p.key + Date.now()), `Exporting ${p.display}`, 'Packing the archive…');
+  try {
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || `${p.display}.tar.gz`;
+    const u = URL.createObjectURL(await res.blob());
+    const a = Object.assign(document.createElement('a'), { href: u, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 2000);
+    t.done('Archive saved', name);
+  } catch (err) {
+    t.error('Could not export the profile', err.message);
+  }
+}
 // Replace a stopped profile's data with an exported archive from disk.
 function restoreProfile(p, after) {
   const inp = document.createElement('input');
@@ -2728,10 +3015,10 @@ async function deleteProfile(p) {
 function showProfileDetails(p) {
   showDetails(p.display, [
     ['Storage', `<span class="mono">${esc(p.storage_dir || p.name)}</span>`], ['ID', p.id && `<span class="mono">${esc(p.id)}</span>`],
-    ['Node', nodeChip(p.node_name)], ['Engine', p.engine],
+    ['Node', nodeChip(p.node_name)], ['Engine', esc(p.engine)],
     ['Proxy', p.proxy ? proxyChip(p.node_name, p.proxy) : 'Direct'], ['Appearance', schemeName(p.color_scheme)],
     ['Default tabs', p.tabs?.length ? p.tabs.map((t) => `<span class="mono">${esc(t)}</span>`).join('<br>') : 'blank'],
-    ['Size', formatBytes(p.size_bytes)], ['Status', p.session ? 'Running' : 'Stored'],
+    ['Size', formatBytes(p.size_bytes)], ['Status', p.session ? 'Running' : 'Not running'],
     ['Session', p.session && `<span class="mono">${esc(p.session.id)}</span>`],
     ['Created', absTime(p.created_at_secs)], ['Modified', absTime(p.modified_at_secs)],
   ], p);
@@ -2756,7 +3043,7 @@ $('transferForm').addEventListener('submit', async (e) => {
   const name = $('transferName').value.trim() || p.display;
   closeModal('transferModal');
   const t = createProgressToast('transfer-' + p.key, `Moving ${p.display} to ${transferTarget}`, 'Packing and uploading…');
-  t.update(35, 'Packing and uploading…');
+  t.update(null, 'Packing and uploading…');
   try {
     await request('POST', api(p.node_name, `/profiles/${enc(p.key)}/transfer`), {
       target_node: transferTarget,
@@ -2777,7 +3064,7 @@ const nodeDefaultProxy = (node) => nodes.find((n) => n.name === node)?.settings?
 function renderNodes() {
   if (!ov) return;
   // Not while a setting is being changed: re-rendering would close its picker.
-  if ($('nodesList').contains(document.activeElement)) return;
+  if ($('nodesList').contains(document.activeElement) && document.activeElement.matches('select, input')) return;
   const html = nodes.map((n) => {
     const online = n.status === 'online';
     const proxies = n.proxies || [];
@@ -2795,14 +3082,14 @@ function renderNodes() {
     return `<div class="node-card" style="--node:${nodeColor(n.name)}">
       <div class="node-head">
         <div class="avatar">${icon('server')}</div>
-        <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${n.latency_ms} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
+        <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${esc(n.latency_ms)} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
           <span>${esc(n.url)}${n.version ? ` · v${esc(n.version)}${esc(rev)}` : ''}</span>
-          ${online ? `<div class="bars"><span><b>${n.active_sessions}</b>/${n.max_sessions} sessions</span><span><b>${n.profiles_count}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.join(' · ')}</span>` : ''}</div>` : ''}
+          ${online ? `<div class="bars"><span><b>${esc(n.active_sessions)}</b>/${esc(n.max_sessions)} sessions</span><span><b>${esc(n.profiles_count)}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.map(esc).join(' · ')}</span>` : ''}</div>` : ''}
         </div>
         <div style="display:flex;gap:6px;flex:none">
-          <button class="btn sm${filter === n.name ? ' primary' : ''}" data-act="filter" data-node="${esc(n.name)}" title="${filter === n.name ? 'Showing only this node: click to show all' : 'Show only this node on the other tabs'}">${icon('layers', 'sm')}${filter === n.name ? 'Showing only' : 'Show only'}</button>
-          ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}">${icon('plus', 'sm')}Session</button>` : ''}
-          ${!n.isLocal ? `<button class="btn icon sm ghost" data-node-remove="${esc(n.name)}" title="Remove peer">${icon('trash', 'sm')}</button>` : ''}
+          <button class="btn sm${filter === n.name ? ' primary' : ''}" data-act="filter" data-node="${esc(n.name)}" aria-label="${filter === n.name ? 'Showing only' : 'Show only'} ${esc(n.name)}" title="${filter === n.name ? 'Showing only this node: click to show all' : 'Show only this node on the other tabs'}">${icon('layers', 'sm')}${filter === n.name ? 'Showing only' : 'Show only'}</button>
+          ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus', 'sm')}New session</button>` : ''}
+          ${!n.isLocal ? `<button class="btn icon sm ghost" data-node-remove="${esc(n.name)}" title="Remove peer ${esc(n.name)}" aria-label="Remove peer ${esc(n.name)}">${icon('trash', 'sm')}</button>` : ''}
         </div>
       </div>
       ${settings}
@@ -2811,45 +3098,81 @@ function renderNodes() {
   if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
 }
 // Defaults per browser engine, the same on every node: shown as the local node has
-// them, saved to all online nodes (a node that differs is named).
+// them. A change is a draft until it is applied (to every online node, after a
+// confirmation); a node that differs is named.
 const ENGINES = [['chromium', 'Chromium'], ['firefox', 'Firefox']];
+const engineLabel = (id) => (id === 'firefox' ? 'Firefox' : 'Chromium');
+const enginesDraft = {};   // engine id -> the settings it should have
 // The engines some online node offers.
 const availableEngines = () => ENGINES.filter(([id]) => nodes.some((n) => n.status === 'online' && (!n.supported_engines?.length || n.supported_engines.includes(id))));
+const engineBase = (id) => nodes.find((n) => n.isLocal)?.settings?.engines?.[id] || {};
+const ENGINE_KEYS = { adblock: 'Ad blocking', color_scheme: 'Appearance', show_touches: 'Show touches' };
+function engineChanges(id) {
+  const d = enginesDraft[id], base = engineBase(id);
+  if (!d) return [];
+  return Object.keys(ENGINE_KEYS).filter((k) => JSON.stringify(d[k]) !== JSON.stringify(base[k]))
+    .map((k) => `${ENGINE_KEYS[k]}: ${d[k] === undefined ? 'node default' : String(d[k])}`);
+}
 function renderEngines() {
-  if (!ov || $('enginesList').contains(document.activeElement)) return;
-  const local = nodes.find((n) => n.isLocal);
+  if (!ov || ($('enginesList').contains(document.activeElement) && document.activeElement.matches('select, input'))) return;
   const online = nodes.filter((n) => n.status === 'online');
   const html = availableEngines().map(([id, label]) => {
-    const d = local?.settings?.engines?.[id] || {};
-    const differ = online.filter((n) => !n.isLocal && n.settings && JSON.stringify(n.settings.engines?.[id] || {}) !== JSON.stringify(d)).map((n) => n.name);
-    const sel = (key, value, opts) => `<select class="input" data-engine="${id}" data-key="${key}">${opts.map(([v, l]) => `<option value="${v}"${String(value ?? '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    const d = enginesDraft[id] || engineBase(id);
+    const changes = engineChanges(id);
+    const differ = online.filter((n) => !n.isLocal && n.settings && JSON.stringify(n.settings.engines?.[id] || {}) !== JSON.stringify(engineBase(id))).map((n) => n.name);
+    const sel = (key, value, opts) => `<select class="input" data-engine="${id}" data-key="${key}" aria-label="${esc(ENGINE_KEYS[key])} for ${label}">${opts.map(([v, l]) => `<option value="${v}"${String(value ?? '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
     return `<div class="node-card" style="--node:var(--${id})">
       <div class="node-head"><div class="avatar">${icon(id)}</div>
         <div class="t"><b>${label}</b><span>Defaults for new ${label} sessions and their live views. A session's own choice, or its profile's, wins.</span></div></div>
       <div class="node-settings">
         <label class="node-setting"><span>${icon('shield', 'sm')}Ad blocking</span>${sel('adblock', d.adblock === undefined ? '' : String(d.adblock), [['', 'Node default'], ['true', 'On'], ['false', 'Off']])}</label>
-        <label class="node-setting"><span>${icon('moon', 'sm')}Colour scheme</span>${sel('color_scheme', d.color_scheme, [['', 'Dark'], ['light', 'Light']])}</label>
+        <label class="node-setting"><span>${icon('moon', 'sm')}Appearance</span>${sel('color_scheme', d.color_scheme, [['', 'Dark'], ['light', 'Light']])}</label>
         <label class="node-setting"><span>${icon('takeover', 'sm')}Show touches</span><input type="checkbox" data-engine="${id}" data-key="show_touches"${d.show_touches ? ' checked' : ''}> <span class="muted">Live views mark taps and clicks (a viewer can still switch it in the view's menu)</span></label>
-        ${differ.length ? `<span class="hint">Differs on ${esc(differ.join(', '))}: saving sets it everywhere.</span>` : ''}
+        ${differ.length ? `<span class="hint">Differs on ${esc(differ.join(', '))}: applying sets it everywhere.</span>` : ''}
+        ${changes.length ? `<div class="node-actions"><button class="btn primary sm" data-engine-apply="${id}">Apply to ${plural(online.length, 'node')}</button><button class="btn sm" data-engine-discard="${id}">Discard</button><span class="hint">Not saved yet: ${esc(changes.join(', '))}</span></div>` : ''}
       </div>
     </div>`;
   }).join('');
   if ($('enginesList').innerHTML !== html) $('enginesList').innerHTML = html;
 }
-$('enginesList').addEventListener('change', async (e) => {
+$('enginesList').addEventListener('change', (e) => {
   const el = e.target.closest('[data-engine][data-key]');
   if (!el) return;
   const { engine, key } = el.dataset;
-  const engines = structuredClone(nodes.find((n) => n.isLocal)?.settings?.engines || {});
-  const d = engines[engine] ||= {};
+  const d = enginesDraft[engine] ||= structuredClone(engineBase(engine));
   if (key === 'show_touches') d.show_touches = el.checked;
   else if (el.value === '') delete d[key];
   else d[key] = key === 'adblock' ? el.value === 'true' : el.value;
-  const targets = nodes.filter((n) => n.status === 'online');
-  await act(`Saving ${engine} defaults`, () => Promise.all(targets.map((n) => request('PATCH', api(n.name, '/settings'), { engines }))),
-    `${engine === 'firefox' ? 'Firefox' : 'Chromium'} defaults saved on ${targets.length} node${targets.length === 1 ? '' : 's'}`);
-  for (const n of targets) n.settings = { ...(n.settings || {}), engines };
+  if (!engineChanges(engine).length) delete enginesDraft[engine];
   el.blur();
+  renderEngines();
+});
+$('enginesList').addEventListener('click', async (e) => {
+  const discard = e.target.closest('[data-engine-discard]');
+  if (discard) { delete enginesDraft[discard.dataset.engineDiscard]; renderEngines(); return; }
+  const apply = e.target.closest('[data-engine-apply]');
+  if (!apply) return;
+  const id = apply.dataset.engineApply, draft = enginesDraft[id];
+  const targets = nodes.filter((n) => n.status === 'online');
+  if (!draft || !targets.length) return;
+  const ok = await ask({
+    title: `Apply the ${engineLabel(id)} defaults to ${plural(targets.length, 'node')}?`,
+    text: `${engineChanges(id).join('; ')}. This overwrites the ${engineLabel(id)} defaults on ${targets.map((n) => n.name).join(', ')}.`,
+    ok: 'Apply',
+  });
+  if (!ok) return;
+  const engines = structuredClone(nodes.find((n) => n.isLocal)?.settings?.engines || {});
+  engines[id] = draft;
+  const t = createProgressToast('engines-' + id, `Saving the ${engineLabel(id)} defaults`, `On ${plural(targets.length, 'node')}…`);
+  const results = await Promise.allSettled(targets.map((n) => request('PATCH', api(n.name, '/settings'), { engines })));
+  const failed = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') targets[i].settings = { ...(targets[i].settings || {}), engines };
+    else failed.push(`${targets[i].name}: ${r.reason?.message || r.reason}`);
+  });
+  if (failed.length) t.error(`Saved on ${targets.length - failed.length} of ${targets.length} nodes`, failed.join('; '));
+  else { delete enginesDraft[id]; t.done(`${engineLabel(id)} defaults saved`, `On ${plural(targets.length, 'node')}`); }
+  refreshData();
   renderEngines();
 });
 $('nodesList').addEventListener('change', async (e) => {
@@ -2906,7 +3229,9 @@ $('endpointsList').addEventListener('click', (e) => {
 });
 
 /* ---------------------------------------------------------------- live data */
-let overviewWs = null, wsReconnectTimer = null;
+let overviewWs = null, wsReconnectTimer = null, wsFailures = 0, pollFailures = 0, lastData = 0;
+// Retry delays grow to 30 s, with jitter, so a node that is down is not hammered by every tab.
+const backoff = (n) => Math.min(30000, 1000 * 2 ** Math.min(n, 5)) * (0.75 + Math.random() * 0.5);
 
 // ?play=<recording id> (e.g. from `browser-daemon tui`): open that recording once it is listed.
 // Same for #recordings/<id>, which the player shows while a recording is open.
@@ -2922,6 +3247,8 @@ function applyOverview(data) {
   if (!data || !data.local_node) return;
   ov = data;
   currentOverview = data;
+  lastData = Date.now();
+  pollFailures = 0;
   if (pendingPlay) {
     const r = (data.recordings || []).find((x) => x.id === pendingPlay);
     if (r) {
@@ -2932,6 +3259,7 @@ function applyOverview(data) {
       setTimeout(() => openPlayerModal(r.id, r.node_name), 0);
     }
   }
+  trackSeen(data);
   sparkHistory.push(0);                       // filled in by renderStats for the current filter
   if (sparkHistory.length > 40) sparkHistory.shift();
   render();
@@ -2941,12 +3269,13 @@ function connectOverviewWs() {
   if (overviewWs && overviewWs.readyState <= WebSocket.OPEN) return;
   const url = `${location.origin.replace(/^http/, 'ws')}/api/ws/overview`;
   try { overviewWs = new WebSocket(url); } catch { return; }
-  overviewWs.onopen = () => $('liveDot').classList.add('on');
+  overviewWs.onopen = () => { wsFailures = 0; $('liveDot').classList.add('on'); };
   overviewWs.onmessage = (ev) => { try { applyOverview(JSON.parse(ev.data)); } catch { /* ignore */ } };
   overviewWs.onclose = () => {
     $('liveDot').classList.remove('on');
     clearTimeout(wsReconnectTimer);
-    wsReconnectTimer = setTimeout(connectOverviewWs, 3000);
+    wsFailures++;
+    wsReconnectTimer = setTimeout(connectOverviewWs, backoff(wsFailures));
   };
   overviewWs.onerror = () => overviewWs.close();
 }
@@ -2958,9 +3287,27 @@ async function refreshData(force = false) {
   try {
     applyOverview(await request('GET', '/api/mesh/overview'));
   } catch (err) {
+    pollFailures++;
     if (!ov) showToast('Could not load the overview', 'danger', 6000, null, err.message);
   }
+  renderOffline();
 }
+// The data on screen is old: say so, and grey it out.
+function renderOffline() {
+  const age = Date.now() - lastData;
+  const old = !!ov && age > 20000;
+  document.querySelector('main').classList.toggle('stale', old);
+  const banner = $('offlineBanner');
+  banner.hidden = !old;
+  if (old) banner.textContent = `Disconnected from this node: showing data from ${formatUptime(Math.round(age / 1000))} ago. Retrying…`;
+  if (!ov && pollFailures > 0) {
+    const grid = $('sessionGrid');
+    grid.style.display = 'block';
+    setStatic(grid, emptyState('alert', 'Cannot reach the daemon', 'The overview did not load. Trying again in a moment.',
+      '<button class="btn primary" data-act="retry">Try again now</button>'));
+  }
+}
+setInterval(renderOffline, 5000);
 
 async function vacuum() {
   const targets = filter === 'all' ? nodes.filter((n) => n.status === 'online').map((n) => n.name) : [filter];
@@ -3227,7 +3574,7 @@ function handleWorkerMessage(e) {
       const loadingSub = document.getElementById('playerLoadingSub');
       const titleText = effectiveTotal > 0 ? `Downloading session: ${sub} (${displayPct}%)` : `Downloading session: ${sub}`;
       if (loadingText) loadingText.textContent = titleText;
-      if (loadingBar) loadingBar.style.width = displayPct + '%';
+      if (loadingBar) { loadingBar.classList.toggle('indeterminate', !(displayPct > 0)); loadingBar.style.width = displayPct > 0 ? displayPct + '%' : ''; }
       if (loadingSub) loadingSub.textContent = e.data.frameCount ? `${e.data.frameCount.toLocaleString()} frames received` : 'Streaming frames…';
     }
   } else if (type === 'SUCCESS') {
@@ -3281,7 +3628,7 @@ function setRecordingKeep(list, keep) {
 function showRecordingDetails(r) {
   showDetails(r.title && r.title !== 'about:blank' ? r.title : 'Recording', [
     ['ID', `<span class="mono">${esc(r.id)}</span>`], ['Node', nodeChip(r.node_name)], ['Profile', r.profile ? esc(r.profile) : 'Throwaway'],
-    ['Started', absTime(r.started_at_secs)], ['Length', formatUptime(r.duration_seconds)], ['Frames', String(r.frame_count)], ['Size', formatBytes(r.size_bytes)],
+    ['Started', absTime(r.started_at_secs)], ['Length', formatUptime(r.duration_seconds)], ['Frames', esc(r.frame_count)], ['Size', formatBytes(r.size_bytes)],
     ['Status', esc(r.status)], ['Kept', r.keep ? 'Yes: the cleanup never removes it' : 'No'], ['Sound', r.audio ? 'Yes' : 'No'],
     ...(r.merged_from?.length ? [['Merged from', r.merged_from.map((x) => `<span class="mono">${esc(x)}</span>`).join('<br>')]] : []),
     ['From', r.initial_url ? `<span class="mono">${esc(r.initial_url)}</span>` : '–'], ['To', r.final_url ? `<span class="mono">${esc(r.final_url)}</span>` : '–'],
@@ -3302,12 +3649,13 @@ async function deleteRecording(id, node) {
 }
 
 async function deleteSelectedRecordings() {
-  const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter(Boolean);
+  const selected = selectedListed();
   if (!selected.length) return;
+  const hidden = selectedRecordings.size - selected.length;
   const nodesText = [...new Set(selected.map((r) => r.node_name))].join(', ');
   const ok = await ask({
-    title: `Delete ${selected.length} recordings?`,
-    text: `They will be removed from ${nodesText} and from this browser's cache.${selected.some((r) => r.keep) ? ` ${selected.filter((r) => r.keep).length} of them are marked to be kept.` : ''}`,
+    title: `Delete ${plural(selected.length, 'recording')}?`,
+    text: `They will be removed from ${nodesText} and from this browser's cache.${selected.some((r) => r.keep) ? ` ${selected.filter((r) => r.keep).length} of them are marked to be kept.` : ''}${hidden > 0 ? ` ${plural(hidden, 'other selected recording is', 'other selected recordings are')} hidden by the search and stays.` : ''}`,
     ok: `Delete ${selected.length}`,
     danger: true,
   });
@@ -3334,7 +3682,7 @@ async function deleteSelectedRecordings() {
 }
 
 async function uncacheSelectedRecordings() {
-  const selected = [...selectedRecordings].map((key) => byKey.recordings.get(key)).filter((r) => r && cachedRecordingsSet.has(r.id));
+  const selected = selectedListed().filter((r) => cachedRecordingsSet.has(r.id));
   if (!selected.length) return;
   await Promise.all(selected.map((r) => deleteCachedRecording(r.id)));
   for (const r of selected) cachedRecordingsSet.delete(r.id);
@@ -3371,6 +3719,7 @@ function handlePlayerModalOverlayClick(e) {
 }
 
 function closePlayerModal() {
+  playerOpenSeq++;
   const d = activeDownloadsMap.get(activePlayerModalId);
   if (d && !d.pToast) {
     d.pToast = createProgressToast(`rec-${activePlayerModalId}`, `Session ${activePlayerModalId.slice(0, 8)}`, 'Downloading in the background…');
@@ -3394,8 +3743,7 @@ function closePlayerModal() {
     card.classList.remove('fullscreen-mode');
     card.classList.remove('hide-controls');
   }
-  const modal = document.getElementById('playerModal');
-  if (modal) modal.classList.remove('open');
+  closeModal('playerModal');
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
     else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
@@ -3499,12 +3847,33 @@ function startStreamingPlayer(id, download) {
   });
 }
 
+// The seek bar runs in time (ms), not in frames: frames are far from evenly spread.
+const clock = (ms) => { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+const playerDuration = (p) => {
+  const last = p.frames[p.frames.length - 1]?.t || 0;
+  return p.streaming ? Math.max(last, p.expectedMs || 0) : last;
+};
+// The last frame shown at or before this time.
+function frameIndexAt(p, ms) {
+  let lo = 0, hi = p.frames.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (p.frames[mid].t <= ms) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+function updateScrubber(p, { moveThumb = true } = {}) {
+  const s = $('playerScrubber'), max = playerDuration(p), t = p.frames[p.currentIndex]?.t || 0;
+  s.max = max;
+  if (moveThumb) s.value = t;
+  s.setAttribute('aria-valuetext', `${clock(+s.value)} of ${clock(max)}`);
+}
 function streamProgress() {
   const p = activePlayer;
   if (!p) return;
   const have = p.frames.length;
   const total = p.streaming ? Math.max(have, p.expectedFrames || 0) : have;
-  $('playerScrubber').max = Math.max(0, total - 1);
+  updateScrubber(p);
   $('playerBuffered').style.width = (p.streaming && total ? Math.min(100, (have / total) * 100) : 100) + '%';
   $('playerBufferWrap').classList.toggle('done', !p.streaming);
   if (p.waiting && (have > p.currentIndex + 1 || !p.streaming)) {
@@ -3539,7 +3908,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     updatePlayPauseButton();
     if (centerPlayBtn) centerPlayBtn.style.display = 'none';
   } else {
-    document.getElementById('playerScrubber').max = frames.length - 1;
+    updateScrubber(activePlayer);
     document.getElementById('playerFrameDisplay').textContent = `(1 / ${frames.length} frames)`;
     updatePlayPauseButton();
     if (centerPlayBtn) centerPlayBtn.style.display = 'flex';
@@ -3557,6 +3926,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
   // Hide loading overlay
   const loadingOverlay = document.getElementById('playerLoadingOverlay');
   if (loadingOverlay) loadingOverlay.style.display = 'none';
+  $('playerViewportContainer').classList.remove('loading');
 
   renderPlayerFrame(0);
   streamProgress();
@@ -3661,7 +4031,9 @@ function togglePlayerMute() {
   else a.muted = true;
 }
 
+let playerOpenSeq = 0;
 async function openPlayerModal(id, node) {
+  const openSeq = ++playerOpenSeq;
   const modal = document.getElementById('playerModal');
   playerHash = '#recordings/' + enc(id);
   const nodeBadge = document.getElementById('playerNodeBadge');
@@ -3669,11 +4041,13 @@ async function openPlayerModal(id, node) {
   if (nodeBadge) { nodeBadge.textContent = node || 'local'; nodeBadge.style.setProperty('--node', nodeColor(node)); }
   $('playerFav').innerHTML = favicon(recInfo?.final_url || recInfo?.initial_url || '', recInfo && recFavicon(recInfo), recInfo?.favicon_url);
 
-  document.getElementById('playerPageTitle').textContent = 'Loading frames...';
-  document.getElementById('playerPageUrl').textContent = '';
-  document.getElementById('playerFrameOffset').textContent = '+0.0s';
+  // The header carries the recording's title (as the list shows it); the address follows the frame.
+  document.getElementById('playerPageTitle').textContent = recInfo ? recordingTitle(recInfo) : `Recording ${id.slice(0, 8)}`;
+  document.getElementById('playerPageUrl').textContent = 'Loading frames…';
+  document.getElementById('playerFrameOffset').textContent = 'frame at 0.0s';
   document.getElementById('playerScrubber').value = 0;
   document.getElementById('playerScrubber').max = 0;
+  $('playerViewportContainer').classList.add('loading');
 
   // Show loading overlay
   const loadingOverlay = document.getElementById('playerLoadingOverlay');
@@ -3682,11 +4056,11 @@ async function openPlayerModal(id, node) {
   const loadingSub = document.getElementById('playerLoadingSub');
   if (loadingOverlay) loadingOverlay.style.display = 'flex';
   if (loadingText) loadingText.textContent = 'Connecting to recording stream...';
-  if (loadingBar) loadingBar.style.width = '0%';
-  if (loadingSub) loadingSub.textContent = 'Fetching frames from server...';
+  if (loadingBar) { loadingBar.style.width = ''; loadingBar.classList.add('indeterminate'); }
+  if (loadingSub) loadingSub.textContent = 'Fetching frames from the node…';
 
   // Open modal immediately so user sees the loading state
-  modal.classList.add('open');
+  openModal('playerModal');
   loadPlayerAudio(id, node, recInfo);
 
   const canvas = document.getElementById('playerCanvas');
@@ -3700,9 +4074,12 @@ async function openPlayerModal(id, node) {
 
   // Check client-side local storage (IndexedDB) first for instant playback
   const cachedFrames = await getCachedRecording(id);
+  if (openSeq !== playerOpenSeq) { pToast.remove(); return; }   // closed, or another one opened, meanwhile
   if (cachedFrames && cachedFrames.length > 0) {
     if (nodeBadge) nodeBadge.textContent = `${node || 'local'} · cached`;
-    pToast.done('Loaded from Cache', `Loaded ${cachedFrames.length} frames instantly from browser storage`);
+    pToast.remove();
+    activePlayerModalId = id;
+    activePlayerModalNode = node;
     initPlayerWithFrames(id, node, cachedFrames, true);
     return;
   }
@@ -3772,7 +4149,17 @@ async function fallbackDownloadFrames(id, node, url, pToast, expectedBytes = 0) 
   }
 }
 
-function renderPlayerFrame(idx, { quiet = false } = {}) {
+// The page title and address in effect at a frame: frames that carry none keep the last known.
+function frameMeta(p, idx) {
+  let title = '', url = '';
+  for (let i = idx, n = 0; i >= 0 && n < 600 && (!title || !url); i--, n++) {
+    const f = p.frames[i];
+    if (!title && f.title && f.title !== 'about:blank') title = f.title;
+    if (!url && f.url) url = f.url;
+  }
+  return { title, url };
+}
+function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
   if (!activePlayer || !activePlayer.frames[idx]) return;
   const p = activePlayer;
   p.currentIndex = idx;
@@ -3780,23 +4167,20 @@ function renderPlayerFrame(idx, { quiet = false } = {}) {
   const totalFrames = p.frames.length;
   const shownTotal = p.streaming ? Math.max(totalFrames, p.expectedFrames || 0) : totalFrames;
 
-  document.getElementById('playerScrubber').value = idx;
+  updateScrubber(p, { moveThumb: !scrub });
+  $('playerViewportContainer').classList.toggle('buffering', !!p.waiting);
   document.getElementById('playerFrameDisplay').textContent = p.waiting ? '(buffering…)'
     : `(${idx + 1} / ${shownTotal} frames${p.streaming ? ` · ${Math.round((totalFrames / Math.max(1, shownTotal)) * 100)}% loaded` : ''})`;
 
-  const curSec = Math.floor(frame.t / 1000);
-  const lastT = p.frames[totalFrames - 1].t;
-  const maxSec = Math.floor((p.streaming ? Math.max(lastT, p.expectedMs || 0) : lastT) / 1000);
-  const pad = n => String(n).padStart(2, '0');
-  document.getElementById('playerTimeDisplay').textContent =
-    `${pad(Math.floor(curSec / 60))}:${pad(curSec % 60)} / ${pad(Math.floor(maxSec / 60))}:${pad(maxSec % 60)}`;
-  document.getElementById('playerFrameOffset').textContent = `+${(frame.t / 1000).toFixed(1)}s`;
+  document.getElementById('playerTimeDisplay').textContent = `${clock(frame.t)} / ${clock(playerDuration(p))}`;
+  document.getElementById('playerFrameOffset').textContent = `frame at ${(frame.t / 1000).toFixed(1)}s`;
   syncPlayerAudio();
 
   if (quiet) return;
-  const frameTitle = (frame.title !== 'about:blank' && frame.title) || shortUrl(frame.url);
-  if (frameTitle) document.getElementById('playerPageTitle').textContent = frameTitle;
-  if (frame.url) document.getElementById('playerPageUrl').textContent = frame.url;
+  const meta = frameMeta(p, idx);
+  p.currentUrl = meta.url;
+  $('playerPageUrl').textContent = meta.url || 'about:blank';
+  $('playerPageUrl').title = meta.title ? `${meta.title}\n${meta.url}` : 'Address of the page in the frame shown';
 
   const canvas = document.getElementById('playerCanvas');
   const ctx = canvas.getContext('2d');
@@ -3806,7 +4190,7 @@ function renderPlayerFrame(idx, { quiet = false } = {}) {
     img = new Image();
     img.src = 'data:image/jpeg;base64,' + frame.data;
     activePlayer.cachedImages.set(idx, img);
-    if (activePlayer.cachedImages.size > 200) {
+    if (activePlayer.cachedImages.size > 40) {
       const firstKey = activePlayer.cachedImages.keys().next().value;
       activePlayer.cachedImages.delete(firstKey);
     }
@@ -3829,7 +4213,7 @@ function renderPlayerFrame(idx, { quiet = false } = {}) {
   }
 
   // Preload upcoming frames
-  for (let i = 1; i <= 15; i++) {
+  for (let i = 1; i <= 8; i++) {
     const nextIdx = idx + i;
     if (nextIdx < totalFrames && !activePlayer.cachedImages.has(nextIdx)) {
       const nextFrame = activePlayer.frames[nextIdx];
@@ -3960,9 +4344,8 @@ function stepFrame(delta) {
 function onScrubberInput(val) {
   if (!activePlayer) return;
   // Not downloaded yet: stop at what is there.
-  const idx = Math.min(parseInt(val, 10), activePlayer.frames.length - 1);
-  if (String(idx) !== String(val)) $('playerScrubber').value = idx;
-  renderPlayerFrame(idx);
+  const idx = frameIndexAt(activePlayer, +val);
+  renderPlayerFrame(idx, { scrub: true });
 }
 
 function cyclePlaySpeed() {
@@ -3991,7 +4374,7 @@ let exportingWebM = false;
 function openPlayerMenu(el) {
   const id = activePlayer?.id || activePlayerModalId, node = activePlayer?.node || activePlayerModalNode;
   const r = (currentOverview?.recordings || []).find((x) => x.id === id && x.node_name === node);
-  const url = document.getElementById('playerPageUrl')?.textContent;
+  const url = activePlayer?.currentUrl;
   openMenu(el, [
     { label: `Recording ${String(id || '').slice(0, 8)}` },
     r && { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
@@ -4004,78 +4387,73 @@ function openPlayerMenu(el) {
 }
 
 async function exportRecordingWebM() {
-  if (!activePlayer || !activePlayer.frames || activePlayer.frames.length === 0) return;
-  if (activePlayer.streaming) { showToast('Still downloading', 'info', 4000, null, 'Export works once the whole recording is here.'); return; }
+  const player = activePlayer;
+  if (!player || !player.frames || player.frames.length === 0) return;
+  if (player.streaming) { showToast('Still downloading', 'info', 4000, null, 'Export works once the whole recording is here.'); return; }
   // Progress shows in its toast; one export at a time.
   if (exportingWebM) return;
   exportingWebM = true;
-  const btn = { set disabled(v) { if (!v) exportingWebM = false; } };
-  const btnLabel = { textContent: '' };
-
-  const canvas = document.getElementById('playerCanvas');
-  const stream = canvas.captureStream(25);
-  let mediaRecorder;
+  let expToast = null;
   try {
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
-  } catch(e) {
+    const canvas = document.getElementById('playerCanvas');
+    const stream = canvas.captureStream(25);
+    let mediaRecorder;
     try {
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
-    } catch(err) {
-      showToast('WebM export is not supported in this browser', 'danger', 6000, null, String(err));
-      btn.disabled = false;
-      btnLabel.textContent = 'WebM';
-      return;
+      mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
+    } catch (e) {
+      try {
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      } catch (err) {
+        showToast('WebM export is not supported in this browser', 'danger', 6000, null, String(err));
+        return;
+      }
     }
-  }
+    expToast = createProgressToast(`export-${player.id}`, 'Exporting WebM video', 'Preparing the canvas stream…');
+    const chunks = [];
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    const stopped = new Promise((resolve) => { mediaRecorder.onstop = resolve; });
+    mediaRecorder.start();
 
-  const expToast = createProgressToast(`export-${activePlayer.id}`, `Exporting WebM Video`, `Preparing canvas stream...`);
-
-  const chunks = [];
-  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-  mediaRecorder.onstop = () => {
-    const blob = new Blob(chunks, { type: 'video/webm' });
-    const u = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = u;
-    a.download = `session-${activePlayer.id}.webm`;
+    const originalIndex = player.currentIndex;
+    const wasPlaying = player.isPlaying;
+    player.isPlaying = false;
+    const total = player.frames.length;
+    for (let i = 0; i < total; i++) {
+      if (activePlayer !== player) throw new Error('The player was closed');
+      renderPlayerFrame(i);
+      const pct = Math.round((i / total) * 100);
+      expToast.update(pct, `Encoding frame ${i + 1} / ${total} (${pct}%)`, 'Rendering the canvas stream to WebM…');
+      const frameImg = player.cachedImages.get(i);
+      if (frameImg && !frameImg.complete) {
+        await new Promise((r) => { frameImg.onload = r; frameImg.onerror = r; setTimeout(r, 80); });
+      }
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    mediaRecorder.stop();
+    await stopped;
+    const u = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+    const a = Object.assign(document.createElement('a'), { href: u, download: `session-${player.id}.webm` });
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(u);
-    btn.disabled = false;
-    btnLabel.textContent = 'WebM';
-    expToast.done('WebM Video Ready', `Downloaded session-${activePlayer.id}.webm`);
-  };
-
-  mediaRecorder.start();
-
-  const originalIndex = activePlayer.currentIndex;
-  const wasPlaying = activePlayer.isPlaying;
-  activePlayer.isPlaying = false;
-  const total = activePlayer.frames.length;
-
-  for (let i = 0; i < total; i++) {
-    renderPlayerFrame(i);
-    const pct = Math.round((i / total) * 100);
-    btnLabel.textContent = `${pct}%`;
-    expToast.update(pct, `Encoding frame ${i + 1} / ${total} (${pct}%)`, 'Rendering canvas stream to WebM video...');
-    const frameImg = activePlayer.cachedImages.get(i);
-    if (frameImg && !frameImg.complete) {
-      await new Promise(r => { frameImg.onload = r; frameImg.onerror = r; setTimeout(r, 80); });
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 2000);
+    expToast.done('WebM video ready', `Downloaded session-${player.id}.webm`);
+    if (activePlayer === player) {
+      renderPlayerFrame(originalIndex);
+      if (wasPlaying) togglePlayPause();
     }
-    await new Promise(r => setTimeout(r, 40));
+  } catch (err) {
+    expToast?.error('Could not export the video', err.message || String(err));
+  } finally {
+    exportingWebM = false;
   }
-
-  mediaRecorder.stop();
-  renderPlayerFrame(originalIndex);
-  if (wasPlaying) togglePlayPause();
 }
 
 // Saved as a video with its sound, encoded on the node (frames at their own
 // times); where that fails (an older node), rendered here without sound.
 async function exportWebMFromRecording(id, node) {
   const t = createProgressToast(`webm-${id}`, 'Saving as WebM', `Encoding on ${node}…`);
-  t.update(15, `Encoding on ${node}…`, 'Long recordings take a while');
+  t.update(null, `Encoding on ${node}…`, 'Long recordings take a while');
   try {
     const res = await fetch(api(node, `/recordings/${enc(id)}/export.webm`), { headers: getAuthHeaders() });
     if (res.status === 404) throw Object.assign(new Error('This node cannot encode recordings'), { fallback: true });
@@ -4088,7 +4466,7 @@ async function exportWebMFromRecording(id, node) {
       if (done) break;
       parts.push(value);
       got += value.length;
-      t.update(total ? 50 + Math.round((got / total) * 50) : 60, 'Downloading…', total ? `${formatBytes(got)} of ${formatBytes(total)}` : formatBytes(got));
+      t.update(total ? Math.round((got / total) * 100) : null, 'Downloading…', total ? `${formatBytes(got)} of ${formatBytes(total)}` : formatBytes(got));
     }
     const u = URL.createObjectURL(new Blob(parts, { type: 'video/webm' }));
     const a = document.createElement('a');
@@ -4111,6 +4489,8 @@ async function exportWebMFromRecording(id, node) {
 window.addEventListener('keydown', e => {
   const modal = document.getElementById('playerModal');
   if (!modal || !modal.classList.contains('open') || !activePlayer) return;
+  if (topModal() !== modal || $('menu').classList.contains('open')) return;
+  if (e.target.closest?.('textarea, select, [contenteditable], input:not([type="range"])')) return;
   if (e.key === ' ' || e.code === 'Space' || e.key === 'k' || e.key === 'K') {
     e.preventDefault();
     togglePlayPause();
@@ -4134,10 +4514,7 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     const pct = parseInt(e.key, 10) / 10;
     if (activePlayer && activePlayer.frames.length > 1) {
-      const targetIdx = Math.min(activePlayer.frames.length - 1, Math.round((activePlayer.frames.length - 1) * pct));
-      activePlayer.currentIndex = targetIdx;
-      renderPlayerFrame(targetIdx);
-      document.getElementById('playerScrubber').value = targetIdx;
+      renderPlayerFrame(frameIndexAt(activePlayer, playerDuration(activePlayer) * pct));
       resetPlayerControlsTimer();
     }
   } else if ((e.key === 'm' || e.key === 'M') && playerSound.url) {
@@ -4151,15 +4528,6 @@ window.addEventListener('keydown', e => {
   } else if (e.key === 'f' || e.key === 'F') {
     e.preventDefault();
     togglePlayerFullscreen();
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    const card = document.querySelector('.player-modal-card');
-    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement || (card && card.classList.contains('fullscreen-mode')));
-    if (isFs) {
-      togglePlayerFullscreen();
-    } else {
-      closePlayerModal();
-    }
   }
 });
 
@@ -4215,10 +4583,10 @@ document.addEventListener('visibilitychange', () => {
 
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
-setView(['sessions', 'profiles', 'recordings', 'engines', 'nodes'].includes(initialView) ? initialView : 'sessions');
+setView(VIEWS.includes(initialView) ? initialView : 'sessions');
 addEventListener('hashchange', () => {
   const v = location.hash.slice(1);
-  if (['sessions', 'profiles', 'recordings'].includes(v)) setView(v);
+  if (VIEWS.includes(v)) setView(v);
   const m = /^recordings\/(.+)$/.exec(v);
   const r = m && (ov?.recordings || []).find((x) => x.id === decodeURIComponent(m[1]));
   if (r && activePlayerModalId !== r.id) { setView('recordings'); openPlayerModal(r.id, r.node_name); }
@@ -4226,7 +4594,9 @@ addEventListener('hashchange', () => {
 syncCachedRecordingsSet();
 refreshData(true);
 connectOverviewWs();
-setInterval(() => refreshData(), 5000);
+(function pollLoop() {
+  setTimeout(async () => { await refreshData(); pollLoop(); }, pollFailures ? backoff(pollFailures) : 5000);
+})();
 setInterval(() => { if (ov) { renderProfiles(); renderRecordings(); } }, 60000);   // keep relative times fresh
 </script>
 </body>

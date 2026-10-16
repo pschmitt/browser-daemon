@@ -8,6 +8,7 @@ mod browser;
 mod clients;
 mod ctl;
 mod display;
+mod favicon;
 mod history;
 mod idle;
 mod mcp;
@@ -2280,6 +2281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/peers/{peer}/recordings/{id}/keep",
             post(api_peer_set_recording_keep),
         )
+        .route("/api/favicon", get(api_site_favicon))
         .route("/api/recordings/{id}/favicon", get(api_get_recording_favicon))
         .route("/api/recordings/vacuum", post(api_vacuum_recordings))
         // Peer-to-Peer Mesh APIs
@@ -5340,6 +5342,42 @@ async fn api_get_recording_favicon(
         bytes,
     )
         .into_response()
+}
+
+#[derive(Deserialize)]
+struct SiteFaviconParams {
+    url: String,
+}
+
+/// The icon of the site a page belongs to, fetched by this node (see `favicon.rs`).
+async fn api_site_favicon(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<SiteFaviconParams>,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    match favicon::lookup(&params.url).await {
+        Some(icon) => (
+            [
+                (header::CONTENT_TYPE, icon.mime.to_string()),
+                (header::CACHE_CONTROL, "private, max-age=86400".to_string()),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; sandbox".to_string(),
+                ),
+            ],
+            icon.bytes,
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            [(header::CACHE_CONTROL, "private, max-age=600")],
+        )
+            .into_response(),
+    }
 }
 
 async fn api_peer_get_recording_favicon(
