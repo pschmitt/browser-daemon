@@ -249,10 +249,11 @@ fn own_tools(secrets: &[String]) -> Vec<Value> {
     tools
 }
 
-/// Playwright code giving the page's CDP target id and host: no secret in it.
+/// Playwright code giving the page's CDP target id and address: no secret in
+/// it. (Its sandbox has no `URL`, so the host is taken apart here.)
 const PAGE_INFO: &str = "async (page) => { const s = await page.context().newCDPSession(page); \
 const { targetInfo } = await s.send('Target.getTargetInfo'); await s.detach(); \
-return 'BDPAGE:' + targetInfo.targetId + ':' + new URL(page.url()).hostname + ':BDEND'; }";
+return 'BDPAGE:' + targetInfo.targetId + ':' + page.url() + ':BDEND'; }";
 
 /// (target id, host) from the answer to PAGE_INFO.
 fn parse_page_info(result: &Value) -> Option<(String, String)> {
@@ -264,8 +265,9 @@ fn parse_page_info(result: &Value) -> Option<(String, String)> {
     let start = text.find("BDPAGE:")? + "BDPAGE:".len();
     let rest = &text[start..];
     let (id, rest) = rest.split_once(':')?;
-    let (host, _) = rest.split_once(":BDEND")?;
-    (!id.is_empty() && !host.is_empty()).then(|| (id.to_string(), host.to_string()))
+    let (address, _) = rest.split_once(":BDEND")?;
+    let host = url::Url::parse(address).ok()?.host_str()?.to_ascii_lowercase();
+    (!id.is_empty() && !host.is_empty()).then(|| (id.to_string(), host))
 }
 
 impl State {
@@ -761,7 +763,7 @@ mod tests {
 
     #[test]
     fn the_page_info_is_found_in_the_answer() {
-        let answer = json!({ "content": [{ "type": "text", "text": "### Result\n\"BDPAGE:E831D6:auth.frigate.video:BDEND\"\n### Ran Playwright code" }] });
+        let answer = json!({ "content": [{ "type": "text", "text": "### Result\n\"BDPAGE:E831D6:https://auth.frigate.video/login?redirect_uri=x:BDEND\"\n### Ran Playwright code" }] });
         assert_eq!(
             parse_page_info(&answer),
             Some(("E831D6".to_string(), "auth.frigate.video".to_string()))
