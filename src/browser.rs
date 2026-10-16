@@ -399,7 +399,9 @@ impl ActiveBrowser {
                         start_pages.clone()
                     })
                     .env("MOZ_ENABLE_WAYLAND", "0")
-                    .stderr(std::process::Stdio::from(std::fs::File::create(&log)?))
+                    .stderr(std::process::Stdio::from(
+                        fs::File::create(&log).await?.into_std().await,
+                    ))
                     .stdout(std::process::Stdio::null());
                 proc::own_group(&mut cmd);
 
@@ -485,7 +487,13 @@ impl ActiveBrowser {
         if let Some(ref mut display) = self.display {
             display.stop().await;
         }
-        self.cleanup_files();
+        // A throwaway profile can be large: not on the runtime's thread.
+        if let Some(dir) = self.temp_dir.take() {
+            let _ = fs::remove_dir_all(dir).await;
+        }
+        if let Some(log) = self.firefox_log.take() {
+            let _ = fs::remove_file(log).await;
+        }
     }
 
     /// The browser quits the way a user's quit does, writing its data to disk first.
@@ -762,7 +770,7 @@ async fn wait_for_devtools_port(
     let timeout = Duration::from_secs(12);
 
     while start.elapsed() < timeout {
-        if port_file.exists() {
+        if fs::try_exists(&port_file).await.unwrap_or(false) {
             if let Ok(content) = fs::read_to_string(&port_file).await {
                 let lines: Vec<&str> = content.lines().collect();
                 if lines.len() >= 2 {

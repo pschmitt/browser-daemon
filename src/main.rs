@@ -1878,10 +1878,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.bind
     );
 
-    let chromium_adblock = args
-        .chromium_adblock
-        .as_deref()
-        .and_then(|src| writable_extension_copy(src, &args.profile_dir));
+    let chromium_adblock = match args.chromium_adblock.clone() {
+        Some(src) => {
+            let profile_dir = args.profile_dir.clone();
+            tokio::task::spawn_blocking(move || writable_extension_copy(&src, &profile_dir))
+                .await
+                .ok()
+                .flatten()
+        }
+        None => None,
+    };
     profiles::migrate(&args.profile_dir).await;
     let proxies = match args.proxies_file {
         Some(ref path) => match proxies::load(path) {
@@ -5362,7 +5368,7 @@ async fn api_get_recording_frames(
         .recordings_dir
         .join(id.to_string())
         .join("frames.jsonl");
-    if !frames_path.exists() {
+    if !fs::try_exists(&frames_path).await.unwrap_or(false) {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "Frames not found for recording" })),
@@ -5470,7 +5476,7 @@ async fn api_get_recording_audio(
         .recordings_dir
         .join(id.to_string())
         .join(rec_audio::FILE);
-    if !path.exists() {
+    if !fs::try_exists(&path).await.unwrap_or(false) {
         return api_error(StatusCode::NOT_FOUND, "This recording has no sound").into_response();
     }
     match tower_http::services::ServeFile::new(&path)
