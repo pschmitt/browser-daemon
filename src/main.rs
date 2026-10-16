@@ -2656,7 +2656,8 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
     all_targets
 }
 
-/// The session showing a tab, and the tab.
+/// The session showing a tab, and the tab. A page id that more than one
+/// session shows is refused: it cannot be told whose it is.
 async fn find_page(state: &AppState, page_id: &str) -> Option<(ManagedSession, DevToolsTarget)> {
     let sessions = snapshot_sessions(state).await;
     let found = futures_util::future::join_all(sessions.into_iter().map(|session| async move {
@@ -2667,7 +2668,26 @@ async fn find_page(state: &AppState, page_id: &str) -> Option<(ManagedSession, D
         Some((session, target))
     }))
     .await;
-    found.into_iter().flatten().next()
+    let mut found = found.into_iter().flatten();
+    let first = found.next()?;
+    found.next().is_none().then_some(first)
+}
+
+/// The one page `page_id` names, in `session` when given. No page, or a page id
+/// several sessions show (when no session is named), is an error.
+fn resolve_page<'a>(
+    targets: &'a [DevToolsTarget],
+    page_id: &str,
+    session: Option<Uuid>,
+) -> Result<&'a DevToolsTarget, &'static str> {
+    let mut hits = targets
+        .iter()
+        .filter(|t| t.id == page_id && session.is_none_or(|s| t.session_id == Some(s)));
+    let first = hits.next().ok_or("Page not found")?;
+    if hits.next().is_some() {
+        return Err("The page id is not unique across sessions: name the session");
+    }
+    Ok(first)
 }
 
 fn firefox_target(session: &ManagedSession, ctx: bidi::BidiContext) -> DevToolsTarget {
@@ -6110,6 +6130,9 @@ struct InsertTextRequest {
     /// Press Enter afterwards.
     #[serde(default)]
     enter: bool,
+    /// The session the page must belong to (the caller's own).
+    #[serde(default)]
+    session_id: Option<Uuid>,
 }
 
 /// Types text into the focused element of a Chromium page (see page_input.rs).
@@ -6121,33 +6144,21 @@ async fn api_page_insert_text(
     Json(req): Json<InsertTextRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
-    let sessions: Vec<ManagedSession> = {
-        let guard = state.sessions.read().await;
-        guard.values().cloned().collect()
-    };
-    let mut found = None;
-    for session in sessions {
-        if session.bidi.is_some() {
-            continue;
-        }
-        let url = format!("http://127.0.0.1:{}/json/list", session.port);
-        let Ok(res) = state.http_client.get(&url).send().await else {
-            continue;
-        };
-        let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await else {
-            continue;
-        };
-        if let Some(t) = targets.into_iter().find(|t| t.id == page_id) {
-            found = Some((session, t.url));
-            break;
-        }
+    let targets = get_local_targets(&state).await;
+    let page = resolve_page(&targets, &page_id, req.session_id)
+        .map_err(|e| api_error(StatusCode::NOT_FOUND, e))?;
+    let session = match page.session_id {
+        Some(sid) => state.sessions.read().await.get(&sid).cloned(),
+        None => None,
     }
-    let Some((session, page_url)) = found else {
-        return Err(api_error(
+    .filter(|s| s.bidi.is_none())
+    .ok_or_else(|| {
+        api_error(
             StatusCode::NOT_FOUND,
             "Page not found (Chromium sessions only)",
-        ));
-    };
+        )
+    })?;
+    let page_url = page.url.clone();
     if !secrets::url_matches(&page_url, &req.uris) {
         return Err(api_error(
             StatusCode::CONFLICT,
@@ -6306,6 +6317,7 @@ async fn api_session_autofill(
             req.page_id,
             host.clone(),
             passkeys::Autofill {
+                session: Some(id),
                 entry: req.entry,
                 fields,
                 unlock: req.unlock,
@@ -6346,10 +6358,8 @@ async fn api_page_autofill(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let targets = get_local_targets(&state).await;
-    let page = targets
-        .iter()
-        .find(|t| t.id == page_id)
-        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found"))?;
+    let page =
+        resolve_page(&targets, &page_id, None).map_err(|e| api_error(StatusCode::NOT_FOUND, e))?;
     let actual = url::Url::parse(&page.url)
         .ok()
         .and_then(|u| u.host_str().map(str::to_ascii_lowercase));
@@ -6380,7 +6390,7 @@ async fn api_page_autofill(
     }
     if !state
         .passkeys
-        .authorize_fill(req.request, &page_id, &req.host)
+        .authorize_fill(req.request, &page_id, &req.host, page.session_id)
     {
         return Err(api_error(
             StatusCode::FORBIDDEN,
@@ -6711,6 +6721,41 @@ async fn compute_dir_size(path: PathBuf) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    fn page(id: &str, session: Uuid) -> DevToolsTarget {
+        DevToolsTarget {
+            id: id.into(),
+            title: None,
+            target_type: "page".into(),
+            url: "https://x.test/".into(),
+            devtools_frontend_url: None,
+            web_socket_debugger_url: None,
+            session_id: Some(session),
+            profile: None,
+            engine: None,
+            audible: false,
+        }
+    }
+
+    #[test]
+    fn a_page_is_resolved_within_its_session() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let targets = vec![page("p1", a), page("p2", b), page("dup", a), page("dup", b)];
+        assert_eq!(
+            resolve_page(&targets, "p1", None).unwrap().session_id,
+            Some(a)
+        );
+        assert!(
+            resolve_page(&targets, "p1", Some(b)).is_err(),
+            "other session"
+        );
+        assert!(resolve_page(&targets, "dup", None).is_err(), "ambiguous");
+        assert_eq!(
+            resolve_page(&targets, "dup", Some(b)).unwrap().session_id,
+            Some(b)
+        );
+        assert!(resolve_page(&targets, "nope", None).is_err());
+    }
+
     use super::*;
 
     #[test]

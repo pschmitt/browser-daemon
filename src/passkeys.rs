@@ -62,6 +62,8 @@ pub struct Autofill {
     pub unlock: bool,
     pub query: Option<String>,
     pub any_site: bool,
+    /// The session the request is made for.
+    pub session: Option<Uuid>,
 }
 
 /// What an "assert" request needs besides the site.
@@ -104,6 +106,8 @@ struct Tracked {
     rp_id: String,
     /// A "fill" request lets the node put one login into its page, once.
     fill_used: bool,
+    /// The session the request was made for: only its page may be filled.
+    session: Option<Uuid>,
 }
 
 #[derive(Default)]
@@ -129,20 +133,23 @@ impl Broker {
         entry: Option<String>,
         signing: Signing,
     ) -> Result<Uuid, String> {
-        self.enqueue(Request {
-            id: Uuid::new_v4(),
-            page_id,
-            rp_id,
-            kind: kind.into(),
-            entry,
-            origin: signing.origin,
-            challenge: signing.challenge,
-            allow: signing.allow,
-            fields: Vec::new(),
-            unlock: false,
-            query: None,
-            any_site: false,
-        })
+        self.enqueue(
+            Request {
+                id: Uuid::new_v4(),
+                page_id,
+                rp_id,
+                kind: kind.into(),
+                entry,
+                origin: signing.origin,
+                challenge: signing.challenge,
+                allow: signing.allow,
+                fields: Vec::new(),
+                unlock: false,
+                query: None,
+                any_site: false,
+            },
+            None,
+        )
     }
 
     /// Queue a login lookup ("logins", no `entry`) or fill ("fill") for the page
@@ -154,23 +161,27 @@ impl Broker {
         a: Autofill,
     ) -> Result<Uuid, String> {
         let kind = if a.entry.is_some() { "fill" } else { "logins" };
-        self.enqueue(Request {
-            id: Uuid::new_v4(),
-            page_id,
-            rp_id: host,
-            kind: kind.into(),
-            entry: a.entry,
-            origin: None,
-            challenge: None,
-            allow: Vec::new(),
-            fields: a.fields,
-            unlock: a.unlock,
-            query: a.query,
-            any_site: a.any_site,
-        })
+        let session = a.session;
+        self.enqueue(
+            Request {
+                id: Uuid::new_v4(),
+                page_id,
+                rp_id: host,
+                kind: kind.into(),
+                entry: a.entry,
+                origin: None,
+                challenge: None,
+                allow: Vec::new(),
+                fields: a.fields,
+                unlock: a.unlock,
+                query: a.query,
+                any_site: a.any_site,
+            },
+            session,
+        )
     }
 
-    fn enqueue(&self, req: Request) -> Result<Uuid, String> {
+    fn enqueue(&self, req: Request, req_session: Option<Uuid>) -> Result<Uuid, String> {
         let helper = *self.helper_seen.lock().unwrap();
         if helper.is_none_or(|t| t.elapsed() > HELPER_GONE) {
             return Err("No passkey helper is running for this node".into());
@@ -187,6 +198,7 @@ impl Broker {
                 page_id: req.page_id.clone(),
                 rp_id: req.rp_id.clone(),
                 fill_used: false,
+                session: req_session,
             },
         );
         let id = req.id;
@@ -274,7 +286,13 @@ impl Broker {
     /// Whether the node may put a login into `page_id` on `host` for the "fill"
     /// request `id`: the helper holds it, it is for that page and host, and
     /// nothing was filled for it yet. Allows one fill.
-    pub fn authorize_fill(&self, id: Uuid, page_id: &str, host: &str) -> bool {
+    pub fn authorize_fill(
+        &self,
+        id: Uuid,
+        page_id: &str,
+        host: &str,
+        session: Option<Uuid>,
+    ) -> bool {
         match self.tracked.lock().unwrap().get_mut(&id) {
             Some(t)
                 if t.kind == "fill"
@@ -283,6 +301,7 @@ impl Broker {
                     && matches!(t.status, Status::Pending { .. })
                     && t.since.elapsed() <= ANSWER_TIMEOUT
                     && t.page_id == page_id
+                    && t.session.is_none_or(|s| Some(s) == session)
                     && t.rp_id.eq_ignore_ascii_case(host) =>
             {
                 t.fill_used = true;
@@ -427,16 +446,16 @@ mod tests {
         // Queued but not taken: nobody may answer it, annotate it or fill for it.
         assert!(!b.complete(id, done()));
         assert!(!b.note(id, "x".into()));
-        assert!(!b.authorize_fill(id, "page", "x.test"));
+        assert!(!b.authorize_fill(id, "page", "x.test", None));
         b.next(Duration::from_secs(1), true, true).await.unwrap();
         // Another page or host gets nothing, and one fill is all there is.
-        assert!(!b.authorize_fill(id, "other", "x.test"));
-        assert!(!b.authorize_fill(id, "page", "evil.test"));
-        assert!(b.authorize_fill(id, "page", "X.test"));
-        assert!(!b.authorize_fill(id, "page", "x.test"), "replay");
+        assert!(!b.authorize_fill(id, "other", "x.test", None));
+        assert!(!b.authorize_fill(id, "page", "evil.test", None));
+        assert!(b.authorize_fill(id, "page", "X.test", None));
+        assert!(!b.authorize_fill(id, "page", "x.test", None), "replay");
         assert!(b.complete(id, done()));
         assert!(!b.complete(id, done()), "answered once");
-        assert!(!b.authorize_fill(id, "page", "x.test"));
+        assert!(!b.authorize_fill(id, "page", "x.test", None));
         // Only fills may fill.
         let find = b
             .start(
@@ -448,6 +467,28 @@ mod tests {
             )
             .unwrap();
         b.next(Duration::from_secs(1), true, true).await.unwrap();
-        assert!(!b.authorize_fill(find, "page", "x.test"));
+        assert!(!b.authorize_fill(find, "page", "x.test", None));
+    }
+
+    #[tokio::test]
+    async fn a_fill_only_goes_to_the_session_it_was_made_for() {
+        let b = Broker::default();
+        assert!(b.next(Duration::from_millis(1), true, true).await.is_none());
+        let (mine, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let id = b
+            .start_autofill(
+                "page".into(),
+                "x.test".into(),
+                Autofill {
+                    entry: Some("e".into()),
+                    session: Some(mine),
+                    ..Autofill::default()
+                },
+            )
+            .unwrap();
+        b.next(Duration::from_secs(1), true, true).await.unwrap();
+        assert!(!b.authorize_fill(id, "page", "x.test", Some(other)));
+        assert!(!b.authorize_fill(id, "page", "x.test", None));
+        assert!(b.authorize_fill(id, "page", "x.test", Some(mine)));
     }
 }

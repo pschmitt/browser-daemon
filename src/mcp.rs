@@ -310,6 +310,19 @@ fn parse_page_info(result: &Value) -> Option<(String, String, String)> {
     (!id.is_empty() && !host.is_empty()).then(|| (id.to_string(), address.to_string(), host))
 }
 
+/// The `sessionId` of the one target `page_id` in a /json/list answer.
+fn unique_session(list: &Value, page_id: &str) -> Option<String> {
+    let mut hits = list
+        .as_array()?
+        .iter()
+        .filter(|t| t["id"].as_str() == Some(page_id));
+    let first = hits.next()?;
+    if hits.next().is_some() {
+        return None;
+    }
+    first["sessionId"].as_str().map(str::to_string)
+}
+
 impl State {
     async fn send(&self, msg: Value) {
         let mut line = msg.to_string();
@@ -471,13 +484,19 @@ impl State {
             return Err(format!("Could not focus the field: {}", why.trim()));
         }
         let submit = args["submit"].as_bool().unwrap_or(false);
+        let session_id = self.page_session(&child.target.url, &page_id).await;
         let mut req = self
             .http
             .post(format!(
                 "{}/api/pages/{page_id}/insert-text",
                 child.target.url.trim_end_matches('/')
             ))
-            .json(&json!({ "text": secret.value, "uris": secret.uris, "enter": submit }));
+            .json(&json!({
+                "text": secret.value,
+                "uris": secret.uris,
+                "enter": submit,
+                "session_id": session_id,
+            }));
         if let Some(ref s) = self.secret {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
@@ -498,6 +517,19 @@ impl State {
             "Typed the {field} of '{entry}' into {element} on {host}{}. The value is not shown; take a browser_snapshot to see the page.",
             if submit { " and pressed Enter" } else { "" }
         ))
+    }
+
+    /// The session the node shows `page_id` in, so the node types only into
+    /// that session's page. None when the node does not say or says it twice.
+    async fn page_session(&self, base: &str, page_id: &str) -> Option<String> {
+        let mut req = self
+            .http
+            .get(format!("{}/json/list", base.trim_end_matches('/')));
+        if let Some(ref s) = self.secret {
+            req = req.header("X-Browser-Cluster-Secret", s);
+        }
+        let list: Value = req.send().await.ok()?.json().await.ok()?;
+        unique_session(&list, page_id)
     }
 
     // ------------------------------------------------------------------ mesh
@@ -853,6 +885,18 @@ async fn read_child(child: Arc<Child>, stdout: tokio::process::ChildStdout) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_session_is_only_named_when_unique() {
+        let list = json!([
+            { "id": "a", "sessionId": "s1" },
+            { "id": "b", "sessionId": "s1" },
+            { "id": "b", "sessionId": "s2" },
+        ]);
+        assert_eq!(unique_session(&list, "a").as_deref(), Some("s1"));
+        assert_eq!(unique_session(&list, "b"), None);
+        assert_eq!(unique_session(&list, "c"), None);
+    }
 
     fn overview(nodes: &[(&str, usize, usize, &str)]) -> MeshOverview {
         let node = |n: &(&str, usize, usize, &str)| {
