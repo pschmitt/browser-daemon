@@ -182,6 +182,26 @@ pub enum SessionCmd {
         #[arg(long)]
         node: Option<String>,
     },
+    /// List what a session's pages downloaded (kept on its node until it ends).
+    Downloads {
+        session: String,
+        #[arg(long)]
+        node: Option<String>,
+    },
+    /// Save a file a session's page downloaded.
+    Download {
+        session: String,
+        /// Download id (or its start), or its file name.
+        download: String,
+        /// Where to save it (default: its own name, here).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Replace an existing file.
+        #[arg(short, long)]
+        force: bool,
+        #[arg(long)]
+        node: Option<String>,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -1298,8 +1318,95 @@ pub async fn session(args: SessionArgs) -> R<()> {
             let url = ws_url(c.session(&session, node.as_deref())?);
             c.say(json!({ "url": url }), &url);
         }
+        SessionCmd::Downloads { session, node } => {
+            let s = c.session(&session, node.as_deref())?;
+            let path = c.api(
+                &s.node_name,
+                &format!("/sessions/{}/downloads", s.session.id),
+            );
+            let list = c.call(c.req(Method::GET, &path)).await?;
+            if c.json {
+                c.print_json(&list);
+                return Ok(());
+            }
+            let rows: Vec<Vec<String>> = list
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|d| {
+                    let size = d["received_bytes"].as_u64().unwrap_or(0);
+                    vec![
+                        short_id(d["id"].as_str().unwrap_or_default()),
+                        d["state"].as_str().unwrap_or_default().replace('_', " "),
+                        bytes(size),
+                        d["name"].as_str().unwrap_or_default().to_string(),
+                        d["url"].as_str().unwrap_or_default().to_string(),
+                    ]
+                })
+                .collect();
+            if rows.is_empty() {
+                println!("No downloads");
+            } else {
+                table(&["ID", "STATE", "SIZE", "NAME", "URL"], &rows);
+            }
+        }
+        SessionCmd::Download {
+            session,
+            download,
+            output,
+            force,
+            node,
+        } => {
+            let s = c.session(&session, node.as_deref())?;
+            let base = c.api(
+                &s.node_name,
+                &format!("/sessions/{}/downloads", s.session.id),
+            );
+            let list = c.call(c.req(Method::GET, &base)).await?;
+            let d = pick_download(list.as_array().map_or(&[][..], Vec::as_slice), &download)?;
+            let id = d["id"].as_str().unwrap_or_default();
+            let file = output.unwrap_or_else(|| {
+                PathBuf::from(safe_filename(d["name"].as_str().unwrap_or("download")))
+            });
+            export_to(&c, &format!("{base}/{}", enc(id)), &file, force).await?;
+        }
     }
     Ok(())
+}
+
+/// The first characters of a download id, as tables show them.
+fn short_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+/// A download by its id, its name (the newest of that name: the list comes newest
+/// first), or the start of its id (4 characters or more).
+fn pick_download<'a>(list: &'a [Value], key: &str) -> R<&'a Value> {
+    let id = |d: &Value| d["id"].as_str().unwrap_or_default().to_string();
+    if let Some(d) = list.iter().find(|d| id(d) == key) {
+        return Ok(d);
+    }
+    if let Some(d) = list.iter().find(|d| d["name"].as_str() == Some(key)) {
+        return Ok(d);
+    }
+    let hits: Vec<_> = list
+        .iter()
+        .filter(|d| key.len() >= 4 && id(d).starts_with(key))
+        .collect();
+    match hits.as_slice() {
+        [one] => return Ok(one),
+        [] => {}
+        _ => {
+            return fail(
+                1,
+                format!("'{key}' fits several downloads; use more of the id"),
+            )
+        }
+    }
+    fail(
+        EXIT_NOT_FOUND,
+        format!("No download '{key}' (an id prefix needs at least 4 characters)"),
+    )
 }
 
 /// Print the answer as JSON, or a short confirmation.
@@ -2116,6 +2223,29 @@ pub fn completions(shell: clap_complete::Shell) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_download_is_found_by_id_name_or_id_start() {
+        let list = vec![
+            serde_json::json!({"id": "aaaa1111", "name": "a.txt"}),
+            serde_json::json!({"id": "aaaa2222", "name": "a.txt"}),
+            serde_json::json!({"id": "bbbb3333", "name": "b.txt"}),
+        ];
+        assert_eq!(
+            super::pick_download(&list, "a.txt").unwrap()["id"],
+            "aaaa1111",
+            "newest of the name"
+        );
+        assert_eq!(
+            super::pick_download(&list, "bbbb").unwrap()["name"],
+            "b.txt"
+        );
+        assert!(
+            super::pick_download(&list, "aaaa").is_err(),
+            "an ambiguous id start"
+        );
+        assert!(super::pick_download(&list, "bb").is_err(), "too short");
+    }
+
     use super::*;
     use clap::CommandFactory;
 
