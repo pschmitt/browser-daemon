@@ -1860,32 +1860,17 @@ async fn api_session_save_as_profile(
     }
     ensure_name_free(&state, &name, None).await?;
 
-    let urls: Vec<String> = get_local_targets(&state)
+    let urls: Vec<String> = session_targets(&state, &session)
         .await
         .into_iter()
         .filter(|t| {
-            t.session_id == Some(id)
-                && t.target_type == "page"
-                && (t.url.starts_with("http://") || t.url.starts_with("https://"))
+            t.target_type == "page" && (t.url.starts_with("http://") || t.url.starts_with("https://"))
         })
         .map(|t| t.url)
         .collect();
     let recording = state.active_recordings.read().await.contains_key(&id);
 
-    // Quit the browser (data to disk), leaving its directory in place.
-    let src = {
-        let mut guard = session.browser.lock().await;
-        let browser = guard
-            .as_mut()
-            .ok_or_else(|| api_error(StatusCode::CONFLICT, "The session is not running"))?;
-        let src = browser
-            .temp_dir_path()
-            .cloned()
-            .ok_or_else(|| api_error(StatusCode::CONFLICT, "The session has no data to keep"))?;
-        browser.quiesce().await;
-        src
-    };
-
+    // The profile first: when it cannot be made, the browser is left alone.
     let profile = {
         let _guard = state.profiles_lock.lock().await;
         ensure_name_free(&state, &name, None).await?;
@@ -1893,6 +1878,77 @@ async fn api_session_save_as_profile(
             .await
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     };
+    let meta = match keep_session_data(&session, &profile).await {
+        Ok(meta) => meta,
+        Err((err, quit)) => {
+            let _ = fs::remove_dir_all(&profile.dir).await;
+            // The browser has quit: the session is a shell without a browser.
+            if quit {
+                state.terminate_session(&id).await;
+            }
+            return Err(err);
+        }
+    };
+
+    // The throwaway ends (its directory goes with it); the profile takes over.
+    let (width, height) = session.window_size;
+    let adblock = session.adblock;
+    let color_scheme = session.color_scheme;
+    state.terminate_session(&id).await;
+    let new = state
+        .spawn_session(
+            session.engine,
+            Some(&name),
+            true,
+            Some(width),
+            Some(height),
+            Some(recording),
+            None,
+            None,
+            Some(adblock),
+            None,
+            Some(color_scheme),
+            true,
+            false,
+            urls,
+        )
+        .await
+        .map_err(|(status, msg)| api_error(status, msg))?;
+    info!(profile = %name, from = %id, session_id = %new.id, "Session saved as a profile");
+    let rec = state.active_recordings.read().await.get(&new.id).cloned();
+    let summary = new.to_summary(&state.http_client, rec.as_ref()).await;
+    Ok(Json(serde_json::json!({
+        "profile": profile_info(&state, &meta_profile(&profile, meta)).await,
+        "session": summary,
+    })))
+}
+
+/// Quit a throwaway session's browser and copy its data into the profile. On
+/// failure: the error, and whether the browser has quit by then.
+async fn keep_session_data(
+    session: &ManagedSession,
+    profile: &Profile,
+) -> Result<profiles::ProfileMeta, (ApiError, bool)> {
+    // Quit the browser (data to disk), leaving its directory in place.
+    let src = {
+        let mut guard = session.browser.lock().await;
+        let browser = guard.as_mut().ok_or_else(|| {
+            (
+                api_error(StatusCode::CONFLICT, "The session is not running"),
+                false,
+            )
+        })?;
+        let src = browser.temp_dir_path().cloned().ok_or_else(|| {
+            (
+                api_error(StatusCode::CONFLICT, "The session has no data to keep"),
+                false,
+            )
+        })?;
+        browser.quiesce().await;
+        src
+    };
+    let failed = |msg: String| (api_error(StatusCode::INTERNAL_SERVER_ERROR, msg), true);
+
     let copied = tokio::process::Command::new("cp")
         .arg("-a")
         .arg("--")
@@ -1901,11 +1957,7 @@ async fn api_session_save_as_profile(
         .status()
         .await;
     if !matches!(copied, Ok(s) if s.success()) {
-        let _ = fs::remove_dir_all(&profile.dir).await;
-        return Err(api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Could not copy the session's data",
-        ));
+        return Err(failed("Could not copy the session's data".into()));
     }
     // What belongs to the run, not to the data.
     for leftover in [
@@ -1937,43 +1989,24 @@ async fn api_session_save_as_profile(
     meta.color_scheme = Some(session.color_scheme);
     profiles::write_meta(&profile.dir, &meta)
         .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| failed(e.to_string()))?;
+    Ok(meta)
+}
 
-    // The throwaway ends (its directory goes with it); the profile takes over.
-    let (width, height) = session.window_size;
-    let adblock = session.adblock;
-    let color_scheme = session.color_scheme;
-    state.terminate_session(&id).await;
-    let new = state
-        .spawn_session(
-            session.engine,
-            Some(&name),
-            true,
-            Some(width),
-            Some(height),
-            Some(recording),
-            None,
-            None,
-            Some(adblock),
-            None,
-            Some(color_scheme),
-            true,
-            false,
-            urls,
-        )
-        .await
-        .map_err(|(status, msg)| api_error(status, msg))?;
-    info!(profile = %name, from = %id, session_id = %new.id, "Session saved as a profile");
-    let summary = new
-        .to_summary(
-            &state.http_client,
-            state.active_recordings.read().await.get(&new.id),
-        )
-        .await;
-    Ok(Json(serde_json::json!({
-        "profile": profile_info(&state, &meta_profile(&profile, meta)).await,
-        "session": summary,
-    })))
+/// Half-unpacked imports a crash or a restart left behind.
+async fn remove_stale_imports(profiles_dir: &Path) {
+    let Ok(mut entries) = fs::read_dir(profiles_dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(IMPORT_PREFIX)
+        {
+            let _ = fs::remove_dir_all(entry.path()).await;
+        }
+    }
 }
 
 fn meta_profile(profile: &Profile, meta: profiles::ProfileMeta) -> Profile {
@@ -2096,6 +2129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
     profiles::migrate(&args.profile_dir).await;
+    remove_stale_imports(&args.profile_dir).await;
     let proxies = match args.proxies_file {
         Some(ref path) => match proxies::load(path) {
             Ok(list) => list,
@@ -3705,17 +3739,11 @@ async fn api_delete_profile(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let profile = lookup_profile(&state, &key).await?;
-    if let Some(session) = profile_session(&state, profile.meta.id).await {
-        if !params.force.unwrap_or(false) {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                format!("Profile is currently in use by active session {}. Pass ?force=true to terminate session and delete.", session.id),
-            ));
-        }
-        info!(profile = %profile.meta.name, session_id = %session.id, "Force terminating session before deleting profile");
-        state.terminate_session(&session.id).await;
-    }
+    // Nothing starts a session of the profile between the check and the removal.
+    let _lock = state.profile_locks.lock(profile.meta.id).await;
+    release_profile(&state, &profile, params.force.unwrap_or(false), "delete").await?;
 
+    state.dir_sizes.forget(&profile.dir);
     if let Err(e) = fs::remove_dir_all(&profile.dir).await {
         error!(profile = %profile.meta.name, error = %e, "Failed to remove profile directory");
         return Err(api_error(
@@ -3735,25 +3763,46 @@ async fn api_delete_profile(
     ))
 }
 
+/// What holds a profile.
+enum ProfileUse {
+    Session(Uuid),
+    Starting,
+}
+
+async fn profile_use(state: &AppState, id: Uuid) -> Option<ProfileUse> {
+    if let Some(session) = profile_session(state, id).await {
+        return Some(ProfileUse::Session(session.id));
+    }
+    state.starting.has_profile(id).then_some(ProfileUse::Starting)
+}
+
 /// Make sure no browser holds the profile: refuse while a session uses it,
-/// unless `force` stops that session.
+/// unless `force` stops that session. The caller holds the profile's lock, so no
+/// session is admitted meanwhile.
 async fn release_profile(
     state: &AppState,
     profile: &Profile,
     force: bool,
     action: &str,
 ) -> Result<(), ApiError> {
-    let Some(session) = profile_session(state, profile.meta.id).await else {
-        return Ok(());
+    let session = match profile_use(state, profile.meta.id).await {
+        None => return Ok(()),
+        Some(ProfileUse::Starting) => {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                format!("A session of the profile is starting. Try again to {action}."),
+            ))
+        }
+        Some(ProfileUse::Session(id)) => id,
     };
     if !force {
         return Err(api_error(
             StatusCode::CONFLICT,
-            format!("Profile is currently in use by active session {}. Pass ?force=true to terminate session and {action}.", session.id),
+            format!("Profile is currently in use by active session {session}. Pass ?force=true to terminate session and {action}."),
         ));
     }
-    info!(profile = %profile.meta.name, session_id = %session.id, "Force terminating session before {action}");
-    state.terminate_session(&session.id).await;
+    info!(profile = %profile.meta.name, session_id = %session, "Force terminating session before {action}");
+    state.terminate_session(&session).await;
     Ok(())
 }
 
@@ -3797,13 +3846,16 @@ async fn api_create_backup(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let profile = lookup_profile(&state, &key).await?;
-    if let Some(session) = profile_session(&state, profile.meta.id).await {
+    let _lock = state.profile_locks.lock(profile.meta.id).await;
+    if let Some(used) = profile_use(&state, profile.meta.id).await {
         return Err(api_error(
             StatusCode::CONFLICT,
-            format!(
-                "Cannot back up an active profile (in use by session {})",
-                session.id
-            ),
+            match used {
+                ProfileUse::Session(id) => {
+                    format!("Cannot back up an active profile (in use by session {id})")
+                }
+                ProfileUse::Starting => "Cannot back up a profile that is starting".into(),
+            },
         ));
     }
     let label = body.and_then(|Json(b)| b.label);
@@ -3845,6 +3897,7 @@ async fn api_restore_backup(
     if backups::get(dir, profile.meta.id, &backup).await.is_none() {
         return Err(api_error(StatusCode::NOT_FOUND, "Backup not found"));
     }
+    let _lock = state.profile_locks.lock(profile.meta.id).await;
     release_profile(&state, &profile, params.force.unwrap_or(false), "restore").await?;
     auto_backup(&state, &profile, "pre-restore").await?;
     backups::restore(dir, &profile, &backup)
@@ -3853,6 +3906,7 @@ async fn api_restore_backup(
             error!(profile = %profile.meta.name, backup = %backup, error = %e, "Restore failed");
             api_error(StatusCode::INTERNAL_SERVER_ERROR, e)
         })?;
+    state.dir_sizes.forget(&profile.dir);
     info!(profile = %profile.meta.name, backup = %backup, "Profile restored from backup");
     Ok(Json(profile_info(&state, &profile).await))
 }
@@ -3867,6 +3921,7 @@ async fn api_clear_profile(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let profile = lookup_profile(&state, &key).await?;
+    let _lock = state.profile_locks.lock(profile.meta.id).await;
     release_profile(&state, &profile, params.force.unwrap_or(false), "clear").await?;
     // A safety net: clearing cannot be undone otherwise.
     if params.backup.unwrap_or(true) {
@@ -3894,44 +3949,95 @@ async fn api_clear_profile(
         }
     }
 
+    state.dir_sizes.forget(&profile.dir);
     info!(profile = %profile.meta.name, id = %profile.meta.id, "Profile data cleared");
     Ok(Json(profile_info(&state, &profile).await))
 }
 
-async fn export_profile_archive(state: &AppState, profile: &Profile) -> Result<Vec<u8>, ApiError> {
-    if let Some(session) = profile_session(state, profile.meta.id).await {
-        return Err(api_error(
-            StatusCode::CONFLICT,
-            format!(
-                "Cannot export active profile (in use by session {})",
-                session.id
-            ),
-        ));
-    }
+/// What a child process wrote to stderr (a little of it), collected while it runs: a
+/// full pipe would stop the child.
+fn drain_stderr(stderr: Option<tokio::process::ChildStderr>) -> tokio::task::JoinHandle<String> {
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        const KEEP: usize = 8192;
+        let Some(mut stderr) = stderr else {
+            return String::new();
+        };
+        let mut kept = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match stderr.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let room = KEEP.saturating_sub(kept.len());
+                    kept.extend_from_slice(&buf[..n.min(room)]);
+                }
+            }
+        }
+        String::from_utf8_lossy(&kept).trim().to_string()
+    })
+}
 
-    let output = tokio::process::Command::new("tar")
+/// The profile directory as a gzipped tar, produced while it is read: the archive
+/// never sits in memory. A failing tar ends the stream with an error, so the
+/// receiver sees a broken archive rather than a short, valid one.
+fn tar_export(
+    dir: &Path,
+) -> std::io::Result<impl futures_util::Stream<Item = std::io::Result<Bytes>> + Send + 'static> {
+    let mut child = tokio::process::Command::new("tar")
         .arg("-czf")
         .arg("-")
         .arg("-C")
-        .arg(&profile.dir)
+        .arg(dir)
         .arg(".")
-        .output()
-        .await
-        .map_err(|e| {
-            error!(profile = %profile.meta.name, error = %e, "Failed to run tar command for profile export");
-            api_error(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to archive profile: {}", e))
-        })?;
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("tar has no output"))?;
+    let errors = drain_stderr(child.stderr.take());
+    Ok(futures_util::stream::unfold(
+        Some((child, stdout, errors)),
+        |state| async move {
+            use tokio::io::AsyncReadExt;
+            let (mut child, mut stdout, errors) = state?;
+            let mut buf = vec![0u8; 64 * 1024];
+            match stdout.read(&mut buf).await {
+                Ok(0) => match child.wait().await {
+                    Ok(status) if status.success() => None,
+                    other => {
+                        let why = errors.await.unwrap_or_default();
+                        error!(error = %why, status = ?other, "tar export failed");
+                        Some((Err(std::io::Error::other(format!("tar failed: {why}"))), None))
+                    }
+                },
+                Ok(n) => {
+                    buf.truncate(n);
+                    Some((Ok(Bytes::from(buf)), Some((child, stdout, errors))))
+                }
+                Err(e) => Some((Err(e), None)),
+            }
+        },
+    ))
+}
 
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        error!(profile = %profile.meta.name, error = %err, "tar export failed");
-        return Err(api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("tar command failed: {}", err),
-        ));
+/// Why a profile cannot be exported or moved right now.
+async fn ensure_profile_idle(state: &AppState, profile: &Profile, what: &str) -> Result<(), ApiError> {
+    match profile_use(state, profile.meta.id).await {
+        None => Ok(()),
+        Some(ProfileUse::Session(id)) => Err(api_error(
+            StatusCode::CONFLICT,
+            format!("Cannot {what} active profile (in use by session {id})"),
+        )),
+        Some(ProfileUse::Starting) => Err(api_error(
+            StatusCode::CONFLICT,
+            format!("Cannot {what} a profile that is starting"),
+        )),
     }
-
-    Ok(output.stdout)
 }
 
 async fn api_export_profile(
@@ -3941,7 +4047,18 @@ async fn api_export_profile(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let profile = lookup_profile(&state, &key).await?;
-    let bytes = export_profile_archive(&state, &profile).await?;
+    let archive = {
+        // Checked and started under the profile's lock: no session starts in between.
+        let _lock = state.profile_locks.lock(profile.meta.id).await;
+        ensure_profile_idle(&state, &profile, "export").await?;
+        tar_export(&profile.dir).map_err(|e| {
+            error!(profile = %profile.meta.name, error = %e, "Failed to run tar command for profile export");
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to archive profile: {e}"),
+            )
+        })?
+    };
     // Header values are ASCII: keep a readable file name, fall back to the id.
     let file_stem: String = profile
         .meta
@@ -3965,107 +4082,202 @@ async fn api_export_profile(
             ),
             (header::CONTENT_DISPOSITION, cd_header),
         ],
-        bytes,
+        axum::body::Body::from_stream(archive),
     ))
+}
+
+/// Archives being extracted wait in a hidden directory (`.import-<id>`, which no
+/// profile listing shows) until they are complete.
+const IMPORT_PREFIX: &str = ".import-";
+
+/// A directory removed when this goes, also when the request is dropped halfway
+/// (the client left).
+struct StagingDir(Option<PathBuf>);
+
+impl StagingDir {
+    fn path(&self) -> &Path {
+        self.0.as_deref().unwrap_or(Path::new(""))
+    }
+
+    /// It was moved into place: nothing to clean up.
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        let Some(dir) = self.0.take() else {
+            return;
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(rt) => {
+                rt.spawn(async move {
+                    let _ = fs::remove_dir_all(dir).await;
+                });
+            }
+            Err(_) => {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+}
+
+/// Unpack a gzipped tar from a request body into `dir`, as it arrives. Returns the
+/// bytes received.
+async fn extract_archive(body: axum::body::Body, dir: &Path) -> Result<u64, ApiError> {
+    use futures_util::StreamExt;
+    let mut child = tokio::process::Command::new("tar")
+        .arg("-xzf")
+        .arg("-")
+        .arg("--no-same-owner")
+        .arg("-C")
+        .arg(dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| {
+            error!(error = %e, "Failed to spawn tar process for import");
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to spawn tar: {e}"),
+            )
+        })?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "tar has no input"))?;
+    // Read while tar runs: it blocks on a full stderr pipe, and we on its stdin.
+    let errors = drain_stderr(child.stderr.take());
+
+    let mut chunks = Box::pin(capped_chunks(body, MAX_UPLOAD_BYTES));
+    let mut received = 0u64;
+    let mut write_failed = false;
+    while let Some(chunk) = chunks.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                drop(stdin);
+                let _ = child.kill().await;
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("Upload failed: {e}"),
+                ));
+            }
+        };
+        received += chunk.len() as u64;
+        // A failing write means tar gave up (a broken archive): its message says why.
+        if stdin.write_all(&chunk).await.is_err() {
+            write_failed = true;
+            break;
+        }
+    }
+    drop(stdin);
+    if received == 0 {
+        let _ = child.kill().await;
+        return Err(api_error(StatusCode::BAD_REQUEST, "Empty archive body"));
+    }
+    let status = child.wait().await.map_err(|e| {
+        error!(error = %e, "Failed to wait on tar process");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("tar extraction error: {e}"),
+        )
+    })?;
+    if write_failed || !status.success() {
+        let why = errors.await.unwrap_or_default();
+        error!(error = %why, "tar extraction failed");
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("tar extraction failed: {why}"),
+        ));
+    }
+    Ok(received)
 }
 
 /// Import an archive as the profile named in the path. The archive's own
 /// `profile.json` supplies the engine; archives from the old name-based
-/// layout fall back to the `firefox_` naming convention.
+/// layout fall back to the `firefox_` naming convention. The archive is
+/// unpacked as it arrives, into a hidden directory that becomes the profile once
+/// it is complete.
 async fn api_import_profile(
     AxumPath(name): AxumPath<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<ImportProfileParams>,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let name = new_profile_name(&name)?;
-    if body.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "Empty archive body"));
+    let overwrite = params.overwrite.unwrap_or(false);
+    let exists = |name: &str| {
+        let dir = state.config.profiles_dir.clone();
+        let name = name.to_string();
+        async move {
+            profiles::find(&dir, &name)
+                .await
+                .filter(|p| p.meta.name == name)
+        }
+    };
+    // Before the upload is read: a profile that is in the way is no reason to wait for it.
+    if !overwrite && exists(&name).await.is_some() {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("Profile '{name}' already exists on target"),
+        ));
     }
 
-    let _guard = state.profiles_lock.lock().await;
-    let existing = profiles::find(&state.config.profiles_dir, &name)
-        .await
-        .filter(|p| p.meta.name == name);
-    if let Some(ref existing) = existing {
-        if !params.overwrite.unwrap_or(false) {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                format!("Profile '{}' already exists on target", name),
-            ));
-        }
-        if let Some(session) = profile_session(&state, existing.meta.id).await {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                format!(
-                    "Cannot overwrite active profile (in use by session {})",
-                    session.id
-                ),
-            ));
-        }
-    }
-
-    let target_dir = state.config.profiles_dir.join(Uuid::new_v4().to_string());
-    if let Err(e) = fs::create_dir_all(&target_dir).await {
+    let mut staging = StagingDir(Some(
+        state
+            .config
+            .profiles_dir
+            .join(format!("{IMPORT_PREFIX}{}", Uuid::new_v4())),
+    ));
+    if let Err(e) = fs::create_dir_all(staging.path()).await {
         error!(profile = %name, error = %e, "Failed to create profile directory");
         return Err(api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to create profile directory",
         ));
     }
+    extract_archive(body, staging.path()).await?;
 
-    let mut child = tokio::process::Command::new("tar")
-        .arg("-xzf")
-        .arg("-")
-        .arg("-C")
-        .arg(&target_dir)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            error!(error = %e, "Failed to spawn tar process for import");
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to spawn tar: {}", e),
-            )
-        })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(&body).await {
-            error!(error = %e, "Failed to write archive stream to tar stdin");
-            let _ = fs::remove_dir_all(&target_dir).await;
+    let (name, engine) = match profiles::read_meta(staging.path()).await {
+        Some(meta) => (name, meta.engine),
+        None => profiles::legacy_identity(&name),
+    };
+    let _guard = state.profiles_lock.lock().await;
+    let existing = exists(&name).await;
+    let _existing_lock = match existing {
+        Some(ref e) => Some(state.profile_locks.lock(e.meta.id).await),
+        None => None,
+    };
+    if let Some(ref existing) = existing {
+        if !overwrite {
             return Err(api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to write to tar: {}", e),
+                StatusCode::CONFLICT,
+                format!("Profile '{name}' already exists on target"),
+            ));
+        }
+        if profile_use(&state, existing.meta.id).await.is_some() {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                "Cannot overwrite active profile (in use by a session)",
             ));
         }
     }
 
-    let output = child.wait_with_output().await.map_err(|e| {
-        error!(error = %e, "Failed to wait on tar process");
+    let target_dir = state.config.profiles_dir.join(Uuid::new_v4().to_string());
+    fs::rename(staging.path(), &target_dir).await.map_err(|e| {
+        error!(profile = %name, error = %e, "Failed to move the imported profile into place");
         api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("tar extraction error: {}", e),
+            "Failed to create profile directory",
         )
     })?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        error!(profile = %name, error = %err, "tar extraction failed");
-        let _ = fs::remove_dir_all(&target_dir).await;
-        return Err(api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("tar extraction failed: {}", err),
-        ));
-    }
-
-    let (name, engine) = match profiles::read_meta(&target_dir).await {
-        Some(meta) => (name, meta.engine),
-        None => profiles::legacy_identity(&name),
-    };
+    staging.disarm();
     let profile = match profiles::adopt(target_dir.clone(), &name, engine).await {
         Ok(p) => p,
         Err(e) => {
@@ -4079,6 +4291,7 @@ async fn api_import_profile(
     };
     // Replace the old copy only once the new one is complete.
     if let Some(existing) = existing {
+        state.dir_sizes.forget(&existing.dir);
         if let Err(e) = fs::remove_dir_all(&existing.dir).await {
             warn!(profile = %name, error = %e, "Imported profile, but failed to remove the overwritten copy");
         }
@@ -4119,19 +4332,30 @@ async fn api_transfer_profile(
         )
     })?;
 
-    // 1. Export local profile to bytes (profile.json carries the engine)
-    let archive_bytes = export_profile_archive(&state, &source).await?;
+    // No session starts on the profile while it is copied (and perhaps removed).
+    let _lock = state.profile_locks.lock(source.meta.id).await;
+    ensure_profile_idle(&state, &source, "export").await?;
 
-    // 2. Upload to target node's /api/profiles/{target_name}/import
+    // 1. Archive the local profile as a stream (profile.json carries the engine)
+    let archive = tar_export(&source.dir).map_err(|e| {
+        error!(profile = %source.meta.name, error = %e, "Failed to run tar command for profile export");
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to archive profile: {e}"),
+        )
+    })?;
+
+    // 2. Pass it on to the target node's /api/profiles/{target_name}/import as it is produced
     let mut import_url = peer_profile_url(&target_peer_url, &target_name, Some("import"));
     if req.overwrite {
         import_url.push_str("?overwrite=true");
     }
 
     let upload_res = state
-        .peer_request(state.http_client.post(&import_url))
+        .peer_request(state.peer_client.post(&import_url))
+        .timeout(PeerWait::Long.timeout())
         .header(header::CONTENT_TYPE, "application/gzip")
-        .body(archive_bytes)
+        .body(reqwest::Body::wrap_stream(archive))
         .send()
         .await
         .map_err(|e| {
@@ -4151,12 +4375,20 @@ async fn api_transfer_profile(
         return Err((status, Json(error_json)));
     }
 
-    // 3. If delete_source was requested, remove local directory
+    // 3. If delete_source was requested, remove the local directory (unless a session
+    //    got hold of the profile meanwhile: it has newer data than what was sent)
+    let mut deleted_source = false;
     if req.delete_source {
-        if let Err(e) = fs::remove_dir_all(&source.dir).await {
-            warn!(profile = %source.meta.name, error = %e, "Profile transferred, but failed to delete source directory");
+        if profile_use(&state, source.meta.id).await.is_some() {
+            warn!(profile = %source.meta.name, "Profile transferred, but a session uses it now: source kept");
         } else {
-            info!(profile = %source.meta.name, "Source profile deleted after transfer");
+            state.dir_sizes.forget(&source.dir);
+            if let Err(e) = fs::remove_dir_all(&source.dir).await {
+                warn!(profile = %source.meta.name, error = %e, "Profile transferred, but failed to delete source directory");
+            } else {
+                info!(profile = %source.meta.name, "Source profile deleted after transfer");
+                deleted_source = true;
+            }
         }
     }
 
@@ -4174,7 +4406,7 @@ async fn api_transfer_profile(
         "source_name": source.meta.name,
         "source_id": source.meta.id,
         "target_name": target_name,
-        "deleted_source": req.delete_source,
+        "deleted_source": deleted_source,
     })))
 }
 
@@ -5148,6 +5380,18 @@ async fn api_delete_recording(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     state.check_auth(&headers)?;
+    if state
+        .active_recordings
+        .read()
+        .await
+        .values()
+        .any(|h| h.recording_id == id)
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "The recording is still in progress. Stop it first." })),
+        ));
+    }
     if recorder::delete_recording(&state.recorder_config, id).await {
         Ok(Json(serde_json::json!({ "status": "deleted", "id": id })))
     } else {
@@ -6157,8 +6401,9 @@ async fn api_session_upload_file(
     Query(params): Query<UploadParams>,
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    body: axum::body::Body,
 ) -> Result<impl IntoResponse, ApiError> {
+    use futures_util::StreamExt;
     state.check_auth(&headers)?;
     let session = state
         .sessions
@@ -6179,11 +6424,27 @@ async fn api_session_upload_file(
     fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
         .await
         .map_err(io)?;
-    fs::write(&path, &body).await.map_err(io)?;
-    info!(session_id = %id, path = %path.display(), bytes = body.len(), "Stored dropped file");
+    // Written as it arrives, not held in memory.
+    let mut file = fs::File::create(&path).await.map_err(io)?;
+    let mut chunks = Box::pin(capped_chunks(body, MAX_UPLOAD_BYTES));
+    let mut size = 0u64;
+    let stored: Result<(), ApiError> = async {
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.map_err(|e| api_error(StatusCode::PAYLOAD_TOO_LARGE, e.to_string()))?;
+            size += chunk.len() as u64;
+            file.write_all(&chunk).await.map_err(io)?;
+        }
+        file.flush().await.map_err(io)
+    }
+    .await;
+    if let Err(e) = stored {
+        let _ = fs::remove_dir_all(&dir).await;
+        return Err(e);
+    }
+    info!(session_id = %id, path = %path.display(), bytes = size, "Stored dropped file");
     Ok(Json(serde_json::json!({
         "path": path,
-        "size_bytes": body.len(),
+        "size_bytes": size,
     })))
 }
 
@@ -6561,6 +6822,81 @@ mod tests {
         let over: Vec<_> = capped_chunks(body(vec![b"abc", b"def"]), 5).collect().await;
         assert!(over[0].is_ok());
         assert!(over[1].is_err());
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bd-{tag}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn a_profile_survives_the_trip_through_export_and_import() {
+        use futures_util::StreamExt;
+        let (src, dst) = (scratch_dir("src"), scratch_dir("dst"));
+        std::fs::create_dir_all(src.join("Default")).unwrap();
+        std::fs::write(src.join("profile.json"), b"{}").unwrap();
+        // Bigger than the pipes between us and tar, and not compressible.
+        let mut big = Vec::new();
+        let mut x = 0x2545_f491_u32;
+        for _ in 0..(6 * 1024 * 1024) {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            big.push(x as u8);
+        }
+        std::fs::write(src.join("Default/Cookies"), &big).unwrap();
+
+        let archive = tar_export(&src).unwrap();
+        let received = extract_archive(axum::body::Body::from_stream(archive), &dst)
+            .await
+            .unwrap();
+        assert!(received > 6 * 1024 * 1024);
+        assert_eq!(std::fs::read(dst.join("Default/Cookies")).unwrap(), big);
+        assert_eq!(std::fs::read(dst.join("profile.json")).unwrap(), b"{}");
+
+        // An export of something that is not there fails at the end of the stream.
+        let missing = tar_export(&src.join("nope")).unwrap();
+        let chunks: Vec<_> = missing.collect().await;
+        assert!(chunks.last().unwrap().is_err());
+        std::fs::remove_dir_all(src).unwrap();
+        std::fs::remove_dir_all(dst).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_broken_or_empty_archive_is_refused_without_stalling() {
+        let dst = scratch_dir("bad");
+        let body = |bytes: Vec<u8>| {
+            axum::body::Body::from_stream(futures_util::stream::iter(
+                bytes
+                    .chunks(64 * 1024)
+                    .map(|c| Ok::<_, std::io::Error>(Bytes::copy_from_slice(c)))
+                    .collect::<Vec<_>>(),
+            ))
+        };
+        // Much more than a pipe holds: tar quits at the first bytes.
+        let err = extract_archive(body(vec![b'x'; 4 * 1024 * 1024]), &dst)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1 .0["error"].as_str().unwrap().contains("tar"));
+        let err = extract_archive(body(Vec::new()), &dst).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        std::fs::remove_dir_all(dst).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_staging_directory_goes_when_the_request_does() {
+        let dir = scratch_dir("stage");
+        let staging = StagingDir(Some(dir.clone()));
+        drop(staging);
+        for _ in 0..50 {
+            if !dir.exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the staging directory is still there");
     }
 
     #[test]
