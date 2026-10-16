@@ -115,6 +115,31 @@ pub struct Cli {
     pub command: Command,
 }
 
+/// `browser-daemon --url X session list` as well as `browser-daemon session --url X
+/// list`: the client options given before the command move to just after it, where
+/// clap reads them.
+fn hoist_conn_args(argv: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    const WITH_VALUE: [&str; 2] = ["--url", "--secret-file"];
+    let mut out = argv.iter().take(1).cloned().collect::<Vec<_>>();
+    let mut hoisted = Vec::new();
+    let mut rest = argv.into_iter().skip(1).peekable();
+    while let Some(a) = rest.next() {
+        let s = a.to_string_lossy();
+        if s == "--json" || WITH_VALUE.iter().any(|f| s.starts_with(&format!("{f}="))) {
+            hoisted.push(a);
+        } else if WITH_VALUE.contains(&s.as_ref()) {
+            hoisted.push(a);
+            hoisted.extend(rest.next());
+        } else {
+            out.push(a);
+            break;
+        }
+    }
+    out.extend(hoisted);
+    out.extend(rest);
+    out
+}
+
 /// Options of `browser-daemon run`.
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -359,7 +384,7 @@ fn meta_profile(profile: &Profile, meta: profiles::ProfileMeta) -> Profile {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let command = Cli::parse().command;
+    let command = Cli::parse_from(hoist_conn_args(std::env::args_os().collect())).command;
     if !matches!(command, Command::Run(_)) {
         // `browser-daemon session list | head`: end quietly instead of panicking.
         // SAFETY: restoring the default disposition of SIGPIPE.
@@ -981,4 +1006,38 @@ async fn shutdown_on_signal(state: AppState) {
     }
     info!(sessions = sessions.len(), recordings = ids.len(), "Exiting");
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod hoist_tests {
+    use super::hoist_conn_args;
+
+    fn run(args: &[&str]) -> Vec<String> {
+        hoist_conn_args(args.iter().map(Into::into).collect())
+            .into_iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn client_options_move_after_the_command() {
+        assert_eq!(
+            run(&["bd", "--url", "http://x", "--json", "session", "list"]),
+            ["bd", "session", "--url", "http://x", "--json", "list"]
+        );
+        assert_eq!(
+            run(&["bd", "--secret-file=/s", "tui"]),
+            ["bd", "tui", "--secret-file=/s"]
+        );
+    }
+
+    #[test]
+    fn other_arguments_stay() {
+        assert_eq!(
+            run(&["bd", "session", "--url", "http://x", "list"]),
+            ["bd", "session", "--url", "http://x", "list"]
+        );
+        assert_eq!(run(&["bd", "--help"]), ["bd", "--help"]);
+        assert_eq!(run(&["bd"]), ["bd"]);
+    }
 }
