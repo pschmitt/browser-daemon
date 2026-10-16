@@ -41,6 +41,10 @@ pub(crate) fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> 
     let trimmed = url_str.trim().trim_end_matches('/');
     if let Ok(parsed) = url::Url::parse(trimmed) {
         if let Some(host) = parsed.host_str() {
+            // An address says nothing about the name: the peer reports it.
+            if host.parse::<std::net::IpAddr>().is_ok() || host.starts_with('[') {
+                return None;
+            }
             if host.starts_with(&format!("browser.{}.", self_node))
                 || host == format!("browser.{}", self_node)
             {
@@ -61,6 +65,32 @@ pub(crate) fn infer_peer_name(url_str: &str, self_node: &str) -> Option<String> 
         }
     }
     None
+}
+
+/// A peer's name is guessed from its URL (or is the URL, e.g. for an IP) until
+/// it answers: then it goes by the name it reports, so `--node <name>` reaches it.
+pub(crate) async fn learn_peer_name(state: &AppState, key: &str, url: &str, reported: &str) {
+    if key == reported || reported.is_empty() || reported == state.node_name {
+        return;
+    }
+    let mut peers = state.peers.write().await;
+    if let Some(renamed) = rekey_peer(&peers, key, url, reported) {
+        peers.remove(key);
+        peers.insert(renamed, url.to_string());
+    }
+}
+
+/// The peer's new key: the name it reports, unless another peer has it.
+fn rekey_peer(
+    peers: &HashMap<String, String>,
+    key: &str,
+    url: &str,
+    reported: &str,
+) -> Option<String> {
+    (key != reported
+        && peers.get(key).map(String::as_str) == Some(url)
+        && !peers.contains_key(reported))
+    .then(|| reported.to_string())
 }
 
 /// The peer a request names: by its name or its URL, exactly (a name is
@@ -429,6 +459,37 @@ pub(crate) async fn api_remove_peer(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_peer_known_by_its_url_takes_the_name_it_reports() {
+        let url = "http://127.0.0.1:3952".to_string();
+        let mut peers = HashMap::new();
+        peers.insert(url.clone(), url.clone());
+        assert_eq!(
+            super::rekey_peer(&peers, &url, &url, "bravo").as_deref(),
+            Some("bravo")
+        );
+        // A name read from the URL stays; a reported name already taken is not reused.
+        peers.insert("bravo".to_string(), "http://elsewhere".to_string());
+        assert_eq!(super::rekey_peer(&peers, &url, &url, "bravo"), None);
+        // A guessed name gives way to the reported one; a matching one stays.
+        let mut named = HashMap::new();
+        named.insert("127".to_string(), url.clone());
+        assert_eq!(
+            super::rekey_peer(&named, "127", &url, "carol").as_deref(),
+            Some("carol")
+        );
+        assert_eq!(super::rekey_peer(&named, "127", &url, "127"), None);
+        assert_eq!(
+            super::infer_peer_name("http://127.0.0.1:3952", "alpha"),
+            None
+        );
+        assert_eq!(super::infer_peer_name("http://[::1]:3952", "alpha"), None);
+        assert_eq!(
+            super::infer_peer_name("https://browser.rofl-14.nb.example", "fnuc").as_deref(),
+            Some("rofl-14")
+        );
+    }
+
     use super::*;
 
     #[test]

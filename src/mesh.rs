@@ -197,6 +197,9 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         Err(err) => return unreachable(None, err.to_string()),
     };
     let info: Option<NodeInfo> = res.json().await.ok();
+    if let Some(ref info) = info {
+        learn_peer_name(state, &name, &url, &info.name).await;
+    }
 
     // The rest at once: a slow peer costs one wait, not four.
     let (sessions, profiles, targets, recordings) = tokio::join!(
