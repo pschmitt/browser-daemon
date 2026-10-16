@@ -295,6 +295,8 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 @keyframes pop { from { opacity: 0; transform: scale(.97) translateY(-3px); } to { opacity: 1; transform: none; } }
 
 /* ------------------------------------------------------------ modals */
+/* Opened from the player too: above it. */
+#detailsModal, #askModal { z-index: 75; }
 .modal {
   position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; padding: 20px;
   background: rgba(5, 7, 12, .62); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
@@ -558,9 +560,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   .player-top { padding-top: calc(10px + env(safe-area-inset-top)); }
   .player-frames-text { display: none; }
   .player-top { gap: 6px; }
-  .player-top #playerCopyUrlBtn, .player-top #playerNodeBadge { display: none; }
-  .player-top #exportWebmBtn span { display: none; }
-  .player-top #exportWebmBtn { width: 30px; padding: 0; }
+  .player-top #playerNodeBadge { display: none; }
   .endpoint .lbl { width: auto; }
   .endpoint { flex-wrap: wrap; }
   .endpoint code { flex-basis: 100%; order: 3; }
@@ -891,8 +891,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="player-top">
       <div class="site"><span class="site-fav" id="playerFav"></span><div class="t"><b id="playerPageTitle">Ready</b><span id="playerPageUrl">about:blank</span></div></div>
       <span class="chip node" id="playerNodeBadge">local</span>
-      <button class="btn ghost sm icon" id="playerCopyUrlBtn" onclick="copyPlayerUrl()" title="Copy page URL"><svg class="i sm"><use href="#i-copy"/></svg></button>
-      <button class="btn ghost sm" id="exportWebmBtn" onclick="exportRecordingWebM()" title="Save as WebM video"><svg class="i sm"><use href="#i-download"/></svg><span>WebM</span></button>
+      <button class="btn ghost sm icon" id="playerMoreBtn" onclick="openPlayerMenu(this)" title="More: details, copy, save, delete" aria-label="More" aria-haspopup="menu"><svg class="i sm"><use href="#i-more"/></svg></button>
       <button class="x-btn" onclick="closePlayerModal()" title="Close (Esc)"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="player-viewport-wrap" id="playerViewportContainer">
@@ -3269,7 +3268,8 @@ function showRecordingDetails(r) {
   showDetails(r.title && r.title !== 'about:blank' ? r.title : 'Recording', [
     ['ID', `<span class="mono">${esc(r.id)}</span>`], ['Node', nodeChip(r.node_name)], ['Profile', r.profile ? esc(r.profile) : 'Throwaway'],
     ['Started', absTime(r.started_at_secs)], ['Length', formatUptime(r.duration_seconds)], ['Frames', String(r.frame_count)], ['Size', formatBytes(r.size_bytes)],
-    ['Status', esc(r.status)], ['Kept', r.keep ? 'Yes: the cleanup never removes it' : 'No'],
+    ['Status', esc(r.status)], ['Kept', r.keep ? 'Yes: the cleanup never removes it' : 'No'], ['Sound', r.audio ? 'Yes' : 'No'],
+    ...(r.merged_from?.length ? [['Merged from', r.merged_from.map((x) => `<span class="mono">${esc(x)}</span>`).join('<br>')]] : []),
     ['From', r.initial_url ? `<span class="mono">${esc(r.initial_url)}</span>` : '–'], ['To', r.final_url ? `<span class="mono">${esc(r.final_url)}</span>` : '–'],
   ], r);
 }
@@ -3277,13 +3277,14 @@ function showRecordingDetails(r) {
 async function deleteRecording(id, node) {
   const kept = (ov?.recordings || []).some((x) => x.id === id && x.keep);
   const ok = await ask({ title: 'Delete this recording?', text: `It is removed from ${node} and from this browser's cache.${kept ? ' It is marked to be kept.' : ''}`, ok: 'Delete', danger: true });
-  if (!ok) return;
+  if (!ok) return false;
   const worker = getDownloadWorker();
   if (worker) worker.postMessage({ action: 'CANCEL', id });
   activeDownloadsMap.delete(id);
   deleteCachedRecording(id);
   cachedRecordingsSet.delete(id);
   act('Deleting recording', () => request('DELETE', api(node, `/recordings/${encodeURIComponent(id)}`)), 'Recording deleted');
+  return true;
 }
 
 async function deleteSelectedRecordings() {
@@ -3452,20 +3453,6 @@ function togglePlayerLoop() {
     btn.title = activePlayer.isLooping ? 'Loop: On (Shift+L)' : 'Toggle loop (Shift+L)';
   }
   resetPlayerControlsTimer();
-}
-
-function copyPlayerUrl() {
-  const url = document.getElementById('playerPageUrl')?.textContent;
-  if (url && url !== 'about:blank') {
-    navigator.clipboard.writeText(url).then(() => {
-      const btn = document.getElementById('playerCopyUrlBtn');
-      if (btn) {
-        const orig = btn.textContent;
-        btn.textContent = '✓ Copied';
-        setTimeout(() => { btn.textContent = orig; }, 1500);
-      }
-    });
-  }
 }
 
 function jumpSeconds(deltaSec) {
@@ -3985,13 +3972,31 @@ function setPlaySpeed(s) {
   resetPlayerControlsTimer();
 }
 
+let exportingWebM = false;
+// The player's overflow menu: details (with the id), the page's address, saving, deleting.
+function openPlayerMenu(el) {
+  const id = activePlayer?.id || activePlayerModalId, node = activePlayer?.node || activePlayerModalNode;
+  const r = (currentOverview?.recordings || []).find((x) => x.id === id && x.node_name === node);
+  const url = document.getElementById('playerPageUrl')?.textContent;
+  openMenu(el, [
+    { label: `Recording ${String(id || '').slice(0, 8)}` },
+    r && { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
+    url && url !== 'about:blank' && { icon: 'copy', label: 'Copy page URL', run: () => copyText(url) },
+    { icon: 'download', label: 'Save as WebM', run: () => exportRecordingWebM() },
+    r?.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
+    '-',
+    { icon: 'trash', label: 'Delete recording', danger: true, run: async () => { if (await deleteRecording(id, node)) closePlayerModal(); } },
+  ]);
+}
+
 async function exportRecordingWebM() {
   if (!activePlayer || !activePlayer.frames || activePlayer.frames.length === 0) return;
   if (activePlayer.streaming) { showToast('Still downloading', 'info', 4000, null, 'Export works once the whole recording is here.'); return; }
-  const btn = document.getElementById('exportWebmBtn');
-  const btnLabel = btn.querySelector('span');
-  btn.disabled = true;
-  btnLabel.textContent = '0%';
+  // Progress shows in its toast; one export at a time.
+  if (exportingWebM) return;
+  exportingWebM = true;
+  const btn = { set disabled(v) { if (!v) exportingWebM = false; } };
+  const btnLabel = { textContent: '' };
 
   const canvas = document.getElementById('playerCanvas');
   const stream = canvas.captureStream(25);
