@@ -506,6 +506,89 @@ pub struct AppState {
     /// One lock per profile, held while a profile is checked and then changed or
     /// removed, and while a session of it is being admitted.
     pub profile_locks: Arc<ProfileLocks>,
+    /// Profile directory sizes, which take a walk of the disk to find out.
+    pub dir_sizes: Arc<DirSizes>,
+    /// The mesh overview, computed once for everybody who wants it.
+    pub overview: Arc<OverviewHub>,
+}
+
+/// How long a profile directory's size is taken as it was.
+const DIR_SIZE_TTL: Duration = Duration::from_secs(60);
+
+/// Sizes of directories, remembered for a while: a profile can be gigabytes and
+/// every dashboard asks every two seconds.
+#[derive(Default)]
+pub struct DirSizes(std::sync::Mutex<HashMap<PathBuf, (Instant, u64)>>);
+
+impl DirSizes {
+    fn fresh(&self, dir: &Path, now: Instant) -> Option<u64> {
+        let map = self.0.lock().unwrap();
+        let (at, size) = map.get(dir)?;
+        (now.saturating_duration_since(*at) < DIR_SIZE_TTL).then_some(*size)
+    }
+
+    fn store(&self, dir: &Path, now: Instant, size: u64) {
+        let mut map = self.0.lock().unwrap();
+        // Directories that are gone for good (deleted profiles) do not pile up.
+        map.retain(|_, (at, _)| now.saturating_duration_since(*at) < DIR_SIZE_TTL * 10);
+        map.insert(dir.to_path_buf(), (now, size));
+    }
+
+    /// Its contents changed (cleared, restored, removed): measure again next time.
+    pub fn forget(&self, dir: &Path) {
+        self.0.lock().unwrap().remove(dir);
+    }
+
+    pub async fn of(&self, dir: &Path) -> u64 {
+        if let Some(size) = self.fresh(dir, Instant::now()) {
+            return size;
+        }
+        let size = compute_dir_size(dir.to_path_buf()).await;
+        self.store(dir, Instant::now(), size);
+        size
+    }
+}
+
+/// The latest mesh overview, as the JSON everybody is sent.
+pub struct OverviewSnapshot {
+    at: Instant,
+    json: String,
+}
+
+#[derive(Default)]
+pub struct OverviewHub {
+    latest: tokio::sync::watch::Sender<Option<Arc<OverviewSnapshot>>>,
+    /// One computation at a time; the ones waiting reuse its result.
+    compute: Mutex<()>,
+}
+
+impl AppState {
+    /// The mesh overview, at most `max_age` old: dashboards, the CLI and the
+    /// TUI share one computation instead of each walking every node.
+    pub async fn overview_snapshot(&self, max_age: Duration) -> Arc<OverviewSnapshot> {
+        let recent = |hub: &OverviewHub| {
+            hub.latest
+                .borrow()
+                .clone()
+                .filter(|s| s.at.elapsed() <= max_age)
+        };
+        if let Some(s) = recent(&self.overview) {
+            return s;
+        }
+        let _computing = self.overview.compute.lock().await;
+        if let Some(s) = recent(&self.overview) {
+            return s;
+        }
+        let at = Instant::now();
+        let overview = fetch_mesh_overview(self).await;
+        let snapshot = Arc::new(OverviewSnapshot {
+            at,
+            json: serde_json::to_string(&overview).unwrap_or_default(),
+        });
+        // Whoever listens (the overview sockets) is woken.
+        self.overview.latest.send_replace(Some(snapshot.clone()));
+        snapshot
+    }
 }
 
 /// Sessions that are launching but not in the map yet. Whoever wants to know
@@ -2152,6 +2235,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         thumbnails,
         starting: Arc::default(),
         profile_locks: Arc::default(),
+        dir_sizes: Arc::default(),
+        overview: Arc::default(),
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -2238,6 +2323,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     audible::spawn_monitor(state.clone());
+
+    // The overview every connected dashboard gets, computed once per tick and only
+    // while somebody listens.
+    let overview_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(2));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            if overview_state.overview.latest.receiver_count() > 0 {
+                overview_state
+                    .overview_snapshot(Duration::from_millis(1500))
+                    .await;
+            }
+        }
+    });
 
     // Stop sessions that nobody has used for a while.
     let reaper_state = state.clone();
@@ -3284,7 +3385,7 @@ async fn profile_info(state: &AppState, profile: &Profile) -> ProfileInfo {
         name: profile.meta.name.clone(),
         engine: profile.meta.engine,
         storage_dir: Some(profile.dir.display().to_string()),
-        size_bytes: compute_dir_size(profile.dir.clone()).await,
+        size_bytes: state.dir_sizes.of(&profile.dir).await,
         is_active: session_id.is_some(),
         session_id,
         created_at_secs: Some(profile.meta.created_at_secs),
@@ -3350,11 +3451,8 @@ async fn copy_profile(state: &AppState, source: &Profile, name: &str) -> Result<
 }
 
 async fn get_local_profiles(state: &AppState) -> Vec<ProfileInfo> {
-    let mut infos = Vec::new();
-    for profile in profiles::list(&state.config.profiles_dir).await {
-        infos.push(profile_info(state, &profile).await);
-    }
-    infos
+    let profiles = profiles::list(&state.config.profiles_dir).await;
+    futures_util::future::join_all(profiles.iter().map(|p| profile_info(state, p))).await
 }
 
 async fn api_list_sessions(
@@ -4262,17 +4360,185 @@ async fn api_mesh_node(
     }))
 }
 
+/// How long a peer may take to answer one of the overview's requests.
+const PEER_POLL_TIMEOUT: Duration = Duration::from_millis(1800);
+
+/// What one peer reported.
+struct PeerReport {
+    state: PeerState,
+    name: String,
+    url: String,
+    sessions: Vec<SessionSummary>,
+    profiles: Vec<ProfileInfo>,
+    targets: Vec<DevToolsTarget>,
+    recordings: Vec<RecordingMeta>,
+    max_storage_bytes: u64,
+}
+
+/// A GET of the overview's from a peer; empty when it cannot be had.
+async fn peer_poll<T: serde::de::DeserializeOwned + Default>(state: &AppState, url: String) -> T {
+    match state
+        .peer_request(state.http_client.get(url))
+        .timeout(PEER_POLL_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(r) => r.json().await.unwrap_or_default(),
+        Err(_) => T::default(),
+    }
+}
+
+async fn fetch_peer(state: &AppState, name: String, url: String) -> PeerReport {
+    let unreachable = |latency_ms: Option<u64>, error: String| PeerReport {
+        state: PeerState {
+            name: name.clone(),
+            url: url.clone(),
+            status: "unreachable".to_string(),
+            version: None,
+            revision: None,
+            latency_ms,
+            active_sessions: 0,
+            max_sessions: 8,
+            profiles_count: 0,
+            recordings_count: 0,
+            storage_used_bytes: 0,
+            uptime_seconds: 0,
+            supported_engines: vec![BrowserEngine::Chromium],
+            proxies: Vec::new(),
+            settings: None,
+            error: Some(error),
+        },
+        name: name.clone(),
+        url: url.clone(),
+        sessions: Vec::new(),
+        profiles: Vec::new(),
+        targets: Vec::new(),
+        recordings: Vec::new(),
+        max_storage_bytes: 0,
+    };
+
+    let t0 = Instant::now();
+    let node = state
+        .peer_request(state.http_client.get(format!("{url}/api/mesh/node")))
+        .timeout(PEER_POLL_TIMEOUT)
+        .send()
+        .await;
+    let latency_ms = t0.elapsed().as_millis() as u64;
+    let res = match node {
+        Ok(res) if res.status().is_success() => res,
+        Ok(res) => return unreachable(Some(latency_ms), format!("HTTP {}", res.status())),
+        Err(err) => return unreachable(None, err.to_string()),
+    };
+    let info: Option<NodeInfo> = res.json().await.ok();
+
+    // The rest at once: a slow peer costs one wait, not four.
+    let (sessions, profiles, targets, recordings) = tokio::join!(
+        peer_poll::<Vec<SessionSummary>>(state, format!("{url}/api/sessions")),
+        peer_poll::<Vec<ProfileInfo>>(state, format!("{url}/api/profiles")),
+        peer_poll::<Vec<DevToolsTarget>>(state, format!("{url}/json/list")),
+        peer_poll::<Vec<RecordingMeta>>(state, format!("{url}/api/recordings")),
+    );
+
+    let (peer, name, max_storage_bytes) = match info {
+        Some(info) => (
+            PeerState {
+                name: info.name.clone(),
+                url: url.clone(),
+                status: "online".to_string(),
+                version: Some(info.version),
+                revision: info.revision,
+                latency_ms: Some(latency_ms),
+                active_sessions: info.active_sessions,
+                max_sessions: info.max_sessions,
+                profiles_count: info.profiles_count,
+                recordings_count: info.recordings_count,
+                storage_used_bytes: info.storage_used_bytes,
+                uptime_seconds: info.uptime_seconds,
+                supported_engines: info.supported_engines,
+                proxies: info.proxies,
+                settings: Some(info.settings),
+                error: None,
+            },
+            info.name,
+            info.max_storage_bytes,
+        ),
+        // Answered, but not as a node: counted online with what is known.
+        None => (
+            PeerState {
+                name: name.clone(),
+                url: url.clone(),
+                status: "online".to_string(),
+                version: None,
+                revision: None,
+                latency_ms: Some(latency_ms),
+                active_sessions: 0,
+                max_sessions: 8,
+                profiles_count: 0,
+                recordings_count: 0,
+                storage_used_bytes: 0,
+                uptime_seconds: 0,
+                supported_engines: vec![BrowserEngine::Chromium],
+                proxies: Vec::new(),
+                settings: None,
+                error: None,
+            },
+            name,
+            0,
+        ),
+    };
+    PeerReport {
+        state: peer,
+        name,
+        url,
+        sessions,
+        profiles,
+        targets,
+        recordings,
+        max_storage_bytes,
+    }
+}
+
 pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
-    let local_sessions = get_local_sessions(state).await;
-    let local_profiles = get_local_profiles(state).await;
-    let local_targets = get_local_targets(state).await;
-    let local_recordings = recorder::list_recordings(&state.recorder_config).await;
+    let peers: Vec<(String, String)> = {
+        let guard = state.peers.read().await;
+        guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    };
+
+    // This node and the peers at the same time.
+    let local = async {
+        let (targets, profiles, recordings) = tokio::join!(
+            get_local_targets(state),
+            get_local_profiles(state),
+            recorder::list_recordings(&state.recorder_config),
+        );
+        // The tab counts come from the target list: no second round of requests.
+        let sessions = snapshot_sessions(state).await;
+        let active = state.active_recordings.read().await.clone();
+        let sessions: Vec<SessionSummary> = sessions
+            .iter()
+            .map(|s| {
+                let tabs = targets
+                    .iter()
+                    .filter(|t| t.session_id == Some(s.id) && t.target_type == "page")
+                    .count();
+                s.summary(tabs, active.get(&s.id))
+            })
+            .collect();
+        (sessions, profiles, targets, recordings)
+    };
+    let remote = futures_util::future::join_all(
+        peers
+            .into_iter()
+            .map(|(name, url)| fetch_peer(state, name, url)),
+    );
+    let ((local_sessions, local_profiles, local_targets, local_recordings), reports) =
+        tokio::join!(local, remote);
+
     let local_storage_used_bytes: u64 = local_recordings.iter().map(|r| r.size_bytes).sum();
     let mut local_supported_engines = vec![BrowserEngine::Chromium];
     if state.config.firefox_bin.is_some() {
         local_supported_engines.push(BrowserEngine::Firefox);
     }
-
     let local_node = NodeInfo {
         name: state.node_name.clone(),
         url: state.public_url.clone(),
@@ -4290,318 +4556,79 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         settings: state.settings.get(),
     };
 
-    let peers: Vec<(String, String)> = {
-        let guard = state.peers.read().await;
-        guard.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-    };
-
-    let client = state.http_client.clone();
-    let cluster_secret = state.cluster_secret.clone();
-    let mut peer_futures = Vec::new();
-
-    for (p_name, p_url) in peers {
-        let c = client.clone();
-        let sec = cluster_secret.clone();
-        peer_futures.push(tokio::spawn(async move {
-            let add_auth = |mut builder: reqwest::RequestBuilder| {
-                if let Some(ref s) = sec {
-                    builder = builder.bearer_auth(s).header("X-Browser-Cluster-Secret", s);
-                }
-                builder
-            };
-            let t0 = Instant::now();
-            let node_url = format!("{}/api/mesh/node", p_url);
-            let sessions_url = format!("{}/api/sessions", p_url);
-            let profiles_url = format!("{}/api/profiles", p_url);
-            let targets_url = format!("{}/json/list", p_url);
-            let recordings_url = format!("{}/api/recordings", p_url);
-
-            let node_res = add_auth(c.get(&node_url))
-                .timeout(std::time::Duration::from_millis(1800))
-                .send()
-                .await;
-            let latency_ms = t0.elapsed().as_millis() as u64;
-
-            match node_res {
-                Ok(res) if res.status().is_success() => {
-                    let node_info: Result<NodeInfo, _> = res.json().await;
-                    let (
-                        node_name,
-                        active_sessions,
-                        max_sessions,
-                        profiles_count,
-                        uptime_seconds,
-                        recordings_count,
-                        storage_used_bytes,
-                        max_storage_bytes,
-                        supported_engines,
-                        proxies,
-                        version,
-                        revision,
-                        settings,
-                    ) = match node_info {
-                        Ok(info) => (
-                            info.name,
-                            info.active_sessions,
-                            info.max_sessions,
-                            info.profiles_count,
-                            info.uptime_seconds,
-                            info.recordings_count,
-                            info.storage_used_bytes,
-                            info.max_storage_bytes,
-                            info.supported_engines,
-                            info.proxies,
-                            Some(info.version),
-                            info.revision,
-                            Some(info.settings),
-                        ),
-                        Err(_) => (
-                            p_name.clone(),
-                            0,
-                            8,
-                            0,
-                            0,
-                            0,
-                            0,
-                            0,
-                            vec![BrowserEngine::Chromium],
-                            Vec::new(),
-                            None,
-                            None,
-                            None,
-                        ),
-                    };
-
-                    let p_sessions: Vec<SessionSummary> = match add_auth(c.get(&sessions_url))
-                        .timeout(std::time::Duration::from_millis(1800))
-                        .send()
-                        .await
-                    {
-                        Ok(r) => r.json().await.unwrap_or_default(),
-                        Err(_) => Vec::new(),
-                    };
-
-                    let p_profiles: Vec<ProfileInfo> = match add_auth(c.get(&profiles_url))
-                        .timeout(std::time::Duration::from_millis(1800))
-                        .send()
-                        .await
-                    {
-                        Ok(r) => r.json().await.unwrap_or_default(),
-                        Err(_) => Vec::new(),
-                    };
-
-                    let p_targets: Vec<DevToolsTarget> = match add_auth(c.get(&targets_url))
-                        .timeout(std::time::Duration::from_millis(1800))
-                        .send()
-                        .await
-                    {
-                        Ok(r) => r.json().await.unwrap_or_default(),
-                        Err(_) => Vec::new(),
-                    };
-
-                    let p_recordings: Vec<RecordingMeta> = match add_auth(c.get(&recordings_url))
-                        .timeout(std::time::Duration::from_millis(1800))
-                        .send()
-                        .await
-                    {
-                        Ok(r) => r.json().await.unwrap_or_default(),
-                        Err(_) => Vec::new(),
-                    };
-
-                    (
-                        PeerState {
-                            name: node_name.clone(),
-                            url: p_url.clone(),
-                            status: "online".to_string(),
-                            version,
-                            revision,
-                            latency_ms: Some(latency_ms),
-                            active_sessions,
-                            max_sessions,
-                            profiles_count,
-                            recordings_count,
-                            storage_used_bytes,
-                            uptime_seconds,
-                            supported_engines,
-                            proxies,
-                            settings,
-                            error: None,
-                        },
-                        node_name,
-                        p_url,
-                        p_sessions,
-                        p_profiles,
-                        p_targets,
-                        p_recordings,
-                        max_storage_bytes,
-                    )
-                }
-                Ok(res) => (
-                    PeerState {
-                        name: p_name.clone(),
-                        url: p_url.clone(),
-                        status: "unreachable".to_string(),
-                        version: None,
-                        revision: None,
-                        latency_ms: Some(latency_ms),
-                        active_sessions: 0,
-                        max_sessions: 8,
-                        profiles_count: 0,
-                        recordings_count: 0,
-                        storage_used_bytes: 0,
-                        uptime_seconds: 0,
-                        supported_engines: vec![BrowserEngine::Chromium],
-                        proxies: Vec::new(),
-                        settings: None,
-                        error: Some(format!("HTTP {}", res.status())),
-                    },
-                    p_name,
-                    p_url,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    0,
-                ),
-                Err(err) => (
-                    PeerState {
-                        name: p_name.clone(),
-                        url: p_url.clone(),
-                        status: "unreachable".to_string(),
-                        version: None,
-                        revision: None,
-                        latency_ms: None,
-                        active_sessions: 0,
-                        max_sessions: 8,
-                        profiles_count: 0,
-                        recordings_count: 0,
-                        storage_used_bytes: 0,
-                        uptime_seconds: 0,
-                        supported_engines: vec![BrowserEngine::Chromium],
-                        proxies: Vec::new(),
-                        settings: None,
-                        error: Some(err.to_string()),
-                    },
-                    p_name,
-                    p_url,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    0,
-                ),
-            }
-        }));
-    }
-
     let mut peer_states = Vec::new();
     let mut all_sessions = Vec::new();
     let mut all_profiles = Vec::new();
     let mut all_targets = Vec::new();
     let mut all_recordings = Vec::new();
 
-    // Add local items
-    for s in local_sessions {
-        all_sessions.push(MeshSession {
-            session: s,
-            node_name: local_node.name.clone(),
-            node_url: local_node.url.clone(),
-            is_local: true,
-        });
-    }
-
-    for p in local_profiles {
-        all_profiles.push(MeshProfile {
-            profile: p,
-            node_name: local_node.name.clone(),
-            node_url: local_node.url.clone(),
-            is_local: true,
-        });
-    }
-
-    for t in local_targets {
-        all_targets.push(MeshTarget {
-            target: t,
-            node_name: local_node.name.clone(),
-            node_url: local_node.url.clone(),
-            is_local: true,
-        });
-    }
-
-    for r in local_recordings {
-        all_recordings.push(MeshRecording {
-            recording: r,
-            node_name: local_node.name.clone(),
-            node_url: local_node.url.clone(),
-            is_local: true,
-        });
-    }
+    let (node_name, node_url) = (local_node.name.clone(), local_node.url.clone());
+    all_sessions.extend(local_sessions.into_iter().map(|session| MeshSession {
+        session,
+        node_name: node_name.clone(),
+        node_url: node_url.clone(),
+        is_local: true,
+    }));
+    all_profiles.extend(local_profiles.into_iter().map(|profile| MeshProfile {
+        profile,
+        node_name: node_name.clone(),
+        node_url: node_url.clone(),
+        is_local: true,
+    }));
+    all_targets.extend(local_targets.into_iter().map(|target| MeshTarget {
+        target,
+        node_name: node_name.clone(),
+        node_url: node_url.clone(),
+        is_local: true,
+    }));
+    all_recordings.extend(local_recordings.into_iter().map(|recording| MeshRecording {
+        recording,
+        node_name: node_name.clone(),
+        node_url: node_url.clone(),
+        is_local: true,
+    }));
 
     let mut total_capacity = local_node.max_sessions;
     let mut online_nodes = 1;
     let mut total_storage_bytes = local_node.storage_used_bytes;
     let mut max_storage_bytes = local_node.max_storage_bytes;
 
-    for task in peer_futures {
-        if let Ok((
-            p_state,
-            node_name,
-            node_url,
-            p_sessions,
-            p_profiles,
-            p_targets,
-            p_recordings,
-            p_max_storage,
-        )) = task.await
-        {
-            if p_state.status == "online" {
-                online_nodes += 1;
-                total_capacity += p_state.max_sessions;
-                total_storage_bytes += p_state.storage_used_bytes;
-                max_storage_bytes += p_max_storage;
-            }
-            peer_states.push(p_state);
-
-            for s in p_sessions {
-                all_sessions.push(MeshSession {
-                    session: s,
-                    node_name: node_name.clone(),
-                    node_url: node_url.clone(),
-                    is_local: false,
-                });
-            }
-            for p in p_profiles {
-                all_profiles.push(MeshProfile {
-                    profile: p,
-                    node_name: node_name.clone(),
-                    node_url: node_url.clone(),
-                    is_local: false,
-                });
-            }
-            for t in p_targets {
-                all_targets.push(MeshTarget {
-                    target: t,
-                    node_name: node_name.clone(),
-                    node_url: node_url.clone(),
-                    is_local: false,
-                });
-            }
-            for r in p_recordings {
-                all_recordings.push(MeshRecording {
-                    recording: r,
-                    node_name: node_name.clone(),
-                    node_url: node_url.clone(),
-                    is_local: false,
-                });
-            }
+    for report in reports {
+        if report.state.status == "online" {
+            online_nodes += 1;
+            total_capacity += report.state.max_sessions;
+            total_storage_bytes += report.state.storage_used_bytes;
+            max_storage_bytes += report.max_storage_bytes;
         }
+        peer_states.push(report.state);
+        let (node_name, node_url) = (report.name, report.url);
+        all_sessions.extend(report.sessions.into_iter().map(|session| MeshSession {
+            session,
+            node_name: node_name.clone(),
+            node_url: node_url.clone(),
+            is_local: false,
+        }));
+        all_profiles.extend(report.profiles.into_iter().map(|profile| MeshProfile {
+            profile,
+            node_name: node_name.clone(),
+            node_url: node_url.clone(),
+            is_local: false,
+        }));
+        all_targets.extend(report.targets.into_iter().map(|target| MeshTarget {
+            target,
+            node_name: node_name.clone(),
+            node_url: node_url.clone(),
+            is_local: false,
+        }));
+        all_recordings.extend(report.recordings.into_iter().map(|recording| MeshRecording {
+            recording,
+            node_name: node_name.clone(),
+            node_url: node_url.clone(),
+            is_local: false,
+        }));
     }
 
-    all_recordings.sort_by(|a, b| {
-        b.recording
-            .started_at_secs
-            .cmp(&a.recording.started_at_secs)
-    });
+    all_recordings.sort_by_key(|r| std::cmp::Reverse(r.recording.started_at_secs));
 
     let total_nodes = 1 + peer_states.len();
     let total_sessions = all_sessions.len();
@@ -4631,8 +4658,11 @@ async fn api_mesh_overview(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     state.check_auth(&headers)?;
-    let overview = fetch_mesh_overview(&state).await;
-    Ok(Json(overview))
+    let snapshot = state.overview_snapshot(Duration::from_millis(750)).await;
+    Ok((
+        [(header::CONTENT_TYPE, "application/json")],
+        snapshot.json.clone(),
+    ))
 }
 
 async fn handle_overview_ws(
@@ -4647,45 +4677,51 @@ async fn handle_overview_ws(
     }
 
     ws.on_upgrade(move |mut socket| async move {
-        // Send initial overview immediately
-        let overview = fetch_mesh_overview(&state).await;
-        if let Ok(json_str) = serde_json::to_string(&overview) {
-            if socket.send(axum::extract::ws::Message::Text(json_str.into())).await.is_err() {
-                return;
-            }
+        use axum::extract::ws::Message;
+        // Listen first, then send the current one: nothing falls in between.
+        let mut updates = state.overview.latest.subscribe();
+        let snapshot = state.overview_snapshot(Duration::from_secs(2)).await;
+        updates.borrow_and_update();
+        if socket
+            .send(Message::Text(snapshot.json.clone().into()))
+            .await
+            .is_err()
+        {
+            return;
         }
-
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(2000));
-        interval.tick().await;
 
         loop {
             tokio::select! {
-                _ = interval.tick() => {
-                    let overview = fetch_mesh_overview(&state).await;
-                    if let Ok(json_str) = serde_json::to_string(&overview) {
-                        if socket.send(axum::extract::ws::Message::Text(json_str.into())).await.is_err() {
-                            break;
-                        }
+                // The overview ticker publishes a new one every two seconds for as
+                // long as somebody listens: one computation for all of them.
+                changed = updates.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    let Some(snapshot) = updates.borrow_and_update().clone() else {
+                        continue;
+                    };
+                    if socket.send(Message::Text(snapshot.json.clone().into())).await.is_err() {
+                        break;
                     }
                 }
                 msg = socket.recv() => {
                     match msg {
-                        Some(Ok(axum::extract::ws::Message::Text(txt))) => {
+                        Some(Ok(Message::Text(txt))) => {
                             if txt.as_str() == "refresh" {
-                                let overview = fetch_mesh_overview(&state).await;
-                                if let Ok(json_str) = serde_json::to_string(&overview) {
-                                    let _ = socket.send(axum::extract::ws::Message::Text(json_str.into())).await;
-                                }
+                                let snapshot = state.overview_snapshot(Duration::from_millis(500)).await;
+                                updates.borrow_and_update();
+                                let _ = socket.send(Message::Text(snapshot.json.clone().into())).await;
                             } else if txt.as_str() == "ping" {
-                                let _ = socket.send(axum::extract::ws::Message::Text("pong".into())).await;
+                                let _ = socket.send(Message::Text("pong".into())).await;
                             }
                         }
-                        Some(Ok(axum::extract::ws::Message::Ping(data))) => {
-                            if socket.send(axum::extract::ws::Message::Pong(data)).await.is_err() {
+                        Some(Ok(Message::Ping(data))) => {
+                            if socket.send(Message::Pong(data)).await.is_err() {
                                 break;
                             }
                         }
-                        Some(Ok(axum::extract::ws::Message::Close(_))) | None | Some(Err(_)) => {
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
                             break;
                         }
                         _ => {}
@@ -7232,6 +7268,24 @@ mod tests {
         assert!(!launch.is_finished());
         drop(held);
         assert!(matches!(launch.await.unwrap(), Ok(Slot::Reserved(_))));
+    }
+
+    #[test]
+    fn directory_sizes_are_remembered_for_a_while() {
+        let sizes = DirSizes::default();
+        let dir = Path::new("/profiles/a");
+        let t0 = Instant::now();
+        assert_eq!(sizes.fresh(dir, t0), None);
+        sizes.store(dir, t0, 5);
+        assert_eq!(sizes.fresh(dir, t0 + Duration::from_secs(30)), Some(5));
+        assert_eq!(sizes.fresh(dir, t0 + DIR_SIZE_TTL), None, "stale");
+        sizes.store(dir, t0, 7);
+        sizes.forget(dir);
+        assert_eq!(sizes.fresh(dir, t0), None, "forgotten after a change");
+        // Old entries of directories nobody asks about are dropped.
+        sizes.store(Path::new("/profiles/gone"), t0, 1);
+        sizes.store(dir, t0 + DIR_SIZE_TTL * 11, 2);
+        assert_eq!(sizes.0.lock().unwrap().len(), 1);
     }
 
     #[test]
