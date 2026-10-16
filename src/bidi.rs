@@ -12,7 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::tungstenite::Message as ServerMsg;
@@ -20,6 +20,16 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// How long a command may take before it is given up on.
+const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// For reads that feed overviews and polling: a hung tab must not stall them.
+const QUICK_TIMEOUT: Duration = Duration::from_secs(5);
+/// Messages queued for one client (or for the browser) before it counts as stuck.
+const QUEUE: usize = 1024;
+/// Realm the daemon's own page probes run in, so a page's scripts cannot
+/// replace what they read (a hostile `document.title` getter).
+const PROBE_SANDBOX: &str = "browser-daemon";
 
 enum Route {
     Client { client: u64, id: Value },
@@ -51,8 +61,64 @@ impl Subscription {
 }
 
 struct Client {
-    tx: mpsc::UnboundedSender<String>,
+    tx: mpsc::Sender<String>,
     subs: Vec<Subscription>,
+}
+
+/// How many subscriptions use each event, so the browser streams an event only
+/// as long as somebody wants it.
+#[derive(Default)]
+struct EventRefs(HashMap<String, usize>);
+
+impl EventRefs {
+    /// Count one more use of each event; the events nobody used before.
+    fn acquire(&mut self, events: &[String]) -> Vec<String> {
+        let mut fresh = Vec::new();
+        for e in events {
+            let n = self.0.entry(e.clone()).or_default();
+            if *n == 0 {
+                fresh.push(e.clone());
+            }
+            *n += 1;
+        }
+        fresh
+    }
+
+    /// Count one use of each event less; the events nobody uses any more.
+    fn release(&mut self, events: &[String]) -> Vec<String> {
+        let mut unused = Vec::new();
+        for e in events {
+            let Some(n) = self.0.get_mut(e) else {
+                continue;
+            };
+            *n -= 1;
+            if *n == 0 {
+                self.0.remove(e);
+                unused.push(e.clone());
+            }
+        }
+        unused
+    }
+}
+
+/// Hand a message to a client; false when its queue is full (it is stuck).
+fn queue(clients: &HashMap<u64, Client>, client: u64, text: String) -> bool {
+    clients
+        .get(&client)
+        .is_none_or(|c| c.tx.try_send(text).is_ok())
+}
+
+/// Removes a command's pending entry however its wait ends, a timeout and a
+/// cancelled caller included.
+struct PendingGuard<'a> {
+    pending: &'a StdMutex<HashMap<u64, Route>>,
+    id: u64,
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        self.pending.lock().unwrap().remove(&self.id);
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -63,12 +129,12 @@ pub struct BidiContext {
 }
 
 pub struct BidiHub {
-    backend_tx: mpsc::UnboundedSender<String>,
+    backend_tx: mpsc::Sender<String>,
     next_id: AtomicU64,
     next_client: AtomicU64,
-    pending: Mutex<HashMap<u64, Route>>,
-    clients: Mutex<HashMap<u64, Client>>,
-    backend_events: Mutex<HashSet<String>>,
+    pending: StdMutex<HashMap<u64, Route>>,
+    clients: StdMutex<HashMap<u64, Client>>,
+    backend_events: StdMutex<EventRefs>,
     closed: AtomicBool,
     /// Most recently navigated/activated top-level context (used by the recorder).
     last_active: Mutex<Option<String>>,
@@ -82,13 +148,15 @@ impl BidiHub {
     /// Ask Firefox to quit the way a user's quit does: it writes its storage and
     /// session first (a signal makes it leave without flushing localStorage).
     pub async fn close_browser(&self) {
-        let _ = tokio::time::timeout(Duration::from_secs(3), self.call("browser.close", json!({})))
+        let _ = self
+            .call_timeout("browser.close", json!({}), Duration::from_secs(3))
             .await;
     }
 
     pub async fn end(&self) {
-        let _ =
-            tokio::time::timeout(Duration::from_secs(3), self.call("session.end", json!({}))).await;
+        let _ = self
+            .call_timeout("session.end", json!({}), Duration::from_secs(3))
+            .await;
     }
 
     pub async fn connect(port: u16) -> Result<Arc<Self>, BoxError> {
@@ -125,14 +193,14 @@ impl BidiHub {
             }
         };
 
-        let (backend_tx, mut backend_rx) = mpsc::unbounded_channel::<String>();
+        let (backend_tx, mut backend_rx) = mpsc::channel::<String>(QUEUE);
         let hub = Arc::new(Self {
             backend_tx,
             next_id: AtomicU64::new(1),
             next_client: AtomicU64::new(1),
-            pending: Mutex::new(HashMap::new()),
-            clients: Mutex::new(HashMap::new()),
-            backend_events: Mutex::new(HashSet::new()),
+            pending: StdMutex::new(HashMap::new()),
+            clients: StdMutex::new(HashMap::new()),
+            backend_events: StdMutex::new(EventRefs::default()),
             closed: AtomicBool::new(false),
             last_active: Mutex::new(None),
             session_id: result["sessionId"].as_str().unwrap_or_default().to_string(),
@@ -178,8 +246,15 @@ impl BidiHub {
     async fn shutdown(&self) {
         self.closed.store(true, Ordering::SeqCst);
         // Dropping the senders closes every client connection.
-        self.clients.lock().await.clear();
-        for (_, route) in self.pending.lock().await.drain() {
+        self.clients.lock().unwrap().clear();
+        let pending: Vec<Route> = self
+            .pending
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, r)| r)
+            .collect();
+        for route in pending {
             if let Route::Internal(tx) = route {
                 let _ = tx.send(json!({ "type": "error", "error": "unknown error", "message": "browser closed" }));
             }
@@ -192,13 +267,11 @@ impl BidiHub {
         };
 
         if let Some(id) = v.get("id").and_then(Value::as_u64) {
-            let route = self.pending.lock().await.remove(&id);
+            let route = self.pending.lock().unwrap().remove(&id);
             match route {
                 Some(Route::Client { client, id: orig }) => {
                     v["id"] = orig;
-                    if let Some(c) = self.clients.lock().await.get(&client) {
-                        let _ = c.tx.send(v.to_string());
-                    }
+                    self.deliver(client, v.to_string()).await;
                 }
                 Some(Route::Internal(tx)) => {
                     let _ = tx.send(v);
@@ -230,61 +303,125 @@ impl BidiHub {
             }
         }
 
-        let clients = self.clients.lock().await;
-        for c in clients.values() {
-            if c.subs.iter().any(|s| s.matches(method, context)) {
-                let _ = c.tx.send(text.to_string());
-            }
-        }
-    }
-
-    async fn ensure_backend_events(&self, events: &[String]) {
-        let missing: Vec<String> = {
-            let mut have = self.backend_events.lock().await;
-            let missing: Vec<String> = events
+        let unused = {
+            let mut clients = self.clients.lock().unwrap();
+            let stuck: Vec<u64> = clients
                 .iter()
-                .filter(|e| {
-                    !have.contains(*e)
-                        && !have.iter().any(|h| {
-                            e.strip_prefix(h.as_str())
-                                .is_some_and(|r| r.starts_with('.'))
-                        })
+                .filter(|(_, c)| {
+                    c.subs.iter().any(|s| s.matches(method, context))
+                        && c.tx.try_send(text.to_string()).is_err()
                 })
-                .cloned()
+                .map(|(id, _)| *id)
                 .collect();
-            have.extend(missing.iter().cloned());
-            missing
+            stuck
+                .into_iter()
+                .flat_map(|id| self.drop_stuck(&mut clients, id))
+                .collect::<Vec<_>>()
         };
-        if !missing.is_empty() {
-            if let Err(e) = self
-                .call("session.subscribe", json!({ "events": missing }))
-                .await
-            {
-                warn!(error = %e, "BiDi hub failed to subscribe to backend events");
+        self.unsubscribe_backend(&unused).await;
+    }
+
+    /// Queue a message for a client; one that does not keep up is cut off
+    /// instead of letting memory grow.
+    async fn deliver(&self, client: u64, text: String) {
+        let unused = {
+            let mut clients = self.clients.lock().unwrap();
+            if queue(&clients, client, text) {
+                return;
             }
+            self.drop_stuck(&mut clients, client)
+        };
+        self.unsubscribe_backend(&unused).await;
+    }
+
+    /// Cut a client off (dropping its sender ends its connection, see
+    /// `serve_client`); the events nobody wants any more as a result.
+    fn drop_stuck(&self, clients: &mut HashMap<u64, Client>, client: u64) -> Vec<String> {
+        let Some(c) = clients.remove(&client) else {
+            return Vec::new();
+        };
+        warn!(client, "BiDi client does not keep up; disconnecting it");
+        let events: Vec<String> = c.subs.into_iter().flat_map(|s| s.events).collect();
+        self.backend_events.lock().unwrap().release(&events)
+    }
+
+    /// Subscribe the browser to events (once, however many want them).
+    async fn ensure_backend_events(&self, events: &[String]) {
+        let fresh = self.backend_events.lock().unwrap().acquire(events);
+        if fresh.is_empty() {
+            return;
+        }
+        if let Err(e) = self
+            .call_timeout(
+                "session.subscribe",
+                json!({ "events": fresh }),
+                QUICK_TIMEOUT,
+            )
+            .await
+        {
+            warn!(error = %e, "BiDi hub failed to subscribe to backend events");
+            // Not subscribed: the next one to ask tries again.
+            self.backend_events.lock().unwrap().release(&fresh);
         }
     }
 
-    fn send_backend(&self, id: u64, method: &str, params: Value) {
+    /// Let go of events a client no longer wants; the browser stops sending the
+    /// ones nobody wants.
+    async fn release_backend_events(&self, events: &[String]) {
+        let unused = self.backend_events.lock().unwrap().release(events);
+        self.unsubscribe_backend(&unused).await;
+    }
+
+    async fn unsubscribe_backend(&self, unused: &[String]) {
+        if unused.is_empty() || self.is_closed() {
+            return;
+        }
+        if let Err(e) = self
+            .call_timeout(
+                "session.unsubscribe",
+                json!({ "events": unused }),
+                QUICK_TIMEOUT,
+            )
+            .await
+        {
+            debug!(error = %e, "BiDi hub could not unsubscribe from backend events");
+        }
+    }
+
+    fn send_backend(&self, id: u64, method: &str, params: Value) -> Result<(), String> {
         let msg = json!({ "id": id, "method": method, "params": params });
-        let _ = self.backend_tx.send(msg.to_string());
+        self.backend_tx
+            .try_send(msg.to_string())
+            .map_err(|_| format!("{method}: the browser does not keep up"))
     }
 
     /// Issue a command on the shared session and wait for its result.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+        self.call_timeout(method, params, CALL_TIMEOUT).await
+    }
+
+    /// Like `call`, given up on after `limit`. The command's entry is removed
+    /// however the wait ends, also when the caller stops waiting early.
+    pub async fn call_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        limit: Duration,
+    ) -> Result<Value, String> {
         if self.is_closed() {
             return Err("browser closed".into());
         }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, Route::Internal(tx));
-        self.send_backend(id, method, params);
-        let res = match tokio::time::timeout(Duration::from_secs(30), rx).await {
+        self.pending.lock().unwrap().insert(id, Route::Internal(tx));
+        let _entry = PendingGuard {
+            pending: &self.pending,
+            id,
+        };
+        self.send_backend(id, method, params)?;
+        let res = match tokio::time::timeout(limit, rx).await {
             Ok(Ok(v)) => v,
-            _ => {
-                self.pending.lock().await.remove(&id);
-                return Err(format!("{} timed out", method));
-            }
+            _ => return Err(format!("{} timed out", method)),
         };
         if res.get("type").and_then(Value::as_str) == Some("success") {
             Ok(res["result"].clone())
@@ -301,30 +438,41 @@ impl BidiHub {
     /// Top-level browsing contexts (tabs) with their titles.
     pub async fn contexts(&self) -> Vec<BidiContext> {
         let Ok(tree) = self
-            .call("browsingContext.getTree", json!({ "maxDepth": 0 }))
+            .call_timeout(
+                "browsingContext.getTree",
+                json!({ "maxDepth": 0 }),
+                QUICK_TIMEOUT,
+            )
             .await
         else {
             return Vec::new();
         };
-        let mut out = Vec::new();
-        for c in tree["contexts"].as_array().cloned().unwrap_or_default() {
+        let tabs = tree["contexts"].as_array().cloned().unwrap_or_default();
+        // Together: a tab that never answers costs one wait, not one per tab.
+        futures_util::future::join_all(tabs.into_iter().map(|c| async move {
             let id = c["context"].as_str().unwrap_or_default().to_string();
             let url = c["url"].as_str().unwrap_or_default().to_string();
-            let title = tokio::time::timeout(
-                Duration::from_millis(800),
-                self.call(
+            let title = self
+                .call_timeout(
                     "script.evaluate",
-                    json!({ "expression": "document.title", "target": { "context": id }, "awaitPromise": false }),
-                ),
-            )
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .and_then(|r| r.pointer("/result/value").and_then(Value::as_str).map(str::to_string))
-            .filter(|t| !t.is_empty());
-            out.push(BidiContext { id, url, title });
-        }
-        out
+                    json!({
+                        "expression": "document.title",
+                        "target": { "context": id, "sandbox": PROBE_SANDBOX },
+                        "awaitPromise": false
+                    }),
+                    Duration::from_millis(800),
+                )
+                .await
+                .ok()
+                .and_then(|r| {
+                    r.pointer("/result/value")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .filter(|t| !t.is_empty());
+            BidiContext { id, url, title }
+        }))
+        .await
     }
 
     pub async fn create_tab(&self, url: &str) -> Result<BidiContext, String> {
@@ -364,7 +512,11 @@ impl BidiHub {
     pub async fn active_context(&self) -> Option<String> {
         let last = self.last_active.lock().await.clone();
         let tree = self
-            .call("browsingContext.getTree", json!({ "maxDepth": 0 }))
+            .call_timeout(
+                "browsingContext.getTree",
+                json!({ "maxDepth": 0 }),
+                QUICK_TIMEOUT,
+            )
             .await
             .ok()?;
         let ids: Vec<String> = tree["contexts"]
@@ -379,13 +531,14 @@ impl BidiHub {
         // browser): the foreground tab is the one that is visible.
         for id in &ids {
             let visible = self
-                .call(
+                .call_timeout(
                     "script.evaluate",
                     json!({
                         "expression": "document.visibilityState === 'visible'",
-                        "target": { "context": id },
+                        "target": { "context": id, "sandbox": PROBE_SANDBOX },
                         "awaitPromise": false
                     }),
+                    Duration::from_millis(800),
                 )
                 .await
                 .ok()
@@ -400,13 +553,14 @@ impl BidiHub {
 
     pub async fn screenshot_jpeg(&self, context: &str) -> Result<String, String> {
         let res = self
-            .call(
+            .call_timeout(
                 "browsingContext.captureScreenshot",
                 json!({
                     "context": context,
                     "origin": "viewport",
                     "format": { "type": "image/jpeg", "quality": 0.6 }
                 }),
+                Duration::from_secs(10),
             )
             .await?;
         res["data"]
@@ -457,14 +611,23 @@ impl BidiHub {
                             .filter_map(|c| c.as_str().map(str::to_string))
                             .collect()
                     });
+                let mut events = events;
+                events.dedup();
                 self.ensure_backend_events(&events).await;
                 let sub_id = Uuid::new_v4().to_string();
-                if let Some(c) = self.clients.lock().await.get_mut(&client) {
-                    c.subs.push(Subscription {
-                        id: sub_id.clone(),
-                        events,
-                        contexts,
-                    });
+                let attached = {
+                    let mut clients = self.clients.lock().unwrap();
+                    clients.get_mut(&client).map(|c| {
+                        c.subs.push(Subscription {
+                            id: sub_id.clone(),
+                            events: events.clone(),
+                            contexts,
+                        });
+                    })
+                };
+                if attached.is_none() {
+                    // The client left while the browser was being asked.
+                    self.release_backend_events(&events).await;
                 }
                 self.reply(
                     client,
@@ -489,16 +652,25 @@ impl BidiHub {
                             .collect()
                     })
                     .unwrap_or_default();
-                if let Some(c) = self.clients.lock().await.get_mut(&client) {
+                let mut dropped = Vec::new();
+                if let Some(c) = self.clients.lock().unwrap().get_mut(&client) {
                     if let Some(ids) = ids {
-                        c.subs.retain(|s| !ids.contains(&s.id));
+                        for s in &mut c.subs {
+                            if ids.contains(&s.id) {
+                                dropped.append(&mut s.events);
+                            }
+                        }
                     } else {
                         for s in &mut c.subs {
-                            s.events.retain(|e| !events.contains(e));
+                            let (gone, kept): (Vec<_>, Vec<_>) =
+                                s.events.drain(..).partition(|e| events.contains(e));
+                            dropped.extend(gone);
+                            s.events = kept;
                         }
-                        c.subs.retain(|s| !s.events.is_empty());
                     }
+                    c.subs.retain(|s| !s.events.is_empty());
                 }
+                self.release_backend_events(&dropped).await;
                 self.reply(client, json!({ "type": "success", "id": id, "result": {} }))
                     .await;
             }
@@ -516,19 +688,23 @@ impl BidiHub {
                     }
                 }
                 let backend_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-                self.pending
-                    .lock()
-                    .await
-                    .insert(backend_id, Route::Client { client, id });
-                self.send_backend(backend_id, &method, params);
+                self.pending.lock().unwrap().insert(
+                    backend_id,
+                    Route::Client {
+                        client,
+                        id: id.clone(),
+                    },
+                );
+                if let Err(e) = self.send_backend(backend_id, &method, params) {
+                    self.pending.lock().unwrap().remove(&backend_id);
+                    self.reply(client, json!({ "type": "error", "id": id, "error": "unknown error", "message": e })).await;
+                }
             }
         }
     }
 
     async fn reply(&self, client: u64, msg: Value) {
-        if let Some(c) = self.clients.lock().await.get(&client) {
-            let _ = c.tx.send(msg.to_string());
-        }
+        self.deliver(client, msg.to_string()).await;
     }
 
     /// Serve one `/firefox` WebSocket client until either side closes.
@@ -539,8 +715,8 @@ impl BidiHub {
         observer: bool,
     ) {
         let client = self.next_client.fetch_add(1, Ordering::SeqCst);
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-        self.clients.lock().await.insert(
+        let (tx, mut rx) = mpsc::channel::<String>(QUEUE);
+        self.clients.lock().unwrap().insert(
             client,
             Client {
                 tx,
@@ -575,11 +751,190 @@ impl BidiHub {
             _ = reader => {},
         }
 
-        self.clients.lock().await.remove(&client);
+        let left = self.clients.lock().unwrap().remove(&client);
         self.pending
             .lock()
-            .await
+            .unwrap()
             .retain(|_, r| !matches!(r, Route::Client { client: c, .. } if *c == client));
+        // Its subscriptions end with it: the browser stops streaming what nobody reads.
+        if let Some(c) = left {
+            let events: Vec<String> = c.subs.into_iter().flat_map(|s| s.events).collect();
+            self.release_backend_events(&events).await;
+        }
         debug!(client, "BiDi client detached");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn events_are_streamed_while_somebody_wants_them() {
+        let mut refs = EventRefs::default();
+        let net = vec!["network".to_string()];
+        assert_eq!(refs.acquire(&net), net);
+        assert!(refs.acquire(&net).is_empty());
+        assert!(refs.release(&net).is_empty());
+        assert_eq!(refs.release(&net), net);
+        // Nothing left to release.
+        assert!(refs.release(&net).is_empty());
+        assert_eq!(refs.acquire(&net), net);
+    }
+
+    type Log = Arc<StdMutex<Vec<(String, Value)>>>;
+
+    /// A stand-in for Firefox's WebDriver BiDi endpoint: answers everything but
+    /// `never`, and records the commands it got.
+    async fn fake_firefox() -> (u16, Log) {
+        use tokio_tungstenite::tungstenite::Message;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let log: Log = Arc::default();
+        let seen = log.clone();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let (mut write, mut read) = ws.split();
+            while let Some(Ok(Message::Text(text))) = read.next().await {
+                let v: Value = serde_json::from_str(text.as_str()).unwrap();
+                let method = v["method"].as_str().unwrap_or_default().to_string();
+                seen.lock()
+                    .unwrap()
+                    .push((method.clone(), v["params"].clone()));
+                if method == "never" {
+                    continue;
+                }
+                let result = if method == "session.new" {
+                    json!({ "sessionId": "s", "capabilities": {} })
+                } else {
+                    json!({})
+                };
+                let reply = json!({ "type": "success", "id": v["id"], "result": result });
+                write
+                    .send(Message::Text(reply.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+        });
+        (port, log)
+    }
+
+    fn calls(log: &Log, method: &str) -> Vec<Value> {
+        let log = log.lock().unwrap();
+        log.iter()
+            .filter(|(m, _)| m == method)
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_command_leaves_nothing_pending() {
+        let (port, _log) = fake_firefox().await;
+        let hub = BidiHub::connect(port).await.unwrap();
+        // Its own timeout, and a caller that stops waiting earlier.
+        let own = hub
+            .call_timeout("never", json!({}), Duration::from_millis(50))
+            .await;
+        assert!(own.unwrap_err().contains("timed out"));
+        let outer = tokio::time::timeout(
+            Duration::from_millis(50),
+            hub.call_timeout("never", json!({}), Duration::from_secs(30)),
+        )
+        .await;
+        assert!(outer.is_err());
+        assert!(hub.pending.lock().unwrap().is_empty());
+        // Still working.
+        assert!(hub.call("browsingContext.getTree", json!({})).await.is_ok());
+    }
+
+    fn attach(hub: &BidiHub, client: u64) -> mpsc::Receiver<String> {
+        let (tx, rx) = mpsc::channel(QUEUE);
+        hub.clients.lock().unwrap().insert(
+            client,
+            Client {
+                tx,
+                subs: Vec::new(),
+            },
+        );
+        rx
+    }
+
+    fn subscribe_to(events: &[&str]) -> String {
+        json!({ "id": 1, "method": "session.subscribe", "params": { "events": events } })
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn the_browser_streams_events_only_while_a_client_wants_them() {
+        let (port, log) = fake_firefox().await;
+        let hub = BidiHub::connect(port).await.unwrap();
+        let mut a = attach(&hub, 1);
+        let mut b = attach(&hub, 2);
+        hub.handle_client_command(1, &subscribe_to(&["network"]))
+            .await;
+        hub.handle_client_command(2, &subscribe_to(&["network"]))
+            .await;
+        let ours = |log: &Log, method: &str| {
+            calls(log, method)
+                .into_iter()
+                .filter(|p| p["events"] == json!(["network"]))
+                .count()
+        };
+        assert_eq!(ours(&log, "session.subscribe"), 1, "subscribed once");
+        let sub = |m: &mut mpsc::Receiver<String>| {
+            let reply: Value = serde_json::from_str(&m.try_recv().unwrap()).unwrap();
+            reply["result"]["subscription"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let (sub_a, sub_b) = (sub(&mut a), sub(&mut b));
+        let unsubscribe = |id: &str| {
+            json!({ "id": 2, "method": "session.unsubscribe", "params": { "subscriptions": [id] } })
+                .to_string()
+        };
+        hub.handle_client_command(1, &unsubscribe(&sub_a)).await;
+        assert_eq!(
+            ours(&log, "session.unsubscribe"),
+            0,
+            "another still wants it"
+        );
+        hub.handle_client_command(2, &unsubscribe(&sub_b)).await;
+        assert_eq!(ours(&log, "session.unsubscribe"), 1);
+        // The hub's own navigation events stay subscribed.
+        assert!(hub
+            .backend_events
+            .lock()
+            .unwrap()
+            .0
+            .contains_key("browsingContext.load"));
+    }
+
+    #[tokio::test]
+    async fn a_client_that_leaves_gives_its_events_back() {
+        let (port, log) = fake_firefox().await;
+        let hub = BidiHub::connect(port).await.unwrap();
+        let _rx = attach(&hub, 7);
+        hub.handle_client_command(7, &subscribe_to(&["log", "network"]))
+            .await;
+        // What `serve_client` does when the socket ends.
+        let left = hub.clients.lock().unwrap().remove(&7).unwrap();
+        let events: Vec<String> = left.subs.into_iter().flat_map(|s| s.events).collect();
+        hub.release_backend_events(&events).await;
+        let unsubscribed: Vec<Value> = calls(&log, "session.unsubscribe");
+        assert_eq!(unsubscribed.len(), 1);
+        assert_eq!(unsubscribed[0]["events"], json!(["log", "network"]));
+    }
+
+    #[tokio::test]
+    async fn a_client_that_does_not_read_is_cut_off() {
+        let (port, _log) = fake_firefox().await;
+        let hub = BidiHub::connect(port).await.unwrap();
+        let _rx = attach(&hub, 3);
+        for _ in 0..=QUEUE {
+            hub.deliver(3, "x".into()).await;
+        }
+        assert!(!hub.clients.lock().unwrap().contains_key(&3));
     }
 }
