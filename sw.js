@@ -1,74 +1,51 @@
-// Browser Daemon Service Worker for PWA App Shell
-const CACHE_NAME = 'browser-daemon-shell-v3';
-const PRECACHE_ASSETS = [
-  '/',
+// Browser Daemon service worker: keeps the static assets (icons, manifest)
+// for the installed app. Pages and API answers are never cached or touched:
+// they sit behind the sign-in cookie and carry live data.
+const CACHE_NAME = 'browser-daemon-static-v4';
+const STATIC_PATHS = new Set([
   '/manifest.webmanifest',
   '/favicon.svg',
   '/favicon.ico',
   '/icon-192.png',
   '/icon-512.png'
-];
+]);
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(PRECACHE_ASSETS).catch((err) => {
-        console.warn('[SW] Precache asset caching failed:', err);
-      });
-    })
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll([...STATIC_PATHS]))
+      .catch((err) => console.warn('[SW] Precache failed:', err))
   );
 });
 
+// Every cache of an older version goes (v3 and before held the dashboard HTML).
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
-      );
-    }).then(() => self.clients.claim())
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
-
   const url = new URL(req.url);
+  // Only our own static assets; everything else goes to the network untouched.
+  if (url.origin !== self.location.origin || !STATIC_PATHS.has(url.pathname)) return;
 
-  // Bypass WebSockets, CDP endpoints, API endpoints, screencast streams, and live media
-  if (
-    url.protocol === 'ws:' ||
-    url.protocol === 'wss:' ||
-    url.pathname.startsWith('/api/') ||
-    url.pathname.startsWith('/json') ||
-    url.pathname.startsWith('/devtools') ||
-    url.pathname.startsWith('/chromium') ||
-    url.pathname.startsWith('/ws') ||
-    url.pathname.includes('/frames') ||
-    url.pathname.includes('/stream')
-  ) {
-    return;
-  }
-
-  // Network-first with cache fallback for dashboard HTML and shell assets
+  // The query string is ignored, in the cache key as well as in the lookup.
+  const key = new Request(url.origin + url.pathname);
   event.respondWith(
     fetch(req)
-      .then((networkResponse) => {
-        if (networkResponse && networkResponse.status === 200) {
-          const resClone = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone));
+      .then((res) => {
+        if (res && res.status === 200 && res.type === 'basic') {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(key, copy));
         }
-        return networkResponse;
+        return res;
       })
-      .catch(() => {
-        return caches.match(req).then((cachedResponse) => {
-          if (cachedResponse) return cachedResponse;
-          if (req.headers.get('accept')?.includes('text/html')) {
-            return caches.match('/');
-          }
-          return new Response('Offline', { status: 503, statusText: 'Offline' });
-        });
-      })
+      .catch(() => caches.match(key).then((hit) => hit || new Response('Offline', { status: 503, statusText: 'Offline' })))
   );
 });

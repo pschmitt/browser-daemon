@@ -1,5 +1,6 @@
 mod audible;
 mod audio;
+mod auth;
 mod autofill;
 mod backups;
 mod bidi;
@@ -127,6 +128,11 @@ pub struct Args {
 
     #[arg(long, help = "Path to file containing shared cluster secret")]
     pub cluster_secret_file: Option<PathBuf>,
+
+    /// A `Host` (HOST[:PORT]) the node answers to besides its public URL's and
+    /// loopback's (repeat for several); other hosts get 403.
+    #[arg(long = "allowed-host")]
+    pub allowed_hosts: Vec<String>,
 
     #[arg(long, default_value = "/var/lib/browser-daemon/recordings")]
     pub recordings_dir: PathBuf,
@@ -470,6 +476,8 @@ pub struct AppState {
     pub peers: Arc<RwLock<HashMap<String, String>>>,
     pub start_time: Instant,
     pub cluster_secret: Option<String>,
+    /// Who may talk to the daemon (see auth.rs).
+    pub auth: Arc<auth::Auth>,
     pub recorder_config: Arc<RecorderConfig>,
     pub active_recordings: Arc<RwLock<HashMap<Uuid, SessionRecorderHandle>>>,
     pub idle_timeout_secs: u64,
@@ -559,38 +567,28 @@ impl AppState {
         self.check_auth_opt(headers, None)
     }
 
+    /// Accepts the cluster secret or a token derived from it (header, cookie or
+    /// `query_token`); with no cluster secret everything passes.
     pub fn check_auth_opt(
         &self,
         headers: &HeaderMap,
         query_token: Option<&str>,
     ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-        if let Some(ref expected) = self.cluster_secret {
-            let auth_header = headers
-                .get(header::AUTHORIZATION)
-                .and_then(|h| h.to_str().ok());
-            let custom_header = headers
-                .get("x-browser-cluster-secret")
-                .and_then(|h| h.to_str().ok());
-
-            let token = auth_header
-                .and_then(|h| {
-                    h.strip_prefix("Bearer ")
-                        .or_else(|| h.strip_prefix("bearer "))
-                })
-                .or(custom_header)
-                .or(query_token);
-
-            if token != Some(expected.as_str()) {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({
-                        "error": "Unauthorized: invalid or missing cluster secret"
-                    })),
-                ));
-            }
+        if self
+            .auth
+            .credential(headers, query_token, auth::now())
+            .is_none()
+        {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Unauthorized: invalid or missing credentials"
+                })),
+            ));
         }
         Ok(())
     }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn spawn_session(
         &self,
@@ -1856,6 +1854,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
+        if args.cluster_secret.is_some() {
+            warn!(
+                "--cluster-secret shows the secret in the process list: use --cluster-secret-file"
+            );
+        }
         args.cluster_secret.or_else(|| {
             std::env::var("CLUSTER_SECRET")
                 .or_else(|_| std::env::var("BROWSER_CLUSTER_SECRET"))
@@ -1965,6 +1968,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Arc::new(settings::Store::load(&settings_path));
     let history = Arc::new(history::History::new(config.state_dir().join("history")));
     let thumbnails = Arc::new(thumbnail::Thumbnails::default());
+    let hosts = auth::HostPolicy::new(&public_url, &args.allowed_hosts, args.bind.port());
+    // The browsers must not reach the daemon (or its mesh) through their relay.
+    relay::deny_hosts(hosts.names());
+    for url in peer_map.values() {
+        relay::deny_url(url);
+    }
+    let auth = Arc::new(auth::Auth::new(cluster_secret.clone(), hosts));
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -1976,6 +1986,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         public_url,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),
+        auth,
         cluster_secret,
         recorder_config,
         active_recordings,
@@ -2111,6 +2122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/icon-512.png", get(icon_512_png))
         .route("/download-worker.js", get(download_worker_js))
         .route("/health", get(health_check))
+        .route("/api/auth/token", get(api_auth_token))
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
         .route("/json/list", get(json_list))
@@ -2361,7 +2373,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .post(api_peer_json_activate)
                 .get(api_peer_json_activate),
         )
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::layer,
+        ));
 
     tokio::spawn(shutdown_on_signal(state));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
@@ -2553,34 +2569,57 @@ async fn download_worker_js() -> impl IntoResponse {
     )
 }
 
-async fn dashboard_page(State(state): State<AppState>) -> impl IntoResponse {
-    let secret_injection = match state.cluster_secret {
-        Some(ref sec) => format!("window.__CLUSTER_SECRET__ = {:?};", sec),
-        None => "window.__CLUSTER_SECRET__ = null;".to_string(),
-    };
-    let html = DASHBOARD_HTML.replace("/* __CLUSTER_SECRET_PLACEHOLDER__ */", &secret_injection);
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        )],
+/// A page that logs the browser in: the cookie comes with it, never the secret.
+fn login_page(state: &AppState, headers: &HeaderMap, html: &'static str) -> Response {
+    let mut res = (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
         Html(html),
     )
+        .into_response();
+    let secure = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .next()
+                .is_some_and(|p| p.trim().eq_ignore_ascii_case("https"))
+        });
+    if let Some(cookie) = state
+        .auth
+        .cookie(secure, auth::now())
+        .and_then(|c| HeaderValue::from_str(&c).ok())
+    {
+        res.headers_mut().append(header::SET_COOKIE, cookie);
+    }
+    res
 }
 
-async fn handoff_page(State(state): State<AppState>) -> impl IntoResponse {
-    let secret_injection = match state.cluster_secret {
-        Some(ref sec) => format!("window.__CLUSTER_SECRET__ = {:?};", sec),
-        None => "window.__CLUSTER_SECRET__ = null;".to_string(),
-    };
-    let html = HANDOFF_HTML.replace("/* __CLUSTER_SECRET_PLACEHOLDER__ */", &secret_injection);
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        )],
-        Html(html),
-    )
+async fn dashboard_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    login_page(&state, &headers, DASHBOARD_HTML)
+}
+
+async fn handoff_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    login_page(&state, &headers, HANDOFF_HTML)
+}
+
+/// A token for tools that cannot send the cookie or a header (`?auth=` on a
+/// CDP endpoint). `null` when the daemon has no cluster secret.
+async fn api_auth_token(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    state.check_auth(&headers)?;
+    let issued = state.auth.issue(auth::now());
+    Ok::<_, ApiError>((
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        Json(serde_json::json!({
+            "token": issued.as_ref().map(|(t, _)| t),
+            "expires_at": issued.as_ref().map(|(_, e)| e),
+        })),
+    ))
 }
 
 async fn json_new(
@@ -4531,11 +4570,9 @@ async fn api_mesh_overview(
 async fn handle_overview_ws(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let token_opt = params.get("token").map(|s| s.as_str());
-    if let Err(e) = state.check_auth_opt(&headers, token_opt) {
+    if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
 
@@ -4683,6 +4720,14 @@ async fn api_add_peer(
         )
             .into_response();
     }
+    // Every request to a peer carries the cluster secret.
+    if !relay::peer_url_ok(&trimmed) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Peer URL must be http(s) and not a loopback address" })),
+        )
+            .into_response();
+    }
 
     let ping_url = format!("{}/api/mesh/node", trimmed);
     let detected_name = match state
@@ -4713,6 +4758,7 @@ async fn api_add_peer(
 
     {
         let mut guard = state.peers.write().await;
+        relay::deny_url(&trimmed);
         guard.insert(detected_name.clone(), trimmed.clone());
     }
 

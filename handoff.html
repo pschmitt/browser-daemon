@@ -455,14 +455,25 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
 </div>
 <script>
 "use strict";
-/* __CLUSTER_SECRET_PLACEHOLDER__ */
+// Signed in by the cookie the page came with (HttpOnly: no script ever sees a
+// secret). A 401 means it expired: reload once to get a fresh one.
+(() => {
+  const plain = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const res = await plain(...args);
+    if (res.status === 401) {
+      let again = false;
+      try { again = sessionStorage.getItem("bd-401") === "1"; sessionStorage.setItem("bd-401", "1"); } catch { /* storage unavailable */ }
+      if (!again) location.reload();
+    } else {
+      try { sessionStorage.removeItem("bd-401"); } catch { /* storage unavailable */ }
+    }
+    return res;
+  };
+})();
+// The cookie authenticates same-origin requests; nothing to add.
 function authHeaders(extra = {}) {
-  const h = { ...extra };
-  if (typeof window !== 'undefined' && window.__CLUSTER_SECRET__) {
-    h['Authorization'] = 'Bearer ' + window.__CLUSTER_SECRET__;
-    h['X-Browser-Cluster-Secret'] = window.__CLUSTER_SECRET__;
-  }
-  return h;
+  return { ...extra };
 }
 
 const params = new URLSearchParams(location.search);

@@ -86,6 +86,29 @@ impl Target {
     }
 }
 
+/// The CDP endpoint of a target, with the auth token when there is one.
+fn cdp_endpoint(target: &Target, token: Option<&str>) -> String {
+    let mut query = Vec::new();
+    if let Some(p) = &target.profile {
+        query.push(format!(
+            "profile={}",
+            url::form_urlencoded::byte_serialize(p.as_bytes()).collect::<String>()
+        ));
+    }
+    if let Some(t) = token {
+        query.push(format!(
+            "auth={}",
+            url::form_urlencoded::byte_serialize(t.as_bytes()).collect::<String>()
+        ));
+    }
+    let query = if query.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", query.join("&"))
+    };
+    format!("{}/chromium{query}", target.ws_base)
+}
+
 /// A running Playwright MCP.
 struct Child {
     stdin: Mutex<ChildStdin>,
@@ -159,7 +182,7 @@ pub async fn run(args: McpArgs) -> R<()> {
         .timeout(Duration::from_secs(30))
         .build()?;
     let base = args.conn.url.trim_end_matches('/').to_string();
-    let secret = crate::tui::find_secret(&http, &base, args.conn.secret_file.as_ref()).await;
+    let secret = crate::tui::find_secret(&http, &base, args.conn.secret_file.as_ref()).await?;
     let out_dir = args.output_dir.clone().unwrap_or_else(|| {
         std::env::var_os("XDG_CACHE_HOME")
             .map(PathBuf::from)
@@ -271,8 +294,8 @@ const PAGE_INFO: &str = "async (page) => { const s = await page.context().newCDP
 const { targetInfo } = await s.send('Target.getTargetInfo'); await s.detach(); \
 return 'BDPAGE:' + targetInfo.targetId + ':' + page.url() + ':BDEND'; }";
 
-/// (target id, host) from the answer to PAGE_INFO.
-fn parse_page_info(result: &Value) -> Option<(String, String)> {
+/// (target id, address, host) from the answer to PAGE_INFO.
+fn parse_page_info(result: &Value) -> Option<(String, String, String)> {
     let text: String = result["content"]
         .as_array()?
         .iter()
@@ -282,8 +305,9 @@ fn parse_page_info(result: &Value) -> Option<(String, String)> {
     let rest = &text[start..];
     let (id, rest) = rest.split_once(':')?;
     let (address, _) = rest.split_once(":BDEND")?;
-    let host = url::Url::parse(address).ok()?.host_str()?.to_ascii_lowercase();
-    (!id.is_empty() && !host.is_empty()).then(|| (id.to_string(), host))
+    let parsed = url::Url::parse(address).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    (!id.is_empty() && !host.is_empty()).then(|| (id.to_string(), address.to_string(), host))
 }
 
 impl State {
@@ -346,7 +370,23 @@ impl State {
         json!({ "tools": tools })
     }
 
+    /// Masks every secret filled so far in a message.
+    fn mask(&self, text: &str) -> String {
+        secrets::redact_str(text, &self.filled.lock().unwrap())
+    }
+
     async fn tools_call(&self, params: Value) -> Rpc {
+        let mut result = self.tools_call_raw(params).await;
+        // Whatever comes back, results and errors alike, goes through the mask.
+        let filled = self.filled.lock().unwrap().clone();
+        match &mut result {
+            Ok(v) => secrets::redact(v, &filled),
+            Err((_, message)) => *message = secrets::redact_str(message, &filled),
+        }
+        result
+    }
+
+    async fn tools_call_raw(&self, params: Value) -> Rpc {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
         match name {
@@ -365,15 +405,10 @@ impl State {
                 })
             }
             _ => {
-                let child = self
-                    .child_or_default()
-                    .await
-                    .map_err(|e| (-32000, e))?;
-                let mut result = child
+                let child = self.child_or_default().await.map_err(|e| (-32000, e))?;
+                child
                     .request("tools/call", params, Duration::from_secs(600))
-                    .await?;
-                secrets::redact(&mut result, &self.filled.lock().unwrap());
-                Ok(result)
+                    .await
             }
         }
     }
@@ -402,11 +437,15 @@ impl State {
         let info = call("browser_run_code_unsafe", json!({ "code": PAGE_INFO }))
             .await
             .map_err(|(_, e)| format!("Could not find the page: {e}"))?;
-        let (page_id, host) =
+        let (page_id, address, host) =
             parse_page_info(&info).ok_or("Could not find the page (no page open?)")?;
 
-        let secret = secrets::lookup(&self.rbw, entry, arg("user"), field).await?;
-        if !secrets::site_matches(&host, &secret.uris) {
+        let secret = secrets::lookup(&self.rbw, entry, arg("user"), field)
+            .await
+            .map_err(|e| self.mask(&e))?;
+        // Masked from here on, whatever fails later.
+        self.filled.lock().unwrap().push(secret.value.clone());
+        if !secrets::url_matches(&address, &secret.uris) {
             return Err(format!(
                 "The entry '{entry}' is not saved for {host}, so it is not typed there."
             ));
@@ -438,12 +477,10 @@ impl State {
                 "{}/api/pages/{page_id}/insert-text",
                 child.target.url.trim_end_matches('/')
             ))
-            .json(&json!({ "text": secret.value, "host": host, "enter": submit }));
+            .json(&json!({ "text": secret.value, "uris": secret.uris, "enter": submit }));
         if let Some(ref s) = self.secret {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
-        // Masked from here on, even if typing fails halfway.
-        self.filled.lock().unwrap().push(secret.value);
         let res = req
             .send()
             .await
@@ -451,11 +488,11 @@ impl State {
         if !res.status().is_success() {
             let status = res.status();
             let body: Value = res.json().await.unwrap_or_default();
-            return Err(format!(
+            return Err(self.mask(&format!(
                 "{} refused the input: {}",
                 child.target.node,
                 body["error"].as_str().unwrap_or(status.as_str())
-            ));
+            )));
         }
         Ok(format!(
             "Typed the {field} of '{entry}' into {element} on {host}{}. The value is not shown; take a browser_snapshot to see the page.",
@@ -625,15 +662,47 @@ impl State {
         Ok(child)
     }
 
+    /// A token for `target`'s node, from the node (it is valid on the whole mesh).
+    async fn auth_token(&self, target: &Target) -> Option<String> {
+        let secret = self.secret.as_ref()?;
+        let res = self
+            .http
+            .get(format!(
+                "{}/api/auth/token",
+                target.url.trim_end_matches('/')
+            ))
+            .header("X-Browser-Cluster-Secret", secret)
+            .send()
+            .await;
+        match res {
+            Ok(r) if r.status().is_success() => {
+                let body: Value = r.json().await.ok()?;
+                body["token"].as_str().map(str::to_string)
+            }
+            Ok(r) => {
+                eprintln!(
+                    "browser-daemon mcp: {} gave no auth token (HTTP {})",
+                    target.node,
+                    r.status()
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!(
+                    "browser-daemon mcp: {} gave no auth token: {e}",
+                    target.node
+                );
+                None
+            }
+        }
+    }
+
     async fn spawn_child(&self, target: &Target) -> Result<Arc<Child>, String> {
-        let endpoint = match &target.profile {
-            Some(p) => format!(
-                "{}/chromium?profile={}",
-                target.ws_base,
-                url::form_urlencoded::byte_serialize(p.as_bytes()).collect::<String>()
-            ),
-            None => format!("{}/chromium", target.ws_base),
-        };
+        // A fresh token for every child (they do not outlive it): Playwright cannot
+        // send a header on a CDP connection, so the token goes in the address. The
+        // cluster secret never does.
+        let token = self.auth_token(target).await;
+        let endpoint = cdp_endpoint(target, token.as_deref());
         let out = self.out_dir.join(format!(
             "{}-{}",
             target.node,
@@ -782,7 +851,11 @@ mod tests {
         let answer = json!({ "content": [{ "type": "text", "text": "### Result\n\"BDPAGE:E831D6:https://auth.frigate.video/login?redirect_uri=x:BDEND\"\n### Ran Playwright code" }] });
         assert_eq!(
             parse_page_info(&answer),
-            Some(("E831D6".to_string(), "auth.frigate.video".to_string()))
+            Some((
+                "E831D6".to_string(),
+                "https://auth.frigate.video/login?redirect_uri=x".to_string(),
+                "auth.frigate.video".to_string()
+            ))
         );
         assert_eq!(
             parse_page_info(&json!({ "content": [{ "type": "text", "text": "Error" }] })),
@@ -819,5 +892,28 @@ mod tests {
     fn web_addresses_become_websocket_ones() {
         assert_eq!(State::ws_base("https://browser.x.test/"), "wss://browser.x.test");
         assert_eq!(State::ws_base("http://127.0.0.1:3001"), "ws://127.0.0.1:3001");
+    }
+
+    #[test]
+    fn the_endpoint_carries_the_token_never_the_secret() {
+        let t = |profile: Option<&str>| Target {
+            node: "n".into(),
+            url: "https://b.test".into(),
+            ws_base: "wss://b.test".into(),
+            profile: profile.map(str::to_string),
+        };
+        assert_eq!(cdp_endpoint(&t(None), None), "wss://b.test/chromium");
+        assert_eq!(
+            cdp_endpoint(&t(None), Some("123.abc")),
+            "wss://b.test/chromium?auth=123.abc"
+        );
+        assert_eq!(
+            cdp_endpoint(&t(Some("my work")), Some("123.abc")),
+            "wss://b.test/chromium?profile=my+work&auth=123.abc"
+        );
+        assert_eq!(
+            cdp_endpoint(&t(Some("work")), None),
+            "wss://b.test/chromium?profile=work"
+        );
     }
 }

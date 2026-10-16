@@ -552,7 +552,7 @@ impl Client {
             .connect_timeout(Duration::from_secs(5))
             .build()?;
         let base = conn.url.trim_end_matches('/').to_string();
-        let secret = crate::tui::find_secret(&http, &base, conn.secret_file.as_ref()).await;
+        let secret = crate::tui::find_secret(&http, &base, conn.secret_file.as_ref()).await?;
         let mut req = http
             .get(format!("{base}/api/mesh/overview"))
             .timeout(Duration::from_secs(30));

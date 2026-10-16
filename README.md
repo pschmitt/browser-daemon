@@ -79,7 +79,19 @@ Enable the service in your NixOS configuration:
 - The **Engines** tab (`5`) lists each node's engines with the defaults new sessions start with (ad blocker, appearance, show touches): `a`, `c`, `t` change them, `m` has the same as menus; the node's default proxy is in the Nodes tab's menu.
 - New sessions and profiles come from a form (node, engine, profile, name, proxy, appearance, recording, ad blocker, auto-stop).
 
-It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file`, the NixOS module's secret when readable, or otherwise the dashboard of that node.
+It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (an explicit file that cannot be read is an error), the NixOS module's secret when readable, or otherwise the `bd_auth` token the dashboard of that node hands out (see Access control).
+
+## Access control
+
+Every route needs the cluster secret or a token derived from it, WebSocket upgrades included; without a cluster secret the daemon stays open, but the checks on `Host` and `Origin` below still apply.
+
+- **Routes without sign-in:** the static assets, `/health`, `/json/version`, `POST /api/agent-topic`, and `/` and `/handoff/`, which hand out the cookie.
+- **Cookie `bd_auth`:** an HMAC-SHA256 token (valid 30 days; `HttpOnly`, `SameSite=Strict`, `Secure` behind `X-Forwarded-Proto: https`) derived from the cluster secret, so it survives restarts and works on every node of the mesh. The pages never contain the secret.
+- **Other ways in:** `Authorization: Bearer <token>`, `?auth=<token>` (CDP endpoints for tools that cannot set a header, e.g. `wss://node/chromium?auth=...`; `browser-daemon mcp` does this itself), and the cluster secret itself as a bearer or `X-Browser-Cluster-Secret` (peers, the CLI, the passkey helper). `GET /api/auth/token` returns `{"token", "expires_at"}`. The secret is compared in constant time and never goes into a URL.
+- **Secret only:** the passkey helper routes, `POST /api/pages/{id}/autofill` and adding or removing peers refuse a token, because a page running in a session can obtain one (peers receive the cluster secret).
+- **`Host` and `Origin`:** the `Host` must be the public URL's host, `127.0.0.1`, `localhost` or `[::1]` on the bind port, or one given with `--allowed-host HOST[:PORT]` (repeatable); anything else is 403 (DNS rebinding). An `Origin` header must be the node itself, so another site cannot open a WebSocket. Requests a browser marks `Sec-Fetch-Site: cross-site` or `same-site` are refused, except a click through to `/` or `/handoff/`.
+- **Browsers cannot reach the daemon:** a session's relay refuses loopback and link-local addresses and the host names of the mesh's daemons (this node's, its peers'), and Chromium and Firefox send loopback through the relay too. A page or an agent therefore cannot open `http://127.0.0.1:3001/` in its own browser to get a cookie.
+- **Service worker:** caches icons and the manifest only, never pages or API answers.
 
 ## CLI
 
@@ -169,6 +181,8 @@ Options:
           Shared cluster secret for peer-to-peer authentication
       --cluster-secret-file <CLUSTER_SECRET_FILE>
           Path to file containing shared cluster secret
+      --allowed-host <ALLOWED_HOSTS>
+          A `Host` (HOST[:PORT]) the node answers to besides its public URL's and loopback's (repeatable)
       --recordings-dir <RECORDINGS_DIR>
           [default: /var/lib/browser-daemon/recordings]
       --record-sessions
