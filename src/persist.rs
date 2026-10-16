@@ -88,11 +88,65 @@ fn file(state_dir: &Path, id: Uuid) -> PathBuf {
 
 pub async fn save(state_dir: &Path, record: &SessionRecord) -> std::io::Result<()> {
     let dir = dir(state_dir);
-    fs::create_dir_all(&dir).await?;
-    let path = file(state_dir, record.id);
-    let tmp = dir.join(format!(".{}.tmp", record.id));
-    fs::write(&tmp, serde_json::to_vec_pretty(record)?).await?;
-    fs::rename(&tmp, &path).await
+    private_dir(&dir).await?;
+    write_atomic(
+        &file(state_dir, record.id),
+        &serde_json::to_vec_pretty(record)?,
+    )
+    .await
+}
+
+/// Create `dir` (and missing parents) and make it reachable by the daemon's user only.
+pub async fn private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(dir).await?;
+    fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).await
+}
+
+/// Counter for temporary file names: two writers of one file never share one.
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `path` replaced by `data` all at once (a temporary file in the same directory,
+/// synced, renamed), readable by the daemon's user only. A crash leaves the old
+/// content or the new, never half of it.
+pub async fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_file_name(format!(".{name}.{}-{seq}.tmp", std::process::id()));
+    let result = async {
+        let mut f = private_file(&tmp).await?;
+        f.write_all(data).await?;
+        f.sync_all().await?;
+        drop(f);
+        fs::rename(&tmp, path).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp).await;
+    }
+    result
+}
+
+/// A new (or truncated) file only the daemon's user can read.
+pub async fn private_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .await
+}
+
+/// Like [`write_atomic`]'s file, but appended to.
+pub async fn private_append(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(path)
+        .await
 }
 
 pub async fn remove(state_dir: &Path, id: Uuid) {
@@ -108,6 +162,11 @@ pub async fn load_all(state_dir: &Path) -> Vec<SessionRecord> {
     };
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
+        if path.extension().is_some_and(|e| e == "tmp") {
+            // A save the daemon died in the middle of.
+            let _ = fs::remove_file(&path).await;
+            continue;
+        }
         if path.extension().is_none_or(|e| e != "json") {
             continue;
         }

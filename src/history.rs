@@ -37,6 +37,9 @@ struct Inner {
 pub struct History {
     dir: PathBuf,
     inner: Mutex<Inner>,
+    /// Held while lists are written or removed: a flush that took its lists
+    /// before a delete must not put the file back afterwards.
+    io: tokio::sync::Mutex<()>,
 }
 
 fn now() -> u64 {
@@ -63,6 +66,7 @@ impl History {
         Self {
             dir,
             inner: Mutex::default(),
+            io: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -150,7 +154,11 @@ impl History {
                     Some((0, e))
                 } else if url.contains(&q) {
                     Some((1, e))
-                } else if e.title.as_ref().is_some_and(|t| t.to_lowercase().contains(&q)) {
+                } else if e
+                    .title
+                    .as_ref()
+                    .is_some_and(|t| t.to_lowercase().contains(&q))
+                {
                     Some((2, e))
                 } else {
                     None
@@ -162,7 +170,10 @@ impl History {
                 .then(b.1.count.cmp(&a.1.count))
                 .then(b.1.last.cmp(&a.1.last))
         });
-        hits.into_iter().take(limit).map(|(_, e)| e.clone()).collect()
+        hits.into_iter()
+            .take(limit)
+            .map(|(_, e)| e.clone())
+            .collect()
     }
 
     /// Drop a throwaway session's list.
@@ -176,9 +187,14 @@ impl History {
 
     /// Write the lists of profiles that changed.
     pub async fn flush(&self) {
+        let _io = self.io.lock().await;
         let pending: Vec<(String, Vec<Entry>)> = {
             let mut inner = self.inner.lock().unwrap();
-            let keys: Vec<String> = inner.dirty.drain().filter(|k| Self::persistent(k)).collect();
+            let keys: Vec<String> = inner
+                .dirty
+                .drain()
+                .filter(|k| Self::persistent(k))
+                .collect();
             keys.into_iter()
                 .filter_map(|k| inner.lists.get(&k).cloned().map(|l| (k, l)))
                 .collect()
@@ -186,19 +202,24 @@ impl History {
         if pending.is_empty() {
             return;
         }
-        let _ = tokio::fs::create_dir_all(&self.dir).await;
+        let _ = crate::persist::private_dir(&self.dir).await;
         for (key, list) in pending {
-            if let Ok(raw) = serde_json::to_vec(&list) {
-                let tmp = self.dir.join(format!(".{key}.json.tmp"));
-                if tokio::fs::write(&tmp, raw).await.is_ok() {
-                    let _ = tokio::fs::rename(&tmp, self.path(&key)).await;
-                }
+            let written = match serde_json::to_vec(&list) {
+                Ok(raw) => crate::persist::write_atomic(&self.path(&key), &raw)
+                    .await
+                    .is_ok(),
+                Err(_) => false,
+            };
+            if !written {
+                // Try again with the next flush.
+                self.inner.lock().unwrap().dirty.insert(key);
             }
         }
     }
 
     /// Remove a deleted profile's list.
     pub async fn delete(&self, key: &str) {
+        let _io = self.io.lock().await;
         {
             let mut inner = self.inner.lock().unwrap();
             inner.lists.remove(key);
@@ -230,10 +251,24 @@ mod tests {
     #[test]
     fn suggestions_rank_hosts_before_paths_before_titles() {
         let h = History::new(std::env::temp_dir().join("bd-history-test-a"));
-        h.record(KEY, "https://opsgenie.test/alert/list", Some("Alerts"), true);
-        h.record(KEY, "https://mail.test/inbox?from=opsgenie", Some("Inbox"), true);
+        h.record(
+            KEY,
+            "https://opsgenie.test/alert/list",
+            Some("Alerts"),
+            true,
+        );
+        h.record(
+            KEY,
+            "https://mail.test/inbox?from=opsgenie",
+            Some("Inbox"),
+            true,
+        );
         h.record(KEY, "https://news.test/", Some("About opsgenie"), true);
-        let hits: Vec<String> = h.suggest(KEY, "opsgenie", 10).into_iter().map(|e| e.url).collect();
+        let hits: Vec<String> = h
+            .suggest(KEY, "opsgenie", 10)
+            .into_iter()
+            .map(|e| e.url)
+            .collect();
         assert_eq!(
             hits,
             [
@@ -270,6 +305,11 @@ mod tests {
         assert_eq!(again.suggest(KEY, "", 5)[0].title.as_deref(), Some("A"));
         assert!(again.suggest("session:1234", "", 5).is_empty());
         assert!(!dir.join("session:1234.json").exists());
+        // A deleted list stays deleted, and no temporary file is left behind.
+        again.delete(KEY).await;
+        again.flush().await;
+        assert!(!dir.join(format!("{KEY}.json")).exists());
+        assert!(std::fs::read_dir(&dir).unwrap().next().is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 }
