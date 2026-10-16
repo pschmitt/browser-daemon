@@ -3208,6 +3208,10 @@ async fn handle_chromium_ws(
                     socket,
                     server_ws,
                     frame_tx,
+                    proxy::FrameSource {
+                        port: session.port,
+                        page: None,
+                    },
                     activity,
                     None,
                     None,
@@ -3328,6 +3332,10 @@ async fn handle_page_ws(
                     socket,
                     server_ws,
                     frame_tx,
+                    proxy::FrameSource {
+                        port,
+                        page: Some(page_id.clone()),
+                    },
                     activity,
                     initial_url,
                     initial_title,

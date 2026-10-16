@@ -7,6 +7,15 @@ use crate::idle::Activity;
 use crate::recorder::{FrameSender, ProxyRecordingFrame};
 use std::sync::Arc;
 
+/// Where the frames a client receives come from, so only the visible tab is recorded.
+pub struct FrameSource {
+    /// The session's DevTools port.
+    pub port: u16,
+    /// The page the connection is to (a page endpoint); None on the browser
+    /// endpoint, where the page of a frame follows from its CDP session.
+    pub page: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn bridge_websockets(
     client_ws: ClientWs,
@@ -14,6 +23,7 @@ pub async fn bridge_websockets(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     frame_tx: Option<FrameSender>,
+    frame_source: FrameSource,
     // The session's idle clock, and whether this client is a mere observer.
     activity: Option<(Arc<Activity>, bool)>,
     initial_url: Option<String>,
@@ -30,6 +40,8 @@ pub async fn bridge_websockets(
     let client_tx = tokio::sync::Mutex::new(client_tx);
     let (mut server_tx, mut server_rx) = server_ws.split();
     let alias = std::sync::Mutex::new(ContextAlias::default());
+    let targets = std::sync::Mutex::new(TargetMap::default());
+    let visibility = Visibility::new(frame_source.port);
 
     let client_to_server = async {
         while let Some(Ok(msg)) = client_rx.next().await {
@@ -38,6 +50,9 @@ pub async fn bridge_websockets(
             }
             let server_msg = match msg {
                 ClientMsg::Text(text) => {
+                    if frame_tx.is_some() {
+                        targets.lock().unwrap().request(text.as_str());
+                    }
                     let text = if use_profile_context {
                         alias
                             .lock()
@@ -86,6 +101,11 @@ pub async fn bridge_websockets(
                 }
                 (_, other) => other,
             };
+            if frame_tx.is_some() {
+                if let ServerMsg::Text(ref text) = msg {
+                    targets.lock().unwrap().event(text.as_str());
+                }
+            }
             // Tap into screencast frames and navigation events for recording
             if let (Some(ref tx), ServerMsg::Text(ref text)) = (&frame_tx, &msg) {
                 let s = text.as_str();
@@ -96,11 +116,24 @@ pub async fn bridge_websockets(
                         {
                             if let Some(data) = val.pointer("/params/data").and_then(|v| v.as_str())
                             {
-                                let _ = tx.send(ProxyRecordingFrame {
-                                    url: current_url.clone(),
-                                    title: current_title.clone(),
-                                    data: data.to_string(),
+                                // Only the tab in front is recorded: a screencast of a
+                                // background tab (Playwright pages, a second handoff
+                                // view) would show the wrong picture. A frame whose
+                                // page cannot be told is kept.
+                                let page = frame_source.page.clone().or_else(|| {
+                                    targets.lock().unwrap().target_of(&val).map(str::to_string)
                                 });
+                                let show = match page {
+                                    Some(ref id) => visibility.is_visible(id).await,
+                                    None => true,
+                                };
+                                if show {
+                                    let _ = tx.send(ProxyRecordingFrame {
+                                        url: current_url.clone(),
+                                        title: current_title.clone(),
+                                        data: data.to_string(),
+                                    });
+                                }
                             }
                         }
                     }
@@ -154,6 +187,136 @@ pub async fn bridge_websockets(
     tokio::select! {
         _ = client_to_server => {},
         _ = server_to_client => {},
+    }
+}
+
+/// The page each CDP session of a browser connection is attached to, learnt from
+/// `Target.attachedToTarget` events and the answers to `Target.attachToTarget`.
+#[derive(Default)]
+struct TargetMap {
+    /// CDP session id -> target id (pages only).
+    sessions: std::collections::HashMap<String, String>,
+    /// Request id of a `Target.attachToTarget` -> target id.
+    attaching: std::collections::HashMap<u64, String>,
+}
+
+impl TargetMap {
+    fn request(&mut self, text: &str) {
+        if !text.contains("\"Target.attachToTarget\"") {
+            return;
+        }
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(text) else {
+            return;
+        };
+        if let (Some(id), Some(target)) = (msg["id"].as_u64(), msg["params"]["targetId"].as_str()) {
+            if self.attaching.len() < 1024 {
+                self.attaching.insert(id, target.to_string());
+            }
+        }
+    }
+
+    fn event(&mut self, text: &str) {
+        let attached = text.contains("\"Target.attachedToTarget\"");
+        let detached = text.contains("\"Target.detachedFromTarget\"");
+        let answer = !self.attaching.is_empty() && text.contains("\"sessionId\"");
+        if !(attached || detached || answer) {
+            return;
+        }
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(text) else {
+            return;
+        };
+        match msg["method"].as_str() {
+            Some("Target.attachedToTarget") => {
+                let info = &msg["params"]["targetInfo"];
+                if let (Some(session), Some(target), Some("page")) = (
+                    msg["params"]["sessionId"].as_str(),
+                    info["targetId"].as_str(),
+                    info["type"].as_str(),
+                ) {
+                    self.sessions
+                        .insert(session.to_string(), target.to_string());
+                }
+            }
+            Some("Target.detachedFromTarget") => {
+                if let Some(session) = msg["params"]["sessionId"].as_str() {
+                    self.sessions.remove(session);
+                }
+            }
+            None => {
+                if let (Some(id), Some(session)) =
+                    (msg["id"].as_u64(), msg["result"]["sessionId"].as_str())
+                {
+                    if let Some(target) = self.attaching.remove(&id) {
+                        self.sessions.insert(session.to_string(), target);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The page a message of the browser connection comes from, by its
+    /// top-level `sessionId`.
+    fn target_of(&self, msg: &serde_json::Value) -> Option<&str> {
+        self.sessions
+            .get(msg["sessionId"].as_str()?)
+            .map(String::as_str)
+    }
+}
+
+/// How long a page's visibility is trusted before it is asked again.
+const VISIBLE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Whether a page is the one in front (`document.visibilityState`), asked of
+/// the browser itself and remembered for a moment.
+struct Visibility {
+    port: u16,
+    seen: Arc<std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, bool)>>>,
+}
+
+impl Visibility {
+    fn new(port: u16) -> Self {
+        Self {
+            port,
+            seen: Arc::default(),
+        }
+    }
+
+    /// The first time for a page the answer is waited for; after that the last
+    /// answer is used while a fresh one is fetched in the background.
+    async fn is_visible(&self, page: &str) -> bool {
+        let known = self.seen.lock().unwrap().get(page).copied();
+        match known {
+            Some((at, v)) if at.elapsed() < VISIBLE_TTL => v,
+            Some((_, v)) => {
+                // Marked fresh now so frames do not start a probe each.
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .insert(page.to_string(), (std::time::Instant::now(), v));
+                let (seen, url, page) = (self.seen.clone(), self.url(page), page.to_string());
+                tokio::spawn(async move {
+                    let v = crate::recorder::is_visible(&url).await;
+                    seen.lock()
+                        .unwrap()
+                        .insert(page, (std::time::Instant::now(), v));
+                });
+                v
+            }
+            None => {
+                let v = crate::recorder::is_visible(&self.url(page)).await;
+                let mut seen = self.seen.lock().unwrap();
+                if seen.len() > 256 {
+                    seen.clear();
+                }
+                seen.insert(page.to_string(), (std::time::Instant::now(), v));
+                v
+            }
+        }
+    }
+
+    fn url(&self, page: &str) -> String {
+        format!("ws://127.0.0.1:{}/devtools/page/{page}", self.port)
     }
 }
 
@@ -310,6 +473,23 @@ mod tests {
         assert!(alias
             .request(r#"{"id":8,"method":"Page.navigate","params":{}}"#)
             .is_none());
+    }
+
+    #[test]
+    fn frames_are_traced_to_their_page() {
+        let mut map = TargetMap::default();
+        map.event(r#"{"method":"Target.attachedToTarget","params":{"sessionId":"S1","targetInfo":{"targetId":"T1","type":"page"}}}"#);
+        map.event(r#"{"method":"Target.attachedToTarget","params":{"sessionId":"W","targetInfo":{"targetId":"TW","type":"worker"}}}"#);
+        map.request(r#"{"id":5,"method":"Target.attachToTarget","params":{"targetId":"T2","flatten":true}}"#);
+        map.event(r#"{"id":5,"result":{"sessionId":"S2"}}"#);
+        let frame = |s: &str| serde_json::json!({"method":"Page.screencastFrame","sessionId":s});
+        assert_eq!(map.target_of(&frame("S1")), Some("T1"));
+        assert_eq!(map.target_of(&frame("S2")), Some("T2"));
+        assert_eq!(map.target_of(&frame("W")), None, "not a page");
+        assert_eq!(map.target_of(&frame("nope")), None);
+        assert_eq!(map.target_of(&serde_json::json!({"method":"x"})), None);
+        map.event(r#"{"method":"Target.detachedFromTarget","params":{"sessionId":"S1"}}"#);
+        assert_eq!(map.target_of(&frame("S1")), None);
     }
 
     #[test]

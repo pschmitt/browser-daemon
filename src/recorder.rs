@@ -1179,7 +1179,7 @@ pub(crate) async fn pick_visible(pages: Vec<serde_json::Value>) -> Option<serde_
 }
 
 /// Whether the page at this DevTools URL reports `document.visibilityState` visible.
-async fn is_visible(ws_url: &str) -> bool {
+pub(crate) async fn is_visible(ws_url: &str) -> bool {
     let probe = async {
         let (mut ws, _) = tokio_tungstenite::connect_async(ws_url).await.ok()?;
         let cmd = serde_json::json!({
