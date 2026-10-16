@@ -40,19 +40,18 @@ fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// The concat demuxer's list: each frame for as long as it was shown, the last
-/// one until the recording ended (listed twice, or ffmpeg drops its duration).
+/// The concat demuxer's list: each frame for as long as it was shown, the first
+/// one from the start (the sound starts there too), the last one until the
+/// recording ended.
 fn concat_list(frames: &[(String, u64)], total_ms: u64) -> String {
     let mut out = String::from("ffconcat version 1.0\n");
     for (i, (file, t)) in frames.iter().enumerate() {
+        let from = if i == 0 { 0 } else { *t };
         let until = frames
             .get(i + 1)
             .map_or(total_ms.max(t + LAST_FRAME_MS), |(_, n)| *n);
-        let secs = (until.saturating_sub(*t)).max(1) as f64 / 1000.0;
+        let secs = until.saturating_sub(from).max(1) as f64 / 1000.0;
         out.push_str(&format!("file '{file}'\nduration {secs:.3}\n"));
-    }
-    if let Some((file, _)) = frames.last() {
-        out.push_str(&format!("file '{file}'\n"));
     }
     out
 }
@@ -106,7 +105,8 @@ pub async fn export_webm(
         return Err("The recording has no frames".into());
     }
     let (w, h) = (w.max(2).div_ceil(2) * 2, h.max(2).div_ceil(2) * 2);
-    let total_ms = meta.duration_seconds * 1000;
+    let last_t = frames.last().map_or(0, |(_, t)| *t);
+    let total_ms = (meta.duration_seconds * 1000).max(last_t + LAST_FRAME_MS);
     let list = dir.join("frames.ffconcat");
     tokio::fs::write(&list, concat_list(&frames, total_ms))
         .await
@@ -123,10 +123,14 @@ pub async fn export_webm(
         cmd.arg("-i").arg(&audio);
     }
     // Frames of another size (the window was resized) are fitted in, centred.
+    // The concat demuxer drops the last image's duration: the last frame is held
+    // with tpad instead, and the video cut to the recording's length.
+    let hold = (total_ms - last_t) as f64 / 1000.0;
     let vf = format!(
-        "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=15,format=yuv420p"
+        "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=15,tpad=stop_mode=clone:stop_duration={hold:.3},format=yuv420p"
     );
-    cmd.args(["-map", "0:v", "-vf", &vf])
+    let length = format!("{:.3}", total_ms as f64 / 1000.0);
+    cmd.args(["-map", "0:v", "-vf", &vf, "-t", &length])
         .args([
             "-c:v",
             "libvpx-vp9",
@@ -180,18 +184,19 @@ mod tests {
 
     #[test]
     fn frames_last_as_long_as_they_were_shown() {
+        // The first frame came a second in: it shows from the start.
         let frames = vec![
-            ("a.jpg".to_string(), 0),
+            ("a.jpg".to_string(), 1000),
             ("b.jpg".to_string(), 1500),
             ("c.jpg".to_string(), 1600),
         ];
         let list = concat_list(&frames, 4000);
         assert_eq!(
             list,
-            "ffconcat version 1.0\nfile 'a.jpg'\nduration 1.500\nfile 'b.jpg'\nduration 0.100\nfile 'c.jpg'\nduration 2.400\nfile 'c.jpg'\n"
+            "ffconcat version 1.0\nfile 'a.jpg'\nduration 1.500\nfile 'b.jpg'\nduration 0.100\nfile 'c.jpg'\nduration 2.400\n"
         );
         // A recording whose length is unknown still shows its last frame a moment.
-        assert!(concat_list(&frames[..1], 0).contains("duration 0.500"));
+        assert!(concat_list(&frames[2..], 0).contains("duration 2.100"));
     }
 
     #[test]
