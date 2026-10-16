@@ -584,15 +584,16 @@ in
             cfg.dataDir
             "-${cfg.recordingsDir}"
             "-${pulseDir}"
-          ]
-          # Without a private /tmp, the real one must stay writable (browsers, X sockets).
-          ++ lib.optionals (cfg.displayMode != "per-session") [
+            # The real /tmp, not a private one: browsers and their X displays
+            # outlive a daemon restart (keepSessionsOnRestart), and systemd would
+            # empty a private /tmp when the old daemon stops, under their feet
+            # (uploads, throwaway profiles, X locks). The daemon's own files there
+            # are 0700/0600 (UMask) instead.
             "/tmp"
             "/var/tmp"
           ];
           ProtectHome = true;
-          # The shared Xvfb is a separate unit whose socket lives in /tmp.
-          PrivateTmp = cfg.displayMode == "per-session";
+          PrivateTmp = false;
           ProtectKernelTunables = true;
           ProtectKernelModules = true;
           ProtectKernelLogs = true;
