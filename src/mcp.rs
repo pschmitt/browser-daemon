@@ -6,14 +6,14 @@
 //! (`browser_use`), and adds `browser_status` to see what exists. Without a
 //! choice the agent gets a throwaway browser on the node with the most room.
 //!
-//! The profiles an agent may open are limited (`--allow-profile`): a profile
-//! stays signed in to whatever the user signed it in to.
+//! The profiles an agent may open are limited (`--allow-profile`, `*` for all):
+//! a profile stays signed in to whatever the user signed it in to.
 //!
 //! `browser_fill_secret` types a field of an rbw vault entry into the page
 //! without it passing through the agent: the value is read here, checked
 //! against the page's site, sent to the node over its API (never in a Playwright
 //! script, which Playwright MCP would echo) and masked in later tool results.
-//! Only the entries named with `--allow-secret` can be filled.
+//! Only the entries named with `--allow-secret` (`*` for all) can be filled.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,11 +40,11 @@ pub struct McpArgs {
     #[command(flatten)]
     pub conn: Conn,
 
-    /// A profile agents may open (repeat for several). Throwaway browsers need no permission.
+    /// A profile agents may open (repeat for several, `*` for all). Throwaway browsers need no permission.
     #[arg(long = "allow-profile")]
     pub allow: Vec<String>,
 
-    /// An rbw vault entry agents may fill into pages with browser_fill_secret (repeat for several).
+    /// An rbw vault entry agents may fill into pages with browser_fill_secret (repeat for several, `*` for all).
     #[arg(long = "allow-secret")]
     pub allow_secrets: Vec<String>,
 
@@ -196,6 +196,22 @@ pub async fn run(args: McpArgs) -> R<()> {
     Ok(())
 }
 
+/// Whether an `--allow-*` list lets agents use `name`: named in it, or `*` is.
+fn allows(list: &[String], name: &str) -> bool {
+    list.iter().any(|a| a == "*" || a == name)
+}
+
+/// An `--allow-*` list for agents to read.
+fn allowed(list: &[String]) -> String {
+    if list.is_empty() {
+        "none".to_string()
+    } else if allows(list, "*") {
+        "any".to_string()
+    } else {
+        list.join(", ")
+    }
+}
+
 fn text_result(text: impl Into<String>, error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text.into() }], "isError": error })
 }
@@ -228,7 +244,7 @@ fn own_tools(secrets: &[String]) -> Vec<Value> {
             "description": format!(
                 "Type a field of a vault (rbw) entry into a page field, e.g. a password into a login form, without the value ever reaching you: it is read from the vault here, typed into the page and masked as {} in all later tool results. Use this for passwords, tokens and TOTP codes instead of browser_type or browser_fill_form, never type a secret yourself. The page must be on a site the entry is saved for. Entries you may use: {}.",
                 secrets::MASK,
-                secrets.join(", ")
+                if allows(secrets, "*") { "any entry of the vault".to_string() } else { secrets.join(", ") }
             ),
             "inputSchema": {
                 "type": "object",
@@ -369,10 +385,10 @@ impl State {
         let entry = arg("entry").ok_or("Name the vault entry (`entry`)")?;
         let target = arg("target").ok_or("Name the field to type into (`target`)")?;
         let field = arg("field").unwrap_or("password");
-        if !self.allow_secrets.iter().any(|a| a == entry) {
+        if !allows(&self.allow_secrets, entry) {
             return Err(format!(
                 "The entry '{entry}' is not open to agents here. Allowed: {}.",
-                self.allow_secrets.join(", ")
+                allowed(&self.allow_secrets)
             ));
         }
         let child = self.child_or_default().await?;
@@ -524,7 +540,7 @@ impl State {
         let profiles: Vec<Value> = ov
             .profiles
             .iter()
-            .filter(|p| self.allow.iter().any(|a| *a == p.profile.name))
+            .filter(|p| allows(&self.allow, &p.profile.name))
             .map(|p| {
                 json!({
                     "profile": p.profile.name,
@@ -550,10 +566,10 @@ impl State {
         let ov = self.overview().await?;
         let target = match profile {
             Some(name) => {
-                if !self.allow.iter().any(|a| a == name) {
+                if !allows(&self.allow, name) {
                     return Err(format!(
                         "Profile '{name}' is not open to agents here. Allowed: {}.",
-                        if self.allow.is_empty() { "none".to_string() } else { self.allow.join(", ") }
+                        allowed(&self.allow)
                     ));
                 }
                 let hits: Vec<_> = ov
@@ -785,6 +801,18 @@ mod tests {
         assert!(
             names(own_tools(&["Frigate Plus".into()])).contains(&"browser_fill_secret".to_string())
         );
+    }
+
+    #[test]
+    fn a_star_allows_everything() {
+        let list = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(allows(&list(&["work"]), "work"));
+        assert!(!allows(&list(&["work"]), "hrworks"));
+        assert!(!allows(&[], "work"));
+        assert!(allows(&list(&["*"]), "anything"));
+        assert_eq!(allowed(&[]), "none");
+        assert_eq!(allowed(&list(&["work", "*"])), "any");
+        assert_eq!(allowed(&list(&["work", "google"])), "work, google");
     }
 
     #[test]
