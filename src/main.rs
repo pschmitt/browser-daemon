@@ -20,6 +20,7 @@ mod profiles;
 mod proxies;
 mod proxy;
 mod rec_audio;
+mod rec_export;
 mod recorder;
 mod relay;
 mod secrets;
@@ -2238,6 +2239,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/recordings/{id}/frames", get(api_get_recording_frames))
         .route("/api/recordings/{id}/audio", get(api_get_recording_audio))
+        .route(
+            "/api/recordings/{id}/export.webm",
+            get(api_export_recording),
+        )
+        .route(
+            "/api/peers/{peer}/recordings/{id}/export.webm",
+            get(api_peer_export_recording),
+        )
         .route("/api/recordings/merge", post(api_merge_recordings))
         .route(
             "/api/peers/{peer}/recordings/{id}/audio",
@@ -5488,6 +5497,93 @@ async fn api_peer_get_recording_audio(
                 header::CONTENT_LENGTH,
                 header::CONTENT_RANGE,
                 header::ACCEPT_RANGES,
+            ] {
+                if let Some(v) = r.headers().get(name.as_str()) {
+                    if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {
+                        builder = builder.header(name, v);
+                    }
+                }
+            }
+            builder
+                .body(axum::body::Body::from_stream(r.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+        }
+        Err(e) => api_error(
+            StatusCode::BAD_GATEWAY,
+            format!("Peer communication failed: {e}"),
+        )
+        .into_response(),
+    }
+}
+
+/// The recording as a WebM video with its sound, encoded on request (see
+/// rec_export.rs); this takes a while for a long one.
+async fn api_export_recording(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let (file, size, name) = match rec_export::export_webm(&state.recorder_config, id).await {
+        Ok(x) => x,
+        Err(e) => return api_error(StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+    };
+    let chunks = futures_util::stream::unfold(file, |mut f| async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 256 * 1024];
+        match f.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(Bytes::from(buf)), f))
+            }
+            Err(e) => Some((Err(e), f)),
+        }
+    });
+    Response::builder()
+        .header(header::CONTENT_TYPE, "video/webm")
+        .header(header::CONTENT_LENGTH, size)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{name}\""),
+        )
+        .body(axum::body::Body::from_stream(chunks))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+async fn api_peer_export_recording(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath((peer, id)): AxumPath<(String, Uuid)>,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(peer_url) = get_peer_url(&state, &peer).await else {
+        return api_error(
+            StatusCode::NOT_FOUND,
+            format!("Peer '{peer}' not found in mesh"),
+        )
+        .into_response();
+    };
+    let req = state
+        .peer_request(
+            state
+                .http_client
+                .get(format!("{peer_url}/api/recordings/{id}/export.webm")),
+        )
+        .timeout(Duration::from_secs(3600));
+    match req.send().await {
+        Ok(r) => {
+            let status =
+                StatusCode::from_u16(r.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let mut builder = Response::builder().status(status);
+            for name in [
+                header::CONTENT_TYPE,
+                header::CONTENT_LENGTH,
+                header::CONTENT_DISPOSITION,
             ] {
                 if let Some(v) = r.headers().get(name.as_str()) {
                     if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {

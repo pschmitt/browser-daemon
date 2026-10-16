@@ -1850,7 +1850,7 @@ const ACT = {
       { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
       { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
-      { icon: 'download', label: 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
+      { icon: 'download', label: r.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
       r.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
       { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
       cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
@@ -3982,7 +3982,7 @@ function openPlayerMenu(el) {
     { label: `Recording ${String(id || '').slice(0, 8)}` },
     r && { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
     url && url !== 'about:blank' && { icon: 'copy', label: 'Copy page URL', run: () => copyText(url) },
-    { icon: 'download', label: 'Save as WebM', run: () => exportRecordingWebM() },
+    { icon: 'download', label: r?.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(id, node) },
     r?.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
     '-',
     { icon: 'trash', label: 'Delete recording', danger: true, run: async () => { if (await deleteRecording(id, node)) closePlayerModal(); } },
@@ -4057,9 +4057,40 @@ async function exportRecordingWebM() {
   if (wasPlaying) togglePlayPause();
 }
 
+// Saved as a video with its sound, encoded on the node (frames at their own
+// times); where that fails (an older node), rendered here without sound.
 async function exportWebMFromRecording(id, node) {
-  await openPlayerModal(id, node);
-  setTimeout(() => exportRecordingWebM(), 300);
+  const t = createProgressToast(`webm-${id}`, 'Saving as WebM', `Encoding on ${node}…`);
+  t.update(15, `Encoding on ${node}…`, 'Long recordings take a while');
+  try {
+    const res = await fetch(api(node, `/recordings/${enc(id)}/export.webm`), { headers: getAuthHeaders() });
+    if (res.status === 404) throw Object.assign(new Error('This node cannot encode recordings'), { fallback: true });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    const total = +res.headers.get('Content-Length') || 0;
+    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || `recording-${id.slice(0, 8)}.webm`;
+    const reader = res.body.getReader(), parts = [];
+    for (let got = 0; ;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      got += value.length;
+      t.update(total ? 50 + Math.round((got / total) * 50) : 60, 'Downloading…', total ? `${formatBytes(got)} of ${formatBytes(total)}` : formatBytes(got));
+    }
+    const u = URL.createObjectURL(new Blob(parts, { type: 'video/webm' }));
+    const a = document.createElement('a');
+    a.href = u;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 2000);
+    t.done('WebM saved', name);
+  } catch (err) {
+    if (!err.fallback) { t.error('Could not save as WebM', err.message); return; }
+    t.remove();
+    await openPlayerModal(id, node);
+    setTimeout(() => exportRecordingWebM(), 300);
+  }
 }
 
 // Keyboard shortcuts for player (YouTube-style)

@@ -465,12 +465,15 @@ pub enum RecordingCmd {
         #[arg(short, long)]
         yes: bool,
     },
-    /// Download a recording's frames (JSON lines).
+    /// Download a recording's frames (JSON lines), or a WebM video of it with its sound.
     Export {
         recording: String,
-        /// File to write (default: <id>.jsonl).
+        /// File to write (default: <id>.jsonl, or <id>.webm).
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// A WebM video (VP9, with the sound), encoded on its node.
+        #[arg(long)]
+        webm: bool,
     },
     /// Apply the retention limits now.
     Vacuum {
@@ -1389,18 +1392,26 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                     .map_or_else(String::new, |id| id.chars().take(8).collect())
             );
         }
-        RecordingCmd::Export { recording, output } => {
+        RecordingCmd::Export {
+            recording,
+            output,
+            webm,
+        } => {
             let r = c.recording(&recording)?;
-            let path = c.api(&r.node_name, &format!("/recordings/{}/frames", r.recording.id));
+            let what = if webm { "export.webm" } else { "frames" };
+            let path = c.api(&r.node_name, &format!("/recordings/{}/{what}", r.recording.id));
             let res = c
                 .req(Method::GET, &path)
                 .timeout(Duration::from_secs(3600))
                 .send()
                 .await?;
             if !res.status().is_success() {
-                return Err(format!("export failed: HTTP {}", res.status()).into());
+                let status = res.status();
+                let why = res.json::<Value>().await.ok().and_then(|v| v["error"].as_str().map(str::to_string));
+                return Err(format!("export failed: {}", why.unwrap_or_else(|| format!("HTTP {status}"))).into());
             }
-            let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.jsonl", r.recording.id)));
+            let ext = if webm { "webm" } else { "jsonl" };
+            let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.{ext}", r.recording.id)));
             let data = res.bytes().await?;
             std::fs::write(&file, &data)?;
             println!("{} ({})", file.display(), bytes(data.len() as u64));
