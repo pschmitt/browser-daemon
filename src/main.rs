@@ -17,6 +17,7 @@ mod json_api;
 mod mcp;
 mod names;
 mod page_input;
+mod pages;
 mod passkey_helper;
 mod passkeys;
 mod persist;
@@ -65,23 +66,12 @@ use crate::bidi::BidiHub;
 use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine, SessionState};
 use crate::cdp_ws::*;
 use crate::json_api::*;
+use crate::pages::*;
 use crate::profiles::{ColorScheme, Profile};
 use crate::proxy::bridge_websockets;
 use crate::recorder::{RecorderConfig, RecordingMeta, SessionRecorderHandle};
 use crate::sessions::*;
 use crate::state::*;
-
-static HANDOFF_HTML: &str = include_str!("../handoff.html");
-static DASHBOARD_HTML: &str = include_str!("../dashboard.html");
-static FAVICON_ICO: &[u8] = include_bytes!("../favicon.ico");
-static FAVICON_SVG: &str = include_str!("../favicon.svg");
-static HANDOFF_ICO: &[u8] = include_bytes!("../handoff.ico");
-static HANDOFF_SVG: &str = include_str!("../handoff.svg");
-static MANIFEST_JSON: &str = include_str!("../manifest.webmanifest");
-static SW_JS: &str = include_str!("../sw.js");
-static ICON_192: &[u8] = include_bytes!("../icon-192.png");
-static ICON_512: &[u8] = include_bytes!("../icon-512.png");
-static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 
 /// Git commit this build comes from, passed in by the Nix build.
 pub const REVISION: Option<&str> = option_env!("BROWSER_DAEMON_REV");
@@ -1509,143 +1499,6 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
         "peers_count": state.peers.read().await.len(),
         "supported_engines": supported_engines,
     }))
-}
-
-async fn favicon_ico() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/x-icon"),
-        )],
-        FAVICON_ICO,
-    )
-}
-
-async fn favicon_svg() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/svg+xml"),
-        )],
-        FAVICON_SVG,
-    )
-}
-
-async fn handoff_favicon_ico() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/x-icon"),
-        )],
-        HANDOFF_ICO,
-    )
-}
-
-async fn handoff_favicon_svg() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/svg+xml"),
-        )],
-        HANDOFF_SVG,
-    )
-}
-
-async fn manifest_webmanifest() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/manifest+json"),
-        )],
-        MANIFEST_JSON,
-    )
-}
-
-async fn service_worker_js() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/javascript"),
-        )],
-        SW_JS,
-    )
-}
-
-async fn icon_192_png() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
-        ICON_192,
-    )
-}
-
-async fn icon_512_png() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
-        ICON_512,
-    )
-}
-
-async fn download_worker_js() -> impl IntoResponse {
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/javascript"),
-        )],
-        DOWNLOAD_WORKER_JS,
-    )
-}
-
-/// A page that logs the browser in: the cookie comes with it, never the secret.
-fn login_page(state: &AppState, headers: &HeaderMap, html: &'static str) -> Response {
-    let mut res = (
-        [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/html; charset=utf-8"),
-            ),
-            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-        ],
-        Html(html),
-    )
-        .into_response();
-    let secure = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(',')
-                .next()
-                .is_some_and(|p| p.trim().eq_ignore_ascii_case("https"))
-        });
-    if let Some(cookie) = state
-        .auth
-        .cookie(secure, auth::now())
-        .and_then(|c| HeaderValue::from_str(&c).ok())
-    {
-        res.headers_mut().append(header::SET_COOKIE, cookie);
-    }
-    res
-}
-
-async fn dashboard_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    login_page(&state, &headers, DASHBOARD_HTML)
-}
-
-async fn handoff_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    login_page(&state, &headers, HANDOFF_HTML)
-}
-
-/// A token for tools that cannot send the cookie or a header (`?auth=` on a
-/// CDP endpoint). `null` when the daemon has no cluster secret.
-async fn api_auth_token(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
-    state.check_auth(&headers)?;
-    let issued = state.auth.issue(auth::now());
-    Ok::<_, ApiError>((
-        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
-        Json(serde_json::json!({
-            "token": issued.as_ref().map(|(t, _)| t),
-            "expires_at": issued.as_ref().map(|(_, e)| e),
-        })),
-    ))
 }
 
 async fn profile_session(state: &AppState, id: Uuid) -> Option<ManagedSession> {
