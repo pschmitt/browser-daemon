@@ -1866,7 +1866,8 @@ async fn api_session_save_as_profile(
         .await
         .into_iter()
         .filter(|t| {
-            t.target_type == "page" && (t.url.starts_with("http://") || t.url.starts_with("https://"))
+            t.target_type == "page"
+                && (t.url.starts_with("http://") || t.url.starts_with("https://"))
         })
         .map(|t| t.url)
         .collect();
@@ -2589,7 +2590,9 @@ async fn get_local_targets(state: &AppState) -> Vec<DevToolsTarget> {
     let sessions = snapshot_sessions(state).await;
     // All sessions at once: a hung one costs one wait, not one per session.
     let mut all_targets: Vec<DevToolsTarget> = futures_util::future::join_all(
-        sessions.iter().map(|session| session_targets(state, session)),
+        sessions
+            .iter()
+            .map(|session| session_targets(state, session)),
     )
     .await
     .into_iter()
@@ -2756,7 +2759,10 @@ async fn handoff_page(State(state): State<AppState>) -> impl IntoResponse {
 
 /// The error reply of the DevTools-style routes.
 fn json_err(status: StatusCode, msg: impl ToString) -> ApiError {
-    (status, Json(serde_json::json!({ "error": msg.to_string() })))
+    (
+        status,
+        Json(serde_json::json!({ "error": msg.to_string() })),
+    )
 }
 
 /// Opens a tab. It belongs to the session named by `session_id`, or the one
@@ -3775,7 +3781,10 @@ async fn profile_use(state: &AppState, id: Uuid) -> Option<ProfileUse> {
     if let Some(session) = profile_session(state, id).await {
         return Some(ProfileUse::Session(session.id));
     }
-    state.starting.has_profile(id).then_some(ProfileUse::Starting)
+    state
+        .starting
+        .has_profile(id)
+        .then_some(ProfileUse::Starting)
 }
 
 /// Make sure no browser holds the profile: refuse while a session uses it,
@@ -4014,7 +4023,10 @@ fn tar_export(
                     other => {
                         let why = errors.await.unwrap_or_default();
                         error!(error = %why, status = ?other, "tar export failed");
-                        Some((Err(std::io::Error::other(format!("tar failed: {why}"))), None))
+                        Some((
+                            Err(std::io::Error::other(format!("tar failed: {why}"))),
+                            None,
+                        ))
                     }
                 },
                 Ok(n) => {
@@ -4028,7 +4040,11 @@ fn tar_export(
 }
 
 /// Why a profile cannot be exported or moved right now.
-async fn ensure_profile_idle(state: &AppState, profile: &Profile, what: &str) -> Result<(), ApiError> {
+async fn ensure_profile_idle(
+    state: &AppState,
+    profile: &Profile,
+    what: &str,
+) -> Result<(), ApiError> {
     match profile_use(state, profile.meta.id).await {
         None => Ok(()),
         Some(ProfileUse::Session(id)) => Err(api_error(
@@ -4721,12 +4737,17 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
             node_url: node_url.clone(),
             is_local: false,
         }));
-        all_recordings.extend(report.recordings.into_iter().map(|recording| MeshRecording {
-            recording,
-            node_name: node_name.clone(),
-            node_url: node_url.clone(),
-            is_local: false,
-        }));
+        all_recordings.extend(
+            report
+                .recordings
+                .into_iter()
+                .map(|recording| MeshRecording {
+                    recording,
+                    node_name: node_name.clone(),
+                    node_url: node_url.clone(),
+                    is_local: false,
+                }),
+        );
     }
 
     all_recordings.sort_by_key(|r| std::cmp::Reverse(r.recording.started_at_secs));
@@ -4841,9 +4862,9 @@ fn find_peer<'a>(peers: &'a HashMap<String, String>, peer: &str) -> Option<&'a S
         return Some(url);
     }
     let wanted_url = peer.trim_end_matches('/');
-    let mut hits = peers
-        .iter()
-        .filter(|(name, url)| name.eq_ignore_ascii_case(peer) || url.trim_end_matches('/') == wanted_url);
+    let mut hits = peers.iter().filter(|(name, url)| {
+        name.eq_ignore_ascii_case(peer) || url.trim_end_matches('/') == wanted_url
+    });
     let hit = hits.next()?;
     hits.next().is_none().then_some(hit.1)
 }
@@ -4898,7 +4919,8 @@ fn peer_target(method: &axum::http::Method, rest: &str) -> Option<PeerTarget> {
         ("POST", ["sessions", _, "save-as-profile"]) => (false, Long),
         (
             "POST",
-            ["sessions", _, "record" | "stop-record" | "pause-record" | "resume-record" | "idle-timeout" | "name" | "proxy"],
+            ["sessions", _, "record" | "stop-record" | "pause-record" | "resume-record" | "idle-timeout" | "name"
+            | "proxy"],
         ) => (false, Short),
         ("PATCH", ["settings"]) => (false, Short),
         ("POST", ["profiles"]) => (false, Long),
@@ -4990,8 +5012,8 @@ async fn api_peer_forward(
     }
     url.set_query(query.as_deref().filter(|q| !q.is_empty()));
 
-    let upstream_method = reqwest::Method::from_bytes(method.as_str().as_bytes())
-        .unwrap_or(reqwest::Method::GET);
+    let upstream_method =
+        reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
     let mut req = state
         .peer_request(state.peer_client.request(upstream_method, url))
         .timeout(target.wait.timeout());
@@ -5391,7 +5413,9 @@ async fn api_delete_recording(
     {
         return Err((
             StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "The recording is still in progress. Stop it first." })),
+            Json(
+                serde_json::json!({ "error": "The recording is still in progress. Stop it first." }),
+            ),
         ));
     }
     if recorder::delete_recording(&state.recorder_config, id).await {
@@ -6432,7 +6456,8 @@ async fn api_session_upload_file(
     let mut size = 0u64;
     let stored: Result<(), ApiError> = async {
         while let Some(chunk) = chunks.next().await {
-            let chunk = chunk.map_err(|e| api_error(StatusCode::PAYLOAD_TOO_LARGE, e.to_string()))?;
+            let chunk =
+                chunk.map_err(|e| api_error(StatusCode::PAYLOAD_TOO_LARGE, e.to_string()))?;
             size += chunk.len() as u64;
             file.write_all(&chunk).await.map_err(io)?;
         }
@@ -6685,10 +6710,14 @@ mod tests {
     #[tokio::test]
     async fn a_profile_launched_twice_at_once_gets_one_browser() {
         let sessions = Sessions::default();
-        let (starting, locks) = (Arc::new(Starting::default()), Arc::new(ProfileLocks::default()));
+        let (starting, locks) = (
+            Arc::new(Starting::default()),
+            Arc::new(ProfileLocks::default()),
+        );
         let profile = Uuid::new_v4();
-        let Slot::Reserved(reservation) =
-            slot(&sessions, &starting, &locks, 8, Some(profile)).await.unwrap()
+        let Slot::Reserved(reservation) = slot(&sessions, &starting, &locks, 8, Some(profile))
+            .await
+            .unwrap()
         else {
             panic!("the first launch reserves");
         };
@@ -6721,7 +6750,10 @@ mod tests {
     #[tokio::test]
     async fn a_profile_that_is_being_changed_is_not_admitted_meanwhile() {
         let sessions = Sessions::default();
-        let (starting, locks) = (Arc::new(Starting::default()), Arc::new(ProfileLocks::default()));
+        let (starting, locks) = (
+            Arc::new(Starting::default()),
+            Arc::new(ProfileLocks::default()),
+        );
         let profile = Uuid::new_v4();
         let held = locks.lock(profile).await;
         let launch = {
@@ -6790,7 +6822,9 @@ mod tests {
             PeerWait::Long
         );
         assert_eq!(
-            target(Method::GET, "recordings/abc/export.webm").unwrap().wait,
+            target(Method::GET, "recordings/abc/export.webm")
+                .unwrap()
+                .wait,
             PeerWait::Long
         );
         assert!(target(Method::PUT, "json/new").unwrap().devtools);
