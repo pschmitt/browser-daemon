@@ -25,6 +25,38 @@ pub struct Creds {
     pub totp: Option<String>,
 }
 
+/// Style that shows a filled field's value as dots (Chromium) whatever its
+/// `type`, so a page that flips the password field to `type=text` ("show
+/// password") does not put the secret into a screenshot. Firefox has no
+/// `-webkit-text-security`, so there the text is made transparent. Only
+/// elements carrying `data-bd-secret` are touched.
+pub(crate) fn secret_css(firefox: bool) -> &'static str {
+    if firefox {
+        "[data-bd-secret]{color:transparent !important;text-shadow:none !important;-webkit-text-fill-color:transparent !important}"
+    } else {
+        "[data-bd-secret]{-webkit-text-security:disc !important}"
+    }
+}
+
+/// Runs in the page as `(GUARD)(element, css)`, before the value goes in: marks
+/// the field and adds the style to its document or shadow root (a constructed
+/// stylesheet, which a page's CSP does not block; a `<style>` as fallback).
+pub(crate) const GUARD: &str = r#"(el, css) => {
+  el.setAttribute("data-bd-secret", "");
+  const root = el.getRootNode();
+  const sheets = root.adoptedStyleSheets;
+  try {
+    if (sheets.some((s) => s.cssRules[0] && s.cssRules[0].selectorText === "[data-bd-secret]")) return;
+    const s = new CSSStyleSheet();
+    s.replaceSync(css);
+    root.adoptedStyleSheets = [...sheets, s];
+  } catch (e) {
+    const st = document.createElement("style");
+    st.textContent = css;
+    (root.head || root).appendChild(st);
+  }
+}"#;
+
 /// Runs in the page (as `(FILL)(creds)`): fills the visible login form and says
 /// which fields it filled, as a JSON string (a plain value for CDP and BiDi alike).
 /// A password field takes the password and the text field before it the username;
@@ -53,7 +85,9 @@ const FILL: &str = r#"(c) => {
   const texty = visible.filter((el) => textTypes.has(type(el)));
   const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const guard = /*GUARD*/;
   const put = (el, v) => {
+    guard(el, c.css);
     el.focus();
     setter.call(el, v);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data: v }));
@@ -89,13 +123,14 @@ const FILL: &str = r#"(c) => {
   return JSON.stringify({ filled });
 }"#;
 
-fn expression(creds: &Creds) -> String {
+fn expression(creds: &Creds, firefox: bool) -> String {
     let c = json!({
+        "css": secret_css(firefox),
         "username": creds.username,
         "password": creds.password,
         "totp": creds.totp,
     });
-    format!("({FILL})({c})")
+    format!("({})({c})", FILL.replace("/*GUARD*/", GUARD))
 }
 
 /// The fields the script filled, from its JSON answer.
@@ -192,7 +227,7 @@ pub async fn fill_chromium(
         let tree = cdp.call("Page.getFrameTree", json!({})).await?;
         let mut all = Vec::new();
         frames(&tree["frameTree"], "id", "childFrames", &mut all);
-        let expr = expression(creds);
+        let expr = expression(creds, false);
         let mut done = Vec::new();
         for (frame, url) in all.into_iter().filter(|(_, u)| frame_ok(u)) {
             // A frame of another process (a cross-site iframe) has no world here.
@@ -246,7 +281,7 @@ pub async fn fill_firefox(
     for c in tree["contexts"].as_array().into_iter().flatten() {
         frames(c, "context", "children", &mut all);
     }
-    let expr = expression(creds);
+    let expr = expression(creds, true);
     for (ctx, url) in all.into_iter().filter(|(_, u)| frame_ok(u)) {
         let Ok(res) = hub
             .call(
@@ -293,15 +328,33 @@ mod tests {
     }
 
     #[test]
-    fn values_are_passed_as_json_not_code() {
-        let e = expression(&Creds {
-            username: Some("me\"); alert(1); (\"".into()),
-            password: Some("p\\w".into()),
-            totp: None,
-        });
+    fn filled_fields_are_masked_by_style_before_they_are_typed() {
+        let e = expression(&Creds::default(), false);
+        assert!(!e.contains("/*GUARD*/"), "the guard is spliced in");
         assert!(
-            e.ends_with(r#"({"password":"p\\w","totp":null,"username":"me\"); alert(1); (\""})"#)
+            e.find("guard(el, c.css)").unwrap() < e.find("setter.call").unwrap(),
+            "marked before the value is set"
         );
+        assert!(e.contains("-webkit-text-security:disc"));
+        assert!(expression(&Creds::default(), true).contains("color:transparent"));
+        for firefox in [false, true] {
+            let css = secret_css(firefox);
+            assert!(css.starts_with("[data-bd-secret]{"), "only marked fields");
+            assert!(css.ends_with('}'));
+        }
+    }
+
+    #[test]
+    fn values_are_passed_as_json_not_code() {
+        let e = expression(
+            &Creds {
+                username: Some("me\"); alert(1); (\"".into()),
+                password: Some("p\\w".into()),
+                totp: None,
+            },
+            false,
+        );
+        assert!(e.ends_with(r#""password":"p\\w","totp":null,"username":"me\"); alert(1); (\""})"#));
         assert_eq!(
             filled(Some(r#"{"filled":["username","password"]}"#)),
             ["username", "password"]
