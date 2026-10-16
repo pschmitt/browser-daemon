@@ -15,21 +15,15 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Browser">
 <link rel="apple-touch-icon" href="/icon-192.png">
-<script>
-// Saved theme choice (light/dark; none = follow the system), applied before first paint.
-(() => {
-  let t = null;
-  try { t = localStorage.getItem('dash.theme'); } catch { /* storage unavailable */ }
-  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-})();
-</script>
+<link rel="stylesheet" href="/assets/common.css">
+<script src="/assets/common.js"></script>
 <style>
 :root {
-  --bg: #0b0d12; --surface: #11141c; --raised: #161a24; --hover: #1b2030; --line: #232836; --line-strong: #30364a;
-  --fg: #e8eaf2; --muted: #98a0b8; --faint: #7f87a0;
-  --accent: #7c6cf0; --accent-btn: #6556e0; --accent-fg: #fff; --accent-soft: rgba(124, 108, 240, .16);
-  --bad-btn: #d4213f; --node-l: 68%;
-  --ok: #10b981; --ok-soft: rgba(16, 185, 129, .14); --warn: #f59e0b; --warn-soft: rgba(245, 158, 11, .14);
+  --surface: #11141c; --raised: #161a24; --hover: #1b2030; --line: #232836; --line-strong: #30364a;
+  --faint: #7f87a0;
+  --accent-fg: #fff; --accent-soft: rgba(124, 108, 240, .16);
+  --bad-btn: #d4213f;
+  --ok-soft: rgba(16, 185, 129, .14); --warn: #f59e0b; --warn-soft: rgba(245, 158, 11, .14);
   --bad: #f43f5e; --bad-soft: rgba(244, 63, 94, .14);
   --chromium: #60a5fa; --firefox: #ff7a3d;
   --shadow: 0 10px 30px rgba(0, 0, 0, .35), 0 2px 6px rgba(0, 0, 0, .25);
@@ -38,25 +32,22 @@
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #f4f5fa; --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
-    --fg: #141725; --muted: #646a82; --faint: #656b82;
-    --accent: #5b4bd6; --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
-    --ok: #047857; --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c; --node-l: 36%;
+    --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
+    --faint: #656b82;
+    --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
+    --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c;
   }
 }
 :root[data-theme="light"] {
-  --bg: #f4f5fa; --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
-  --fg: #141725; --muted: #646a82; --faint: #656b82;
-  --accent: #5b4bd6; --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
-  --ok: #047857; --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c; --node-l: 36%;
+  --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
+  --faint: #656b82;
+  --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
+  --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c;
 }
-:root[data-theme="light"] { color-scheme: light; }
-:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
 /* A dialog is open: the page behind stays put. */
 html:has(dialog.modal[open]) { overflow: hidden; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 body {
   margin: 0; background: var(--bg); color: var(--fg); min-height: 100vh;
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
@@ -992,55 +983,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </dialog>
 <script>
 "use strict";
-// Signed in by the cookie the page came with (HttpOnly: no script ever sees a
-// secret). A 401 means it expired: reload once to get a fresh one.
-(() => {
-  const plain = window.fetch.bind(window);
-  window.fetch = async (...args) => {
-    const res = await plain(...args);
-    if (res.status === 401) {
-      let again = false;
-      try { again = sessionStorage.getItem("bd-401") === "1"; sessionStorage.setItem("bd-401", "1"); } catch { /* storage unavailable */ }
-      if (!again) location.reload();
-    } else {
-      try { sessionStorage.removeItem("bd-401"); } catch { /* storage unavailable */ }
-    }
-    return res;
-  };
-})();
 
 /* ================================================================ basics */
-const $ = (id) => document.getElementById(id);
 const enc = encodeURIComponent;
-const SEARCH_ENGINES = {
-  duckduckgo: { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
-  google: { name: "Google", url: "https://www.google.com/search?q=" },
-  startpage: { name: "Startpage", url: "https://www.startpage.com/do/search?q=" },
-  brave: { name: "Brave Search", url: "https://search.brave.com/search?q=" },
-  bing: { name: "Bing", url: "https://www.bing.com/search?q=" },
-  kagi: { name: "Kagi", url: "https://kagi.com/search?q=" },
-};
-// Shared with the handoff view (same origin, same key).
-const SEARCH_KEY = "browserd.search";
-function searchEngine() {
-  let id = null;
-  try { id = localStorage.getItem(SEARCH_KEY); } catch { /* storage unavailable */ }
-  return { id: SEARCH_ENGINES[id] ? id : "duckduckgo", ...SEARCH_ENGINES[SEARCH_ENGINES[id] ? id : "duckduckgo"] };
-}
-function setSearchEngine(id) {
-  try { localStorage.setItem(SEARCH_KEY, id); } catch { /* storage unavailable */ }
-}
 
 
-// The cookie authenticates same-origin requests; nothing to add.
-function getAuthHeaders() {
-  return {};
-}
 
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-const esc = escapeHtml;
 const icon = (name, cls = '') => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
 
 function formatBytes(bytes) {
@@ -1051,14 +999,6 @@ function formatBytes(bytes) {
 }
 
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
-function formatUptime(secs) {
-  if (!secs || secs < 0) return '0s';
-  const d = Math.floor(secs / 86400), h = Math.floor((secs % 86400) / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
-  if (d) return `${d}d ${h}h`;
-  if (h) return `${h}h ${m}m`;
-  if (m) return `${m}m ${s}s`;
-  return `${s}s`;
-}
 
 function relTime(secs) {
   if (!secs) return '–';
@@ -1092,7 +1032,7 @@ function recFavicon(r) {
   const key = `${r.node_name}/${r.id}`;
   if (recIcons.has(key)) return recIcons.get(key);
   recIcons.set(key, '');
-  fetch(api(r.node_name, `/recordings/${enc(r.id)}/favicon`), { headers: getAuthHeaders() })
+  fetch(api(r.node_name, `/recordings/${enc(r.id)}/favicon`), { headers: authHeaders() })
     .then((res) => (res.ok ? res.blob() : null))
     .then((blob) => {
       if (!blob) return;
@@ -1107,9 +1047,7 @@ const lettered = (host) => (host
   : icon('globe', 'sm'));
 function favicon(url, ...stored) {
   const host = hostOf(url);
-  // Local and single-label hosts are not on the public web: nothing to look up.
-  const lookable = host && host.includes('.') && !/^[\d.]+$/.test(host) && !host.includes(':');
-  const remote = lookable ? `/api/favicon?url=${enc(new URL(url).origin)}` : '';
+  const remote = faviconSrc(url);
   const src = [...stored, remote].find((u) => u && !failedFavicons.has(u)) || '';
   if (!src) return lettered(host);
   return `<img src="${esc(src)}" alt="" loading="lazy" data-fav="${esc(host)}" data-fallback="${esc(remote)}">`;
@@ -1129,9 +1067,6 @@ document.addEventListener('error', (e) => {
 }, true);
 
 /* ================================================================ nodes & colors */
-function hashOf(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); }
-// Names that differ in one character (rofl-13, rofl-14) land far apart on the colour wheel.
-const hueOf = (name) => Math.round((hashOf(String(name || '').toLowerCase()) * 137.508) % 360);
 // Lightness comes from the theme (--node-l), so the colour reads on light and dark.
 const nodeColor = (name) => `hsl(${hueOf(name)} 68% var(--node-l))`;
 // Proxies are per node: ids only mean something on the node that defines them.
@@ -1161,7 +1096,7 @@ function handoffUrl(node, { page, session } = {}) {
 }
 
 async function request(method, url, body) {
-  const opts = { method, headers: { ...getAuthHeaders() } };
+  const opts = { method, headers: { ...authHeaders() } };
   if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch(url, opts);
   if (!res.ok) {
@@ -1738,7 +1673,7 @@ async function refreshShots() {
     const r = el.getBoundingClientRect();
     if (r.bottom < 0 || r.top > innerHeight) continue;
     try {
-      const res = await fetch(api(s.node_name, `/sessions/${enc(s.id)}/screenshot`), { headers: getAuthHeaders() });
+      const res = await fetch(api(s.node_name, `/sessions/${enc(s.id)}/screenshot`), { headers: authHeaders() });
       if (res.status !== 200) continue;
       const url = URL.createObjectURL(await res.blob()), old = shots.get(key);
       shots.set(key, url);
@@ -2129,7 +2064,7 @@ const ACT = {
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: r.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
       r.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
-      !Object.keys(getAuthHeaders()).length && { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
+      !Object.keys(authHeaders()).length && { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
       cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
       '-',
       { icon: 'trash', label: 'Delete', danger: true, run: () => deleteRecording(r.id, r.node_name) },
@@ -2513,43 +2448,15 @@ function showClientDetails(s) {
   showDetails(`${list.some((c) => c.agent) ? 'Agents' : 'Clients'} of ${sessName(s)}`, pairs, list.length === 1 ? list[0] : list);
 }
 
-// Which agent drives a session, by the name its browser MCP reports ("claude-code 2.1.296",
-// "codex", ...): the agent's own mark instead of a generic robot.
-const AGENT_SVG = {
-  claude: '<path d="M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64 5.64 18.36" fill="none" stroke="#d97757" stroke-width="2.4" stroke-linecap="round"/>',
-  codex: '<g fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(60 12 12)"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(120 12 12)"/></g>',
-  gemini: '<defs><linearGradient id="ag-gem" x1="3" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse"><stop stop-color="#4f8cf7"/><stop offset=".55" stop-color="#9b72f2"/><stop offset="1" stop-color="#f48fb1"/></linearGradient></defs><path d="M12 2c.7 5.6 4.4 9.3 10 10-5.6.7-9.3 4.4-10 10-.7-5.6-4.4-9.3-10-10 5.6-.7 9.3-4.4 10-10z" fill="url(#ag-gem)" stroke="none"/>',
-  antigravity: '<path d="M3.5 20.5 12 4l8.5 16.5M8.4 14.6h7.2" fill="none" stroke="#5b8dee" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
-  opencode: '<rect x="4" y="3.5" width="16" height="17" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8.5" y="8" width="7" height="8" rx="1" fill="currentColor" stroke="none"/>',
-  cursor: '<path d="M5 3l15 8.2-6.3 1.8L10.5 20z" fill="currentColor" stroke="none"/>',
-  copilot: '<g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="12" rx="6"/><path d="M8 7c0-2.5 2-4 4-4s4 1.5 4 4"/></g><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/>',
-  hermes: '<circle cx="12" cy="12" r="9" fill="none" stroke="#c8a14a" stroke-width="1.8"/><path d="M8.5 7.5v9M15.5 7.5v9M8.5 12h7" fill="none" stroke="#c8a14a" stroke-width="1.9" stroke-linecap="round"/>',
-  agent: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></g>',
-};
-const AGENT_TITLE = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
-function agentBrand(c) {
-  const n = String(c?.agent_name || '').toLowerCase();
-  if (/claude/.test(n)) return 'claude';
-  if (/codex|openai|chatgpt/.test(n)) return 'codex';
-  if (/gemini/.test(n)) return 'gemini';
-  if (/\bagy\b|antigravity/.test(n)) return 'antigravity';
-  if (/opencode/.test(n)) return 'opencode';
-  if (/cursor/.test(n)) return 'cursor';
-  if (/copilot/.test(n)) return 'copilot';
-  if (/hermes/.test(n)) return 'hermes';
-  return 'agent';
-}
 function agentIcon(c, cls = 'sm') {
   const b = agentBrand(c);
   return `<svg class="i ${cls} agent-ic" viewBox="0 0 24 24" aria-hidden="true"><title>${AGENT_TITLE[b]}</title>${AGENT_SVG[b]}</svg>`;
 }
 
-// The agent without its version ("claude-code (work)"), as its browser MCP reported it.
-const agentName = (c) => (c.agent_name || '').replace(/ \d[\w.-]*/, '').replace(/^claude-code/, 'claude');
 // The tag: which agent and what it does (its topic), else from where.
 function agentLabel(c) {
   if (!c.agent_name) return `Agent · ${c.from}`;
-  return c.topic ? `${agentName(c)}: ${c.topic}` : `${agentName(c)} · ${c.from}`;
+  return c.topic ? `${agentShort(c)}: ${c.topic}` : `${agentShort(c)} · ${c.from}`;
 }
 // A connected automation client, for the hover: the agent and its conversation (when
 // its MCP says), origin with address, since when, User-Agent.
@@ -2967,10 +2874,10 @@ $('backupsForm').addEventListener('submit', (e) => {
 // to disk); otherwise fetched with the headers into a blob.
 async function exportProfile(p) {
   const url = api(p.node_name, `/profiles/${enc(p.key)}/export`);
-  if (!Object.keys(getAuthHeaders()).length) { location.href = url; return; }
+  if (!Object.keys(authHeaders()).length) { location.href = url; return; }
   const t = createProgressToast('export-' + hashOf(p.key + Date.now()), `Exporting ${p.display}`, 'Packing the archive…');
   try {
-    const res = await fetch(url, { headers: getAuthHeaders() });
+    const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || `${p.display}.tar.gz`;
     const u = URL.createObjectURL(await res.blob());
@@ -2992,7 +2899,7 @@ function restoreProfile(p, after) {
     if (!ok) return;
     act('Importing archive', async () => {
       const res = await fetch(api(p.node_name, `/profiles/${enc(profileTargetName(p, p.display))}/import`) + '?overwrite=true', {
-        method: 'POST', headers: { ...getAuthHeaders(), 'Content-Type': 'application/gzip' }, body: file,
+        method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/gzip' }, body: file,
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -3398,7 +3305,7 @@ $('mergeForm').addEventListener('submit', (e) => {
 
 async function saveRecordingAudio(r) {
   try {
-    const res = await fetch(api(r.node_name, `/recordings/${enc(r.id)}/audio`), { headers: getAuthHeaders() });
+    const res = await fetch(api(r.node_name, `/recordings/${enc(r.id)}/audio`), { headers: authHeaders() });
     if (!res.ok) throw new Error(res.statusText);
     const u = URL.createObjectURL(await res.blob());
     const a = document.createElement('a');
@@ -4009,7 +3916,7 @@ async function loadPlayerAudio(id, node, rec) {
   if (!rec?.audio) return;
   playerSound.id = id;
   try {
-    const res = await fetch(api(node, `/recordings/${enc(id)}/audio`), { headers: getAuthHeaders() });
+    const res = await fetch(api(node, `/recordings/${enc(id)}/audio`), { headers: authHeaders() });
     if (!res.ok) throw new Error(res.statusText);
     const blob = await res.blob();
     if (playerSound.id !== id) return; // another recording by now
@@ -4127,7 +4034,7 @@ async function openPlayerModal(id, node) {
       action: 'DOWNLOAD',
       id,
       url,
-      headers: getAuthHeaders(),
+      headers: authHeaders(),
       expectedBytes
     });
   } else {
@@ -4137,7 +4044,7 @@ async function openPlayerModal(id, node) {
 
 async function fallbackDownloadFrames(id, node, url, pToast, expectedBytes = 0) {
   try {
-    const res = await fetch(url, { headers: getAuthHeaders() });
+    const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) throw new Error(res.statusText);
     const text = await res.text();
     const lines = text.trim().split('\n');
@@ -4204,7 +4111,7 @@ async function readCachedChunk(id, seq) {
 async function fetchChunk(p, info) {
   if (info.off == null) throw new Error('chunk is not in the cache');
   const res = await fetch(api(p.node, `/recordings/${enc(p.id)}/frames`), {
-    headers: { ...getAuthHeaders(), Range: `bytes=${info.off}-${info.end - 1}` },
+    headers: { ...authHeaders(), Range: `bytes=${info.off}-${info.end - 1}` },
     cache: 'no-store',
   });
   if (res.status !== 206) throw new Error(`HTTP ${res.status}: the node did not send the range`);
@@ -4558,7 +4465,7 @@ async function exportWebMFromRecording(id, node) {
   const t = createProgressToast(`webm-${id}`, 'Saving as WebM', `Encoding on ${node}…`);
   t.update(null, `Encoding on ${node}…`, 'Long recordings take a while');
   try {
-    const res = await fetch(api(node, `/recordings/${enc(id)}/export.webm`), { headers: getAuthHeaders() });
+    const res = await fetch(api(node, `/recordings/${enc(id)}/export.webm`), { headers: authHeaders() });
     if (res.status === 404) throw Object.assign(new Error('This node cannot encode recordings'), { fallback: true });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     const total = +res.headers.get('Content-Length') || 0;

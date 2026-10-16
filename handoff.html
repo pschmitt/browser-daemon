@@ -10,17 +10,14 @@
 <title>Browser Handoff</title>
 <link rel="icon" type="image/svg+xml" href="/handoff/favicon.svg">
 <link rel="alternate icon" type="image/x-icon" href="/handoff/favicon.ico">
-<script>
-// Theme chosen on the dashboard (none = follow the system).
-try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch { /* storage unavailable */ }
-</script>
+<link rel="stylesheet" href="/assets/common.css">
+<script src="/assets/common.js"></script>
 <style>
-  :root { --bg: #0b0d12; --bar: #11141c; --fg: #e8eaf2; --muted: #98a0b8; --line: #262b38; --accent: #7c6cf0; --accent-btn: #6556e0; --ok: #10b981; --bad: #e11d48; --btn: #1b2030; --node-l: 68%; }
+  :root { --bar: #11141c; --line: #262b38; --bad: #e11d48; --btn: #1b2030; }
   @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) { --bg: #f4f5fa; --bar: #ffffff; --fg: #141725; --muted: #5f657c; --line: #dfe2ec; --btn: #eceef6; --accent: #5b4bd6; --bad: #d4213f; --node-l: 36%; }
+    :root:not([data-theme="dark"]) { --bar: #ffffff; --line: #dfe2ec; --btn: #eceef6; --bad: #d4213f; }
   }
-  :root[data-theme="light"] { --bg: #f4f5fa; --bar: #ffffff; --fg: #141725; --muted: #5f657c; --line: #dfe2ec; --btn: #eceef6; --accent: #5b4bd6; --bad: #d4213f; --node-l: 36%; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  :root[data-theme="light"] { --bar: #ffffff; --line: #dfe2ec; --btn: #eceef6; --bad: #d4213f; }
   body { touch-action: manipulation; }
   @media (pointer: coarse) { #urlInput { font-size: 16px; } .ib.chev { width: 36px; margin-left: -6px; } }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -465,31 +462,10 @@ try { const t = localStorage.getItem("dash.theme"); if (t === "light" || t === "
 </div>
 <script>
 "use strict";
-// Signed in by the cookie the page came with (HttpOnly: no script ever sees a
-// secret). A 401 means it expired: reload once to get a fresh one.
-(() => {
-  const plain = window.fetch.bind(window);
-  window.fetch = async (...args) => {
-    const res = await plain(...args);
-    if (res.status === 401) {
-      let again = false;
-      try { again = sessionStorage.getItem("bd-401") === "1"; sessionStorage.setItem("bd-401", "1"); } catch { /* storage unavailable */ }
-      if (!again) location.reload();
-    } else {
-      try { sessionStorage.removeItem("bd-401"); } catch { /* storage unavailable */ }
-    }
-    return res;
-  };
-})();
-// The cookie authenticates same-origin requests; nothing to add.
-function authHeaders(extra = {}) {
-  return { ...extra };
-}
 
 const params = new URLSearchParams(location.search);
 let pageId = params.get("page");
 const testHost = params.get("host");               // testing only: talk to another Browserless
-const $ = (id) => document.getElementById(id);
 const E = {
   smSearch: $("smSearch"),
   tabStrip: $("tabStrip"), profChip: $("profChip"), agentChip: $("agentChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
@@ -543,18 +519,16 @@ function siteIcon(url, px = 14) {
   const wrap = document.createElement("span");
   wrap.className = "site-ic";
   wrap.style.width = wrap.style.height = px + "px";
-  let host = "", origin = "";
-  try { const u = new URL(url, location.href); if (/^https?:$/.test(u.protocol)) { host = u.hostname; origin = u.origin; } } catch { /* not a web address */ }
+  let host = "";
+  try { const u = new URL(url, location.href); if (/^https?:$/.test(u.protocol)) host = u.hostname; } catch { /* not a web address */ }
   const letter = () => {
     wrap.replaceChildren();
     if (!host) { wrap.innerHTML = GLOBE_SVG; return; }
-    let h = 0; for (const c of host) h = (h * 31 + c.charCodeAt(0)) | 0;
     wrap.classList.add("letter");
-    wrap.style.setProperty("--h", Math.round((Math.abs(h) * 137.508) % 360));
+    wrap.style.setProperty("--h", hueOf(host));
     wrap.textContent = host.replace(/^www\./, "").charAt(0).toUpperCase();
   };
-  const lookable = host && host.includes(".") && !/^[\d.]+$/.test(host) && !host.includes(":");
-  const src = lookable ? `/api/favicon?url=${encodeURIComponent(origin)}` : "";
+  const src = faviconSrc(url);
   if (!src || failedIcons.has(src)) { letter(); return wrap; }
   const img = new Image();
   img.alt = "";
@@ -2097,24 +2071,6 @@ E.back.onclick = () => navigateHistory(-1);
 E.fwd.onclick = () => navigateHistory(1);
 E.reload.onclick = () => drv && drv.reload();
 
-const SEARCH_ENGINES = {
-  duckduckgo: { name: "DuckDuckGo", url: "https://duckduckgo.com/?q=" },
-  google: { name: "Google", url: "https://www.google.com/search?q=" },
-  startpage: { name: "Startpage", url: "https://www.startpage.com/do/search?q=" },
-  brave: { name: "Brave Search", url: "https://search.brave.com/search?q=" },
-  bing: { name: "Bing", url: "https://www.bing.com/search?q=" },
-  kagi: { name: "Kagi", url: "https://kagi.com/search?q=" },
-};
-// Shared with the handoff view (same origin, same key).
-const SEARCH_KEY = "browserd.search";
-function searchEngine() {
-  let id = null;
-  try { id = localStorage.getItem(SEARCH_KEY); } catch { /* storage unavailable */ }
-  return { id: SEARCH_ENGINES[id] ? id : "duckduckgo", ...SEARCH_ENGINES[SEARCH_ENGINES[id] ? id : "duckduckgo"] };
-}
-function setSearchEngine(id) {
-  try { localStorage.setItem(SEARCH_KEY, id); } catch { /* storage unavailable */ }
-}
 function applySearchEngine() {
   const se = searchEngine();
   E.urlInput.placeholder = `Search ${se.name} or enter URL…`;
@@ -3000,34 +2956,6 @@ async function pickPage({ notice = "" } = {}) {
 
 /* ---------------------------------------------------------------- session menu: recording + stop */
 let sess = null, sessTimer = null, stopArmed = 0, stopping = false;
-// Which agent drives a session, by the name its browser MCP reports ("claude-code 2.1.296",
-// "codex", ...): the agent's own mark instead of a generic robot.
-const AGENT_SVG = {
-  claude: '<path d="M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64 5.64 18.36" fill="none" stroke="#d97757" stroke-width="2.4" stroke-linecap="round"/>',
-  codex: '<g fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(60 12 12)"/><rect x="7.2" y="2.8" width="9.6" height="18.4" rx="4.8" transform="rotate(120 12 12)"/></g>',
-  gemini: '<defs><linearGradient id="ag-gem" x1="3" y1="21" x2="21" y2="3" gradientUnits="userSpaceOnUse"><stop stop-color="#4f8cf7"/><stop offset=".55" stop-color="#9b72f2"/><stop offset="1" stop-color="#f48fb1"/></linearGradient></defs><path d="M12 2c.7 5.6 4.4 9.3 10 10-5.6.7-9.3 4.4-10 10-.7-5.6-4.4-9.3-10-10 5.6-.7 9.3-4.4 10-10z" fill="url(#ag-gem)" stroke="none"/>',
-  antigravity: '<path d="M3.5 20.5 12 4l8.5 16.5M8.4 14.6h7.2" fill="none" stroke="#5b8dee" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
-  opencode: '<rect x="4" y="3.5" width="16" height="17" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><rect x="8.5" y="8" width="7" height="8" rx="1" fill="currentColor" stroke="none"/>',
-  cursor: '<path d="M5 3l15 8.2-6.3 1.8L10.5 20z" fill="currentColor" stroke="none"/>',
-  copilot: '<g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="12" rx="6"/><path d="M8 7c0-2.5 2-4 4-4s4 1.5 4 4"/></g><circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none"/>',
-  hermes: '<circle cx="12" cy="12" r="9" fill="none" stroke="#c8a14a" stroke-width="1.8"/><path d="M8.5 7.5v9M15.5 7.5v9M8.5 12h7" fill="none" stroke="#c8a14a" stroke-width="1.9" stroke-linecap="round"/>',
-  agent: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></g>',
-};
-const AGENT_TITLE = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
-// The agent as shown: without its version, and "claude" rather than "claude-code".
-const agentShort = (c) => String(c?.agent_name || "").replace(/ \d[\w.-]*/, "").replace(/^claude-code/, "claude");
-function agentBrand(c) {
-  const n = String(c?.agent_name || '').toLowerCase();
-  if (/claude/.test(n)) return 'claude';
-  if (/codex|openai|chatgpt/.test(n)) return 'codex';
-  if (/gemini/.test(n)) return 'gemini';
-  if (/\bagy\b|antigravity/.test(n)) return 'antigravity';
-  if (/opencode/.test(n)) return 'opencode';
-  if (/cursor/.test(n)) return 'cursor';
-  if (/copilot/.test(n)) return 'copilot';
-  if (/hermes/.test(n)) return 'hermes';
-  return 'agent';
-}
 const agentSvg = (c) => `<svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">${AGENT_SVG[agentBrand(c)]}</svg>`;
 const ICON = {
   sound: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>',
@@ -3037,8 +2965,6 @@ const ICON = {
   play: '<svg class="fill" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></svg>',
   stop: '<svg class="fill" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
 };
-const fmtDur = (s) => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
-  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
 
 async function sessionApi(method, path) {
   const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}${path}`, { method, headers: authHeaders() });
@@ -3460,8 +3386,6 @@ function reportViewerSize(native) {
 /* ---------------------------------------------------------------- other sessions */
 // The dashboard button's chevron (and, with a mouse, hovering it) lists the mesh's
 // other running sessions; picking one opens its handoff view.
-const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const fmtAge = (secs) => (secs < 60 ? `${secs | 0}s` : secs < 3600 ? `${(secs / 60) | 0}m` : `${(secs / 3600) | 0}h ${((secs % 3600) / 60) | 0}m`);
 let sessPopTimer = 0;
 async function openSessPop() {
   const pop = $("sessPop");
@@ -3486,7 +3410,7 @@ async function openSessPop() {
       const href = `${base}/handoff/?session=${encodeURIComponent(x.id)}`;
       const eng = x.engine === "firefox" ? "firefox" : "chromium";
       return `<a href="${esc(href)}" role="menuitem" aria-label="${esc((x.name || x.profile || "Throwaway") + ", " + x.node_name + ", " + (eng === "firefox" ? "Firefox" : "Chromium"))}"><span class="sp-eng ${eng}" aria-hidden="true">${eng === "firefox" ? "FF" : "CR"}</span>`
-        + `<span class="sp-t"><b>${x.audible ? speakerIcon().outerHTML : ""}${esc(x.name || x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${x.name ? esc(x.profile || "Throwaway") + " · " : ""}${fmtAge(x.uptime_seconds || 0)}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
+        + `<span class="sp-t"><b>${x.audible ? speakerIcon().outerHTML : ""}${esc(x.name || x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${x.name ? esc(x.profile || "Throwaway") + " · " : ""}${formatUptime(Math.floor(x.uptime_seconds || 0))}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
     }).join("") : '<div class="sp-empty">No other sessions are running.</div>') + '<hr><a href="/" role="menuitem"><span class="sp-eng" aria-hidden="true">⌂</span><span class="sp-t"><b>Dashboard</b></span></a>';
   } catch (err) {
     pop.innerHTML = `<div class="sp-empty">Could not load sessions (${esc(err.message)}).</div>`;
@@ -3715,7 +3639,7 @@ function renderSession() {
   const agents = (sess.clients || []).filter((c) => c.agent);
   $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => [agentShort(c) || c.from, c.topic].filter(Boolean).join(": ")).join(", ")} · ` : "")
     + (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
-    + ` · Up ${fmtDur(sess.uptime_seconds || 0)} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
+    + ` · Up ${formatUptime(Math.floor(sess.uptime_seconds || 0))} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
     + (rec ? (paused ? " · recording paused" : " · recording") : "")
     + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : "");
   if (document.activeElement !== $("smProxy")) $("smProxy").value = sess.proxy || "none";

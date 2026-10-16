@@ -1,0 +1,20 @@
+/* Shared by the dashboard and the handoff view: the colours both pages use (each
+   page adds its own on top) and the keyboard focus ring. The light values meet
+   WCAG AA on the light background. */
+:root {
+  --bg: #0b0d12; --fg: #e8eaf2; --muted: #98a0b8;
+  --accent: #7c6cf0; --accent-btn: #6556e0; --ok: #10b981; --node-l: 68%;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f5fa; --fg: #141725; --muted: #646a82;
+    --accent: #5b4bd6; --ok: #047857; --node-l: 36%;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f4f5fa; --fg: #141725; --muted: #646a82;
+  --accent: #5b4bd6; --ok: #047857; --node-l: 36%;
+  color-scheme: light;
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

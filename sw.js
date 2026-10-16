@@ -1,13 +1,15 @@
-// Browser Daemon service worker: keeps the static assets (icons, manifest)
+// Browser Daemon service worker: keeps the static assets (icons, manifest, shared code)
 // for the installed app. Pages and API answers are never cached or touched:
 // they sit behind the sign-in cookie and carry live data.
-const CACHE_NAME = 'browser-daemon-static-v4';
+const CACHE_NAME = 'browser-daemon-static-v5';
 const STATIC_PATHS = new Set([
   '/manifest.webmanifest',
   '/favicon.svg',
   '/favicon.ico',
   '/icon-192.png',
-  '/icon-512.png'
+  '/icon-512.png',
+  '/assets/common.js',
+  '/assets/common.css'
 ]);
 
 self.addEventListener('install', (event) => {

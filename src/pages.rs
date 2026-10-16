@@ -24,6 +24,11 @@ pub(crate) static ICON_512: &[u8] = include_bytes!("../icon-512.png");
 
 pub(crate) static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 
+/// What the dashboard and the handoff view share (helpers, colours).
+pub(crate) static COMMON_JS: &str = include_str!("../assets/common.js");
+
+pub(crate) static COMMON_CSS: &str = include_str!("../assets/common.css");
+
 pub(crate) async fn favicon_ico() -> impl IntoResponse {
     (
         [(
@@ -105,6 +110,33 @@ pub(crate) async fn download_worker_js() -> impl IntoResponse {
             HeaderValue::from_static("application/javascript"),
         )],
         DOWNLOAD_WORKER_JS,
+    )
+}
+
+// Revalidated on every load, so a page and its shared code never come from two versions.
+pub(crate) async fn common_js() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/javascript"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
+        COMMON_JS,
+    )
+}
+
+pub(crate) async fn common_css() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/css; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
+        COMMON_CSS,
     )
 }
 
