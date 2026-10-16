@@ -150,7 +150,7 @@ impl Auth {
             ));
         }
         if let Some(origin) = req.origin {
-            if !origin_matches_host(origin, req.host) {
+            if !origin_matches_host(origin, req.host) && !self.hosts.allows_origin(origin) {
                 return Err(Refusal::new(StatusCode::FORBIDDEN, "Cross-origin request"));
             }
         }
@@ -371,6 +371,23 @@ impl HostPolicy {
         self.rules
             .iter()
             .any(|(h, p)| *h == host && p.is_none_or(|p| Some(p) == port))
+    }
+
+    /// Whether an `Origin` is one of this node's own names. A proxy in front
+    /// (the public vhost on another host) may rewrite `Host` to the node's
+    /// name while the browser's `Origin` still names the public one.
+    pub fn allows_origin(&self, origin: &str) -> bool {
+        let Ok(url) = url::Url::parse(origin) else {
+            return false;
+        };
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let authority = match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        };
+        self.allows(Some(&authority))
     }
 
     /// Names of the hosts the mesh reaches this node under, for the relay.
@@ -722,6 +739,13 @@ mod tests {
             decide(&a, &r)
         };
         assert!(origin("https://browser.fnuc.test", "browser.fnuc.test").is_ok());
+        // Behind a proxy that rewrites Host: the Origin is another allowed name.
+        let hosts = HostPolicy::new("https://browser.fnuc.test", &["browser.test".into()], 3001);
+        assert!(hosts.allows_origin("https://browser.test"));
+        assert!(hosts.allows_origin("https://browser.fnuc.test:8443"));
+        assert!(!hosts.allows_origin("https://evil.test"));
+        assert!(!hosts.allows_origin("http://127.0.0.1"));
+        assert!(!hosts.allows_origin("null"));
         assert!(origin("https://browser.fnuc.test:443", "browser.fnuc.test").is_ok());
         assert!(origin("http://127.0.0.1:3001", "127.0.0.1:3001").is_ok());
         assert_eq!(
