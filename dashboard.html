@@ -495,6 +495,15 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .player-ctrl-btn.active, .player-ctrl-btn.btn-accent { color: var(--accent); }
 .player-ctrl-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .player-ctrl-btn.play svg { fill: currentColor; stroke: none; }
+/* The sound plays from an invisible <audio> laid over the picture: volume add-ons
+   (e.g. Volume Scroll) look for the media element under the pointer. */
+#playerAudio { display: block; position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
+.player-volume { display: inline-flex; align-items: center; gap: 2px; }
+.player-volume.off { opacity: .35; }
+.player-volume.off .player-ctrl-btn { cursor: not-allowed; }
+.player-volume-slider { width: 84px; accent-color: var(--accent); cursor: pointer; }
+.player-volume.off .player-volume-slider { cursor: not-allowed; }
+@media (max-width: 640px) { .player-volume-slider { width: 56px; } }
 .player-ctrl-btn:disabled { opacity: .4; }
 .player-time-text { font: 600 12.5px var(--mono); margin-left: 6px; white-space: nowrap; }
 .player-frames-text { font: 11.5px var(--mono); color: rgba(255, 255, 255, .55); margin-left: 6px; white-space: nowrap; }
@@ -887,7 +896,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="player-viewport-wrap" id="playerViewportContainer">
       <canvas id="playerCanvas" onclick="togglePlayPause()"></canvas>
-      <audio id="playerAudio" preload="auto" hidden></audio>
+      <audio id="playerAudio" preload="auto"></audio>
       <div class="player-center-play paused" id="playerCenterPlayBtn" onclick="togglePlayPause()"><svg viewBox="0 0 24 24" id="playerCenterPlayIcon"><polygon points="8 5 19 12 8 19 8 5"/></svg></div>
       <div class="player-loading-overlay" id="playerLoadingOverlay">
         <div class="player-loading-spinner"></div>
@@ -909,7 +918,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         </div>
         <div class="player-controls-right">
           <span id="playerFrameOffset" class="player-frames-text">+0.0s</span>
-          <button class="player-ctrl-btn" id="playerMuteBtn" onclick="togglePlayerMute()" title="Mute (m)" hidden><svg viewBox="0 0 24 24" id="playerMuteIcon"></svg></button>
+          <span class="player-volume" id="playerVolumeWrap">
+            <button class="player-ctrl-btn" id="playerMuteBtn" onclick="togglePlayerMute()" title="Mute (m)"><svg viewBox="0 0 24 24" id="playerMuteIcon"></svg></button>
+            <input type="range" id="playerVolume" class="player-volume-slider" min="0" max="1" step="0.01" value="1" oninput="setPlayerVolume(this.value)" aria-label="Volume">
+          </span>
           <button class="player-ctrl-btn" id="playerLoopBtn" onclick="togglePlayerLoop()" title="Loop (Shift+L)"><svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/></svg></button>
           <button class="player-ctrl-btn" id="playerSpeedCycleBtn" onclick="cyclePlaySpeed()" title="Playback speed">1x</button>
           <button class="player-ctrl-btn" id="playerFullscreenBtn" onclick="togglePlayerFullscreen()" title="Full screen (f)"><svg viewBox="0 0 24 24" id="playerFsIcon"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
@@ -3556,17 +3568,45 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
 /* The recording's sound (recordings made with audio): fetched whole (seeking works
    on a blob), and kept in step with the frames, which stay the clock: each frame
    moves the audio there if it drifted, at the playback speed. */
-const playerSound = { id: null, url: '', muted: (() => { try { return localStorage.getItem('dash.playerMuted') === '1'; } catch { return false; } })() };
+const playerSound = { id: null, url: '' };
 const SPEAKER_ON = '<path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>';
+const SPEAKER_LOW = '<path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7"/>';
 const SPEAKER_OFF = '<path d="M11 5 6 9H2v6h4l5 4zM22 9l-6 6M16 9l6 6"/>';
 function playerHasSound() { return !!(activePlayer && playerSound.id === activePlayer.id && playerSound.url); }
+// Volume and mute are remembered across recordings and visits.
+(() => {
+  const a = $('playerAudio');
+  try {
+    const v = parseFloat(localStorage.getItem('dash.playerVolume'));
+    if (v >= 0 && v <= 1) a.volume = v;
+    a.muted = localStorage.getItem('dash.playerMuted') === '1';
+  } catch { /* storage unavailable */ }
+  // Whoever changed it (the slider, a key, a volume add-on): the controls follow.
+  a.addEventListener('volumechange', () => {
+    try {
+      localStorage.setItem('dash.playerVolume', String(a.volume));
+      localStorage.setItem('dash.playerMuted', a.muted ? '1' : '0');
+    } catch { /* storage unavailable */ }
+    showMuteButton();
+  });
+})();
+// Without sound the controls stay, greyed out.
 function showMuteButton() {
-  const btn = $('playerMuteBtn');
-  btn.hidden = !playerSound.url;
-  $('playerMuteIcon').innerHTML = playerSound.muted ? SPEAKER_OFF : SPEAKER_ON;
-  btn.title = playerSound.muted ? 'Unmute (m)' : 'Mute (m)';
-  btn.classList.toggle('active', !playerSound.muted);
-  $('playerAudio').muted = playerSound.muted;
+  const a = $('playerAudio'), on = !!playerSound.url;
+  const silent = a.muted || a.volume === 0;
+  $('playerVolumeWrap').classList.toggle('off', !on);
+  $('playerMuteBtn').disabled = !on;
+  $('playerVolume').disabled = !on;
+  $('playerVolume').value = a.muted ? 0 : a.volume;
+  $('playerMuteIcon').innerHTML = silent ? SPEAKER_OFF : a.volume < 0.5 ? SPEAKER_LOW : SPEAKER_ON;
+  const title = !on ? 'This recording has no sound' : silent ? 'Unmute (m)' : 'Mute (m)';
+  $('playerMuteBtn').title = title;
+  $('playerVolume').title = on ? `Volume ${Math.round((a.muted ? 0 : a.volume) * 100)}% (↑/↓)` : title;
+}
+function setPlayerVolume(v) {
+  const a = $('playerAudio');
+  a.volume = Math.max(0, Math.min(1, +v));
+  a.muted = a.volume === 0;
 }
 function unloadPlayerAudio() {
   const a = $('playerAudio');
@@ -3612,9 +3652,11 @@ function syncPlayerAudio() {
   if (!running && !a.paused) a.pause();
 }
 function togglePlayerMute() {
-  playerSound.muted = !playerSound.muted;
-  try { localStorage.setItem('dash.playerMuted', playerSound.muted ? '1' : '0'); } catch { /* storage unavailable */ }
-  showMuteButton();
+  if (!playerSound.url) return;
+  const a = $('playerAudio');
+  // Unmuting at volume 0 would stay silent: back to a usable level.
+  if (a.muted || a.volume === 0) { if (a.volume === 0) a.volume = 0.5; a.muted = false; }
+  else a.muted = true;
 }
 
 async function openPlayerModal(id, node) {
@@ -4050,6 +4092,11 @@ window.addEventListener('keydown', e => {
   } else if ((e.key === 'm' || e.key === 'M') && playerSound.url) {
     e.preventDefault();
     togglePlayerMute();
+  } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && playerSound.url) {
+    e.preventDefault();
+    const a = $('playerAudio');
+    setPlayerVolume((a.muted ? 0 : a.volume) + (e.key === 'ArrowUp' ? 0.05 : -0.05));
+    resetPlayerControlsTimer();
   } else if (e.key === 'f' || e.key === 'F') {
     e.preventDefault();
     togglePlayerFullscreen();
