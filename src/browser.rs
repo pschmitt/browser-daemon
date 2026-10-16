@@ -227,6 +227,9 @@ impl ActiveBrowser {
                 }
                 // Outlives the daemon: a restart adopts it again.
                 proc::own_group(&mut cmd);
+                if let Some(tag) = proc::instance_arg() {
+                    cmd.arg(tag);
+                }
                 // No start tab for an agent opening its own (Playwright): it would sit
                 // there unused. Chromium then opens the window with the first tab.
                 if !start_pages.is_empty() {

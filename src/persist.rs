@@ -188,3 +188,28 @@ pub async fn load_all(state_dir: &Path) -> Vec<SessionRecord> {
 pub fn record_version() -> u32 {
     VERSION
 }
+
+/// Display numbers (`:N`) the session records in the sessions directory mention,
+/// whether or not they can still be adopted.
+pub async fn display_numbers(state_dir: &Path) -> std::collections::HashSet<u32> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(mut entries) = fs::read_dir(dir(state_dir)).await else {
+        return out;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let Ok(raw) = fs::read(entry.path()).await else {
+            continue;
+        };
+        let Ok(rec) = serde_json::from_slice::<SessionRecord>(&raw) else {
+            continue;
+        };
+        let names = rec.display.as_ref().map(|d| d.name.as_str());
+        out.extend(
+            names
+                .into_iter()
+                .chain(rec.shared_display.as_deref())
+                .filter_map(|n| n.strip_prefix(':')?.parse::<u32>().ok()),
+        );
+    }
+    out
+}

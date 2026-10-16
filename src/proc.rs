@@ -15,19 +15,6 @@ pub fn start_ticks(pid: u32) -> Option<u64> {
     rest.split_whitespace().nth(19)?.parse().ok()
 }
 
-/// The command line of a process, arguments joined by spaces.
-pub fn cmdline(pid: u32) -> Option<String> {
-    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
-    let text = String::from_utf8_lossy(&raw).into_owned();
-    Some(text.trim_end_matches('\0').replace('\0', " "))
-}
-
-fn stat_fields(pid: u32) -> Option<Vec<String>> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest = &stat[stat.rfind(')')? + 1..];
-    Some(rest.split_whitespace().map(str::to_string).collect())
-}
-
 /// Is this the main process of a session browser or its X server, by command line?
 fn is_session_main(args: &str) -> bool {
     let browser = args.contains("--remote-debugging-port")
@@ -42,15 +29,133 @@ fn is_session_main(args: &str) -> bool {
     browser || xvfb
 }
 
-/// Kill browsers and session displays of this user that no session record
+/// Environment variable carrying the id of the daemon that started a session process.
+pub const INSTANCE_VAR: &str = "BROWSER_DAEMON_INSTANCE";
+
+static INSTANCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Stable id of the daemon owning `state_dir` (FNV-1a of the path): the same
+/// after a restart, different for a daemon with another state directory.
+pub fn instance_id(state_dir: &std::path::Path) -> String {
+    let dir = std::fs::canonicalize(state_dir).unwrap_or_else(|_| state_dir.to_path_buf());
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in dir.as_os_str().as_encoded_bytes() {
+        hash = (hash ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Set once at startup, before any session process is spawned.
+pub fn set_instance(id: String) {
+    let _ = INSTANCE.set(id);
+}
+
+/// What the sweep may rely on to tell this daemon's leftovers from other daemons'.
+pub struct SweepScope<'a> {
+    pub instance: &'a str,
+    /// Directories whose mention in a command line marks a process as ours
+    /// (profiles, state) -- only used for processes without an instance tag.
+    pub dirs: &'a [std::path::PathBuf],
+    /// Prefix of temporary profile paths (`<tmp>/browserd-`).
+    pub temp_prefix: &'a str,
+    /// Display numbers our own session records mention.
+    pub displays: &'a std::collections::HashSet<u32>,
+}
+
+/// Command-line switch carrying the same tag: Chromium blanks its environment
+/// (it reuses the memory for its process title), so the variable is unreadable.
+pub const INSTANCE_ARG: &str = "--browser-daemon-instance=";
+
+/// The instance this daemon tags its browsers with, as a switch for Chromium.
+pub fn instance_arg() -> Option<String> {
+    INSTANCE.get().map(|id| format!("{INSTANCE_ARG}{id}"))
+}
+
+fn args_instance(args: &str) -> Option<String> {
+    args.split(' ')
+        .find_map(|a| a.strip_prefix(INSTANCE_ARG))
+        .map(str::to_string)
+}
+
+/// The instance tag in a `/proc/<pid>/environ` blob, if any.
+fn environ_instance(raw: &[u8]) -> Option<String> {
+    let prefix = format!("{INSTANCE_VAR}=");
+    raw.split(|b| *b == 0)
+        .filter_map(|e| std::str::from_utf8(e).ok())
+        .find_map(|e| e.strip_prefix(&prefix))
+        .map(str::to_string)
+}
+
+fn xvfb_display(args: &str) -> Option<u32> {
+    let mut it = args.split(' ');
+    it.next().filter(|a| a.ends_with("Xvfb"))?;
+    it.next()?.strip_prefix(':')?.parse().ok()
+}
+
+/// Is this (session main) process left behind by this daemon, as opposed to a
+/// live process of another daemon of the same user?
+///
+/// - Tagged with an instance id (every process started by this version): ours
+///   only when the id is ours.
+/// - Untagged (started by an older version): a browser is ours when its command
+///   line names a path under our own directories (profiles, state, `browserd-*`
+///   temp profiles); an Xvfb only when its display number appears in our session
+///   records. Anything else is left alone.
+fn is_ours(tag: Option<&str>, args: &str, scope: &SweepScope) -> bool {
+    if let Some(tag) = tag {
+        return tag == scope.instance;
+    }
+    if let Some(n) = xvfb_display(args) {
+        return scope.displays.contains(&n);
+    }
+    mentions_path(args, scope.temp_prefix, false)
+        || scope.dirs.iter().any(|d| {
+            let d = d.to_string_lossy();
+            !d.is_empty() && mentions_path(args, &d, true)
+        })
+}
+
+/// Does `args` name `path` (or something below it)? With `whole`, `/a/b` does not
+/// match `/a/bc`; a prefix like `<tmp>/browserd-` is meant to match more.
+fn mentions_path(args: &str, path: &str, whole: bool) -> bool {
+    let path = if whole {
+        path.trim_end_matches('/')
+    } else {
+        path
+    };
+    args.match_indices(path).any(|(i, m)| {
+        !whole
+            || args[i + m.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c == '/' || c == ' ')
+    })
+}
+
+/// Kill browsers and session displays of this daemon that no session record
 /// claims (a crash, or a daemon from before sessions survived restarts left
-/// them): they hold profiles and memory and nothing can reach them.
-pub fn sweep_orphans(keep: &std::collections::HashSet<u32>) -> usize {
+/// them): they hold profiles and memory and nothing can reach them. Processes
+/// of other daemons of the same user are left alone (see [`is_ours`]).
+pub fn sweep_orphans(keep: &std::collections::HashSet<u32>, scope: &SweepScope) -> usize {
+    sweep_orphans_in(std::path::Path::new("/proc"), keep, scope, |pid| {
+        // SAFETY: plain kill(2) on the orphan's own process group.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    })
+}
+
+fn sweep_orphans_in(
+    root: &std::path::Path,
+    keep: &std::collections::HashSet<u32>,
+    scope: &SweepScope,
+    kill: impl Fn(u32),
+) -> usize {
     use std::os::unix::fs::MetadataExt;
     // SAFETY: getuid(2) has no preconditions.
     let uid = unsafe { libc::getuid() };
     let mut killed = 0;
-    let Ok(entries) = std::fs::read_dir("/proc") else {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return 0;
     };
     for entry in entries.flatten() {
@@ -64,21 +169,37 @@ pub fn sweep_orphans(keep: &std::collections::HashSet<u32>) -> usize {
         if keep.contains(&pid) || entry.metadata().map(|m| m.uid()).ok() != Some(uid) {
             continue;
         }
+        let dir = entry.path();
         // Group leaders reparented to init: what an earlier daemon left behind.
-        let Some(fields) = stat_fields(pid) else {
+        let Some(stat) = std::fs::read_to_string(dir.join("stat")).ok() else {
             continue;
         };
-        let (ppid, pgid) = (fields.get(1), fields.get(2));
-        if ppid.map(String::as_str) != Some("1")
-            || pgid.map(String::as_str) != Some(&pid.to_string())
+        let Some(rest) = stat.rfind(')').map(|i| &stat[i + 1..]) else {
+            continue;
+        };
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        if fields.get(1) != Some(&"1")
+            || fields.get(2).and_then(|p| p.parse::<u32>().ok()) != Some(pid)
         {
             continue;
         }
-        if cmdline(pid).is_some_and(|a| is_session_main(&a)) {
-            // SAFETY: plain kill(2) on the orphan's own process group.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
+        let Some(args) = std::fs::read(dir.join("cmdline")).ok().map(|raw| {
+            String::from_utf8_lossy(&raw)
+                .trim_end_matches('\0')
+                .replace('\0', " ")
+        }) else {
+            continue;
+        };
+        if !is_session_main(&args) {
+            continue;
+        }
+        let tag = args_instance(&args).or_else(|| {
+            std::fs::read(dir.join("environ"))
+                .ok()
+                .and_then(|raw| environ_instance(&raw))
+        });
+        if is_ours(tag.as_deref(), &args, scope) {
+            kill(pid);
             killed += 1;
         }
     }
@@ -228,8 +349,12 @@ fn group_is_ours(current_start: Option<u64>, recorded_start: u64) -> bool {
 }
 
 /// Put the child in a process group of its own (pgid = pid).
+/// Tag it with this daemon's instance id, so another daemon's sweep leaves it alone.
 pub fn own_group(cmd: &mut Command) {
     cmd.process_group(0);
+    if let Some(id) = INSTANCE.get() {
+        cmd.env(INSTANCE_VAR, id);
+    }
 }
 
 /// Kill the child when the daemon dies: helpers (ffmpeg encoders, ...) must not
@@ -266,6 +391,112 @@ mod tests {
         assert!(!is_session_main(
             "/nix/store/x-chromium/bin/chromium --type=renderer --user-data-dir=/p"
         ));
+    }
+
+    fn scope<'a>(
+        dirs: &'a [std::path::PathBuf],
+        displays: &'a std::collections::HashSet<u32>,
+    ) -> SweepScope<'a> {
+        SweepScope {
+            instance: "aaaa",
+            dirs,
+            temp_prefix: "/tmp/browserd-",
+            displays,
+        }
+    }
+
+    #[test]
+    fn the_instance_tag_is_read_from_environ() {
+        let raw = b"A=1\0BROWSER_DAEMON_INSTANCE=abc\0B=2\0";
+        assert_eq!(environ_instance(raw).as_deref(), Some("abc"));
+        assert_eq!(environ_instance(b"A=1\0"), None);
+        assert_eq!(
+            args_instance("/x/chromium --a --browser-daemon-instance=abc --b").as_deref(),
+            Some("abc")
+        );
+    }
+
+    #[test]
+    fn instance_ids_follow_the_directory() {
+        let a = instance_id(std::path::Path::new("/nonexistent/a"));
+        assert_eq!(a, instance_id(std::path::Path::new("/nonexistent/a")));
+        assert_ne!(a, instance_id(std::path::Path::new("/nonexistent/b")));
+    }
+
+    #[test]
+    fn tagged_processes_belong_to_their_daemon_only() {
+        let dirs = vec![std::path::PathBuf::from("/var/lib/bd")];
+        let displays = std::collections::HashSet::new();
+        let sc = scope(&dirs, &displays);
+        let args = "/x/chromium --remote-debugging-port=0 --user-data-dir=/var/lib/bd/profiles/p";
+        assert!(is_ours(Some("aaaa"), args, &sc));
+        // Another daemon's browser, even one whose path looks like ours.
+        assert!(!is_ours(Some("bbbb"), args, &sc));
+    }
+
+    #[test]
+    fn untagged_processes_need_a_path_or_display_of_ours() {
+        let dirs = vec![std::path::PathBuf::from("/var/lib/bd")];
+        let displays = std::collections::HashSet::from([101]);
+        let sc = scope(&dirs, &displays);
+        assert!(is_ours(
+            None,
+            "/x/chromium --remote-debugging-port=0 --user-data-dir=/var/lib/bd/profiles/p",
+            &sc
+        ));
+        assert!(is_ours(
+            None,
+            "/x/firefox --profile /tmp/browserd-1 --remote-debugging-port=0",
+            &sc
+        ));
+        assert!(!is_ours(
+            None,
+            "/x/chromium --remote-debugging-port=0 --user-data-dir=/other/profiles/p",
+            &sc
+        ));
+        assert!(!is_ours(
+            None,
+            "/x/chromium --remote-debugging-port=0 --user-data-dir=/var/lib/bd-test/profiles/p",
+            &sc
+        ));
+        assert!(is_ours(None, "/x/Xvfb :101 -screen 0 1x1x24", &sc));
+        assert!(!is_ours(None, "/x/Xvfb :102 -screen 0 1x1x24", &sc));
+    }
+
+    #[test]
+    fn the_sweep_kills_only_matching_orphans_in_a_fake_proc() {
+        use std::cell::RefCell;
+        let root = std::env::temp_dir().join(format!("bd-fakeproc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mk = |pid: u32, ppid: u32, pgid: u32, cmd: &str, env: &str| {
+            let d = root.join(pid.to_string());
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("stat"), format!("{pid} (x y) S {ppid} {pgid} 0")).unwrap();
+            std::fs::write(d.join("cmdline"), cmd.replace(' ', "\0")).unwrap();
+            std::fs::write(d.join("environ"), env).unwrap();
+        };
+        let chrome = "/x/chromium --remote-debugging-port=0 --user-data-dir=/other/p";
+        mk(5001, 1, 5001, chrome, "BROWSER_DAEMON_INSTANCE=aaaa\0");
+        mk(5002, 1, 5002, chrome, "BROWSER_DAEMON_INSTANCE=bbbb\0");
+        mk(5003, 1, 5003, chrome, "");
+        mk(5004, 77, 5004, chrome, "BROWSER_DAEMON_INSTANCE=aaaa\0");
+        mk(5005, 1, 5005, chrome, "BROWSER_DAEMON_INSTANCE=aaaa\0");
+        // Chromium: tag on the command line, environment blanked.
+        let tagged = format!("{chrome} --browser-daemon-instance=aaaa");
+        let other = format!("{chrome} --browser-daemon-instance=bbbb");
+        mk(5006, 1, 5006, &tagged, "");
+        mk(5007, 1, 5007, &other, "");
+        let dirs = vec![];
+        let displays = std::collections::HashSet::new();
+        let sc = scope(&dirs, &displays);
+        let keep = std::collections::HashSet::from([5005]);
+        let killed = RefCell::new(Vec::new());
+        let n = sweep_orphans_in(&root, &keep, &sc, |p| killed.borrow_mut().push(p));
+        let _ = std::fs::remove_dir_all(&root);
+        // Only the orphan tagged with our id: not another daemon's, not an
+        // untagged one outside our dirs, not a child, not a kept one.
+        assert_eq!(killed.into_inner(), vec![5001, 5006]);
+        assert_eq!(n, 2);
     }
 
     #[test]

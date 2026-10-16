@@ -495,6 +495,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parent()
         .unwrap_or(&args.profile_dir)
         .join("node-settings.json");
+    // Tag every browser and display this daemon starts (see `proc::sweep_orphans`).
+    proc::set_instance(proc::instance_id(
+        args.profile_dir.parent().unwrap_or(&args.profile_dir),
+    ));
     let config = Arc::new(BrowserConfig {
         chromium_bin: args.chromium,
         firefox_bin: args.firefox,
@@ -608,6 +612,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
+    let known_displays = persist::display_numbers(state.config.state_dir()).await;
     state.adopt_sessions().await;
     {
         let adopted = snapshot_sessions(&state).await;
@@ -620,7 +625,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        let swept = proc::sweep_orphans(&keep);
+        let dirs = [
+            state.config.profiles_dir.clone(),
+            state.config.state_dir().to_path_buf(),
+        ];
+        let temp_prefix = format!("{}/browserd-", std::env::temp_dir().display());
+        let scope = proc::SweepScope {
+            instance: &proc::instance_id(state.config.state_dir()),
+            dirs: &dirs,
+            temp_prefix: &temp_prefix,
+            displays: &known_displays,
+        };
+        let swept = proc::sweep_orphans(&keep, &scope);
         if swept > 0 {
             warn!(
                 count = swept,

@@ -85,6 +85,8 @@ The flake's own package is the module's default, so no overlay is needed. More o
 | `keepSessionsOnRestart` | leave the browsers running when the service restarts (the next daemon adopts them) |
 | `allowedHosts` | `Host` header values accepted besides `publicUrl` and loopback (`--allowed-host`) |
 
+At startup the daemon kills browsers and session displays that no session record claims (leftovers of a crash). Only its own are touched, so several daemons of one user can coexist: every browser and Xvfb it starts carries `BROWSER_DAEMON_INSTANCE=<id derived from the state directory>`, and the sweep kills only processes with its id. Processes without a tag (started by an older version) are killed only when their command line names a path under the profiles or state directory (or a `browserd-*` temporary profile), or, for an Xvfb, when its display number appears in this daemon's session records.
+
 The service runs hardened: `ProtectSystem=strict` (writes go to `dataDir`, `recordingsDir`), `ProtectHome`, `NoNewPrivileges`, no capabilities, a state directory of mode 0700 and `UMask=0077`. User namespaces stay allowed for the Chromium sandbox, and `/dev` is not restricted so the GPU render node and audio work.
 
 ### Mesh
