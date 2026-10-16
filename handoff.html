@@ -1174,8 +1174,10 @@ async function helperRequest(url, body, onNote = () => {}) {
     return body;
   };
   const { request } = await call(url, { method: "POST", body: JSON.stringify(body) });
-  for (const until = Date.now() + 340000; Date.now() < until;) {
-    await new Promise((r) => setTimeout(r, 1000));
+  // Quick answers (a lookup in the vault index) come in well under a second: ask
+  // soon, then less often for the slow ones (a phone unlock).
+  for (let n = 0, until = Date.now() + 340000; Date.now() < until; n++) {
+    await new Promise((r) => setTimeout(r, [150, 250, 400, 600][n] ?? 1000));
     const st = await call(`/api/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
     if (st.state === "ready") return st.info;
     if (st.state === "failed") throw new Error(st.error);
@@ -3458,6 +3460,7 @@ function vaultPeek() {
   vaultBadge();
   if (!host || !target?.sessionId || vault.peeking || Date.now() < vault.off) return;
   if (vault.host === host && Date.now() - vault.at < VAULT_FRESH) return;
+  vault.peekHost = host;
   vault.peeking = vaultCall({}).then((found) => {
     vault.host = host;
     vault.at = Date.now();
@@ -3506,6 +3509,12 @@ async function vaultLoad(host, unlock = false, query = "") {
   const body = (html) => { if (!pop.hidden && seq === vaultSeq) { $("vaultList").innerHTML = html; placeVaultPop(); } };
   if (!host) return body('<div class="sp-empty">This page is not on a website: there is nothing to fill.</div>');
   if (!target?.sessionId) return body('<div class="sp-empty">Not connected to a session yet.</div>');
+  // The badge's lookup for this page is underway: wait for it rather than ask twice.
+  if (!unlock && !query && vault.peeking && vault.peekHost === host) {
+    body('<div class="sp-empty checking">Looking in the vault…</div>');
+    await vault.peeking;
+  }
+  if (pop.hidden || seq !== vaultSeq) return;
   const fresh = !unlock && !query && vault.host === host && Array.isArray(vault.list) && Date.now() - vault.at < VAULT_FRESH;
   if (fresh) return vaultRender(vault.list, host, "");
   if (!query || !$("vaultList").querySelector(".vp-entry")) {

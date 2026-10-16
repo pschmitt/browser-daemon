@@ -11,7 +11,7 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::passkeys::{Outcome, Request};
-use crate::secrets;
+use crate::{secrets, vault_index};
 
 #[derive(clap::Args, Debug)]
 pub struct HelperArgs {
@@ -41,6 +41,17 @@ pub async fn run(args: HelperArgs) -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()?;
+    // Keeps the vault index (vault_index.rs) current while rbw is unlocked, so
+    // lookups rarely wait for rbw.
+    let rbw = args.rbw.clone();
+    tokio::spawn(async move {
+        loop {
+            if unlocked(&rbw).await {
+                let _ = vault_index::entries(&rbw);
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    });
     let mut tasks = Vec::new();
     for node in &args.nodes {
         let (node, secret, client, args) = (
@@ -325,8 +336,10 @@ async fn serve(
     })
 }
 
-/// At most this many vault entries are checked for a site.
+/// At most this many vault entries are checked for a site (without the index).
 const MAX_CANDIDATES: usize = 30;
+/// At most this many logins are listed.
+const MAX_RESULTS: usize = 50;
 
 /// The login entries for the page's site (rp_id is its host), as Bitwarden's
 /// autofill would pick them: name, user and whether there's a TOTP, no secrets.
@@ -344,6 +357,32 @@ async fn logins(
         return Ok(serde_json::json!({ "locked": true }));
     }
     let host = req.rp_id.as_str();
+    if let Some(all) = vault_index::entries(&args.rbw) {
+        let mut out: Vec<(bool, &vault_index::Entry)> = all
+            .iter()
+            .map(|e| (secrets::site_matches(host, &e.uris), e))
+            .filter(|(site, e)| match req.query.as_deref() {
+                Some(q) => e.matches(q),
+                None => *site,
+            })
+            .collect();
+        out.sort_by_key(|(site, e)| (!site, e.name.to_lowercase()));
+        return Ok(out
+            .into_iter()
+            .take(MAX_RESULTS)
+            .map(|(site, e)| {
+                serde_json::json!({
+                    "id": e.id,
+                    "name": e.name,
+                    "user": e.user,
+                    "folder": e.folder,
+                    "password": e.password,
+                    "totp": e.totp,
+                    "site": site,
+                })
+            })
+            .collect());
+    }
     // Every URI of a matching entry names the site's base domain, so a search for it
     // narrows the vault cheaply (`rbw list --raw` decrypts all of it); the URIs and
     // their match types then decide. A search of the user's lists every login it

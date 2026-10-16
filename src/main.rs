@@ -25,6 +25,7 @@ mod secrets;
 mod settings;
 mod thumbnail;
 mod tui;
+mod vault_index;
 mod video;
 mod viewers;
 
