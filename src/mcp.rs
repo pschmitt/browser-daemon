@@ -389,9 +389,19 @@ impl State {
     }
 
     async fn tools_call(&self, params: Value) -> Rpc {
+        let started = std::time::SystemTime::now() - Duration::from_secs(1);
         let mut result = self.tools_call_raw(params).await;
         // Whatever comes back, results and errors alike, goes through the mask.
         let filled = self.filled.lock().unwrap().clone();
+        if !filled.is_empty() {
+            // Playwright MCP links its snapshots as files, which show a field's
+            // value even when the screen shows dots: mask them before the agent can read them.
+            let dir = self.out_dir.clone();
+            let secrets = filled.clone();
+            let _ =
+                tokio::task::spawn_blocking(move || secrets::redact_files(&dir, started, &secrets))
+                    .await;
+        }
         match &mut result {
             Ok(v) => secrets::redact(v, &filled),
             Err((_, message)) => *message = secrets::redact_str(message, &filled),

@@ -362,6 +362,43 @@ pub fn redact_str(text: &str, secrets: &[String]) -> String {
     }
 }
 
+/// Masks the secrets in the text files (snapshots, console logs, ...) under
+/// `dir` written since `since`. Playwright MCP keeps page snapshots in files
+/// and its answer only links them, so the mask on the answer does not reach
+/// them. A snapshot shows an input's value whatever it looks like on screen.
+/// Returns how many files were changed.
+pub fn redact_files(dir: &Path, since: std::time::SystemTime, secrets: &[String]) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut changed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            changed += redact_files(&path, since, secrets);
+            continue;
+        }
+        let text_file = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e, "yml" | "yaml" | "log" | "md" | "txt" | "json" | "html"));
+        if !text_file || meta.modified().is_ok_and(|m| m < since) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let masked = redact_str(&text, secrets);
+        if masked != text && std::fs::write(&path, masked).is_ok() {
+            changed += 1;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,5 +657,35 @@ mod tests {
         assert!(!rp_id_valid_for("evil.co.uk", "co.uk"));
         assert!(!rp_id_valid_for("a.com", ""));
         assert!(rp_id_valid_for("a.evil.github.io", "evil.github.io"));
+    }
+
+    #[test]
+    fn files_written_since_are_masked_older_ones_and_other_types_are_not() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("session");
+        std::fs::create_dir(&sub).unwrap();
+        let line = "- textbox \"Pass\": DummySecret123\n";
+        let old = sub.join("old.yml");
+        std::fs::write(&old, line).unwrap();
+        let since = std::time::SystemTime::now() + Duration::from_secs(60);
+        let secrets = vec!["DummySecret123".to_string()];
+        assert_eq!(redact_files(dir.path(), since, &secrets), 0, "too old");
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), line);
+
+        let since = std::time::SystemTime::now() - Duration::from_secs(60);
+        let png = sub.join("shot.png");
+        std::fs::write(&png, line).unwrap();
+        assert_eq!(redact_files(dir.path(), since, &secrets), 1);
+        assert_eq!(
+            std::fs::read_to_string(&old).unwrap(),
+            "- textbox \"Pass\": •••\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&png).unwrap(),
+            line,
+            "not a text file"
+        );
+        assert_eq!(redact_files(dir.path(), since, &secrets), 0, "nothing left");
     }
 }
