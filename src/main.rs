@@ -24,6 +24,7 @@ mod pages;
 mod passkey_helper;
 mod passkeys;
 mod passkeys_api;
+mod peerproc;
 mod peers;
 mod persist;
 mod proc;

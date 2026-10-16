@@ -8,6 +8,10 @@
 //! and never the daemons of the mesh by name. Otherwise a page, or an agent
 //! that was told to open a link, could read the daemon's dashboard through
 //! its own browser and take over every session.
+//!
+//! The relay has no credentials (Chromium cannot do SOCKS5 authentication), so
+//! it only serves the session's own browser: see `peerproc`. Until the browser
+//! has been started (`set_owner`), every connection is refused.
 
 use std::collections::HashSet;
 use std::io;
@@ -21,6 +25,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
+use crate::peerproc::Owner;
 use crate::proxies::{Proxy, Upstream};
 
 /// Per address tried: an address that silently drops packets must not stall the rest.
@@ -119,6 +124,7 @@ impl Policy {
 
 pub struct Relay {
     port: u16,
+    owner: Arc<Owner>,
     upstream: watch::Sender<Option<Proxy>>,
     accept: JoinHandle<()>,
 }
@@ -148,10 +154,17 @@ impl Relay {
         let listener = TcpListener::bind(("127.0.0.1", port)).await?;
         let port = listener.local_addr()?.port();
         let (tx, rx) = watch::channel(upstream);
+        let owner = Arc::new(Owner::default());
+        let accept_owner = owner.clone();
         let accept = tokio::spawn(async move {
-            while let Ok((client, _)) = listener.accept().await {
+            while let Ok((client, peer)) = listener.accept().await {
                 let rx = rx.clone();
+                let owner = accept_owner.clone();
                 tokio::spawn(async move {
+                    if policy.enforce && !from_owner(owner, peer, port).await {
+                        debug!(peer = %peer, "Relay connection from outside the browser refused");
+                        return;
+                    }
                     if let Err(e) = serve(client, rx, policy).await {
                         debug!(error = %e, "Relay connection ended");
                     }
@@ -160,6 +173,7 @@ impl Relay {
         });
         Ok(Arc::new(Self {
             port,
+            owner,
             upstream: tx,
             accept,
         }))
@@ -167,6 +181,12 @@ impl Relay {
 
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// The session's browser (pid and start time): only it and its descendants
+    /// may use the relay.
+    pub fn set_owner(&self, pid: u32, start: u64) {
+        self.owner.set(pid, start);
     }
 
     /// Id of the upstream proxy, `None` for direct connections.
@@ -179,6 +199,19 @@ impl Relay {
         info!(port = self.port, upstream = ?upstream.as_ref().map(|p| &p.id), "Switching session proxy");
         self.upstream.send_replace(upstream);
     }
+}
+
+/// Whether the process on the other end of a connection belongs to the browser.
+/// Any failure to tell counts as no.
+async fn from_owner(owner: Arc<Owner>, peer: SocketAddr, port: u16) -> bool {
+    if !peer.ip().is_loopback() {
+        return false;
+    }
+    tokio::task::spawn_blocking(move || {
+        owner.allows(std::path::Path::new("/proc"), peer.port(), port)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Where the browser wants to go.
@@ -446,6 +479,27 @@ mod tests {
         port
     }
 
+    #[tokio::test]
+    async fn serves_only_the_browsers_processes() {
+        let relay = Relay::start_with(0, None, Policy::strict()).await.unwrap();
+        let handshake = |port: u16| async move {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).await?;
+            s.write_all(&[5, 1, 0]).await?;
+            let mut reply = [0u8; 2];
+            s.read_exact(&mut reply).await?;
+            io::Result::Ok(reply)
+        };
+        // No browser yet.
+        assert!(handshake(relay.port()).await.is_err());
+        // Somebody else's process tree.
+        relay.set_owner(1, 0);
+        assert!(handshake(relay.port()).await.is_err());
+        // This test process stands in for the browser.
+        let me = std::process::id();
+        relay.set_owner(me, crate::proc::start_ticks(me).unwrap());
+        assert_eq!(handshake(relay.port()).await.unwrap(), [5, 0]);
+    }
+
     async fn via_relay(relay: u16, host: &str, port: u16) -> io::Result<TcpStream> {
         let mut s = TcpStream::connect(("127.0.0.1", relay)).await?;
         socks5_connect(&mut s, &Target::Name(host.into()), port).await?;
@@ -575,6 +629,8 @@ mod tests {
     async fn a_strict_relay_refuses_loopback_with_a_ruleset_reply() {
         let echo = echo_server().await;
         let relay = Relay::start(None).await.unwrap();
+        let me = std::process::id();
+        relay.set_owner(me, crate::proc::start_ticks(me).unwrap());
         for host in ["127.0.0.1", "localhost"] {
             let err = via_relay(relay.port(), host, echo).await.err().unwrap();
             assert!(

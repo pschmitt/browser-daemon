@@ -288,6 +288,7 @@ impl ActiveBrowser {
                 let existing = fs::read_to_string(&prefs_file).await.unwrap_or_default();
                 fs::write(&prefs_file, chromium_preferences(&existing)).await?;
                 let proc = Proc::spawned(cmd.spawn()?).ok_or("Chromium exited right away")?;
+                relay.set_owner(proc.pid, proc.start);
                 let (port, ws_path) = match wait_for_devtools_port(&user_data_dir).await {
                     Ok(res) => res,
                     Err(e) => {
@@ -416,6 +417,7 @@ impl ActiveBrowser {
                 }
 
                 let proc = Proc::spawned(cmd.spawn()?).ok_or("Firefox exited right away")?;
+                relay.set_owner(proc.pid, proc.start);
 
                 // A failure below drops `proc`, which kills Firefox.
                 let port = match wait_for_firefox_bidi(&log, Duration::from_secs(15)).await {
@@ -635,6 +637,7 @@ impl ActiveBrowser {
             .and_then(|id| config.proxies.iter().find(|p| &p.id == id))
             .cloned();
         let relay = Relay::start_on(rec.relay_port, proxy).await?;
+        relay.set_owner(proc.pid, proc.start);
         let audio = match (&config.audio, &rec.audio) {
             (Some(cfg), Some(a)) => Some(Sink::adopt(cfg, a.sink.clone(), a.module)),
             _ => None,
