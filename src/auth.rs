@@ -60,10 +60,12 @@ impl Auth {
         Self { secret, key, hosts }
     }
 
+    #[allow(dead_code)]
     pub fn enabled(&self) -> bool {
         self.secret.is_some()
     }
 
+    #[allow(dead_code)]
     pub fn hosts(&self) -> &HostPolicy {
         &self.hosts
     }
