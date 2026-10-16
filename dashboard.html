@@ -496,7 +496,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .player-ctrl-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .player-ctrl-btn.play svg { fill: currentColor; stroke: none; }
 /* The sound plays from an invisible <audio> laid over the picture: volume add-ons
-   (e.g. Volume Scroll) look for the media element under the pointer. */
+   (e.g. Volume Scroll) look for the media element under the pointer. It has
+   `controls` because browsers hide <audio> without them (display: none !important). */
 #playerAudio { display: block; position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; pointer-events: none; }
 .player-volume { display: inline-flex; align-items: center; gap: 2px; }
 .player-volume.off { opacity: .35; }
@@ -896,7 +897,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="player-viewport-wrap" id="playerViewportContainer">
       <canvas id="playerCanvas" onclick="togglePlayPause()"></canvas>
-      <audio id="playerAudio" preload="auto"></audio>
+      <audio id="playerAudio" preload="auto" controls tabindex="-1" aria-hidden="true"></audio>
       <div class="player-center-play paused" id="playerCenterPlayBtn" onclick="togglePlayPause()"><svg viewBox="0 0 24 24" id="playerCenterPlayIcon"><polygon points="8 5 19 12 8 19 8 5"/></svg></div>
       <div class="player-loading-overlay" id="playerLoadingOverlay">
         <div class="player-loading-spinner"></div>
