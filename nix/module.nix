@@ -21,6 +21,9 @@ let
     load-module module-null-sink sink_name=browserd_idle sink_properties=device.description=browser-daemon
     set-default-sink browserd_idle
   '';
+  # StateDirectory is relative to /var/lib.
+  stateDirectory =
+    if lib.hasPrefix "/var/lib/" cfg.dataDir then lib.removePrefix "/var/lib/" cfg.dataDir else null;
   parkPointer = pkgs.writeShellScript "browser-daemon-park-pointer" ''
     for _ in $(seq 50); do
       DISPLAY=${cfg.display} ${lib.getExe pkgs.xdotool} mousemove ${toString (screenWidth - 1)} ${toString (screenHeight - 1)} && exit 0
@@ -36,18 +39,21 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       default = pkgs.browser-daemon or (pkgs.callPackage ./package.nix { });
+      defaultText = lib.literalExpression "pkgs.browser-daemon (the flake's package when the module comes from the flake)";
       description = "browser-daemon package to run.";
     };
 
     chromiumPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.chromium;
+      defaultText = lib.literalExpression "pkgs.chromium";
       description = "Chromium package to spawn for sessions.";
     };
 
     firefoxPackage = lib.mkOption {
       type = lib.types.nullOr lib.types.package;
       default = pkgs.firefox;
+      defaultText = lib.literalExpression "pkgs.firefox";
       description = "Firefox package to spawn for sessions. Set to null to disable Firefox engine.";
     };
 
@@ -97,13 +103,15 @@ in
     xvfbPackage = lib.mkOption {
       type = lib.types.package;
       default = pkgs.xorg-server;
+      defaultText = lib.literalExpression "pkgs.xorg-server";
       description = "Xvfb server package.";
     };
 
     bind = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1:3001";
-      description = "Listen address and port for the HTTP/WebSocket daemon.";
+      example = "127.0.0.1:3001";
+      description = "Listen address and port (IP literal, `[::1]:3001` for IPv6) for the HTTP/WebSocket daemon.";
     };
 
     display = lib.mkOption {
@@ -151,6 +159,7 @@ in
     nodeName = lib.mkOption {
       type = lib.types.str;
       default = config.networking.hostName;
+      defaultText = lib.literalExpression "config.networking.hostName";
       description = "Node identifier for peer-to-peer mesh.";
     };
 
@@ -166,21 +175,41 @@ in
       description = "List of peer browser-daemon base URLs for cluster meshing.";
     };
 
+    allowedHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "browser.example.org" ];
+      description = ''
+        Host names (optionally with `:port`) the daemon accepts in the `Host`
+        header, besides the one of `publicUrl` and loopback. Add the names a
+        reverse proxy or a mesh peer reaches this node by.
+      '';
+    };
+
     clusterSecret = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Shared cluster secret string for peer-to-peer authentication.";
+      description = ''
+        Shared cluster secret string. Deprecated: it ends up in the world-readable
+        Nix store and on the command line. Use `clusterSecretFile`.
+      '';
     };
 
     clusterSecretFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+      type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Path to file containing shared cluster secret for peer-to-peer authentication.";
+      example = "/run/secrets/browser-daemon/cluster-secret";
+      description = ''
+        Absolute path of a file with the shared cluster secret. Give a string,
+        not a Nix path literal (that would copy the secret into the Nix store).
+        The CLI and TUI read it from `$BROWSER_DAEMON_SECRET_FILE` when set.
+      '';
     };
 
     recordingsDir = lib.mkOption {
       type = lib.types.str;
       default = "${cfg.dataDir}/recordings";
+      defaultText = lib.literalExpression ''"''${config.services.browser-daemon.dataDir}/recordings"'';
       description = "Directory where session screencast recordings are saved.";
     };
 
@@ -234,11 +263,13 @@ in
       chromiumExtension = lib.mkOption {
         type = lib.types.package;
         default = adblockPkgs.ublock-origin-lite;
+        defaultText = lib.literalExpression "(pkgs.callPackage ./adblock.nix { }).ublock-origin-lite";
         description = "Unpacked Chromium extension to load as the ad blocker.";
       };
       firefoxAddon = lib.mkOption {
         type = lib.types.path;
         default = "${adblockPkgs.ublock-origin-xpi}/ublock-origin.xpi";
+        defaultText = lib.literalExpression ''"''${(pkgs.callPackage ./adblock.nix { }).ublock-origin-xpi}/ublock-origin.xpi"'';
         description = "Firefox add-on (.xpi) to install as the ad blocker.";
       };
     };
@@ -320,9 +351,38 @@ in
   config = lib.mkIf cfg.enable {
     assertions = [
       {
+        assertion = cfg.clusterSecret == null || cfg.clusterSecretFile == null;
+        message = "services.browser-daemon: set only one of clusterSecret and clusterSecretFile.";
+      }
+      {
+        assertion =
+          cfg.clusterSecretFile == null
+          || (
+            lib.hasPrefix "/" cfg.clusterSecretFile
+            && !(lib.hasPrefix "${builtins.storeDir}/" cfg.clusterSecretFile)
+          );
+        message = "services.browser-daemon.clusterSecretFile must be an absolute path outside the Nix store (a string, not a path literal).";
+      }
+      {
+        assertion = builtins.match "([[][0-9a-fA-F:.]+[]]|[0-9.]+):[0-9]{1,5}" cfg.bind != null;
+        message = "services.browser-daemon.bind must be IP:PORT (or [IPv6]:PORT), got `${cfg.bind}`.";
+      }
+      {
         assertion = cfg.video.enable -> cfg.displayMode == "per-session";
         message = "services.browser-daemon.video needs displayMode = \"per-session\" (each session's screen is captured on its own).";
       }
+    ];
+
+    warnings =
+      lib.optional (cfg.clusterSecret != null)
+        "services.browser-daemon.clusterSecret is deprecated: it lands in the Nix store and on the command line. Use clusterSecretFile."
+      ++ lib.optional (
+        cfg.peers != [ ] && cfg.clusterSecret == null && cfg.clusterSecretFile == null
+      ) "services.browser-daemon.peers is set without a cluster secret: the mesh will not authenticate.";
+
+    # A dataDir outside /var/lib cannot be a StateDirectory.
+    systemd.tmpfiles.rules = lib.mkIf (stateDirectory == null) [
+      "d ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group} -"
     ];
 
     users.users.${cfg.user} = {
@@ -341,6 +401,9 @@ in
 
     # `browser-daemon tui` for the people on the host.
     environment.systemPackages = [ cfg.package ];
+    environment.variables = lib.mkIf (cfg.clusterSecretFile != null) {
+      BROWSER_DAEMON_SECRET_FILE = cfg.clusterSecretFile;
+    };
 
     systemd.services = {
       browser-daemon-pulse = lib.mkIf cfg.audio.enable {
@@ -422,6 +485,10 @@ in
               (toString cfg.recordingMaxCount)
               "--record-audio"
               (lib.boolToString cfg.recordAudio)
+              "--record-sessions"
+              (lib.boolToString cfg.recordSessions)
+              "--ffmpeg"
+              (lib.getExe cfg.audio.ffmpegPackage)
               "--max-sessions"
               (toString cfg.maxSessions)
               "--default-width"
@@ -466,8 +533,6 @@ in
               "${pulseDir}/native"
               "--pactl"
               "${cfg.audio.pulseaudioPackage}/bin/pactl"
-              "--ffmpeg"
-              (lib.getExe cfg.audio.ffmpegPackage)
             ]
             ++ lib.optionals (cfg.proxies != [ ]) [
               "--proxies-file"
@@ -481,16 +546,17 @@ in
               "--peer"
               p
             ]) cfg.peers
+            ++ lib.concatMap (h: [
+              "--allowed-host"
+              h
+            ]) cfg.allowedHosts
             ++ lib.optionals (cfg.clusterSecretFile != null) [
               "--cluster-secret-file"
-              (toString cfg.clusterSecretFile)
+              cfg.clusterSecretFile
             ]
             ++ lib.optionals (cfg.clusterSecret != null) [
               "--cluster-secret"
               cfg.clusterSecret
-            ]
-            ++ lib.optionals cfg.recordSessions [
-              "--record-sessions"
             ]
             ++ lib.optionals (cfg.firefoxPackage != null) [
               "--firefox"
@@ -506,7 +572,41 @@ in
           KillMode = lib.mkIf cfg.keepSessionsOnRestart "process";
           User = cfg.user;
           Group = cfg.group;
-          StateDirectory = "browser-daemon";
+          StateDirectory = lib.mkIf (stateDirectory != null) stateDirectory;
+          StateDirectoryMode = "0700";
+          UMask = "0077";
+          # Hardening. User namespaces stay allowed (the Chromium sandbox needs
+          # them), as does W^X-violating JIT memory. /dev is not restricted, so
+          # the GPU render node (/dev/dri) and audio keep working.
+          NoNewPrivileges = true;
+          ProtectSystem = "strict";
+          ReadWritePaths = [
+            cfg.dataDir
+            "-${cfg.recordingsDir}"
+            "-${pulseDir}"
+          ]
+          # Without a private /tmp, the real one must stay writable (browsers, X sockets).
+          ++ lib.optionals (cfg.displayMode != "per-session") [
+            "/tmp"
+            "/var/tmp"
+          ];
+          ProtectHome = true;
+          # The shared Xvfb is a separate unit whose socket lives in /tmp.
+          PrivateTmp = cfg.displayMode == "per-session";
+          ProtectKernelTunables = true;
+          ProtectKernelModules = true;
+          ProtectKernelLogs = true;
+          ProtectControlGroups = true;
+          RestrictAddressFamilies = [
+            "AF_UNIX"
+            "AF_INET"
+            "AF_INET6"
+            "AF_NETLINK"
+          ];
+          LockPersonality = true;
+          RestrictRealtime = true;
+          SystemCallArchitectures = "native";
+          CapabilityBoundingSet = "";
           WorkingDirectory = cfg.dataDir;
           MemoryMax = lib.mkIf (cfg.memoryMax != null) cfg.memoryMax;
           MemoryHigh = lib.mkIf (cfg.memoryHigh != null) cfg.memoryHigh;
