@@ -10,6 +10,7 @@ mod history;
 mod idle;
 mod mcp;
 mod names;
+mod page_input;
 mod passkey_helper;
 mod passkeys;
 mod persist;
@@ -19,6 +20,7 @@ mod proxies;
 mod proxy;
 mod recorder;
 mod relay;
+mod secrets;
 mod settings;
 mod thumbnail;
 mod tui;
@@ -2073,6 +2075,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
+        .route("/api/pages/{page_id}/insert-text", post(api_page_insert_text))
         .route("/api/sessions/{id}/name", post(api_session_rename))
         .route("/api/sessions/{id}/history", get(api_session_history))
         .route("/api/sessions/{id}/screenshot", get(api_session_screenshot))
@@ -5761,6 +5764,73 @@ async fn api_session_x_input(
     if !display::send_input(&xdotool, &display, size, &input).await {
         return Err(api_error(StatusCode::BAD_REQUEST, "Input refused"));
     }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct InsertTextRequest {
+    text: String,
+    /// Only type while the page is on this host (as the browser's own page list
+    /// has it), so a navigation in between cannot send the text elsewhere.
+    #[serde(default)]
+    host: Option<String>,
+    /// Press Enter afterwards.
+    #[serde(default)]
+    enter: bool,
+}
+
+/// Types text into the focused element of a Chromium page (see page_input.rs).
+/// The text is never logged.
+async fn api_page_insert_text(
+    AxumPath(page_id): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<InsertTextRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let sessions: Vec<ManagedSession> = {
+        let guard = state.sessions.read().await;
+        guard.values().cloned().collect()
+    };
+    let mut found = None;
+    for session in sessions {
+        if session.bidi.is_some() {
+            continue;
+        }
+        let url = format!("http://127.0.0.1:{}/json/list", session.port);
+        let Ok(res) = state.http_client.get(&url).send().await else {
+            continue;
+        };
+        let Ok(targets) = res.json::<Vec<DevToolsTarget>>().await else {
+            continue;
+        };
+        if let Some(t) = targets.into_iter().find(|t| t.id == page_id) {
+            found = Some((session, t.url));
+            break;
+        }
+    }
+    let Some((session, page_url)) = found else {
+        return Err(api_error(
+            StatusCode::NOT_FOUND,
+            "Page not found (Chromium sessions only)",
+        ));
+    };
+    if let Some(ref host) = req.host {
+        let actual = url::Url::parse(&page_url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase));
+        if actual.as_deref() != Some(host.to_ascii_lowercase().as_str()) {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                format!("The page is not on {host} anymore"),
+            ));
+        }
+    }
+    session.activity.touch();
+    let ws_url = format!("ws://127.0.0.1:{}/devtools/page/{}", session.port, page_id);
+    page_input::insert_text(&ws_url, &req.text, req.enter)
+        .await
+        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

@@ -8,6 +8,12 @@
 //!
 //! The profiles an agent may open are limited (`--allow-profile`): a profile
 //! stays signed in to whatever the user signed it in to.
+//!
+//! `browser_fill_secret` types a field of an rbw vault entry into the page
+//! without it passing through the agent: the value is read here, checked
+//! against the page's site, sent to the node over its API (never in a Playwright
+//! script, which Playwright MCP would echo) and masked in later tool results.
+//! Only the entries named with `--allow-secret` can be filled.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +29,7 @@ use tokio::process::{Child as Proc, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 
 use crate::ctl::Conn;
+use crate::secrets;
 use crate::MeshOverview;
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
@@ -37,6 +44,14 @@ pub struct McpArgs {
     #[arg(long = "allow-profile")]
     pub allow: Vec<String>,
 
+    /// An rbw vault entry agents may fill into pages with browser_fill_secret (repeat for several).
+    #[arg(long = "allow-secret")]
+    pub allow_secrets: Vec<String>,
+
+    /// rbw binary, for browser_fill_secret.
+    #[arg(long, default_value = "rbw")]
+    pub rbw: PathBuf,
+
     /// Program that runs Playwright MCP on a CDP endpoint, called as `PROGRAM ENDPOINT OUTPUT_DIR`.
     #[arg(long, default_value = "browser-mcp")]
     pub playwright_cmd: PathBuf,
@@ -49,12 +64,15 @@ pub struct McpArgs {
 const INSTRUCTIONS: &str = "Browsers run on a mesh of nodes. Without a choice you get a \
 throwaway browser on the node with the most room. To work in a saved profile (its logins and \
 cookies persist, e.g. `work` for Outlook and OpsGenie) call browser_use with its name; \
-browser_status lists the profiles you may open and the nodes. Switching closes the current browser.";
+browser_status lists the profiles you may open and the nodes. Switching closes the current browser. \
+Never type a password, token or TOTP code yourself: use browser_fill_secret when it is listed.";
 
 /// A node and profile the browser runs on.
 #[derive(Clone)]
 struct Target {
     node: String,
+    /// The node's HTTP(S) base address.
+    url: String,
     ws_base: String,
     profile: Option<String>,
 }
@@ -122,6 +140,10 @@ struct State {
     base: String,
     secret: Option<String>,
     allow: Vec<String>,
+    allow_secrets: Vec<String>,
+    rbw: PathBuf,
+    /// Secrets filled in this session, masked in every tool result.
+    filled: std::sync::Mutex<Vec<String>>,
     cmd: PathBuf,
     out_dir: PathBuf,
     version: Mutex<String>,
@@ -150,6 +172,9 @@ pub async fn run(args: McpArgs) -> R<()> {
         base,
         secret,
         allow: args.allow,
+        allow_secrets: args.allow_secrets,
+        rbw: args.rbw,
+        filled: std::sync::Mutex::new(Vec::new()),
         cmd: args.playwright_cmd,
         out_dir,
         version: Mutex::new("2025-06-18".into()),
@@ -175,8 +200,8 @@ fn text_result(text: impl Into<String>, error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text.into() }], "isError": error })
 }
 
-fn own_tools() -> Vec<Value> {
-    vec![
+fn own_tools(secrets: &[String]) -> Vec<Value> {
+    let mut tools = vec![
         json!({
             "name": "browser_status",
             "description": "What this browser can use: the browser in use now, the profiles you may open (saved logins and cookies) and the nodes with their load.",
@@ -196,7 +221,51 @@ fn own_tools() -> Vec<Value> {
             },
             "annotations": { "title": "Use another browser", "readOnlyHint": false }
         }),
-    ]
+    ];
+    if !secrets.is_empty() {
+        tools.push(json!({
+            "name": "browser_fill_secret",
+            "description": format!(
+                "Type a field of a vault (rbw) entry into a page field, e.g. a password into a login form, without the value ever reaching you: it is read from the vault here, typed into the page and masked as {} in all later tool results. Use this for passwords, tokens and TOTP codes instead of browser_type or browser_fill_form, never type a secret yourself. The page must be on a site the entry is saved for. Entries you may use: {}.",
+                secrets::MASK,
+                secrets.join(", ")
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "entry": { "type": "string", "description": "Name of the vault entry (one of the allowed ones)." },
+                    "user": { "type": "string", "description": "Username of the entry, when several entries have that name." },
+                    "field": { "type": "string", "description": "password (default), username, totp (the current code) or the name of a custom field." },
+                    "target": { "type": "string", "description": "The field to type into: an exact element reference from the page snapshot, or a unique element selector." },
+                    "element": { "type": "string", "description": "Human-readable description of that field." },
+                    "submit": { "type": "boolean", "description": "Press Enter afterwards." }
+                },
+                "required": ["entry", "target"],
+                "additionalProperties": false
+            },
+            "annotations": { "title": "Fill a vault secret", "readOnlyHint": false }
+        }));
+    }
+    tools
+}
+
+/// Playwright code giving the page's CDP target id and host: no secret in it.
+const PAGE_INFO: &str = "async (page) => { const s = await page.context().newCDPSession(page); \
+const { targetInfo } = await s.send('Target.getTargetInfo'); await s.detach(); \
+return 'BDPAGE:' + targetInfo.targetId + ':' + new URL(page.url()).hostname + ':BDEND'; }";
+
+/// (target id, host) from the answer to PAGE_INFO.
+fn parse_page_info(result: &Value) -> Option<(String, String)> {
+    let text: String = result["content"]
+        .as_array()?
+        .iter()
+        .filter_map(|c| c["text"].as_str())
+        .collect();
+    let start = text.find("BDPAGE:")? + "BDPAGE:".len();
+    let rest = &text[start..];
+    let (id, rest) = rest.split_once(':')?;
+    let (host, _) = rest.split_once(":BDEND")?;
+    (!id.is_empty() && !host.is_empty()).then(|| (id.to_string(), host.to_string()))
 }
 
 impl State {
@@ -251,7 +320,7 @@ impl State {
     }
 
     async fn tools_list(&self) -> Value {
-        let mut tools = own_tools();
+        let mut tools = own_tools(&self.allow_secrets);
         match self.child_or_default().await {
             Ok(child) => tools.extend(child.tools.lock().unwrap().iter().cloned()),
             Err(e) => eprintln!("browser-daemon mcp: no browser tools yet: {e}"),
@@ -271,16 +340,109 @@ impl State {
                 Ok(text) => text_result(text, false),
                 Err(e) => text_result(e, true),
             }),
+            "browser_fill_secret" if !self.allow_secrets.is_empty() => {
+                Ok(match self.fill_secret(&args).await {
+                    Ok(text) => text_result(text, false),
+                    Err(e) => text_result(e, true),
+                })
+            }
             _ => {
                 let child = self
                     .child_or_default()
                     .await
                     .map_err(|e| (-32000, e))?;
-                child
+                let mut result = child
                     .request("tools/call", params, Duration::from_secs(600))
-                    .await
+                    .await?;
+                secrets::redact(&mut result, &self.filled.lock().unwrap());
+                Ok(result)
             }
         }
+    }
+
+    // --------------------------------------------------------------- secrets
+
+    async fn fill_secret(&self, args: &Value) -> Result<String, String> {
+        let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let entry = arg("entry").ok_or("Name the vault entry (`entry`)")?;
+        let target = arg("target").ok_or("Name the field to type into (`target`)")?;
+        let field = arg("field").unwrap_or("password");
+        if !self.allow_secrets.iter().any(|a| a == entry) {
+            return Err(format!(
+                "The entry '{entry}' is not open to agents here. Allowed: {}.",
+                self.allow_secrets.join(", ")
+            ));
+        }
+        let child = self.child_or_default().await?;
+        let call = |name: &str, arguments: Value| {
+            child.request(
+                "tools/call",
+                json!({ "name": name, "arguments": arguments }),
+                Duration::from_secs(60),
+            )
+        };
+        let info = call("browser_run_code_unsafe", json!({ "code": PAGE_INFO }))
+            .await
+            .map_err(|(_, e)| format!("Could not find the page: {e}"))?;
+        let (page_id, host) =
+            parse_page_info(&info).ok_or("Could not find the page (no page open?)")?;
+
+        let secret = secrets::lookup(&self.rbw, entry, arg("user"), field).await?;
+        if !secrets::site_matches(&host, &secret.uris) {
+            return Err(format!(
+                "The entry '{entry}' is not saved for {host}, so it is not typed there."
+            ));
+        }
+
+        // Focus the field the Playwright way (references are Playwright's), then type.
+        let element = arg("element").map_or_else(|| format!("{field} field"), str::to_string);
+        let click = call(
+            "browser_click",
+            json!({ "target": target, "element": element }),
+        )
+        .await
+        .map_err(|(_, e)| format!("Could not focus the field: {e}"))?;
+        if click["isError"].as_bool() == Some(true) {
+            let mut click = click;
+            secrets::redact(&mut click, &self.filled.lock().unwrap());
+            let why: String = click["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["text"].as_str())
+                .collect();
+            return Err(format!("Could not focus the field: {}", why.trim()));
+        }
+        let submit = args["submit"].as_bool().unwrap_or(false);
+        let mut req = self
+            .http
+            .post(format!(
+                "{}/api/pages/{page_id}/insert-text",
+                child.target.url.trim_end_matches('/')
+            ))
+            .json(&json!({ "text": secret.value, "host": host, "enter": submit }));
+        if let Some(ref s) = self.secret {
+            req = req.header("X-Browser-Cluster-Secret", s);
+        }
+        // Masked from here on, even if typing fails halfway.
+        self.filled.lock().unwrap().push(secret.value);
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("{}: {e}", child.target.node))?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let body: Value = res.json().await.unwrap_or_default();
+            return Err(format!(
+                "{} refused the input: {}",
+                child.target.node,
+                body["error"].as_str().unwrap_or(status.as_str())
+            ));
+        }
+        Ok(format!(
+            "Typed the {field} of '{entry}' into {element} on {host}{}. The value is not shown; take a browser_snapshot to see the page.",
+            if submit { " and pressed Enter" } else { "" }
+        ))
     }
 
     // ------------------------------------------------------------------ mesh
@@ -347,7 +509,7 @@ impl State {
     async fn default_target(&self) -> Result<Target, String> {
         let ov = self.overview().await?;
         let (node, url) = Self::pick_node(&ov, None)?;
-        Ok(Target { node, ws_base: Self::ws_base(&url), profile: None })
+        Ok(Target { node, ws_base: Self::ws_base(&url), url, profile: None })
     }
 
     async fn status(&self) -> Result<String, String> {
@@ -406,13 +568,14 @@ impl State {
                 };
                 Target {
                     node: p.node_name.clone(),
+                    url: p.node_url.clone(),
                     ws_base: Self::ws_base(&p.node_url),
                     profile: Some(name.to_string()),
                 }
             }
             None => {
                 let (node, url) = Self::pick_node(&ov, node)?;
-                Target { node, ws_base: Self::ws_base(&url), profile: None }
+                Target { node, ws_base: Self::ws_base(&url), url, profile: None }
             }
         };
         let child = self.spawn_child(&target).await?;
@@ -594,6 +757,32 @@ mod tests {
         assert_eq!(State::pick_node(&ov, None).unwrap().0, "b");
         let full = overview(&[("fnuc", 5, 5, "online")]);
         assert!(State::pick_node(&full, None).is_err());
+    }
+
+    #[test]
+    fn the_page_info_is_found_in_the_answer() {
+        let answer = json!({ "content": [{ "type": "text", "text": "### Result\n\"BDPAGE:E831D6:auth.frigate.video:BDEND\"\n### Ran Playwright code" }] });
+        assert_eq!(
+            parse_page_info(&answer),
+            Some(("E831D6".to_string(), "auth.frigate.video".to_string()))
+        );
+        assert_eq!(
+            parse_page_info(&json!({ "content": [{ "type": "text", "text": "Error" }] })),
+            None
+        );
+    }
+
+    #[test]
+    fn the_secret_tool_is_only_offered_with_allowed_entries() {
+        let names = |t: Vec<Value>| {
+            t.iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(!names(own_tools(&[])).contains(&"browser_fill_secret".to_string()));
+        assert!(
+            names(own_tools(&["Frigate Plus".into()])).contains(&"browser_fill_secret".to_string())
+        );
     }
 
     #[test]
