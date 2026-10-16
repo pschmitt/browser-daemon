@@ -362,6 +362,29 @@ impl TabOrder {
     }
 }
 
+pub(crate) async fn compute_dir_size(path: PathBuf) -> u64 {
+    tokio::task::spawn_blocking(move || {
+        fn walk(p: &Path) -> u64 {
+            let mut s = 0;
+            if let Ok(rd) = std::fs::read_dir(p) {
+                for entry in rd.flatten() {
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_file() {
+                            s += meta.len();
+                        } else if meta.is_dir() {
+                            s += walk(&entry.path());
+                        }
+                    }
+                }
+            }
+            s
+        }
+        walk(&path)
+    })
+    .await
+    .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
