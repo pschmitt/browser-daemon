@@ -18,7 +18,7 @@ A fast, lightweight, native remote browser daemon written in Rust for CDP automa
 - **What a profile keeps:** cookies (including the ones without an expiry that many logins use), localStorage and IndexedDB, like a desktop browser. A session of a profile is quit properly when it stops, so the browser writes its data first (a signal would lose cookies set in the last seconds), and the profile's saved tabs are not restored: only the pages in its default tabs open. This holds for sessions made by agents through Playwright too: Playwright works in a context of its own, which the daemon maps onto the profile's. Throwaway sessions keep nothing, until **Save as profile** (session menu in the dashboard and handoff, `browser-daemon session save-as-profile`, `POST /api/sessions/<id>/save-as-profile {"name": "..."}`): the browser quits, its data is copied into a new profile, and a session of that profile opens the same pages.
 - **Recordings with sound:** with session audio (`services.browser-daemon.audio.enable`), a recording takes the session's sound too (`recordAudio`, `--record-audio`, on by default), paused and resumed with it; a recording that stayed silent keeps none. Start one without from the dashboard's session menu, the handoff's **Sound** toggle or `POST /api/sessions/<id>/record?audio=false`. A profile can say for itself whether its sessions are recorded and whether with sound (dashboard: profile menu → **Recording**; `browser-daemon profile set NAME --record on --record-audio off`; `PATCH /api/profiles/<name> {"record": true, "record_audio": false}`, `null` for the node's default). The player plays it in step with the frames (`m` mutes, ↑/↓ volume), and `GET /api/recordings/<id>/audio` serves it (Opus in WebM). **Save as WebM** encodes the recording on its node with ffmpeg, frames at their own times (VP9) and its sound: `GET /api/recordings/<id>/export.webm`, `browser-daemon recording export ID --webm`.
 - **Merging recordings:** select two or more recordings of a node in the dashboard and **Merge**: pick their order (drag or arrows) and whether the originals go once merged. They become one recording, one after the other, sound included. `browser-daemon recording merge ID... [--delete]`, `POST /api/recordings/merge {"ids": [...], "delete": false}`. The Recordings tab's search field finds recordings by title, address, profile, node or date.
-- **Kept recordings:** the cleanup (age, count and storage limits) removes old recordings. Mark one as kept and it is never removed: the pin in the dashboard (recording menu, or select several), `p` in the TUI, `browser-daemon recording keep ID...` (`unkeep` undoes it), `POST /api/recordings/<id>/keep {"keep": true}`. Nothing is kept unless you ask; deleting a kept recording by hand still works (after a warning).
+- **Kept recordings:** the cleanup (age, count and storage limits) removes old recordings. Mark one as kept and it is never removed: the pin in the dashboard (recording menu, or select several), `K` in the TUI, `browser-daemon recording keep ID...` (`unkeep` undoes it), `POST /api/recordings/<id>/keep {"keep": true}`. Nothing is kept unless you ask; deleting a kept recording by hand still works (after a warning).
 - **Upstream Proxies:** Route a session through a SOCKS or HTTP proxy configured on its node (`services.browser-daemon.proxies`). Pick one per session (`"proxy": "<id>"` when creating it, `?proxy=<id>` on `/chromium` and `/firefox`, `none` for direct) or store a default on a profile (`PATCH /api/profiles/<name> {"proxy": "<id>"}`). A running session switches on the fly (`POST /api/sessions/<id>/proxy {"proxy": "<id>"}`, the session menu in the dashboard and handoff, `p` in the TUI): browsers always talk to a per-session SOCKS5 relay in the daemon, which forwards directly or through the chosen proxy and drops open connections when the route changes. DNS goes through SOCKS5 proxies, and WebRTC is kept from bypassing them. `GET /api/proxies` lists a node's proxies.
 - **Installable PWA:** Web App Manifest with standalone display mode, badging, and offline service worker caching.
 - **Drop-In CDP & BiDi Compatibility:** Standard endpoints:
@@ -69,36 +69,70 @@ Enable the service in your NixOS configuration:
 }
 ```
 
+The flake's own package is the module's default, so no overlay is needed. More options (see `nix/module.nix` for all of them):
+
+| Option | What it does |
+| --- | --- |
+| `displayMode` | `"shared"` (one Xvfb, `display`) or `"per-session"` (an Xvfb per session, sized to its window) |
+| `video.enable`, `video.encoder`, `video.vaapiDevice` | H.264 live view (needs `per-session`); `x264` on the CPU or `vaapi` on the GPU |
+| `gpu.enable` | render Chromium on the GPU (ANGLE on Vulkan) instead of in software |
+| `audio.enable` | a PulseAudio server for the browsers, streamed to the handoff and recorded |
+| `adblock.enable`, `adblock.default` | uBlock Origin (Lite) for the sessions, on by default |
+| `recordSessions`, `recordAudio` | record new sessions (with sound); `recordingMax{StorageMB,AgeHours,Count}` are the cleanup limits |
+| `maxSessions`, `sessionMemoryMaxMB`, `idleTimeoutMinutes` | per-node and per-session limits |
+| `memoryMax`, `memoryHigh`, `cpuQuota` | systemd limits of the service |
+| `keepSessionsOnRestart` | leave the browsers running when the service restarts (the next daemon adopts them) |
+| `allowedHosts` | `Host` header values accepted besides `publicUrl` and loopback (`--allowed-host`) |
+
+The service runs hardened: `ProtectSystem=strict` (writes go to `dataDir`, `recordingsDir`), `ProtectHome`, `NoNewPrivileges`, no capabilities, a state directory of mode 0700 and `UMask=0077`. User namespaces stay allowed for the Chromium sandbox, and `/dev` is not restricted so the GPU render node and audio work.
+
+### Mesh
+
+Nodes find each other through `peers` (base URLs) and authenticate with a shared secret kept in a file, outside the Nix store (for example a sops-nix secret):
+
+```nix
+services.browser-daemon = {
+  nodeName = "rofl-13";
+  publicUrl = "https://browser-13.example.org";
+  peers = [ "https://browser-14.example.org" ];
+  clusterSecretFile = "/run/secrets/browser-daemon/cluster-secret"; # a string, not a path literal
+};
+```
+
+`clusterSecret` (a plain string) still works but is deprecated: it lands in the Nix store and on the command line. Set only one of the two. `peers` without a secret warns. The module exports the file's path as `$BROWSER_DAEMON_SECRET_FILE` to the CLI, TUI and MCP server on the host. `bind` must be `IP:PORT`. The package installs shell completions for bash, zsh and fish.
+
 ## Terminal UI
 
-`browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, refreshed every few seconds, and does what the dashboard does.
+`browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, refreshed every few seconds, and does what the dashboard does. Requests run in the background (a spinner shows while they do), so the view stays responsive when a node is slow or unreachable.
 
 - `m` (or Space) opens the menu of the selected row with everything the dashboard offers: take over, new tab, rename, auto-stop timeout, proxy, recording control, details, stop for sessions; launch, rename, proxy, appearance, homepage, duplicate, copy or move to another node, backups & data (back up, restore, clear, export and import archives) and delete for profiles; play, export frames, delete for recordings; filter, settings, new session or profile there, remove for nodes. `M` opens the menu of the view (new session or profile, stop all, retention, add a peer).
-- Hotkeys for the common ones (`?` lists them): `s` stop, `X` stop all, `p` proxy, `R` record, `t` new tab, `e` rename, `N` new session or profile, `b` backups & data, `E` export frames, `d` delete, `i` details.
+- Hotkeys for the common ones (`?` lists them, and the bottom line shows the ones of the view): `Enter`/`o` open (take over, launch, play), `s` stop, `X` stop all, `p` proxy (sessions, profiles), `R` record, `t` new tab, `T` auto-stop timeout, `e` rename, `n` throwaway session on the node, `N` new session or profile, `w` WebSocket URL, `b` backups & data, `K` keep a recording, `E` export frames, `v` vacuum, `d` delete, `i` details, `a`/`x` add or remove a peer (Nodes). `q` or Ctrl-C quits (Esc only closes menus).
 - `f` shows only the selected row's node on the other tabs (again: every node); the header says so.
 - The **Engines** tab (`5`) lists each node's engines with the defaults new sessions start with (ad blocker, appearance, show touches): `a`, `c`, `t` change them, `m` has the same as menus; the node's default proxy is in the Nodes tab's menu.
 - New sessions and profiles come from a form (node, engine, profile, name, proxy, appearance, recording, ad blocker, auto-stop).
 
-It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file`, the NixOS module's secret when readable, or otherwise the dashboard of that node.
+It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (or `BROWSER_DAEMON_SECRET_FILE`, which the NixOS module sets from `clusterSecretFile`), else `/run/secrets/browser-daemon/cluster-secret` when readable.
 
 ## CLI
 
-The `browser-daemon` binary is the daemon (`run`, what the systemd service starts) and a command-line client for its API. The client talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (or `BROWSER_DAEMON_SECRET_FILE`), the NixOS module's secret when readable, or otherwise the dashboard of that node. `--json` prints JSON instead of tables.
+The `browser-daemon` binary is the daemon (`run`, what the systemd service starts) and a command-line client for its API. The client talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (or `BROWSER_DAEMON_SECRET_FILE`, which the NixOS module sets from `clusterSecretFile`), else `/run/secrets/browser-daemon/cluster-secret` when readable. `--json` prints JSON instead of tables.
 
 ```text
 browser-daemon run [OPTIONS]              the daemon (see `run --help`)
-browser-daemon session list|show|new|stop|stop-all|rename|proxy|idle-timeout|record|tabs|open|close-tab|save-as-profile|url
-browser-daemon profile list|show|new|set|clone|rm|clear|backup|export|import|transfer
+browser-daemon session list|show|new|delete (stop)|stop-all|rename|proxy|idle-timeout|record|tabs|open|close-tab|save-as-profile|url
+browser-daemon profile list|show|new|set|clone|delete (rm)|clear|backup|export|import|transfer
 browser-daemon profile backup list|create|restore|rm PROFILE
-browser-daemon recording list|show|keep|unkeep|rm|merge|export|vacuum
-browser-daemon node list|show|set|add|rm
-browser-daemon completions bash|zsh|fish   shell completions
+browser-daemon recording list|show|keep|unkeep|delete (rm)|merge|export|vacuum
+browser-daemon node list|show|set|add|remove (rm)
+browser-daemon completions bash|zsh|fish   shell completions (the package installs them)
 browser-daemon mcp                        MCP server for AI agents (see below)
 browser-daemon tui                        terminal UI (see above)
 browser-daemon passkey-helper             serve approved passkeys and vault logins from rbw
 ```
 
-Sessions, profiles and recordings are named by id (the first characters will do), by name for sessions and profiles; `--node` narrows a name that exists on several nodes. Commands that destroy data (`profile rm|clear`, `profile backup restore`, `recording rm`, `session stop-all`) ask first, or take `-y`.
+Sessions, profiles and recordings are named by id or, for sessions and profiles, by name. An exact id wins over an exact name, which wins over the start of an id (at least 4 characters); `--node` narrows a name that exists on several nodes. Commands with several targets (`session stop`, `recording rm|keep|unkeep`) try each one and report the ones that failed. Commands that destroy data (`profile rm|clear`, `profile backup restore`, `recording rm`, `session stop-all`) ask first, or take `-y`. Exports (`profile export`, `recording export`) stream into a temporary file that replaces the target when complete, and refuse to overwrite an existing file without `--force`.
+
+Exit status: 0 success, 1 failure, 2 bad command line, 3 not found, 4 node unreachable, 5 cancelled (or not confirmed), 6 unauthorized.
 
 ```sh
 browser-daemon session list
@@ -108,7 +142,7 @@ browser-daemon session record quiet-otter pause
 browser-daemon session stop-all --node rofl-13 -y
 browser-daemon profile backup create hrworks before-cleanup
 browser-daemon profile transfer hrworks --to rofl-14 --move
-browser-daemon recording export 1b2c3d4e -o rec.jsonl
+browser-daemon recording export 1b2c3d4e -o rec.jsonl --force
 ```
 
 ### MCP server for agents
@@ -148,9 +182,9 @@ Options:
       --chromium <CHROMIUM>
           [default: chromium]
       --firefox <FIREFOX>
-          
+
       --display <DISPLAY>
-          
+
       --max-sessions <MAX_SESSIONS>
           [default: 8]
       --profile-dir <PROFILE_DIR>
@@ -160,19 +194,21 @@ Options:
       --default-height <DEFAULT_HEIGHT>
           [default: 1000]
       --node-name <NODE_NAME>
-          
+
       --public-url <PUBLIC_URL>
-          
+
       --peer <PEERS>
-          
+
       --cluster-secret <CLUSTER_SECRET>
           Shared cluster secret for peer-to-peer authentication
       --cluster-secret-file <CLUSTER_SECRET_FILE>
           Path to file containing shared cluster secret
       --recordings-dir <RECORDINGS_DIR>
           [default: /var/lib/browser-daemon/recordings]
-      --record-sessions
-          
+      --record-sessions <RECORD_SESSIONS>
+          Record new sessions unless they opt out (`--record-sessions false` to turn off) [default: true] [possible values: true, false]
+      --record-audio <RECORD_AUDIO>
+          Record the session's sound with its recording (needs --pulse-server); a recording can still be started without (`POST .../record?audio=false`) [default: true] [possible values: true, false]
       --recording-max-storage-mb <RECORDING_MAX_STORAGE_MB>
           [default: 2048]
       --recording-max-age-hours <RECORDING_MAX_AGE_HOURS>
@@ -191,10 +227,30 @@ Options:
           Block ads in new sessions unless they opt out [default: true] [possible values: true, false]
       --proxies-file <PROXIES_FILE>
           JSON list of upstream proxies sessions can use: [{"id", "name", "url"}]
+      --pulse-server <PULSE_SERVER>
+          PulseAudio socket for session audio (per-session sinks, streamed on /audio)
+      --pactl <PACTL>
+          [default: pactl]
+      --ffmpeg <FFMPEG>
+          [default: ffmpeg]
+      --display-mode <DISPLAY_MODE>
+          X display per session (own Xvfb, needed for video streaming) or one shared --display [default: shared] [possible values: shared, per-session]
+      --xvfb <XVFB>
+          Xvfb binary for --display-mode per-session [default: Xvfb]
+      --xdotool <XDOTOOL>
+          xdotool, to park the X pointer on per-session displays
+      --video-encoder <VIDEO_ENCODER>
+          Offer the live view as H.264 video (needs --display-mode per-session) [possible values: vaapi, x264]
+      --video-ffmpeg <VIDEO_FFMPEG>
+          ffmpeg with x11grab (ffmpeg-full) for --video-encoder [default: ffmpeg]
+      --vaapi-device <VAAPI_DEVICE>
+          [default: /dev/dri/renderD128]
+      --chromium-gpu <CHROMIUM_GPU>
+          Render Chromium on the GPU: vulkan (ANGLE on Vulkan), or none (software) [default: none] [possible values: none, vulkan]
+      --allowed-host <ALLOWED_HOST>
+          Host (HOST[:PORT]) accepted in the Host header besides --public-url's and loopback; repeatable
   -h, --help
           Print help
-  -V, --version
-          Print version
 ```
 
 ## License
