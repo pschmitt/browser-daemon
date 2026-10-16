@@ -2,10 +2,17 @@
 //! proxy; the relay connects directly or through the session's upstream proxy,
 //! which can change at any time: open connections are dropped on a change, so
 //! the browser reconnects through the new route.
+//!
+//! What a page in the session can reach is limited: never the machine the
+//! browser runs on (loopback), never link-local addresses (cloud metadata),
+//! and never the daemons of the mesh by name. Otherwise a page, or an agent
+//! that was told to open a link, could read the daemon's dashboard through
+//! its own browser and take over every session.
 
+use std::collections::HashSet;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -19,6 +26,96 @@ use crate::proxies::{Proxy, Upstream};
 /// Per address tried: an address that silently drops packets must not stall the rest.
 const CONNECT_ATTEMPT: Duration = Duration::from_secs(4);
 const HANDSHAKE: Duration = Duration::from_secs(15);
+
+/// Host names of the mesh's daemons (this node's, its peers'): not reachable
+/// through a relay.
+fn denied_hosts() -> &'static RwLock<HashSet<String>> {
+    static HOSTS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
+    HOSTS.get_or_init(Default::default)
+}
+
+fn normalize(host: &str) -> String {
+    host.trim()
+        .trim_matches(['[', ']'])
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+}
+
+pub fn deny_hosts(hosts: impl IntoIterator<Item = String>) {
+    let mut set = denied_hosts().write().unwrap();
+    set.extend(hosts.into_iter().map(|h| normalize(&h)));
+}
+
+/// Denies the host of a daemon's URL.
+pub fn deny_url(url: &str) {
+    if let Some(host) = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+    {
+        deny_hosts([host]);
+    }
+}
+
+/// Whether a URL can be a peer: http(s), and not an address of this machine.
+pub fn peer_url_ok(url: &str) -> bool {
+    let Ok(u) = url::Url::parse(url) else {
+        return false;
+    };
+    matches!(u.scheme(), "http" | "https")
+        && u.host_str().is_some_and(|h| {
+            let h = normalize(h);
+            h != "localhost"
+                && !h.ends_with(".localhost")
+                && !h.parse::<IpAddr>().is_ok_and(ip_denied)
+        })
+}
+
+/// Loopback, unspecified and link-local addresses, however they are written
+/// (v4-mapped included).
+fn ip_denied(ip: IpAddr) -> bool {
+    let ip = ip.to_canonical();
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || match ip {
+            IpAddr::V4(v4) => v4.is_link_local(),
+            IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+        }
+}
+
+/// Whether the relay may connect to a target by its name, before resolving it.
+fn name_denied(name: &str) -> bool {
+    let n = normalize(name);
+    if let Ok(ip) = n.parse::<IpAddr>() {
+        return ip_denied(ip);
+    }
+    n == "localhost" || n.ends_with(".localhost") || denied_hosts().read().unwrap().contains(&n)
+}
+
+/// What a relay refuses to connect to.
+#[derive(Clone, Copy)]
+pub struct Policy {
+    enforce: bool,
+}
+
+impl Policy {
+    pub fn strict() -> Self {
+        Self { enforce: true }
+    }
+
+    /// For tests, which talk to servers on loopback.
+    #[cfg(test)]
+    fn permissive() -> Self {
+        Self { enforce: false }
+    }
+
+    fn denies(&self, target: &Target) -> bool {
+        self.enforce
+            && match target {
+                Target::Ip(ip) => ip_denied(*ip),
+                Target::Name(n) => name_denied(n),
+            }
+    }
+}
 
 pub struct Relay {
     port: u16,
@@ -40,6 +137,14 @@ impl Relay {
     /// On a given port (0: any): a browser kept running across a daemon restart
     /// still points at the old one.
     pub async fn start_on(port: u16, upstream: Option<Proxy>) -> io::Result<Arc<Self>> {
+        Self::start_with(port, upstream, Policy::strict()).await
+    }
+
+    async fn start_with(
+        port: u16,
+        upstream: Option<Proxy>,
+        policy: Policy,
+    ) -> io::Result<Arc<Self>> {
         let listener = TcpListener::bind(("127.0.0.1", port)).await?;
         let port = listener.local_addr()?.port();
         let (tx, rx) = watch::channel(upstream);
@@ -47,7 +152,7 @@ impl Relay {
             while let Ok((client, _)) = listener.accept().await {
                 let rx = rx.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = serve(client, rx).await {
+                    if let Err(e) = serve(client, rx, policy).await {
                         debug!(error = %e, "Relay connection ended");
                     }
                 });
@@ -92,12 +197,22 @@ impl std::fmt::Display for Target {
     }
 }
 
-async fn serve(mut client: TcpStream, mut rx: watch::Receiver<Option<Proxy>>) -> io::Result<()> {
+async fn serve(
+    mut client: TcpStream,
+    mut rx: watch::Receiver<Option<Proxy>>,
+    policy: Policy,
+) -> io::Result<()> {
     let (target, port) = tokio::time::timeout(HANDSHAKE, socks5_accept(&mut client))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "client handshake"))??;
+    if policy.denies(&target) {
+        // 0x02: not allowed by the ruleset.
+        client.write_all(&[5, 2, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+        return Err(invalid("destination not allowed"));
+    }
     let upstream = rx.borrow_and_update().clone();
-    let connected = tokio::time::timeout(HANDSHAKE, open(upstream.as_ref(), &target, port)).await;
+    let connected =
+        tokio::time::timeout(HANDSHAKE, open(upstream.as_ref(), &target, port, policy)).await;
     let mut remote = match connected {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {
@@ -168,8 +283,12 @@ async fn read_addr<R: AsyncReadExt + Unpin>(s: &mut R, atyp: u8) -> io::Result<T
 }
 
 /// Connect to `host:port`, IPv4 addresses first, each attempt bounded.
-async fn connect_any(host: &str, port: u16) -> io::Result<TcpStream> {
+async fn connect_any(host: &str, port: u16, policy: Option<Policy>) -> io::Result<TcpStream> {
     let mut addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+    // A name that resolves to a forbidden address (DNS rebinding) is refused too.
+    if let Some(policy) = policy {
+        addrs.retain(|a| !policy.denies(&Target::Ip(a.ip())));
+    }
     addrs.sort_by_key(SocketAddr::is_ipv6);
     let mut last = io::Error::new(io::ErrorKind::NotFound, format!("{host}: no addresses"));
     for addr in addrs {
@@ -185,7 +304,12 @@ async fn connect_any(host: &str, port: u16) -> io::Result<TcpStream> {
     Err(last)
 }
 
-async fn open(upstream: Option<&Proxy>, target: &Target, port: u16) -> io::Result<TcpStream> {
+async fn open(
+    upstream: Option<&Proxy>,
+    target: &Target,
+    port: u16,
+    policy: Policy,
+) -> io::Result<TcpStream> {
     let Some(proxy) = upstream else {
         return match target {
             Target::Ip(ip) => {
@@ -193,11 +317,11 @@ async fn open(upstream: Option<&Proxy>, target: &Target, port: u16) -> io::Resul
                     .await
                     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connect"))?
             }
-            Target::Name(n) => connect_any(n, port).await,
+            Target::Name(n) => connect_any(n, port, Some(policy)).await,
         };
     };
     let up = proxy.upstream();
-    let mut s = connect_any(&up.host, up.port).await?;
+    let mut s = connect_any(&up.host, up.port, None).await?;
     match up.kind {
         Upstream::Socks5 => socks5_connect(&mut s, target, port).await?,
         Upstream::Socks4 => socks4_connect(&mut s, target, port).await?,
@@ -332,8 +456,12 @@ mod tests {
     async fn relays_directly_and_through_an_upstream_and_switches() {
         let echo = echo_server().await;
         // An upstream SOCKS5 proxy: another relay, direct.
-        let upstream = Relay::start(None).await.unwrap();
-        let relay = Relay::start(None).await.unwrap();
+        let upstream = Relay::start_with(0, None, Policy::permissive())
+            .await
+            .unwrap();
+        let relay = Relay::start_with(0, None, Policy::permissive())
+            .await
+            .unwrap();
 
         let mut s = via_relay(relay.port(), "localhost", echo).await.unwrap();
         s.write_all(b"hi").await.unwrap();
@@ -366,13 +494,93 @@ mod tests {
         let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let dead_port = dead.local_addr().unwrap().port();
         drop(dead);
-        let relay = Relay::start(Some(Proxy {
-            id: "dead".into(),
-            name: "dead".into(),
-            url: format!("socks5://127.0.0.1:{dead_port}"),
-        }))
+        let relay = Relay::start_with(
+            0,
+            Some(Proxy {
+                id: "dead".into(),
+                name: "dead".into(),
+                url: format!("socks5://127.0.0.1:{dead_port}"),
+            }),
+            Policy::permissive(),
+        )
         .await
         .unwrap();
         assert!(via_relay(relay.port(), "127.0.0.1", echo).await.is_err());
+    }
+
+    #[test]
+    fn loopback_and_link_local_are_never_reachable() {
+        let denied = |t: Target| Policy::strict().denies(&t);
+        for ip in [
+            "127.0.0.1",
+            "127.1.2.3",
+            "::1",
+            "0.0.0.0",
+            "::",
+            "::ffff:127.0.0.1",
+            "::ffff:0.0.0.0",
+            "169.254.169.254",
+            "fe80::1",
+        ] {
+            assert!(denied(Target::Ip(ip.parse().unwrap())), "{ip}");
+            assert!(denied(Target::Name(ip.into())), "{ip} as a name");
+        }
+        for ip in [
+            "10.0.0.1",
+            "192.168.1.1",
+            "100.64.1.1",
+            "8.8.8.8",
+            "2606:4700::1111",
+        ] {
+            assert!(!denied(Target::Ip(ip.parse().unwrap())), "{ip}");
+        }
+        for n in ["localhost", "LOCALHOST.", "evil.localhost", "[::1]"] {
+            assert!(denied(Target::Name(n.into())), "{n}");
+        }
+        assert!(!denied(Target::Name("example.com".into())));
+        assert!(!Policy::permissive().denies(&Target::Name("localhost".into())));
+    }
+
+    #[test]
+    fn the_mesh_daemons_are_not_reachable_by_name() {
+        deny_hosts(["Browser.Fnuc.Test".to_string()]);
+        deny_url("https://browser.rofl-13.test:8443/");
+        let denied = |n: &str| Policy::strict().denies(&Target::Name(n.into()));
+        assert!(denied("browser.fnuc.test"));
+        assert!(denied("browser.fnuc.test."));
+        assert!(denied("browser.rofl-13.test"));
+        assert!(!denied("browser.other.test"));
+        assert!(!denied("x.browser.fnuc.test"));
+    }
+
+    #[test]
+    fn peers_must_be_web_addresses_off_this_machine() {
+        assert!(peer_url_ok("https://browser.rofl-13.test"));
+        assert!(peer_url_ok("http://10.1.2.3:3001"));
+        for bad in [
+            "ftp://x.test",
+            "file:///etc/passwd",
+            "http://127.0.0.1:3001",
+            "http://localhost:3001",
+            "http://[::1]:3001",
+            "http://0.0.0.0",
+            "http://[::ffff:127.0.0.1]",
+            "nonsense",
+        ] {
+            assert!(!peer_url_ok(bad), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_strict_relay_refuses_loopback_with_a_ruleset_reply() {
+        let echo = echo_server().await;
+        let relay = Relay::start(None).await.unwrap();
+        for host in ["127.0.0.1", "localhost"] {
+            let err = via_relay(relay.port(), host, echo).await.err().unwrap();
+            assert!(
+                err.to_string().contains("refused (code 2)"),
+                "{host}: {err}"
+            );
+        }
     }
 }

@@ -1,5 +1,6 @@
 mod audible;
 mod audio;
+mod auth;
 mod autofill;
 mod backups;
 mod bidi;
@@ -133,6 +134,11 @@ pub struct Args {
 
     #[arg(long, help = "Path to file containing shared cluster secret")]
     pub cluster_secret_file: Option<PathBuf>,
+
+    /// A `Host` (HOST[:PORT]) the node answers to besides its public URL's and
+    /// loopback's (repeat for several); other hosts get 403.
+    #[arg(long = "allowed-host")]
+    pub allowed_hosts: Vec<String>,
 
     #[arg(long, default_value = "/var/lib/browser-daemon/recordings")]
     pub recordings_dir: PathBuf,
@@ -477,6 +483,8 @@ pub struct AppState {
     pub peers: Arc<RwLock<HashMap<String, String>>>,
     pub start_time: Instant,
     pub cluster_secret: Option<String>,
+    /// Who may talk to the daemon (see auth.rs).
+    pub auth: Arc<auth::Auth>,
     pub recorder_config: Arc<RecorderConfig>,
     pub active_recordings: Arc<RwLock<HashMap<Uuid, SessionRecorderHandle>>>,
     pub idle_timeout_secs: u64,
@@ -566,38 +574,28 @@ impl AppState {
         self.check_auth_opt(headers, None)
     }
 
+    /// Accepts the cluster secret or a token derived from it (header, cookie or
+    /// `query_token`); with no cluster secret everything passes.
     pub fn check_auth_opt(
         &self,
         headers: &HeaderMap,
         query_token: Option<&str>,
     ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-        if let Some(ref expected) = self.cluster_secret {
-            let auth_header = headers
-                .get(header::AUTHORIZATION)
-                .and_then(|h| h.to_str().ok());
-            let custom_header = headers
-                .get("x-browser-cluster-secret")
-                .and_then(|h| h.to_str().ok());
-
-            let token = auth_header
-                .and_then(|h| {
-                    h.strip_prefix("Bearer ")
-                        .or_else(|| h.strip_prefix("bearer "))
-                })
-                .or(custom_header)
-                .or(query_token);
-
-            if token != Some(expected.as_str()) {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(serde_json::json!({
-                        "error": "Unauthorized: invalid or missing cluster secret"
-                    })),
-                ));
-            }
+        if self
+            .auth
+            .credential(headers, query_token, auth::now())
+            .is_none()
+        {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "Unauthorized: invalid or missing credentials"
+                })),
+            ));
         }
         Ok(())
     }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn spawn_session(
         &self,
@@ -1863,6 +1861,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     } else {
+        if args.cluster_secret.is_some() {
+            warn!(
+                "--cluster-secret shows the secret in the process list: use --cluster-secret-file"
+            );
+        }
         args.cluster_secret.or_else(|| {
             std::env::var("CLUSTER_SECRET")
                 .or_else(|_| std::env::var("BROWSER_CLUSTER_SECRET"))
@@ -1972,6 +1975,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Arc::new(settings::Store::load(&settings_path));
     let history = Arc::new(history::History::new(config.state_dir().join("history")));
     let thumbnails = Arc::new(thumbnail::Thumbnails::default());
+    let hosts = auth::HostPolicy::new(&public_url, &args.allowed_hosts, args.bind.port());
+    // The browsers must not reach the daemon (or its mesh) through their relay.
+    relay::deny_hosts(hosts.names());
+    for url in peer_map.values() {
+        relay::deny_url(url);
+    }
+    let auth = Arc::new(auth::Auth::new(cluster_secret.clone(), hosts));
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -1983,6 +1993,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         public_url,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),
+        auth,
         cluster_secret,
         recorder_config,
         active_recordings,
@@ -2118,6 +2129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/icon-512.png", get(icon_512_png))
         .route("/download-worker.js", get(download_worker_js))
         .route("/health", get(health_check))
+        .route("/api/auth/token", get(api_auth_token))
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
         .route("/json/list", get(json_list))
@@ -2368,7 +2380,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .post(api_peer_json_activate)
                 .get(api_peer_json_activate),
         )
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::layer,
+        ));
 
     tokio::spawn(shutdown_on_signal(state));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
@@ -2560,34 +2576,57 @@ async fn download_worker_js() -> impl IntoResponse {
     )
 }
 
-async fn dashboard_page(State(state): State<AppState>) -> impl IntoResponse {
-    let secret_injection = match state.cluster_secret {
-        Some(ref sec) => format!("window.__CLUSTER_SECRET__ = {:?};", sec),
-        None => "window.__CLUSTER_SECRET__ = null;".to_string(),
-    };
-    let html = DASHBOARD_HTML.replace("/* __CLUSTER_SECRET_PLACEHOLDER__ */", &secret_injection);
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        )],
+/// A page that logs the browser in: the cookie comes with it, never the secret.
+fn login_page(state: &AppState, headers: &HeaderMap, html: &'static str) -> Response {
+    let mut res = (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
         Html(html),
     )
+        .into_response();
+    let secure = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .next()
+                .is_some_and(|p| p.trim().eq_ignore_ascii_case("https"))
+        });
+    if let Some(cookie) = state
+        .auth
+        .cookie(secure, auth::now())
+        .and_then(|c| HeaderValue::from_str(&c).ok())
+    {
+        res.headers_mut().append(header::SET_COOKIE, cookie);
+    }
+    res
 }
 
-async fn handoff_page(State(state): State<AppState>) -> impl IntoResponse {
-    let secret_injection = match state.cluster_secret {
-        Some(ref sec) => format!("window.__CLUSTER_SECRET__ = {:?};", sec),
-        None => "window.__CLUSTER_SECRET__ = null;".to_string(),
-    };
-    let html = HANDOFF_HTML.replace("/* __CLUSTER_SECRET_PLACEHOLDER__ */", &secret_injection);
-    (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/html; charset=utf-8"),
-        )],
-        Html(html),
-    )
+async fn dashboard_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    login_page(&state, &headers, DASHBOARD_HTML)
+}
+
+async fn handoff_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    login_page(&state, &headers, HANDOFF_HTML)
+}
+
+/// A token for tools that cannot send the cookie or a header (`?auth=` on a
+/// CDP endpoint). `null` when the daemon has no cluster secret.
+async fn api_auth_token(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    state.check_auth(&headers)?;
+    let issued = state.auth.issue(auth::now());
+    Ok::<_, ApiError>((
+        [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+        Json(serde_json::json!({
+            "token": issued.as_ref().map(|(t, _)| t),
+            "expires_at": issued.as_ref().map(|(_, e)| e),
+        })),
+    ))
 }
 
 async fn json_new(
@@ -4540,11 +4579,9 @@ async fn api_mesh_overview(
 async fn handle_overview_ws(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let token_opt = params.get("token").map(|s| s.as_str());
-    if let Err(e) = state.check_auth_opt(&headers, token_opt) {
+    if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
 
@@ -4692,6 +4729,14 @@ async fn api_add_peer(
         )
             .into_response();
     }
+    // Every request to a peer carries the cluster secret.
+    if !relay::peer_url_ok(&trimmed) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Peer URL must be http(s) and not a loopback address" })),
+        )
+            .into_response();
+    }
 
     let ping_url = format!("{}/api/mesh/node", trimmed);
     let detected_name = match state
@@ -4722,6 +4767,7 @@ async fn api_add_peer(
 
     {
         let mut guard = state.peers.write().await;
+        relay::deny_url(&trimmed);
         guard.insert(detected_name.clone(), trimmed.clone());
     }
 
@@ -6142,10 +6188,11 @@ async fn api_session_x_input(
 #[derive(Deserialize)]
 struct InsertTextRequest {
     text: String,
-    /// Only type while the page is on this host (as the browser's own page list
-    /// has it), so a navigation in between cannot send the text elsewhere.
+    /// The sites the text may go to (the vault entry's URIs): the page, as the
+    /// browser's own page list has it, and the focused frame must be on one,
+    /// so a navigation in between cannot send the text elsewhere.
     #[serde(default)]
-    host: Option<String>,
+    uris: Vec<secrets::Uri>,
     /// Press Enter afterwards.
     #[serde(default)]
     enter: bool,
@@ -6187,22 +6234,20 @@ async fn api_page_insert_text(
             "Page not found (Chromium sessions only)",
         ));
     };
-    if let Some(ref host) = req.host {
-        let actual = url::Url::parse(&page_url)
-            .ok()
-            .and_then(|u| u.host_str().map(str::to_ascii_lowercase));
-        if actual.as_deref() != Some(host.to_ascii_lowercase().as_str()) {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                format!("The page is not on {host} anymore"),
-            ));
-        }
+    if !secrets::url_matches(&page_url, &req.uris) {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "The page is not on a site the entry is saved for",
+        ));
     }
     session.activity.touch();
     let ws_url = format!("ws://127.0.0.1:{}/devtools/page/{}", session.port, page_id);
-    page_input::insert_text(&ws_url, &req.text, req.enter)
-        .await
-        .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
+    let uris = req.uris;
+    page_input::insert_text(&ws_url, &req.text, req.enter, move |u| {
+        secrets::url_matches(u, &uris)
+    })
+    .await
+    .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -6241,28 +6286,34 @@ async fn api_session_passkey(
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
     session.activity.touch();
-    if !req.find {
-        info!(session_id = %id, rp_id = %req.rp_id, "Passkey approved in the live view");
-    }
     let kind = match (req.find, &req.challenge) {
         (true, _) => "find",
         (false, Some(_)) => "assert",
         (false, None) => "inject",
     };
-    // The origin to sign for comes from the browser's own page list, never from
-    // the page: a page must not obtain an assertion for another site.
-    let origin = if kind == "assert" {
-        let targets = get_local_targets(&state).await;
-        let page = targets
-            .iter()
-            .find(|t| t.id == req.page_id && t.session_id == Some(id))
-            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found in this session"))?;
-        let url = url::Url::parse(&page.url)
-            .map_err(|_| api_error(StatusCode::BAD_REQUEST, "The page has no web origin"))?;
-        Some(url.origin().ascii_serialization())
-    } else {
-        None
-    };
+    // The page comes from the browser's own page list, never from what the caller
+    // says, and must be one of this session's. The origin to sign for and the rp_id
+    // follow from it: a page must not obtain an assertion for another site.
+    let targets = get_local_targets(&state).await;
+    let page = targets
+        .iter()
+        .find(|t| t.id == req.page_id && t.session_id == Some(id))
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found in this session"))?;
+    let page_url = url::Url::parse(&page.url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page has no web origin"))?;
+    let rp_id = req.rp_id.trim().trim_end_matches('.').to_ascii_lowercase();
+    if !secrets::rp_id_valid_for(page_url.host_str().unwrap_or_default(), &rp_id) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            format!("The page is not on {rp_id} or a subdomain of it"),
+        ));
+    }
+    let origin = (kind == "assert").then(|| page_url.origin().ascii_serialization());
+    if !req.find {
+        info!(session_id = %id, rp_id = %rp_id, kind, "Passkey approved in the live view");
+    }
     let signing = passkeys::Signing {
         origin,
         challenge: req.challenge,
@@ -6270,7 +6321,7 @@ async fn api_session_passkey(
     };
     let request = state
         .passkeys
-        .start(req.page_id, req.rp_id, kind, req.entry, signing)
+        .start(req.page_id, rp_id, kind, req.entry, signing)
         .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
     Ok(Json(serde_json::json!({ "request": request })))
 }
@@ -6356,10 +6407,17 @@ async fn api_session_autofill(
 
 #[derive(Deserialize)]
 struct PageAutofill {
+    /// The "fill" request this answers: only one the helper took, for this page and
+    /// host, and only once.
+    request: Uuid,
     /// The page must still be on this host (the one the entry was checked for).
     host: String,
     /// The entry's URIs: only frames on these sites are filled.
     uris: Vec<secrets::Uri>,
+    /// The entry is not saved for the site and was picked anyway (the helper
+    /// told the user): only the page's own site is filled, then.
+    #[serde(default)]
+    any_site: bool,
     #[serde(flatten)]
     creds: autofill::Creds,
 }
@@ -6387,10 +6445,32 @@ async fn api_page_autofill(
             format!("The page is not on {} anymore", req.host),
         ));
     }
-    if !secrets::site_matches(&req.host, &req.uris) {
+    let uris = if req.any_site {
+        let origin = url::Url::parse(&page.url)
+            .ok()
+            .map(|u| u.origin().ascii_serialization())
+            .filter(|o| o.starts_with("http"))
+            .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+        vec![secrets::Uri {
+            uri: origin,
+            match_type: Some(1),
+        }]
+    } else {
+        req.uris
+    };
+    if !secrets::url_matches(&page.url, &uris) {
         return Err(api_error(
             StatusCode::FORBIDDEN,
             format!("The entry is not for {}", req.host),
+        ));
+    }
+    if !state
+        .passkeys
+        .authorize_fill(req.request, &page_id, &req.host)
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "No approved fill request for this page",
         ));
     }
     let sid = page
@@ -6404,14 +6484,7 @@ async fn api_page_autofill(
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
     session.activity.touch();
-    let uris = req.uris;
-    let frame_ok = move |u: &str| {
-        url::Url::parse(u)
-            .ok()
-            .filter(|u| matches!(u.scheme(), "http" | "https"))
-            .and_then(|u| u.host_str().map(str::to_string))
-            .is_some_and(|h| secrets::site_matches(&h, &uris))
-    };
+    let frame_ok = move |u: &str| secrets::url_matches(u, &uris);
     let filled = match session.bidi {
         Some(ref hub) => autofill::fill_firefox(hub, &page_id, frame_ok, &req.creds).await,
         None => {

@@ -932,7 +932,22 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </div>
 <script>
 "use strict";
-/* __CLUSTER_SECRET_PLACEHOLDER__ */
+// Signed in by the cookie the page came with (HttpOnly: no script ever sees a
+// secret). A 401 means it expired: reload once to get a fresh one.
+(() => {
+  const plain = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const res = await plain(...args);
+    if (res.status === 401) {
+      let again = false;
+      try { again = sessionStorage.getItem("bd-401") === "1"; sessionStorage.setItem("bd-401", "1"); } catch { /* storage unavailable */ }
+      if (!again) location.reload();
+    } else {
+      try { sessionStorage.removeItem("bd-401"); } catch { /* storage unavailable */ }
+    }
+    return res;
+  };
+})();
 
 /* ================================================================ basics */
 const $ = (id) => document.getElementById(id);
@@ -957,13 +972,9 @@ function setSearchEngine(id) {
 }
 
 
+// The cookie authenticates same-origin requests; nothing to add.
 function getAuthHeaders() {
-  const h = {};
-  if (window.__CLUSTER_SECRET__) {
-    h['Authorization'] = 'Bearer ' + window.__CLUSTER_SECRET__;
-    h['X-Browser-Cluster-Secret'] = window.__CLUSTER_SECRET__;
-  }
-  return h;
+  return {};
 }
 
 function escapeHtml(s) {
@@ -2869,20 +2880,24 @@ $('addPeerForm').addEventListener('submit', async (e) => {
   if (r !== undefined) { $('peerUrl').value = ''; setTimeout(renderNodes, 600); }
 });
 
-function openConnect() {
+async function openConnect() {
   const ws = location.origin.replace(/^http/, 'ws');
-  const auth = window.__CLUSTER_SECRET__ ? ' -H "Authorization: Bearer $BROWSER_DAEMON_SECRET"' : '';
+  // Tools that cannot send the cookie take a token in the URL (valid for 30 days).
+  let token = null;
+  try { token = (await (await fetch('/api/auth/token')).json()).token; } catch { /* no token */ }
+  const q = (sep) => (token ? `${sep}auth=${enc(token)}` : '');
+  const auth = token ? ' -H "Authorization: Bearer $BROWSER_DAEMON_SECRET"' : '';
   const rows = [
-    ['Chromium CDP', `${ws}/chromium`],
-    ['Firefox BiDi', `${ws}/firefox`],
-    ['Persistent', `${ws}/chromium?profile=work&persistent=true`],
-    ['Playwright MCP', `npx @playwright/mcp --cdp-endpoint ${ws}/chromium`],
+    ['Chromium CDP', `${ws}/chromium${q('?')}`],
+    ['Firefox BiDi', `${ws}/firefox${q('?')}`],
+    ['Persistent', `${ws}/chromium?profile=work&persistent=true${q('&')}`],
+    ['Playwright MCP', `npx @playwright/mcp --cdp-endpoint ${ws}/chromium${q('?')}`],
     ['Sessions API', `curl${auth} -X POST ${location.origin}/api/sessions -H 'Content-Type: application/json' -d '{"profile":"work","persistent":true}'`],
     ['Profiles API', `curl${auth} -X POST ${location.origin}/api/profiles -H 'Content-Type: application/json' -d '{"name":"work"}'`],
     ['Handoff', `${location.origin}/handoff/`],
   ];
   $('endpointsList').innerHTML = rows.map(([k, v]) => `<div class="endpoint"><span class="lbl">${esc(k)}</span><code title="${esc(v)}">${esc(v)}</code><button class="btn ghost sm" data-copy="${esc(v)}">${icon('copy', 'sm')}Copy</button></div>`).join('')
-    + (auth ? '<span class="hint">API calls need the cluster secret as a bearer token.</span>' : '');
+    + (token ? '<span class="hint">The auth token in the addresses is yours for 30 days: keep them private. The API calls take the cluster secret or that token as a bearer token.</span>' : '');
   openModal('connectModal');
 }
 $('endpointsList').addEventListener('click', (e) => {
@@ -2924,8 +2939,7 @@ function applyOverview(data) {
 
 function connectOverviewWs() {
   if (overviewWs && overviewWs.readyState <= WebSocket.OPEN) return;
-  let url = `${location.origin.replace(/^http/, 'ws')}/api/ws/overview`;
-  if (window.__CLUSTER_SECRET__) url += `?token=${enc(window.__CLUSTER_SECRET__)}`;
+  const url = `${location.origin.replace(/^http/, 'ws')}/api/ws/overview`;
   try { overviewWs = new WebSocket(url); } catch { return; }
   overviewWs.onopen = () => $('liveDot').classList.add('on');
   overviewWs.onmessage = (ev) => { try { applyOverview(JSON.parse(ev.data)); } catch { /* ignore */ } };

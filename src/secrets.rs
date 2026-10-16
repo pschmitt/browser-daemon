@@ -28,12 +28,18 @@ pub struct Uri {
     pub match_type: Option<u64>,
 }
 
+/// rbw is asked for little; one that hangs must not hold a request forever.
+const RBW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub async fn rbw(rbw: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(rbw)
+    let run = Command::new(rbw)
         .args(args)
         .stdin(Stdio::null())
-        .output()
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(RBW_TIMEOUT, run)
         .await
+        .map_err(|_| "rbw did not answer in time".to_string())?
         .map_err(|e| format!("Could not run rbw: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
@@ -57,13 +63,17 @@ pub async fn lookup(
     user: Option<&str>,
     field: &str,
 ) -> Result<Secret, String> {
-    let unlocked = Command::new(rbw_bin)
-        .arg("unlocked")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|s| s.success());
+    let unlocked = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        Command::new(rbw_bin)
+            .arg("unlocked")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status(),
+    )
+    .await
+    .is_ok_and(|s| s.is_ok_and(|s| s.success()));
     if !unlocked {
         return Err("rbw is locked: unlock it first (rbw skill), then try again".into());
     }
@@ -129,33 +139,58 @@ pub fn host_of(uri: &str) -> Option<String> {
     )
 }
 
-/// The registrable part of a host, roughly: the last two labels, three for
-/// country suffixes like co.uk. IP addresses stay whole.
+/// The registrable part of a host, by the Public Suffix List (private suffixes
+/// such as `github.io` or `pages.dev` included: `a.github.io` and `b.github.io`
+/// are different sites). A host that is a suffix itself, an IP address or an
+/// unknown single label stays whole.
 pub fn base_domain(host: &str) -> &str {
     if host.parse::<std::net::IpAddr>().is_ok() || host.starts_with('[') {
         return host;
     }
-    let labels: Vec<&str> = host.split('.').collect();
-    let n = labels.len();
-    let keep = if n >= 3
-        && labels[n - 1].len() == 2
-        && matches!(
-            labels[n - 2],
-            "co" | "com" | "org" | "net" | "ac" | "gov" | "edu" | "ne" | "or"
-        ) {
-        3
-    } else {
-        2
-    };
-    if n <= keep {
-        return host;
+    psl::domain_str(host).unwrap_or(host)
+}
+
+/// Whether a passkey for `rp_id` may be used on a page at `host`, by the
+/// WebAuthn rule: the rp_id is the host or a parent domain of it, and not a
+/// public suffix (so never `github.io` or `co.uk`).
+pub fn rp_id_valid_for(host: &str, rp_id: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if rp_id.is_empty() || host.is_empty() {
+        return false;
     }
-    let skip: usize = labels[..n - keep].iter().map(|l| l.len() + 1).sum();
-    &host[skip..]
+    if host == rp_id {
+        return true;
+    }
+    host.ends_with(&format!(".{rp_id}"))
+        && rp_id.parse::<std::net::IpAddr>().is_err()
+        && psl::domain_str(rp_id).is_some()
+}
+
+/// A vault entry's URI as a URL: an address without a scheme is https.
+fn parse_uri(uri: &str) -> Option<url::Url> {
+    let parsed = url::Url::parse(uri)
+        .ok()
+        .filter(|u| u.host_str().is_some())
+        .or_else(|| url::Url::parse(&format!("https://{uri}")).ok())?;
+    matches!(parsed.scheme(), "http" | "https").then_some(parsed)
+}
+
+/// Whether an entry saved for `entry` may be used on `page`: an https entry is
+/// never used on plain http, and a port the entry names (or the default one)
+/// is the one the page must be on.
+fn same_scheme_and_port(page: &url::Url, entry: &url::Url) -> bool {
+    if page.scheme() != entry.scheme() && !(page.scheme() == "https" && entry.scheme() == "http") {
+        return false;
+    }
+    match entry.port() {
+        Some(p) => page.port_or_known_default() == Some(p),
+        None => page.port().is_none(),
+    }
 }
 
 /// Whether the vault entry is meant for `host`, as Bitwarden's autofill would
-/// decide (regex URIs are not supported and never match).
+/// decide, looking at host names only (regex URIs are not supported and never
+/// match). Listing uses this; anything that fills uses `url_matches`.
 pub fn site_matches(host: &str, uris: &[Uri]) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     uris.iter().any(|u| {
@@ -170,19 +205,116 @@ pub fn site_matches(host: &str, uris: &[Uri]) -> bool {
     })
 }
 
-/// Replaces every filled secret in the strings of `v` with MASK.
+/// Whether the vault entry may be filled into the page at `page_url`: the
+/// match type is honoured (starts with, exact), and scheme and port count.
+pub fn url_matches(page_url: &str, uris: &[Uri]) -> bool {
+    let Ok(page) = url::Url::parse(page_url) else {
+        return false;
+    };
+    let Some(host) = page
+        .host_str()
+        .filter(|_| matches!(page.scheme(), "http" | "https"))
+        .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
+    else {
+        return false;
+    };
+    uris.iter().any(|u| {
+        let Some(entry) = parse_uri(&u.uri) else {
+            return false;
+        };
+        let Some(entry_host) = entry
+            .host_str()
+            .map(|h| h.trim_end_matches('.').to_ascii_lowercase())
+        else {
+            return false;
+        };
+        let trim = |p: &str| p.trim_end_matches('/').to_string();
+        match u.match_type {
+            Some(4) | Some(5) => false,
+            Some(1) => entry_host == host && same_scheme_and_port(&page, &entry),
+            Some(2) => {
+                entry_host == host
+                    && same_scheme_and_port(&page, &entry)
+                    && trim(page.path()).starts_with(&trim(entry.path()))
+            }
+            Some(3) => {
+                entry_host == host
+                    && same_scheme_and_port(&page, &entry)
+                    && trim(page.path()) == trim(entry.path())
+            }
+            _ => {
+                base_domain(&entry_host) == base_domain(&host)
+                    && same_scheme_and_port(&page, &entry)
+            }
+        }
+    })
+}
+
+/// The forms a secret takes when a page or a tool echoes it: as typed, escaped
+/// for JSON, percent-encoded (as a form body or a URL) and escaped for HTML.
+fn variants(secret: &str) -> Vec<String> {
+    let json = serde_json::to_string(secret).unwrap_or_default();
+    let json = json
+        .get(1..json.len().saturating_sub(1))
+        .unwrap_or_default();
+    let form = url::form_urlencoded::byte_serialize(secret.as_bytes()).collect::<String>();
+    let html = secret
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;");
+    let mut out: Vec<String> = Vec::new();
+    for v in [
+        secret.to_string(),
+        json.to_string(),
+        form.replace('+', "%20"),
+        form,
+        html.clone(),
+        html.replace("&#39;", "&#x27;"),
+    ] {
+        if !v.is_empty() && !out.contains(&v) {
+            out.push(v);
+        }
+    }
+    // Longest first: an escaped form contains the shorter ones.
+    out.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    out
+}
+
+/// Replaces every filled secret in the strings of `v` with MASK, in every
+/// form `variants` lists. A secret shorter than MIN_REDACT would mangle
+/// unrelated text, so it is only masked where it is the whole string.
 pub fn redact(v: &mut Value, secrets: &[String]) {
     match v {
         Value::String(s) => {
-            for secret in secrets.iter().filter(|s| s.chars().count() >= MIN_REDACT) {
-                if s.contains(secret.as_str()) {
-                    *s = s.replace(secret.as_str(), MASK);
+            for secret in secrets.iter().filter(|s| !s.is_empty()) {
+                if secret.chars().count() < MIN_REDACT {
+                    if s == secret {
+                        *s = MASK.to_string();
+                    }
+                    continue;
+                }
+                for variant in variants(secret) {
+                    if s.contains(variant.as_str()) {
+                        *s = s.replace(variant.as_str(), MASK);
+                    }
                 }
             }
         }
         Value::Array(a) => a.iter_mut().for_each(|x| redact(x, secrets)),
         Value::Object(o) => o.values_mut().for_each(|x| redact(x, secrets)),
         _ => {}
+    }
+}
+
+/// `redact` for a plain string (an error message).
+pub fn redact_str(text: &str, secrets: &[String]) -> String {
+    let mut v = Value::String(text.to_string());
+    redact(&mut v, secrets);
+    match v {
+        Value::String(s) => s,
+        _ => String::new(),
     }
 }
 
@@ -268,8 +400,148 @@ mod tests {
             v["content"][0]["text"],
             format!("value: {MASK}, again {MASK}")
         );
-        let mut short = json!("abc");
+        let mut short = json!("abc d");
         redact(&mut short, &["abc".into()]);
-        assert_eq!(short, "abc");
+        assert_eq!(short, "abc d");
+    }
+
+    #[test]
+    fn shared_hosting_suffixes_are_separate_sites() {
+        for (page, entry) in [
+            ("evil.github.io", "https://a.github.io"),
+            ("evil.pages.dev", "https://good.pages.dev"),
+            ("x.netlify.app", "https://y.netlify.app"),
+            ("evil.duckdns.org", "https://mine.duckdns.org"),
+            ("evil.me.uk", "https://good.me.uk"),
+            ("evil.co.uk", "https://www.bbc.co.uk"),
+            ("evil.com.au", "https://good.com.au"),
+        ] {
+            assert!(
+                !site_matches(page, &[uri(entry, None)]),
+                "{page} vs {entry}"
+            );
+            assert!(
+                !url_matches(&format!("https://{page}/"), &[uri(entry, None)]),
+                "{page} vs {entry}"
+            );
+        }
+        assert!(site_matches(
+            "login.a.github.io",
+            &[uri("https://www.a.github.io", None)]
+        ));
+        assert!(site_matches(
+            "login.bbc.co.uk",
+            &[uri("https://www.bbc.co.uk", None)]
+        ));
+        assert!(site_matches(
+            "shop.example.com.au",
+            &[uri("example.com.au", None)]
+        ));
+        assert_eq!(base_domain("a.b.github.io"), "b.github.io");
+        assert_eq!(base_domain("github.io"), "github.io");
+        assert_eq!(base_domain("localhost"), "localhost");
+        assert_eq!(base_domain("10.0.0.1"), "10.0.0.1");
+        assert_eq!(base_domain("auth.frigate.video"), "frigate.video");
+    }
+
+    #[test]
+    fn fills_look_at_scheme_port_and_match_type() {
+        let https = [uri("https://example.com", None)];
+        assert!(url_matches("https://login.example.com/x?y=1", &https));
+        assert!(!url_matches("http://example.com/", &https), "downgrade");
+        assert!(
+            !url_matches("https://example.com:8443/", &https),
+            "other port"
+        );
+        assert!(!url_matches("ftp://example.com/", &https));
+        assert!(!url_matches("about:blank", &https));
+        assert!(!url_matches("not a url", &https));
+        // An http entry also fills its https page, on the default port.
+        let http = [uri("http://example.com", None)];
+        assert!(url_matches("https://example.com/", &http));
+        assert!(url_matches("http://example.com/", &http));
+        // An entry naming a port is for that port.
+        let ha = [uri("http://10.5.1.1:8123", None)];
+        assert!(url_matches("http://10.5.1.1:8123/lovelace", &ha));
+        assert!(!url_matches("http://10.5.1.1:8124/", &ha));
+        assert!(!url_matches("http://10.5.1.1/", &ha));
+        // Host, starts with, exact.
+        let host = [uri("https://ssl6.hrworks.de/o/dashboard", Some(1))];
+        assert!(url_matches("https://ssl6.hrworks.de/other", &host));
+        assert!(!url_matches("https://login.hrworks.de/", &host));
+        let prefix = [uri("https://x.test/app", Some(2))];
+        assert!(url_matches("https://x.test/app/login", &prefix));
+        assert!(!url_matches("https://x.test/other", &prefix));
+        let exact = [uri("https://x.test/login", Some(3))];
+        assert!(url_matches("https://x.test/login/", &exact));
+        assert!(!url_matches("https://x.test/login/evil", &exact));
+        assert!(!url_matches(
+            "https://x.test/",
+            &[uri("https://x.test", Some(5))]
+        ));
+        assert!(!url_matches(
+            "https://x.test/",
+            &[uri("^https://x\\.test", Some(4))]
+        ));
+        assert!(!url_matches("https://x.test/", &[]));
+    }
+
+    #[test]
+    fn masking_covers_escaped_and_encoded_copies() {
+        let secret = "pa\"ss\\wörd &<'x y".to_string();
+        let json_form = serde_json::to_string(&secret).unwrap();
+        let form = url::form_urlencoded::byte_serialize(secret.as_bytes()).collect::<String>();
+        let html = "pa&quot;ss\\wörd &amp;&lt;&#39;x y";
+        let mut body = json!({
+            "raw": format!("a {secret} b"),
+            "json": format!("{{\"password\":{json_form}}}"),
+            "form": format!("user=me&password={form}&x=1"),
+            "pct": format!("?p={}", form.replace('+', "%20")),
+            "html": format!("<input value=\"{html}\">"),
+            "nested": [{ "deep": [format!("{secret}{secret}")] }],
+        });
+        redact(&mut body, std::slice::from_ref(&secret));
+        let text = body.to_string();
+        for needle in [
+            &secret,
+            &json_form,
+            &form,
+            &form.replace('+', "%20"),
+            &html.to_string(),
+        ] {
+            assert!(!text.contains(needle.as_str()), "left {needle}");
+        }
+        assert_eq!(body["nested"][0]["deep"][0], format!("{MASK}{MASK}"));
+        assert!(text.contains("user=me&password=•••&x=1"));
+    }
+
+    #[test]
+    fn short_secrets_are_masked_only_when_they_are_the_whole_value() {
+        let mut v = json!({ "a": "123", "b": "room 123 is free", "c": ["123"] });
+        redact(&mut v, &["123".into()]);
+        assert_eq!(v["a"], MASK);
+        assert_eq!(v["b"], "room 123 is free");
+        assert_eq!(v["c"][0], MASK);
+        assert_eq!(
+            redact_str("error: hunter22 refused", &["hunter22".into()]),
+            format!("error: {MASK} refused")
+        );
+        let mut empty = json!("keep");
+        redact(&mut empty, &[String::new()]);
+        assert_eq!(empty, "keep");
+    }
+
+    #[test]
+    fn a_passkey_is_for_the_page_site_not_a_public_suffix() {
+        assert!(rp_id_valid_for("login.example.com", "example.com"));
+        assert!(rp_id_valid_for("example.com", "example.com"));
+        assert!(rp_id_valid_for("login.example.com", "login.example.com"));
+        assert!(!rp_id_valid_for("example.com", "login.example.com"));
+        assert!(!rp_id_valid_for("evil.test", "example.com"));
+        assert!(!rp_id_valid_for("notexample.com", "example.com"));
+        assert!(!rp_id_valid_for("evil.github.io", "github.io"));
+        assert!(!rp_id_valid_for("evil.co.uk", "co.uk"));
+        assert!(!rp_id_valid_for("a.com", ""));
+        assert!(rp_id_valid_for("a.evil.github.io", "evil.github.io"));
     }
 }

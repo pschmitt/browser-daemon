@@ -30,6 +30,84 @@ pub struct HelperArgs {
     /// Host name the unlock webhook should unlock rbw on.
     #[arg(long, default_value = "fnuc")]
     pub unlock_host: String,
+    /// Webhook told about every login filled into a site the entry is not saved
+    /// for (POST {"message": "..."}). The fill goes ahead; this is the notice.
+    #[arg(long)]
+    pub notify_webhook: Option<String>,
+    #[arg(skip)]
+    seen: std::sync::Mutex<std::collections::VecDeque<uuid::Uuid>>,
+}
+
+/// How long one rbw call may take.
+const RBW_WAIT: Duration = Duration::from_secs(60);
+/// Longest a request may take, the wait for a phone unlock included.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(420);
+/// Request ids remembered, so a node cannot make the helper serve one twice.
+const SEEN_IDS: usize = 512;
+
+/// Whether the request's fields are plain values the vault tools can take:
+/// nothing a node sends reaches rbw as an option or a path.
+fn valid_request(req: &Request) -> Result<(), String> {
+    let id_like = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 128
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    };
+    let host_like = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 253
+            && !s.starts_with(['-', '.'])
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | ':' | '[' | ']'))
+    };
+    if !id_like(&req.page_id) {
+        return Err("Bad page id".into());
+    }
+    if !host_like(&req.rp_id) {
+        return Err("Bad host".into());
+    }
+    if req.entry.as_deref().is_some_and(|e| !id_like(e)) {
+        return Err("Bad entry id".into());
+    }
+    if req
+        .challenge
+        .as_deref()
+        .is_some_and(|c| !id_like(c) || c.len() > 1024)
+    {
+        return Err("Bad challenge".into());
+    }
+    if req.allow.iter().any(|a| !id_like(a)) || req.allow.len() > 64 {
+        return Err("Bad credential id".into());
+    }
+    if req.origin.as_deref().is_some_and(|o| {
+        url::Url::parse(o).map_or(true, |u| !matches!(u.scheme(), "http" | "https"))
+    }) {
+        return Err("Bad origin".into());
+    }
+    if req
+        .fields
+        .iter()
+        .any(|f| !matches!(f.as_str(), "username" | "password" | "totp"))
+    {
+        return Err("Bad field".into());
+    }
+    Ok(())
+}
+
+impl HelperArgs {
+    /// Notes a request id; false when it was seen before.
+    fn remember(&self, id: uuid::Uuid) -> bool {
+        let mut seen = self.seen.lock().unwrap();
+        if seen.contains(&id) {
+            return false;
+        }
+        if seen.len() >= SEEN_IDS {
+            seen.pop_front();
+        }
+        seen.push_back(id);
+        true
+    }
 }
 
 pub async fn run(args: HelperArgs) -> Result<(), Box<dyn std::error::Error>> {
@@ -100,7 +178,7 @@ async fn poll(
                 continue;
             }
             Err(e) => {
-                warn!(node = %node, error = %e, "Node unreachable");
+                warn!(node = %node, error = %e.without_url(), "Node unreachable");
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 continue;
             }
@@ -108,16 +186,27 @@ async fn poll(
         info!(node = %node, rp_id = %req.rp_id, page = %req.page_id, kind = %req.kind, "Passkey requested");
         let (node, secret, client, args) =
             (node.clone(), secret.clone(), client.clone(), args.clone());
+        let replay = !args.remember(req.id);
         tokio::spawn(async move {
-            let result = match req.kind.as_str() {
-                "find" => find(&req, &args).await.map(Some),
-                "logins" => logins(&node, &secret, &req, &client, &args).await.map(Some),
-                "fill" => fill(&node, &secret, &req, &client, &args).await.map(Some),
-                "assert" => assert(&node, &secret, &req, &client, &args).await.map(Some),
-                _ => serve(&node, &secret, &req, &client, &args)
-                    .await
-                    .map(|()| None),
+            let work = async {
+                if replay {
+                    return Err("This request was served already".to_string());
+                }
+                valid_request(&req)?;
+                match req.kind.as_str() {
+                    "find" => find(&req, &args).await.map(Some),
+                    "logins" => logins(&node, &secret, &req, &client, &args).await.map(Some),
+                    "fill" => fill(&node, &secret, &req, &client, &args).await.map(Some),
+                    "assert" => assert(&node, &secret, &req, &client, &args).await.map(Some),
+                    "inject" => serve(&node, &secret, &req, &client, &args)
+                        .await
+                        .map(|()| None),
+                    other => Err(format!("Unknown request kind '{other}'")),
+                }
             };
+            let result = tokio::time::timeout(REQUEST_TIMEOUT, work)
+                .await
+                .unwrap_or_else(|_| Err("The request took too long".to_string()));
             let outcome = match result {
                 Ok(info) => Outcome {
                     ok: true,
@@ -149,12 +238,17 @@ async fn find(req: &Request, args: &HelperArgs) -> Result<serde_json::Value, Str
     if !unlocked(&args.rbw).await {
         return Ok(serde_json::json!({ "locked": true }));
     }
-    let out = Command::new(&args.rbw)
-        .args(["passkey", "find", "--rp-id", &req.rp_id])
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("Could not run rbw: {e}"))?;
+    let out = tokio::time::timeout(
+        RBW_WAIT,
+        Command::new(&args.rbw)
+            .args(["passkey", "find", "--rp-id", &req.rp_id])
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "rbw did not answer in time".to_string())?
+    .map_err(|e| format!("Could not run rbw: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(err
@@ -168,13 +262,17 @@ async fn find(req: &Request, args: &HelperArgs) -> Result<serde_json::Value, Str
 }
 
 async fn unlocked(rbw: &PathBuf) -> bool {
-    Command::new(rbw)
-        .arg("unlocked")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .is_ok_and(|s| s.success())
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new(rbw)
+            .arg("unlocked")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .status(),
+    )
+    .await
+    .is_ok_and(|s| s.is_ok_and(|s| s.success()))
 }
 
 /// Ready once `rbw passkey inject` has the passkey in the page; rbw keeps
@@ -191,10 +289,11 @@ async fn ensure_unlocked(
         let hook = args.unlock_webhook.as_ref().ok_or("The vault is locked")?;
         client
             .post(hook)
+            .timeout(Duration::from_secs(15))
             .json(&serde_json::json!({ "host": args.unlock_host, "agent": format!("{} for {}", if matches!(req.kind.as_str(), "logins" | "fill") { "Login" } else { "Passkey" }, req.rp_id) }))
             .send()
             .await
-            .map_err(|e| format!("Could not ask for an unlock: {e}"))?;
+            .map_err(|e| format!("Could not ask for an unlock: {}", e.without_url()))?;
         let _ = client
             .post(format!("{node}/api/passkey-helper/{}/note", req.id))
             .header("X-Browser-Cluster-Secret", secret)
@@ -243,11 +342,13 @@ async fn assert(
         cmd.args(["--allow", id]);
     }
     cmd.args(req.entry.as_deref());
-    let out = cmd
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .map_err(|e| format!("Could not run rbw: {e}"))?;
+    let out = tokio::time::timeout(
+        RBW_WAIT,
+        cmd.stdin(Stdio::null()).kill_on_drop(true).output(),
+    )
+    .await
+    .map_err(|_| "rbw did not answer in time".to_string())?
+    .map_err(|e| format!("Could not run rbw: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(err
@@ -451,16 +552,17 @@ async fn fill(
         serde_json::from_str(&secrets::rbw(&args.rbw, &["get", "--raw", entry]).await?)
             .map_err(|_| "rbw: unexpected output".to_string())?;
     let mut uris = secrets::uris(&raw);
+    let mut any_site = false;
     if !secrets::site_matches(&req.rp_id, &uris) {
         if !req.any_site {
             return Err(format!("This entry is not saved for {}", req.rp_id));
         }
-        // Confirmed in the live view: only into the page's own host, no other frames.
-        info!(host = %req.rp_id, "Filling an entry not saved for the site, as confirmed");
-        uris = vec![secrets::Uri {
-            uri: format!("https://{}", req.rp_id),
-            match_type: Some(1),
-        }];
+        // Confirmed in the live view: only into the page's own site, no other frames
+        // (the node narrows the URIs). The user hears about it.
+        warn!(host = %req.rp_id, "Filling an entry not saved for the site, as confirmed");
+        uris = Vec::new();
+        any_site = true;
+        notify_any_site(client, args, node, &raw, req).await;
     }
     let want = |f: &str| req.fields.iter().any(|x| x == f);
     let field = |f: &str| {
@@ -480,8 +582,10 @@ async fn fill(
         None
     };
     let body = serde_json::json!({
+        "request": req.id,
         "host": req.rp_id,
         "uris": uris,
+        "any_site": any_site,
         "username": field("username"),
         "password": field("password"),
         "totp": totp,
@@ -495,7 +599,7 @@ async fn fill(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Could not reach the node: {e}"))?;
+        .map_err(|e| format!("Could not reach the node: {}", e.without_url()))?;
     let ok = res.status().is_success();
     let answer: serde_json::Value = res.json().await.unwrap_or_default();
     if !ok {
@@ -506,4 +610,113 @@ async fn fill(
     }
     info!(host = %req.rp_id, fields = %answer["filled"], "Login filled");
     Ok(answer)
+}
+
+/// Tells the user (webhook) that an entry went into a site it is not saved for.
+/// The message names the entry, the site and the fields, never a value.
+async fn notify_any_site(
+    client: &reqwest::Client,
+    args: &HelperArgs,
+    node: &str,
+    raw: &serde_json::Value,
+    req: &Request,
+) {
+    let Some(hook) = args.notify_webhook.as_deref() else {
+        return;
+    };
+    let message = any_site_message(
+        raw["name"].as_str().unwrap_or("?"),
+        &req.rp_id,
+        &req.fields,
+        node,
+    );
+    let sent = client
+        .post(hook)
+        .timeout(Duration::from_secs(15))
+        .json(&serde_json::json!({ "message": message }))
+        .send()
+        .await;
+    match sent {
+        Ok(r) if r.status().is_success() => {}
+        Ok(r) => warn!(status = %r.status(), "Notification webhook refused the message"),
+        Err(e) => warn!(error = %e.without_url(), "Could not reach the notification webhook"),
+    }
+}
+
+fn any_site_message(entry: &str, host: &str, fields: &[String], node: &str) -> String {
+    format!(
+        "Vault entry '{entry}' ({}) was filled into {host}, a site it is not saved for (live view on {node}).",
+        fields.join(", ")
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::passkeys::Request;
+
+    fn req() -> Request {
+        serde_json::from_value(serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "page_id": "7C4E8F21A9B0",
+            "rp_id": "login.example.com",
+            "kind": "fill",
+            "entry": "00000000-0000-0000-0000-000000000001",
+            "fields": ["username", "password"],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn requests_from_a_node_are_plain_values() {
+        assert!(valid_request(&req()).is_ok());
+        let mut bad = req();
+        bad.rp_id = "--cdp-url".into();
+        assert!(valid_request(&bad).is_err());
+        let mut bad = req();
+        bad.page_id = "x --flag".into();
+        assert!(valid_request(&bad).is_err());
+        let mut bad = req();
+        bad.entry = Some("-x".into());
+        assert!(valid_request(&bad).is_ok(), "ids may contain a dash");
+        bad.entry = Some("a b".into());
+        assert!(valid_request(&bad).is_err());
+        let mut bad = req();
+        bad.fields = vec!["notes".into()];
+        assert!(valid_request(&bad).is_err());
+        let mut bad = req();
+        bad.origin = Some("file:///etc/passwd".into());
+        assert!(valid_request(&bad).is_err());
+    }
+
+    #[test]
+    fn a_request_id_is_served_once() {
+        let args = HelperArgs {
+            nodes: vec![],
+            cluster_secret_file: PathBuf::new(),
+            rbw: PathBuf::from("rbw"),
+            unlock_webhook: None,
+            unlock_host: "x".into(),
+            notify_webhook: None,
+            seen: Default::default(),
+        };
+        let id = uuid::Uuid::new_v4();
+        assert!(args.remember(id));
+        assert!(!args.remember(id));
+        assert!(args.remember(uuid::Uuid::new_v4()));
+    }
+
+    #[test]
+    fn the_notice_names_entry_site_and_fields_only() {
+        let m = any_site_message(
+            "Bank",
+            "evil.test",
+            &["username".into(), "password".into()],
+            "rofl-13",
+        );
+        assert_eq!(
+            m,
+            "Vault entry 'Bank' (username, password) was filled into evil.test, a site it is not saved for (live view on rofl-13)."
+        );
+    }
 }

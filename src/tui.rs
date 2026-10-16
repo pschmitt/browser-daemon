@@ -2759,31 +2759,55 @@ fn popup(f: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
     );
 }
 
-/// The secret: from a file when given or readable, else the one the dashboard
-/// at `base` hands to whoever can open it.
-pub(crate) async fn find_secret(http: &reqwest::Client, base: &str, file: Option<&PathBuf>) -> Option<String> {
-    let path = file
-        .cloned()
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_SECRET_FILE));
-    if let Ok(s) = std::fs::read_to_string(&path) {
+/// What to authenticate with: the cluster secret from `file` (an explicit file
+/// that cannot be read is an error), else from the NixOS module's file when
+/// readable, else the `bd_auth` token the dashboard at `base` hands to whoever
+/// can open it. `None`: the daemon wants nothing.
+pub(crate) async fn find_secret(
+    http: &reqwest::Client,
+    base: &str,
+    file: Option<&PathBuf>,
+) -> Result<Option<String>, String> {
+    if let Some(path) = file {
+        let secret = std::fs::read_to_string(path)
+            .map_err(|e| format!("Cannot read the secret file {}: {e}", path.display()))?;
+        let secret = secret.trim();
+        if secret.is_empty() {
+            return Err(format!("The secret file {} is empty", path.display()));
+        }
+        return Ok(Some(secret.to_string()));
+    }
+    if let Ok(s) = std::fs::read_to_string(DEFAULT_SECRET_FILE) {
         let s = s.trim().to_string();
         if !s.is_empty() {
-            return Some(s);
+            return Ok(Some(s));
         }
     }
-    let html = http
+    // The page sets the sign-in cookie; the daemon takes its value as a token.
+    let Ok(res) = http
         .get(format!("{base}/"))
+        .timeout(Duration::from_secs(5))
         .send()
         .await
-        .ok()?
-        .text()
-        .await
-        .ok()?;
-    let rest = html.split("window.__CLUSTER_SECRET__ = ").nth(1)?;
-    let literal = rest.split(';').next()?;
-    serde_json::from_str::<Option<String>>(literal)
-        .ok()
-        .flatten()
+    else {
+        return Ok(None);
+    };
+    let cookies: Vec<&str> = res
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    Ok(auth_cookie_token(&cookies))
+}
+
+/// The `bd_auth` token among `Set-Cookie` values.
+fn auth_cookie_token(set_cookies: &[&str]) -> Option<String> {
+    set_cookies.iter().find_map(|c| {
+        let (name, rest) = c.split_once('=')?;
+        let value = rest.split(';').next()?.trim();
+        (name.trim() == "bd_auth" && !value.is_empty()).then(|| value.to_string())
+    })
 }
 
 pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error>> {
@@ -2791,7 +2815,7 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         .connect_timeout(Duration::from_secs(5))
         .build()?;
     let base = args.url.trim_end_matches('/').to_string();
-    let secret = find_secret(&http, &base, args.secret_file.as_ref()).await;
+    let secret = find_secret(&http, &base, args.secret_file.as_ref()).await?;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app = App {
         tx,
@@ -2888,4 +2912,40 @@ async fn run_call(
         return Ok(format!("Saved {file} ({})", bytes(size)));
     }
     Ok(String::new())
+}
+
+#[cfg(test)]
+mod secret_tests {
+    use super::*;
+
+    #[test]
+    fn the_token_comes_from_the_auth_cookie() {
+        assert_eq!(
+            auth_cookie_token(&["other=1; Path=/", "bd_auth=123.abcd; Max-Age=5; HttpOnly"]),
+            Some("123.abcd".to_string())
+        );
+        assert_eq!(auth_cookie_token(&["bd_auth=; Max-Age=0"]), None);
+        assert_eq!(auth_cookie_token(&["x_bd_auth=1"]), None);
+        assert_eq!(auth_cookie_token(&[]), None);
+    }
+
+    #[tokio::test]
+    async fn an_explicit_unreadable_secret_file_is_an_error() {
+        let http = reqwest::Client::new();
+        let missing = PathBuf::from("/nonexistent/browser-daemon-secret");
+        let err = find_secret(&http, "http://127.0.0.1:1", Some(&missing)).await;
+        assert!(err.unwrap_err().contains("Cannot read the secret file"));
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::write(&empty, " \n").unwrap();
+        assert!(find_secret(&http, "http://127.0.0.1:1", Some(&empty))
+            .await
+            .is_err());
+        let ok = dir.path().join("ok");
+        std::fs::write(&ok, "s3cret\n").unwrap();
+        assert_eq!(
+            find_secret(&http, "http://127.0.0.1:1", Some(&ok)).await,
+            Ok(Some("s3cret".to_string()))
+        );
+    }
 }
