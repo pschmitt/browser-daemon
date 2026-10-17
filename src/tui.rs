@@ -3602,6 +3602,13 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
     let mut terminal = ratatui::init();
     // After raw mode is on: the terminal answers the query on stdin.
     app.picker = image_picker();
+    // Late answers to the query would arrive as key presses (an `i` opens the details).
+    let settle = Instant::now();
+    while settle.elapsed() < Duration::from_millis(400)
+        && event::poll(Duration::from_millis(120)).unwrap_or(false)
+    {
+        let _ = event::read();
+    }
     let mouse = !matches!(
         std::env::var("BROWSER_DAEMON_TUI_MOUSE").as_deref(),
         Ok("off" | "0" | "no")
