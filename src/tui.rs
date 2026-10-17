@@ -545,6 +545,8 @@ enum Msg {
     },
     /// A session's screenshot (None: there is none to show).
     Shot(String, Option<image::DynamicImage>),
+    /// A profile's picture, by `icon_key`.
+    Icon(String, Option<image::DynamicImage>),
     /// A profile's backups, for its data menu.
     Backups(MeshProfile, Result<Vec<Value>, String>),
 }
@@ -563,6 +565,9 @@ struct App {
     shots: HashMap<String, StatefulProtocol>,
     /// When a session's screenshot was last asked for.
     shot_asked: HashMap<String, Instant>,
+    /// The profiles' pictures, and which were asked for already.
+    icons: HashMap<String, StatefulProtocol>,
+    icon_asked: std::collections::HashSet<String>,
     /// Where the last frame put the tab titles (columns), the table, the popup.
     tab_spans: Vec<(u16, u16)>,
     body: Rect,
@@ -650,6 +655,11 @@ impl App {
             Msg::Shot(id, shot) => {
                 if let (Some(img), Some(picker)) = (shot, self.picker.as_ref()) {
                     self.shots.insert(id, picker.new_resize_protocol(img));
+                }
+            }
+            Msg::Icon(key, icon) => {
+                if let (Some(img), Some(picker)) = (icon, self.picker.as_ref()) {
+                    self.icons.insert(key, picker.new_resize_protocol(img));
                 }
             }
             Msg::Overview(res) => {
@@ -1776,6 +1786,45 @@ impl App {
         });
     }
 
+    /// Fetch the pictures of the profiles (once each, and again when one changes).
+    fn fetch_icons(&mut self) {
+        if self.picker.is_none() {
+            return;
+        }
+        let Some(ov) = self.ov.as_ref() else { return };
+        let wanted: Vec<(String, String, String)> = ov
+            .profiles
+            .iter()
+            .filter_map(|p| {
+                let key = icon_key(p)?;
+                (!self.icon_asked.contains(&key))
+                    .then(|| (key, p.node_name.clone(), profile_base(p)))
+            })
+            .collect();
+        for (key, node, base) in wanted {
+            self.icon_asked.insert(key.clone());
+            let req = self.request(Method::GET, &self.api(&node, &format!("{base}/icon")));
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let bytes = match req.send().await {
+                    Ok(r) if r.status() == reqwest::StatusCode::OK => r.bytes().await.ok(),
+                    _ => None,
+                };
+                // Raster pictures only; an SVG stays as the initials in the browser.
+                let icon = match bytes {
+                    Some(b) => {
+                        tokio::task::spawn_blocking(move || image::load_from_memory(&b).ok())
+                            .await
+                            .ok()
+                            .flatten()
+                    }
+                    None => None,
+                };
+                let _ = tx.send(Msg::Icon(key, icon));
+            });
+        }
+    }
+
     // --------------------------------------------------------------- running
 
     fn run(&mut self, action: Action) {
@@ -2621,6 +2670,42 @@ fn set_session_proxy(app: &App, s: &MeshSession, proxy: Option<&str>) -> Action 
     )
 }
 
+/// Identifies a profile's picture (a new one has a new revision).
+fn icon_key(p: &MeshProfile) -> Option<String> {
+    Some(format!(
+        "{}/{}/{}",
+        p.node_name,
+        profile_key(p),
+        p.profile.icon_rev?
+    ))
+}
+
+/// Draw the pictures of the rows in view, over the blank first column.
+fn draw_row_icons(f: &mut Frame, app: &mut App, body: Rect, state: usize, keys: &[Option<String>]) {
+    let offset = app.tables[state].offset();
+    // The block's top border and the header come first.
+    let first = body.y + 2;
+    for (n, key) in keys.iter().enumerate().skip(offset) {
+        let y = first + (n - offset) as u16;
+        if y >= body.y + body.height {
+            break;
+        }
+        if let Some(icon) = key.as_ref().and_then(|k| app.icons.get_mut(k)) {
+            let area = Rect {
+                x: body.x,
+                y,
+                width: 2,
+                height: 1,
+            };
+            f.render_stateful_widget(
+                StatefulImage::default().resize(Resize::Fit(None)),
+                area,
+                icon,
+            );
+        }
+    }
+}
+
 fn profile_key(p: &MeshProfile) -> String {
     p.profile
         .id
@@ -3020,6 +3105,7 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     match app.tab {
         Tab::Sessions => {
+            let icon_col = Constraint::Length(if app.picker.is_some() { 3 } else { 0 });
             let rows = sessions.iter().map(|s| {
                 let ss = &s.session;
                 let rec = if ss.is_recording {
@@ -3032,6 +3118,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                     ""
                 };
                 Row::new(vec![
+                    Cell::from(""),
                     Cell::from(ss.name.clone()),
                     Cell::from(ss.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
                     node_cell(&s.node_name),
@@ -3053,6 +3140,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             let table = Table::new(
                 rows,
                 [
+                    icon_col,
                     Constraint::Fill(2),
                     Constraint::Fill(3),
                     Constraint::Length(9),
@@ -3067,20 +3155,37 @@ fn draw(f: &mut Frame, app: &mut App) {
                 ],
             )
             .header(header(&[
-                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Viewers",
+                "", "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Viewers",
                 "Clients", "Agent", "",
             ]))
             .row_highlight_style(highlight)
             .block(block);
             f.render_stateful_widget(table, body, &mut app.tables[i]);
+            let keys: Vec<Option<String>> = sessions
+                .iter()
+                .map(|x| {
+                    let name = x.session.profile.as_deref()?;
+                    ov.profiles
+                        .iter()
+                        .find(|p| {
+                            p.node_name == x.node_name
+                                && p.profile.name == name
+                                && p.profile.engine == x.session.engine
+                        })
+                        .and_then(icon_key)
+                })
+                .collect();
+            draw_row_icons(f, app, body, i, &keys);
             if let Some(sel) = app.tables[i].selected().and_then(|n| sessions.get(n)) {
                 draw_session(f, app, &ov, sel, detail);
             }
         }
         Tab::Profiles => {
+            let icon_col = Constraint::Length(if app.picker.is_some() { 3 } else { 0 });
             let rows = profiles.iter().map(|p| {
                 let pp = &p.profile;
                 Row::new(vec![
+                    Cell::from(""),
                     Cell::from(pp.name.clone()),
                     node_cell(&p.node_name),
                     Cell::from(engine_span(pp.engine)),
@@ -3098,6 +3203,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             let table = Table::new(
                 rows,
                 [
+                    icon_col,
                     Constraint::Fill(3),
                     Constraint::Length(9),
                     Constraint::Length(11),
@@ -3108,11 +3214,13 @@ fn draw(f: &mut Frame, app: &mut App) {
                 ],
             )
             .header(header(&[
-                "Profile", "Node", "Engine", "Proxy", "Size", "Used", "",
+                "", "Profile", "Node", "Engine", "Proxy", "Size", "Used", "",
             ]))
             .row_highlight_style(highlight)
             .block(block);
             f.render_stateful_widget(table, body, &mut app.tables[i]);
+            let keys: Vec<Option<String>> = profiles.iter().map(icon_key).collect();
+            draw_row_icons(f, app, body, i, &keys);
             let lines = app.tables[i]
                 .selected()
                 .and_then(|n| profiles.get(n))
@@ -3944,6 +4052,8 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         picker: None,
         shots: HashMap::new(),
         shot_asked: HashMap::new(),
+        icons: HashMap::new(),
+        icon_asked: Default::default(),
         tab_spans: Vec::new(),
         body: Rect::default(),
         popup: None,
@@ -4009,6 +4119,7 @@ fn event_loop(
         }
         app.tick = app.tick.wrapping_add(1);
         app.fetch_shot();
+        app.fetch_icons();
         terminal.draw(|f| draw(f, app))?;
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
