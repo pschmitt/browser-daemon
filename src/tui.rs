@@ -8,10 +8,14 @@ use std::path::PathBuf;
 
 use reqwest::Method;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
@@ -55,9 +59,9 @@ impl Tab {
     }
 }
 
-/// An engine on a node, with the defaults its new sessions start with.
+/// An engine, with the defaults its new sessions start with (as set on this node,
+/// and applied to every online node).
 struct EngineRow {
-    node: String,
     engine: BrowserEngine,
     defaults: EngineDefaults,
 }
@@ -162,7 +166,11 @@ fn subst(v: &Value, input: &str) -> Value {
 #[derive(Clone)]
 enum Action {
     Api(Call),
+    /// Several calls at once (one per node), reported as one.
+    ApiAll(String, Vec<Call>),
     Open(String),
+    /// Play a recording (node, id) in the video player.
+    Play(String, String),
     Say(String),
     Menu {
         title: String,
@@ -201,6 +209,100 @@ impl Action {
             other => other.clone(),
         }
     }
+}
+
+/// Id of the one image the TUI keeps on the terminal.
+const KITTY_ID: u32 = 4711;
+/// How often the selected session's screenshot is fetched again.
+const SHOT_EVERY: Duration = Duration::from_secs(10);
+
+/// A session's screenshot, ready for the kitty graphics protocol.
+struct Shot {
+    /// Base64 of the PNG.
+    png: String,
+    w: u32,
+    h: u32,
+}
+
+impl Shot {
+    /// Decode what the daemon sent (JPEG) and keep it as a PNG: kitty has no JPEG.
+    fn from_image(bytes: &[u8]) -> Option<Self> {
+        use base64::Engine as _;
+        let img = image::load_from_memory(bytes).ok()?;
+        let mut png = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut png, image::ImageFormat::Png).ok()?;
+        Some(Self {
+            png: base64::engine::general_purpose::STANDARD.encode(png.into_inner()),
+            w: img.width(),
+            h: img.height(),
+        })
+    }
+
+    /// Cells the image takes inside `area`: as large as fits, in its own proportions.
+    fn cells(&self, area: Rect) -> (u16, u16) {
+        let (cw, ch) = cell_px();
+        let scale = (f64::from(area.width) * f64::from(cw) / f64::from(self.w))
+            .min(f64::from(area.height) * f64::from(ch) / f64::from(self.h));
+        let cols = (f64::from(self.w) * scale / f64::from(cw)).round() as u16;
+        let rows = (f64::from(self.h) * scale / f64::from(ch)).round() as u16;
+        (cols.clamp(1, area.width), rows.clamp(1, area.height))
+    }
+
+    /// The escape sequence that shows the image at the top left of `area`.
+    fn place(&self, area: Rect) -> String {
+        let (cols, rows) = self.cells(area);
+        let mut out = format!("\x1b7\x1b[{};{}H", area.y + 1, area.x + 1);
+        let chunks: Vec<&str> = self
+            .png
+            .as_bytes()
+            .chunks(4096)
+            .map(|c| std::str::from_utf8(c).unwrap_or_default())
+            .collect();
+        for (n, chunk) in chunks.iter().enumerate() {
+            let more = u8::from(n + 1 < chunks.len());
+            if n == 0 {
+                out.push_str(&format!(
+                    "\x1b_Ga=T,f=100,i={KITTY_ID},c={cols},r={rows},C=1,q=2,m={more};{chunk}\x1b\\"
+                ));
+            } else {
+                out.push_str(&format!("\x1b_Gm={more};{chunk}\x1b\\"));
+            }
+        }
+        out.push_str("\x1b8");
+        out
+    }
+}
+
+/// Size of a terminal cell in pixels (a typical one when the terminal does not say).
+fn cell_px() -> (u16, u16) {
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ fills the winsize struct we pass.
+    let ok = unsafe { libc::ioctl(1, libc::TIOCGWINSZ, &mut ws) } == 0;
+    if ok && ws.ws_xpixel > 0 && ws.ws_ypixel > 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+        (ws.ws_xpixel / ws.ws_col, ws.ws_ypixel / ws.ws_row)
+    } else {
+        (8, 16)
+    }
+}
+
+/// Does the terminal draw kitty graphics? `BROWSER_DAEMON_TUI_IMAGES=on|off` decides
+/// when set; otherwise kitty, Ghostty and WezTerm are recognised (not inside tmux,
+/// which swallows the sequences unless passthrough is set up).
+fn kitty_supported() -> bool {
+    let var = |k: &str| std::env::var(k).unwrap_or_default();
+    match var("BROWSER_DAEMON_TUI_IMAGES").as_str() {
+        "on" | "1" | "kitty" => return true,
+        "off" | "0" | "no" => return false,
+        _ => {}
+    }
+    if !var("TMUX").is_empty() {
+        return false;
+    }
+    let term = var("TERM");
+    !var("KITTY_WINDOW_ID").is_empty()
+        || term.contains("kitty")
+        || term.contains("ghostty")
+        || matches!(var("TERM_PROGRAM").as_str(), "ghostty" | "WezTerm")
 }
 
 fn item(label: impl Into<String>, action: Action) -> (String, Action) {
@@ -313,6 +415,8 @@ enum Msg {
         result: Result<String, String>,
         refresh: bool,
     },
+    /// A session's screenshot (None: there is none to show).
+    Shot(String, Option<Shot>),
     /// A profile's backups, for its data menu.
     Backups(MeshProfile, Result<Vec<Value>, String>),
 }
@@ -325,6 +429,25 @@ struct App {
     pending: usize,
     /// The overview is being fetched.
     refreshing: bool,
+    /// Screenshots of sessions go to the terminal as kitty graphics.
+    kitty: bool,
+    /// The screenshots fetched so far, by session id.
+    shots: HashMap<String, Shot>,
+    /// When a session's screenshot was last asked for.
+    shot_asked: HashMap<String, Instant>,
+    /// Bumped with every new screenshot.
+    shot_gen: u64,
+    /// Where the drawn frame wants a session's screenshot.
+    shot_want: Option<(String, Rect)>,
+    /// What the terminal shows now: session, area and generation.
+    shot_shown: Option<(String, Rect, u64)>,
+    /// Where the last frame put the tab titles (columns), the table, the popup.
+    tab_spans: Vec<(u16, u16)>,
+    body: Rect,
+    popup: Option<Rect>,
+    screen: Rect,
+    /// The last left click on a row: when and where, for double clicks.
+    last_click: Option<(Instant, u16, u16)>,
     /// Another refresh was asked for while one ran.
     refresh_again: bool,
     /// Frames drawn, for the spinner.
@@ -402,6 +525,12 @@ impl App {
                 }
             }
             Msg::Live(live) => self.live = live,
+            Msg::Shot(id, shot) => {
+                if let Some(shot) = shot {
+                    self.shots.insert(id, shot);
+                    self.shot_gen += 1;
+                }
+            }
             Msg::Overview(res) => {
                 self.refreshing = false;
                 match res {
@@ -675,6 +804,89 @@ impl App {
         true
     }
 
+    fn mouse(&mut self, m: MouseEvent) {
+        let pos = Position::new(m.column, m.row);
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        if self.help {
+            if matches!(m.kind, MouseEventKind::Down(_)) {
+                self.help = false;
+            }
+            return;
+        }
+        if let Some(modal) = self.modal.as_ref() {
+            let area = self.popup.unwrap_or_default();
+            let inside = area.contains(pos);
+            let list = matches!(modal, Modal::Menu { .. } | Modal::Text { .. });
+            match m.kind {
+                MouseEventKind::ScrollDown if list => self.modal_key(key(KeyCode::Down)),
+                MouseEventKind::ScrollUp if list => self.modal_key(key(KeyCode::Up)),
+                MouseEventKind::Down(MouseButton::Left) if !inside => {
+                    if matches!(
+                        modal,
+                        Modal::Menu { .. } | Modal::Text { .. } | Modal::Confirm { .. }
+                    ) {
+                        self.modal_key(key(KeyCode::Esc));
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(Modal::Menu { items, sel, .. }) = self.modal.as_mut() {
+                        // The list is windowed around the selection when it is long.
+                        let max = (self.screen.height.saturating_sub(6) as usize).max(3);
+                        let start = if items.len() > max {
+                            sel.saturating_sub(max / 2).min(items.len() - max)
+                        } else {
+                            0
+                        };
+                        let row = (m.row as usize).checked_sub(area.y as usize + 1);
+                        if let Some(i) = row.map(|r| r + start).filter(|i| *i < items.len()) {
+                            *sel = i;
+                            self.modal_key(key(KeyCode::Enter));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) if m.row == 0 => {
+                if let Some(i) = self
+                    .tab_spans
+                    .iter()
+                    .position(|(a, b)| (*a..*b).contains(&m.column))
+                {
+                    self.tab = TABS[i];
+                }
+            }
+            MouseEventKind::ScrollDown if self.body.contains(pos) => self.move_by(1),
+            MouseEventKind::ScrollUp if self.body.contains(pos) => self.move_by(-1),
+            MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right))
+                if self.body.contains(pos) =>
+            {
+                // Under the top border and the header.
+                let Some(row) = (m.row as usize).checked_sub(self.body.y as usize + 2) else {
+                    return;
+                };
+                let i = self.table().offset() + row;
+                if i >= self.rows() {
+                    return;
+                }
+                self.table().select(Some(i));
+                let double = self.last_click.is_some_and(|(at, x, y)| {
+                    at.elapsed() < Duration::from_millis(400) && (x, y) == (m.column, m.row)
+                });
+                self.last_click = Some((Instant::now(), m.column, m.row));
+                if button == MouseButton::Right || double {
+                    self.last_click = None;
+                    if let Some(a) = self.item_menu() {
+                        self.run(a);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn cycle_tab(&mut self, delta: isize) {
         let i = TABS.iter().position(|t| *t == self.tab).unwrap_or(0) as isize;
         self.tab = TABS[(i + delta).rem_euclid(TABS.len() as isize) as usize];
@@ -687,7 +899,7 @@ impl App {
             Tab::Profiles => self.profile().map(|p| p.node_name),
             Tab::Recordings => self.recording().map(|r| r.node_name),
             Tab::Nodes => self.node_at_selection(),
-            Tab::Engines => self.engine_row().map(|r| r.node),
+            Tab::Engines => None,
         }
     }
 
@@ -772,7 +984,10 @@ impl App {
             (Tab::Recordings, KeyCode::Char('d') | KeyCode::Delete) => {
                 self.recording().map(|r| delete_recording(&r))
             }
-            (Tab::Recordings, KeyCode::Enter | KeyCode::Char('o')) => {
+            (Tab::Recordings, KeyCode::Enter | KeyCode::Char('p')) => self
+                .recording()
+                .map(|r| Action::Play(r.node_name.clone(), r.recording.id.to_string())),
+            (Tab::Recordings, KeyCode::Char('o')) => {
                 self.recording().map(|r| Action::Open(play_url(&r)))
             }
             (Tab::Recordings, KeyCode::Char('K')) => self.recording().map(|r| keep_recording(&r)),
@@ -859,44 +1074,28 @@ impl App {
             }
             Tab::Engines => {
                 let r = self.engine_row()?;
-                Some(details(&format!("{} on {}", r.engine, r.node), &r.defaults))
+                Some(details(&format!("{} defaults", r.engine), &r.defaults))
             }
         }
     }
 
-    /// One row per node and engine it supports, with the engine's defaults there.
+    /// One row per engine some online node supports, with the defaults of this node.
     fn engine_rows(&self) -> Vec<EngineRow> {
         let Some(ov) = self.ov.as_ref() else {
             return Vec::new();
         };
-        let mut nodes: Vec<(String, Vec<BrowserEngine>, Option<NodeSettings>)> = vec![(
-            ov.local_node.name.clone(),
-            ov.local_node.supported_engines.clone(),
-            Some(ov.local_node.settings.clone()),
-        )];
-        nodes.extend(ov.peers.iter().filter(|p| p.status == "online").map(|p| {
-            (
-                p.name.clone(),
-                p.supported_engines.clone(),
-                p.settings.clone(),
-            )
-        }));
-        let mut rows = Vec::new();
-        for (node, engines, settings) in nodes {
-            if !self.keep(&node) {
+        let mut rows: Vec<EngineRow> = Vec::new();
+        let peers = ov.peers.iter().filter(|p| p.status == "online");
+        let supported = std::iter::once(&ov.local_node.supported_engines)
+            .chain(peers.map(|p| &p.supported_engines));
+        for engine in supported.flatten().copied() {
+            if rows.iter().any(|r| r.engine == engine) {
                 continue;
             }
-            for engine in engines {
-                let defaults = settings
-                    .as_ref()
-                    .map(|s| s.engines.of(engine).clone())
-                    .unwrap_or_default();
-                rows.push(EngineRow {
-                    node: node.clone(),
-                    engine,
-                    defaults,
-                });
-            }
+            rows.push(EngineRow {
+                engine,
+                defaults: ov.local_node.settings.engines.of(engine).clone(),
+            });
         }
         rows
     }
@@ -914,30 +1113,35 @@ impl App {
         ov.peers.iter().find(|p| p.name == node)?.settings.clone()
     }
 
-    /// Change one engine's defaults on its node: the node takes the engines as a whole.
+    /// Change one engine's defaults on every online node: a node takes the engines as a whole.
     fn engine_patch(
         &self,
         row: &EngineRow,
         label: &str,
-        change: impl FnOnce(&mut EngineDefaults),
+        change: impl Fn(&mut EngineDefaults),
     ) -> Action {
-        let Some(settings) = self.node_settings(&row.node) else {
-            return Action::Say(format!("{}'s settings are not available", row.node));
+        let Some(ov) = self.ov.as_ref() else {
+            return Action::Say("Not connected".into());
         };
-        let mut engines = settings.engines.clone();
-        change(match row.engine {
-            BrowserEngine::Chromium => &mut engines.chromium,
-            BrowserEngine::Firefox => &mut engines.firefox,
-        });
-        Action::Api(
-            Call::new(
-                format!("{} ({} on {})", label, row.engine, row.node),
-                Method::PATCH,
-                &row.node,
-                "/settings",
-            )
-            .body(json!({ "engines": serde_json::to_value(&engines).unwrap_or(Value::Null) })),
-        )
+        let peers = ov.peers.iter().filter(|p| p.status == "online");
+        let nodes = std::iter::once((&ov.local_node.name, Some(ov.local_node.settings.clone())))
+            .chain(peers.map(|p| (&p.name, p.settings.clone())));
+        let calls: Vec<Call> = nodes
+            .filter_map(|(node, settings)| {
+                let mut engines = settings?.engines;
+                change(match row.engine {
+                    BrowserEngine::Chromium => &mut engines.chromium,
+                    BrowserEngine::Firefox => &mut engines.firefox,
+                });
+                Some(Call::new(label, Method::PATCH, node, "/settings").body(
+                    json!({ "engines": serde_json::to_value(&engines).unwrap_or(Value::Null) }),
+                ))
+            })
+            .collect();
+        if calls.is_empty() {
+            return Action::Say("No node's settings are available".into());
+        }
+        Action::ApiAll(format!("{} ({})", label, row.engine), calls)
     }
 
     fn engine_menu(&self, row: &EngineRow) -> Action {
@@ -960,7 +1164,7 @@ impl App {
             )
         });
         Action::Menu {
-            title: format!("{} on {}", row.engine, row.node),
+            title: format!("{} defaults", row.engine),
             items: vec![
                 item(
                     format!("Ad blocker: {}…", tri_label(d.adblock)),
@@ -990,10 +1194,7 @@ impl App {
                         |e| e.show_touches = !d.show_touches,
                     ),
                 ),
-                item(
-                    "Details",
-                    details(&format!("{} on {}", row.engine, row.node), d),
-                ),
+                item("Details", details(&format!("{} defaults", row.engine), d)),
             ],
         }
     }
@@ -1406,12 +1607,83 @@ impl App {
         }
     }
 
+    // ------------------------------------------------------------ screenshots
+
+    /// Ask for the selected session's screenshot when it is missing or a while old.
+    fn fetch_shot(&mut self) {
+        if !self.kitty || self.tab != Tab::Sessions || self.modal.is_some() {
+            return;
+        }
+        let Some(s) = self.session() else { return };
+        let id = s.session.id.to_string();
+        if self
+            .shot_asked
+            .get(&id)
+            .is_some_and(|t| t.elapsed() < SHOT_EVERY)
+        {
+            return;
+        }
+        self.shot_asked.insert(id.clone(), Instant::now());
+        let req = self.request(
+            Method::GET,
+            &self.api(&s.node_name, &format!("/sessions/{id}/screenshot")),
+        );
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let jpeg = match req.send().await {
+                Ok(r) if r.status() == reqwest::StatusCode::OK => r.bytes().await.ok(),
+                _ => None,
+            };
+            let shot = match jpeg {
+                Some(b) => tokio::task::spawn_blocking(move || Shot::from_image(&b))
+                    .await
+                    .ok()
+                    .flatten(),
+                None => None,
+            };
+            let _ = tx.send(Msg::Shot(id, shot));
+        });
+    }
+
+    /// Bring the terminal's image in line with the frame just drawn.
+    fn sync_image(&mut self) {
+        use std::io::Write;
+        if !self.kitty {
+            return;
+        }
+        let want = match (&self.shot_want, self.modal.is_none() && !self.help) {
+            (Some((id, area)), true) => self
+                .shots
+                .get(id)
+                .map(|_| (id.clone(), *area, self.shot_gen)),
+            _ => None,
+        };
+        if want == self.shot_shown {
+            return;
+        }
+        let mut out = String::new();
+        if self.shot_shown.is_some() {
+            out.push_str(&format!("\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\"));
+        }
+        if let Some((id, area, _)) = &want {
+            if let Some(shot) = self.shots.get(id) {
+                out.push_str(&shot.place(*area));
+            }
+        }
+        self.shot_shown = want;
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.flush();
+    }
+
     // --------------------------------------------------------------- running
 
     fn run(&mut self, action: Action) {
         match action {
             Action::Api(call) => self.call(call),
+            Action::ApiAll(label, calls) => self.call_all(label, calls),
             Action::Open(url) => self.open(&url),
+            Action::Play(node, id) => self.play(&node, &id),
             Action::Say(text) => self.set_status(text, false),
             Action::Menu { title, items } => {
                 self.modal = Some(Modal::Menu {
@@ -1472,6 +1744,93 @@ impl App {
                 label: call.label,
                 result,
                 refresh,
+            });
+        });
+    }
+
+    /// Fetch a recording as a video file and play it: `$BROWSER_DAEMON_PLAYER` (mpv by
+    /// default; a command with arguments is fine). Any player does, as it gets a file:
+    /// the daemon's secret stays out of its command line.
+    fn play(&mut self, node: &str, id: &str) {
+        let player = std::env::var("BROWSER_DAEMON_PLAYER").unwrap_or_else(|_| "mpv".into());
+        let mut words = player.split_whitespace().map(String::from);
+        let Some(program) = words.next() else {
+            self.set_status("BROWSER_DAEMON_PLAYER is empty", true);
+            return;
+        };
+        let args: Vec<String> = words.collect();
+        let url = self.api(node, &format!("/recordings/{id}/export.webm"));
+        let req = self
+            .request(Method::GET, &url)
+            .timeout(Duration::from_secs(3600));
+        let label = "Fetching the recording".to_string();
+        self.set_status(format!("{label}…"), false);
+        self.pending += 1;
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let done = |result| Msg::Done {
+                label: label.clone(),
+                result,
+                refresh: false,
+            };
+            let file = match download_video(req).await {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx.send(done(Err(e)));
+                    return;
+                }
+            };
+            let child = std::process::Command::new(&program)
+                .args(&args)
+                .arg(file.path())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            match child {
+                Ok(mut child) => {
+                    let _ = tx.send(done(Ok(format!("Playing in {program}"))));
+                    // The file goes away once the player does.
+                    let _ = tokio::task::spawn_blocking(move || child.wait()).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(done(Err(format!("{program}: {e}"))));
+                }
+            }
+            drop(file);
+        });
+    }
+
+    fn call_all(&mut self, label: String, calls: Vec<Call>) {
+        self.set_status(format!("{label}…"), false);
+        self.pending += 1;
+        let reqs: Vec<_> = calls
+            .iter()
+            .map(|c| {
+                let url = self.api(&c.node, &c.path);
+                let req = self.request(c.method.clone(), &url);
+                match c.body {
+                    Some(ref body) => req.json(body),
+                    None => req,
+                }
+            })
+            .collect();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let results = futures_util::future::join_all(reqs.into_iter().map(|r| r.send())).await;
+            let failed = results
+                .iter()
+                .filter(|r| !matches!(r, Ok(res) if res.status().is_success()))
+                .count();
+            let result = if failed == 0 {
+                Ok(String::new())
+            } else {
+                Err(format!("{failed} of {} nodes failed", results.len()))
+            };
+            let _ = tx.send(Msg::Done {
+                label,
+                result,
+                refresh: true,
             });
         });
     }
@@ -2262,7 +2621,11 @@ fn recording_menu(r: &MeshRecording) -> Action {
     Action::Menu {
         title,
         items: vec![
-            item("Play", Action::Open(play_url(r))),
+            item(
+                "Play in the video player",
+                Action::Play(r.node_name.clone(), r.recording.id.to_string()),
+            ),
+            item("Play in the browser", Action::Open(play_url(r))),
             item(
                 if r.recording.keep {
                     "Stop keeping (the cleanup may remove it)"
@@ -2426,10 +2789,12 @@ fn header(cells: &[&str]) -> Row<'static> {
 }
 
 fn draw(f: &mut Frame, app: &mut App) {
+    // Room for the screenshot below the sessions, where the terminal can show one.
+    let shot_room = app.kitty && app.tab == Tab::Sessions && f.area().height >= 30;
     let [top, body, detail, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
-        Constraint::Length(6),
+        Constraint::Length(if shot_room { 15 } else { 6 }),
         Constraint::Length(2),
     ])
     .areas(f.area());
@@ -2457,6 +2822,17 @@ fn draw(f: &mut Frame, app: &mut App) {
         })
         .collect();
     let selected = TABS.iter().position(|t| *t == app.tab).unwrap_or(0);
+    // Where each title sits (one space of padding either side, one between), for clicks.
+    let mut x = 0u16;
+    app.tab_spans = titles
+        .iter()
+        .map(|t| {
+            let span = (x, x + t.width() as u16 + 2);
+            x = span.1 + 1;
+            span
+        })
+        .collect();
+    app.body = body;
     f.render_widget(
         Tabs::new(titles)
             .select(selected)
@@ -2493,6 +2869,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     let highlight = Style::new()
         .bg(Color::Rgb(60, 50, 120))
         .add_modifier(Modifier::BOLD);
+    app.shot_want = None;
     let Some(ov) = app.ov.clone() else {
         f.render_widget(Paragraph::new("Connecting…").block(block), body);
         draw_footer(f, app, foot);
@@ -2591,7 +2968,42 @@ fn draw(f: &mut Frame, app: &mut App) {
                     );
                     lines
                 });
-            draw_detail(f, detail, detail_lines);
+            if shot_room {
+                // Text on the left, the screenshot (16:10) on the right.
+                let (cw, ch) = cell_px();
+                let rows = detail.height.saturating_sub(1);
+                let cols = (u32::from(rows) * u32::from(ch) * 16 / 10 / u32::from(cw.max(1)))
+                    .min(u32::from(detail.width / 2)) as u16;
+                f.render_widget(
+                    Block::new()
+                        .borders(Borders::TOP)
+                        .border_style(Style::new().dark_gray()),
+                    detail,
+                );
+                let text = Rect {
+                    width: detail.width.saturating_sub(cols + 1),
+                    ..detail
+                };
+                let area = Rect {
+                    x: detail.x + detail.width - cols,
+                    y: detail.y + 1,
+                    width: cols,
+                    height: rows,
+                };
+                draw_detail(f, text, detail_lines);
+                let id = app.tables[i]
+                    .selected()
+                    .and_then(|n| sessions.get(n))
+                    .map(|s| s.session.id.to_string());
+                if let Some(id) = id {
+                    if !app.shots.contains_key(&id) {
+                        f.render_widget(Paragraph::new("Taking a screenshot…").dim(), area);
+                    }
+                    app.shot_want = Some((id, area));
+                }
+            } else {
+                draw_detail(f, detail, detail_lines);
+            }
         }
         Tab::Profiles => {
             let rows = profiles.iter().map(|p| {
@@ -2807,7 +3219,6 @@ fn draw(f: &mut Frame, app: &mut App) {
             let rows_data = app.engine_rows();
             let rows = rows_data.iter().map(|r| {
                 Row::new(vec![
-                    Cell::from(r.node.clone()),
                     Cell::from(r.engine.to_string()),
                     Cell::from(tri_label(r.defaults.adblock)),
                     Cell::from(scheme_label(r.defaults.color_scheme)),
@@ -2817,7 +3228,6 @@ fn draw(f: &mut Frame, app: &mut App) {
             let table = Table::new(
                 rows,
                 [
-                    Constraint::Fill(2),
                     Constraint::Length(11),
                     Constraint::Length(12),
                     Constraint::Length(12),
@@ -2825,7 +3235,6 @@ fn draw(f: &mut Frame, app: &mut App) {
                 ],
             )
             .header(header(&[
-                "Node",
                 "Engine",
                 "Ad blocker",
                 "Appearance",
@@ -2835,25 +3244,11 @@ fn draw(f: &mut Frame, app: &mut App) {
             .block(block);
             f.render_stateful_widget(table, body, &mut app.tables[i]);
             let lines = app.tables[i].selected().and_then(|n| rows_data.get(n)).map(|r| {
-                let proxy = app
-                    .node_settings(&r.node)
-                    .and_then(|s| s.default_proxy)
-                    .map(|p| app.proxy_name(&r.node, &p))
-                    .unwrap_or_else(|| "direct".into());
-                vec![
-                    Line::from(vec![
-                        Span::raw("New ").dim(),
-                        Span::raw(r.engine.to_string()),
-                        Span::raw(" sessions on ").dim(),
-                        Span::raw(r.node.clone()),
-                        Span::raw(" start with these unless the request or the profile says otherwise.").dim(),
-                    ]),
-                    Line::from(vec![
-                        Span::raw("node default proxy ").dim(),
-                        Span::raw(proxy),
-                        Span::raw("   (set it from the Nodes tab)").dim(),
-                    ]),
-                ]
+                vec![Line::from(vec![
+                    Span::raw("New ").dim(),
+                    Span::raw(r.engine.to_string()),
+                    Span::raw(" sessions start with these unless the request or the profile says otherwise; a change applies to every online node.").dim(),
+                ])]
             });
             draw_detail(f, detail, lines);
         }
@@ -2861,11 +3256,14 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     draw_footer(f, app, foot);
 
-    if let Some(ref modal) = app.modal {
-        draw_modal(f, modal);
+    app.screen = f.area();
+    app.popup = if let Some(ref modal) = app.modal {
+        Some(draw_modal(f, modal))
     } else if app.help {
-        popup(f, "Keys", help_lines());
-    }
+        Some(popup(f, "Keys", help_lines()))
+    } else {
+        None
+    };
 }
 
 fn draw_detail(f: &mut Frame, area: Rect, lines: Option<Vec<Line<'static>>>) {
@@ -2886,7 +3284,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             "⏎ take over  s stop  p proxy  R record  t tab  e rename  N new  X stop all  m menu"
         }
         Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
-        Tab::Recordings => "⏎ play  K keep  E export  d delete  v vacuum  m menu",
+        Tab::Recordings => "⏎ play (mpv)  o browser  K keep  E export  d delete  v vacuum  m menu",
         Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
         Tab::Engines => "a ad blocker  c appearance  t touches  m menu  (defaults of new sessions)",
     };
@@ -2924,6 +3322,10 @@ fn help_lines() -> Vec<Line<'static>> {
             "r",
             "refresh now (requests run in the background; the spinner shows while they do)",
         ),
+        (
+            "mouse",
+            "click a tab or row, double-click / right-click: menu, wheel: scroll",
+        ),
         ("", ""),
         ("Sessions", ""),
         ("  ⏎ / o", "open the handoff view in your browser"),
@@ -2947,7 +3349,10 @@ fn help_lines() -> Vec<Line<'static>> {
         ("  e / N", "rename / new profile form"),
         ("  d", "delete it"),
         ("Recordings", ""),
-        ("  ⏎ / o", "play it in the dashboard"),
+        (
+            "  ⏎ / p",
+            "play it in mpv ($BROWSER_DAEMON_PLAYER), o: in the dashboard",
+        ),
         (
             "  K",
             "keep it (the cleanup never removes it) / stop keeping it",
@@ -2993,7 +3398,8 @@ fn window(all: Vec<Line<'static>>, sel: usize, max: usize) -> Vec<Line<'static>>
     all.into_iter().skip(start).take(max).collect()
 }
 
-fn draw_modal(f: &mut Frame, modal: &Modal) {
+/// Draws the modal; the area it covers.
+fn draw_modal(f: &mut Frame, modal: &Modal) -> Rect {
     let room = f.area().height.saturating_sub(6) as usize;
     let selected =
         |text: String| Line::from(Span::raw(format!("▸ {text}")).fg(Color::Magenta).bold());
@@ -3019,7 +3425,7 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
             let mut lines = window(lines, *sel, room.max(3));
             lines.push(Line::from(""));
             lines.push(hint("⏎ choose   Esc close   1-9 pick"));
-            popup(f, title, lines);
+            popup(f, title, lines)
         }
         Modal::Input {
             title, prompt, buf, ..
@@ -3059,7 +3465,7 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
                 .collect();
             shown.push(Line::from(""));
             shown.push(hint("↑↓ scroll   Esc close"));
-            popup(f, title, shown);
+            popup(f, title, shown)
         }
         Modal::Form(form) => {
             let mut lines: Vec<Line> = form
@@ -3094,12 +3500,12 @@ fn draw_modal(f: &mut Frame, modal: &Modal) {
                 FormKind::Session => "New session",
                 FormKind::Profile => "New profile",
             };
-            popup(f, title, lines);
+            popup(f, title, lines)
         }
     }
 }
 
-fn popup(f: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
+fn popup(f: &mut Frame, title: &str, lines: Vec<Line<'static>>) -> Rect {
     let area = f.area();
     let w = lines
         .iter()
@@ -3124,6 +3530,7 @@ fn popup(f: &mut Frame, title: &str, lines: Vec<Line<'static>>) {
         ),
         rect,
     );
+    rect
 }
 
 /// What to authenticate with: the cluster secret from `file` (an explicit file
@@ -3205,6 +3612,17 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         tx,
         pending: 0,
         refreshing: false,
+        kitty: kitty_supported(),
+        shots: HashMap::new(),
+        shot_asked: HashMap::new(),
+        shot_gen: 0,
+        shot_want: None,
+        shot_shown: None,
+        tab_spans: Vec::new(),
+        body: Rect::default(),
+        popup: None,
+        screen: Rect::default(),
+        last_click: None,
         refresh_again: false,
         tick: 0,
         http,
@@ -3230,7 +3648,22 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
     ));
 
     let mut terminal = ratatui::init();
+    let mouse = !matches!(
+        std::env::var("BROWSER_DAEMON_TUI_MOUSE").as_deref(),
+        Ok("off" | "0" | "no")
+    );
+    if mouse {
+        let _ = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+    }
     let result = event_loop(&mut terminal, &mut app, &mut rx);
+    if mouse {
+        let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+    }
+    if app.shot_shown.is_some() {
+        use std::io::Write;
+        let _ =
+            std::io::stdout().write_all(format!("\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\").as_bytes());
+    }
     ratatui::restore();
     result
 }
@@ -3245,12 +3678,14 @@ fn event_loop(
             app.handle(msg);
         }
         app.tick = app.tick.wrapping_add(1);
+        app.fetch_shot();
         terminal.draw(|f| draw(f, app))?;
+        app.sync_image();
         if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(k) = event::read()? {
-                if k.kind == KeyEventKind::Press && !app.key(k) {
-                    return Ok(());
-                }
+            match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press && !app.key(k) => return Ok(()),
+                Event::Mouse(m) => app.mouse(m),
+                _ => {}
             }
         } else if !app.live && app.last_refresh.is_none_or(|t| t.elapsed() >= REFRESH) {
             app.refresh();
@@ -3314,6 +3749,27 @@ async fn push_overviews(
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(Duration::from_secs(30));
     }
+}
+
+/// The recording's video, downloaded to a temporary file.
+async fn download_video(req: reqwest::RequestBuilder) -> Result<tempfile::NamedTempFile, String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    let res = req.send().await.map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        return Err(format!("HTTP {}", res.status()));
+    }
+    let mut file = tempfile::Builder::new()
+        .prefix("browser-daemon-recording-")
+        .suffix(".webm")
+        .tempfile()
+        .map_err(|e| e.to_string())?;
+    let mut stream = res.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+    }
+    Ok(file)
 }
 
 /// Fetch the overview; an error reads as the status line does.
