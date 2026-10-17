@@ -214,6 +214,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .fact { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 99px; background: var(--hover);
   color: var(--muted); font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: default; }
 .fact .i { width: 12px; height: 12px; }
+.fact-pic { width: 14px; height: 14px; border-radius: 4px; object-fit: contain; flex: none; margin-left: -3px; }
 /* Opens the details of the session's clients (agents): hover doesn't exist on phones. */
 .fact.clickable { cursor: pointer; }
 .fact.clickable:hover, .fact.clickable:focus-visible { filter: brightness(.94); outline: none; box-shadow: 0 0 0 1px currentColor inset; }
@@ -1830,7 +1831,7 @@ function sessionCard(s) {
   const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const clientsFact = (cls, ico, text, title) => `<span class="fact clickable ${cls}" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
-    fact('', icon(s.profile ? 'folder' : 'trash', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
+    fact('', sessPic ? `<img class="fact-pic" src="${esc(sessPic)}" alt="">` : icon(s.profile ? 'folder' : 'trash', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
     !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Ephemeral: stops when its last client disconnects'),
     s.audible && fact('accent', icon('speaker', 'sm'), 'Playing', 'Playing sound'),
     s.is_recording && (s.recording_paused
