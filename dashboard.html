@@ -1538,6 +1538,45 @@ const VIEWS = ['sessions', 'profiles', 'recordings', 'engines', 'nodes'];
 let view = 'sessions';
 const selectedRecordings = new Set();
 
+// Tab icon with a badge counting the running sessions, drawn over /favicon.svg.
+const favLinks = [...document.querySelectorAll('link[rel="icon"]')].map((l) => ({ l, href: l.href, type: l.type, sizes: l.getAttribute('sizes') }));
+let favBase = null, favBaseLoading = false, favShown = null;
+function updateFavicon(count) {
+  if (count === favShown) return;
+  if (!favBase) {
+    if (favBaseLoading) return;
+    favBaseLoading = true;
+    const img = new Image();
+    img.onload = () => { favBase = img; updateFavicon(count); };
+    img.src = '/favicon.svg';
+    return;
+  }
+  favShown = count;
+  let href = null;
+  if (count > 0) {
+    const size = 144, text = count > 99 ? '99+' : String(count);
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(favBase, 0, 0, size, size);
+    const h = size * 0.6, w = h * (text.length > 2 ? 1.65 : text.length > 1 ? 1.4 : 1);
+    const x = size - w, y = size - h;
+    ctx.fillStyle = '#16a34a';
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, h / 2); ctx.fill();
+    ctx.font = `bold ${Math.floor(h * (text.length > 2 ? 0.85 : 1))}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, Math.floor(x + w / 2), Math.floor(y + h / 2 + ctx.measureText(text).actualBoundingBoxAscent / 2));
+    href = canvas.toDataURL('image/png');
+  }
+  // Every declaration gets the badge, else the ICO or PNG fallback would win over it.
+  for (const f of favLinks) {
+    f.l.href = href || f.href;
+    f.l.type = href ? 'image/png' : f.type;
+    if (href) f.l.removeAttribute('sizes'); else if (f.sizes) f.l.setAttribute('sizes', f.sizes);
+  }
+}
+
 function render() {
   if (!ov) return;
   nodes = [
@@ -1554,6 +1593,7 @@ function render() {
     recIcons.delete(key);
   }
   renderHeader();
+  updateFavicon(ov.sessions.length);
   renderStats();
   renderSessions();
   renderProfiles();
