@@ -573,6 +573,9 @@ pub struct LaunchParams {
     /// the agent ("claude-code 2.1.296"), its conversation id, its working directory
     /// and the machine it runs on.
     pub agent: Option<String>,
+    /// An integration rather than an agent ("Home Assistant · HRworks"): shown under
+    /// that name, and not counted as an agent whatever library it drives the browser with.
+    pub client: Option<String>,
     pub conversation: Option<String>,
     pub cwd: Option<String>,
     pub machine: Option<String>,

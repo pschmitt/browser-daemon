@@ -15,6 +15,7 @@ use crate::{MeshOverview, MeshProfile, MeshRecording, MeshSession};
 type R<T> = Result<T, Box<dyn std::error::Error>>;
 
 /// Exit statuses (clap itself uses 2 for a bad command line).
+pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_NOT_FOUND: i32 = 3;
 pub const EXIT_UNREACHABLE: i32 = 4;
 pub const EXIT_CANCELLED: i32 = 5;
@@ -365,6 +366,12 @@ pub enum ProfileCmd {
         /// Its recordings take the sound: on, off, or the node's default.
         #[arg(long, value_enum)]
         record_audio: Option<Toggle>,
+        /// Its picture on the dashboard: a png, svg, webp, jpeg or gif file.
+        #[arg(long, value_name = "FILE")]
+        icon: Option<String>,
+        /// Remove its picture.
+        #[arg(long, conflicts_with = "icon")]
+        clear_icon: bool,
     },
     /// Copy a profile under a new name (same node).
     Clone {
@@ -963,6 +970,7 @@ pub fn agents(clients: &[crate::clients::ClientInfo]) -> String {
     let mut seen: Vec<String> = Vec::new();
     for c in clients {
         let label = match (c.agent_name.as_deref(), c.topic.as_deref()) {
+            _ if c.integration.is_some() => c.integration.clone().unwrap_or_default(),
             (Some(a), Some(t)) => format!("{a}: {t}"),
             (None, Some(t)) => t.to_string(),
             (Some(a), None) => a.to_string(),
@@ -1517,8 +1525,46 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             clear_tabs,
             record,
             record_audio,
+            icon,
+            clear_icon,
         } => {
             let p = c.profile(&profile, node.as_deref())?;
+            let icon_given = icon.is_some() || clear_icon;
+            let icon_path = c.api(
+                &p.node_name,
+                &format!("/profiles/{}/icon", enc(&p.profile.name)),
+            );
+            if let Some(file) = icon {
+                let mime = match std::path::Path::new(&file)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                {
+                    Some("png") => "image/png",
+                    Some("svg") => "image/svg+xml",
+                    Some("webp") => "image/webp",
+                    Some("jpg" | "jpeg") => "image/jpeg",
+                    Some("gif") => "image/gif",
+                    _ => {
+                        return fail(
+                            EXIT_USAGE,
+                            "The picture must be a png, svg, webp, jpeg or gif file",
+                        )
+                    }
+                };
+                let bytes = std::fs::read(&file)?;
+                let req = c
+                    .req(Method::PUT, &icon_path)
+                    .header("Content-Type", mime)
+                    .body(bytes);
+                let v = c.call(req).await?;
+                done(&c, v, "picture set");
+            }
+            if clear_icon {
+                let v = c.call(c.req(Method::DELETE, &icon_path)).await?;
+                done(&c, v, "picture removed");
+            }
             let mut body = json!({});
             if let Some(v) = name {
                 body["name"] = json!(v)
@@ -1539,6 +1585,9 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             }
             if let Some(v) = record_audio {
                 body["record_audio"] = v.json()
+            }
+            if icon_given && body.as_object().is_some_and(|o| o.is_empty()) {
+                return Ok(());
             }
             let path = c.api(&p.node_name, &format!("/profiles/{}", enc(&p.profile.name)));
             let v = c.call(c.req(Method::PATCH, &path).json(&body)).await?;
@@ -2334,6 +2383,7 @@ mod tests {
                 conversation: None,
                 cwd: None,
                 machine: None,
+                integration: None,
                 topic: topic.map(str::to_string),
             }
         };

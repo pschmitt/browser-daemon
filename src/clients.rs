@@ -37,6 +37,10 @@ pub struct ClientInfo {
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
+    /// Set when it is an integration (the `client` launch parameter): its name, as shown.
+    /// Such a client is not an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration: Option<String>,
     /// What it is doing, as the agent says (browser-agent-topic).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,

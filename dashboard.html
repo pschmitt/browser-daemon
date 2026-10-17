@@ -191,6 +191,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .engine-badge .i { width: 19px; height: 19px; }
 .scard-title { font-weight: 700; font-size: 14.5px; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .scard-agent { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12.5px; font-weight: 600; color: var(--accent); cursor: pointer; min-width: 0; }
+.scard-agent.integ { color: var(--ok, #22c55e); }
 .scard.driven { border-color: color-mix(in oklab, var(--accent) 40%, var(--line)); }
 .scard.stale { opacity: .55; filter: grayscale(.5); }
 .scard.stale .scard-head { padding-bottom: 14px; }
@@ -270,6 +271,8 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .merge-list .mv { flex: none; display: flex; gap: 2px; }
 .merge-check { display: flex; align-items: center; gap: 8px; font-size: 13.5px; cursor: pointer; }
 .merge-check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.avatar.pic, .engine-badge.pic { background: transparent; }
+.avatar.pic img, .engine-badge.pic img { width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
 .avatar { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 13px; text-transform: uppercase; }
 .play-btn { width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); transition: background .15s, color .15s, transform .1s; }
 .play-btn:hover { background: var(--accent-btn); color: var(--accent-fg); transform: scale(1.05); }
@@ -633,6 +636,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
   <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
   <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14a6.5 6.5 0 0 1 3 6"/></symbol>
   <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></symbol>
@@ -1042,6 +1047,27 @@ function recFavicon(r) {
     .catch(() => { /* the node's icon lookup steps in */ });
   return '';
 }
+// A profile's own picture, fetched the same way (blob URL per picture revision).
+const profIcons = new Map();   // node/profile/rev -> blob URL, or '' while loading or when it failed
+function profIcon(p) {
+  if (!p?.icon_rev) return '';
+  const key = `${p.node_name}/${p.key}/${p.icon_rev}`;
+  if (profIcons.has(key)) return profIcons.get(key);
+  profIcons.set(key, '');
+  fetch(api(p.node_name, `/profiles/${enc(p.key)}/icon`), { headers: authHeaders() })
+    .then((res) => (res.ok ? res.blob() : null))
+    .then((blob) => {
+      if (!blob) return;
+      profIcons.set(key, URL.createObjectURL(blob));
+      if (ov) render();
+    })
+    .catch(() => { /* the initials stay */ });
+  return '';
+}
+// The profile a session runs, if it has one.
+const profileOfSession = (s) => s.profile
+  ? [...byKey.profiles.values()].find((p) => p.node_name === s.node_name && (s.profile_id ? p.id === s.profile_id : p.display === s.profile && p.engine === (s.engine || 'chromium')))
+  : undefined;
 const lettered = (host) => (host
   ? `<span class="fav-letter" style="--h:${hueOf(host)}" aria-hidden="true">${esc(host.replace(/^www\./, '').charAt(0).toUpperCase())}</span>`
   : icon('globe', 'sm'));
@@ -1736,9 +1762,13 @@ function sessionCard(s) {
   const n = s.client_count || 0;
   // Who is connected (an older node reports only the count): agents are Playwright/Puppeteer.
   const clients = s.clients || [];
-  const agents = clients.filter((c) => c.agent), others = clients.filter((c) => !c.agent);
+  const agents = clients.filter((c) => c.agent), integrations = clients.filter((c) => c.integration);
+  const others = clients.filter((c) => !c.agent && !c.integration);
   const lead = agents[0];
   const agentRow = lead ? `<div class="scard-agent" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(`An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`)}" aria-label="${esc(`An agent drives this session: ${agentLabel(lead)}. Show details`)}">${agentIcon(lead)}<span class="ellipsis">${esc(agentLabel(lead))}</span>${agents.length > 1 ? `<span class="chip accent">+${agents.length - 1}</span>` : ''}</div>` : '';
+  // An integration (Home Assistant's HRworks worker, say) says what it is: no agent.
+  const integRow = integrations.length ? `<div class="scard-agent integ" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(`An integration is connected:\n\n${integrations.map(clientInfo).join('\n\n')}`)}">${icon('plug', 'sm')}<span class="ellipsis">${esc(integrations[0].integration)}</span>${integrations.length > 1 ? `<span class="chip">+${integrations.length - 1}</span>` : ''}</div>` : '';
+  const sessPic = profIcon(profileOfSession(s));
   const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const clientsFact = (cls, ico, text, title) => `<span class="fact clickable ${cls}" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
   const facts = [
@@ -1757,10 +1787,10 @@ function sessionCard(s) {
   return `
   <article class="scard${lead ? ' driven' : ''}" data-key="${key}">
     <div class="scard-head">
-      <div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>
+      ${sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`}
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span></div>
-        ${agentRow}
+        ${agentRow}${integRow}
         <div class="scard-sub">${nodeChip(s.node_name)}<span data-up title="Uptime"></span></div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
@@ -1800,7 +1830,7 @@ function profileRow(p) {
     : `<button class="btn sm" data-act="launch-profile" data-key="${key}">${icon('play', 'sm fill')}Launch</button>`;
   return `
   <div class="row" role="row" data-key="${key}">
-    <div role="cell" class="main"><div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>
+    <div role="cell" class="main">${profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`}
       <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}</b><span>${status}${tabStrip(p)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
     <div role="cell" class="num c-size">${formatBytes(p.size_bytes)}</div>
@@ -2029,6 +2059,8 @@ const ACT = {
       !p.session && p.tabs?.length && { icon: 'play', label: 'Launch without the default tabs', run: () => launchProfile(p, { tabs: false }) },
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
+      { icon: 'image', label: 'Set picture…', run: () => pickProfileIcon(p) },
+      p.icon_rev && { icon: 'trash', label: 'Remove picture', run: () => act('Removing the picture', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}/icon`)), 'Picture removed') },
       nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', run: () => openMenu(el, [
         { label: p.session ? 'Default proxy (from the next launch)' : 'Default proxy' },
         { label: 'Direct', on: !p.proxy, run: () => setProfileProxy(p, 'none') },
@@ -2429,7 +2461,7 @@ function showClientDetails(s) {
     const n = list.length > 1 ? `#${i + 1} ` : '';
     const at = c.since ? `${new Date(c.since * 1000).toLocaleString()} (${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since)))} ago)` : '';
     pairs.push(
-      [`${n}Agent`, (c.agent ? agentIcon(c) + ' ' : '') + esc(c.agent_name || (c.agent ? 'unnamed' : 'no, an automation client'))],
+      [`${n}Agent`, (c.agent ? agentIcon(c) + ' ' : '') + esc(c.agent_name || (c.agent ? 'unnamed' : c.integration ? `no, the integration ${c.integration}` : 'no, an automation client'))],
       [`${n}Topic`, esc(c.topic || '')],
       [`${n}Conversation`, c.conversation ? `<span class="mono">${esc(c.conversation)}</span>` : ''],
       [`${n}Project`, c.cwd ? `<span class="mono">${esc(c.cwd)}</span>` : ''],
@@ -2463,6 +2495,7 @@ function clientInfo(c) {
   // refresh (images reload, failed favicons flash). The dialog says how long ago.
   const since = c.since ? `connected ${new Date(c.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
   return [
+    c.integration && `integration ${c.integration}`,
     c.agent_name && (c.topic ? `${c.agent_name}: ${c.topic}` : c.agent_name),
     c.conversation && `conversation ${c.conversation}`,
     (c.cwd || c.machine) && `in ${c.cwd || '?'}${c.machine ? ` on ${c.machine}` : ''}`,
@@ -2604,6 +2637,30 @@ async function renameProfile(p) {
 function setSessionProxy(s, id) {
   const label = id === 'none' ? 'direct connections' : proxyName(s.node_name, id);
   act('Switching the proxy', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/proxy`), { proxy: id }), `Session now uses ${label}`);
+}
+// Pick an image for a profile. Raster images are shrunk to 256px first: the picture
+// is shown at a few dozen.
+function pickProfileIcon(p) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/svg+xml,image/webp,image/jpeg,image/gif';
+  input.onchange = () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    act('Setting the picture', async () => {
+      let blob = file;
+      if (file.type !== 'image/svg+xml') {
+        const bmp = await createImageBitmap(file);
+        const k = Math.min(1, 256 / Math.max(bmp.width, bmp.height));
+        const c = new OffscreenCanvas(Math.max(1, Math.round(bmp.width * k)), Math.max(1, Math.round(bmp.height * k)));
+        c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+        blob = await c.convertToBlob({ type: 'image/png' });
+      }
+      const res = await fetch(api(p.node_name, `/profiles/${enc(p.key)}/icon`), { method: 'PUT', headers: { ...authHeaders(), 'Content-Type': blob.type }, body: blob });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    }, `Picture set for ${p.display}`);
+  };
+  input.click();
 }
 function setProfileScheme(p, v) {
   act('Setting the appearance', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { color_scheme: v }),

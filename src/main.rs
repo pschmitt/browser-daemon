@@ -898,6 +898,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .put(api_update_profile)
                 .delete(api_delete_profile),
         )
+        .route(
+            "/api/profiles/{name}/icon",
+            get(api_get_profile_icon)
+                .put(api_set_profile_icon)
+                .delete(api_delete_profile_icon),
+        )
         .route("/api/profiles/{name}/clone", post(api_clone_profile))
         .route("/api/profiles/{name}/export", get(api_export_profile))
         .route(

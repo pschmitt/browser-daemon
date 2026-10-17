@@ -47,9 +47,53 @@ pub struct ProfileMeta {
     /// Their recordings take the sound too (the node's default when unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record_audio: Option<bool>,
+    /// The picture shown for the profile on the dashboard and in the TUI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<ProfileIcon>,
     /// The single start page of earlier versions: folded into `tabs` when read.
     #[serde(default, rename = "homepage", skip_serializing)]
     legacy_homepage: Option<String>,
+}
+
+/// A profile's picture, kept in its metadata (so backups and clearing the data keep it).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProfileIcon {
+    /// Media type: png, svg, webp, jpeg or gif.
+    pub mime: String,
+    /// The image, base64.
+    pub data: String,
+    /// Changes with the image, for caches.
+    pub rev: u64,
+}
+
+pub const ICON_TYPES: [&str; 5] = [
+    "image/png",
+    "image/svg+xml",
+    "image/webp",
+    "image/jpeg",
+    "image/gif",
+];
+/// Larger pictures are refused (they are shown at a few dozen pixels).
+pub const MAX_ICON_BYTES: usize = 256 * 1024;
+
+impl ProfileIcon {
+    pub fn new(mime: &str, bytes: &[u8]) -> Option<Self> {
+        use base64::Engine as _;
+        let mime = mime.split(';').next()?.trim().to_ascii_lowercase();
+        (ICON_TYPES.contains(&mime.as_str()) && !bytes.is_empty() && bytes.len() <= MAX_ICON_BYTES)
+            .then(|| Self {
+                mime,
+                data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                rev: now_secs(),
+            })
+    }
+
+    pub fn bytes(&self) -> Option<Vec<u8>> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .ok()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +187,7 @@ pub async fn create(
         tabs: Vec::new(),
         record: None,
         record_audio: None,
+        icon: None,
         legacy_homepage: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
@@ -164,6 +209,7 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         .map_or((None, None), |m| (m.record, m.record_audio));
     let proxy = old.as_ref().and_then(|m| m.proxy.clone());
     let tabs = old.as_ref().map(|m| m.tabs.clone()).unwrap_or_default();
+    let icon = old.as_ref().and_then(|m| m.icon.clone());
     let color_scheme = old.and_then(|m| m.color_scheme);
     let id = dir
         .file_name()
@@ -179,6 +225,7 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         tabs,
         record,
         record_audio,
+        icon,
         legacy_homepage: None,
     };
     write_meta(&dir, &meta).await?;
@@ -277,6 +324,7 @@ pub async fn migrate(profiles_dir: &Path) {
             tabs: Vec::new(),
             record: None,
             record_audio: None,
+            icon: None,
             legacy_homepage: None,
         };
         let new = profiles_dir.join(id.to_string());

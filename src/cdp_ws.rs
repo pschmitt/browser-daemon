@@ -29,9 +29,11 @@ pub(crate) async fn client_arrived(
     let addr = clients::remote_addr(headers);
     let from = clients::describe_origin(addr, &state.node_name, &peers).await;
     info!(session_id = %session.id, kind, from = %from, "Automation client connected");
+    let integration = clients::clean(params.client.as_deref());
     session.clients.add(clients::ClientInfo {
         kind: kind.into(),
-        agent,
+        agent: agent && integration.is_none(),
+        integration,
         from,
         addr: addr.map(|a| a.to_string()),
         user_agent: ua,

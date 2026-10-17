@@ -34,6 +34,9 @@ pub struct ProfileInfo {
     /// Pages its sessions open with.
     #[serde(default)]
     pub tabs: Vec<String>,
+    /// Changes whenever the profile's picture does; absent without one (`/profiles/{name}/icon`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_rev: Option<u64>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -326,6 +329,7 @@ pub(crate) async fn profile_info(state: &AppState, profile: &Profile) -> Profile
         tabs: profile.meta.tabs.clone(),
         record: profile.meta.record,
         record_audio: profile.meta.record_audio,
+        icon_rev: profile.meta.icon.as_ref().map(|i| i.rev),
     }
 }
 
@@ -592,6 +596,88 @@ pub(crate) async fn api_update_profile(
             .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         // A running session keeps recording as it does until it is restarted.
         info!(profile = %profile.meta.name, record = ?record, record_audio = ?record_audio, "Profile recording settings changed");
+    }
+    Ok(Json(profile_info(&state, &profile).await))
+}
+
+/// The profile's picture.
+pub(crate) async fn api_get_profile_icon(
+    AxumPath(key): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Ok(profile) = lookup_profile(&state, &key).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some((mime, bytes)) = profile
+        .meta
+        .icon
+        .and_then(|i| i.bytes().map(|b| (i.mime, b)))
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, "private, max-age=300".to_string()),
+            // An SVG here is only ever shown as an image, but nothing in it may run.
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox".to_string(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// Set the profile's picture: the image as the request body, its type as Content-Type.
+pub(crate) async fn api_set_profile_icon(
+    AxumPath(key): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let _guard = state.profiles_lock.lock().await;
+    let mut profile = lookup_profile(&state, &key).await?;
+    let mime = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let icon = profiles::ProfileIcon::new(mime, &body).ok_or_else(|| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "The picture must be a png, svg, webp, jpeg or gif of at most {} KB",
+                profiles::MAX_ICON_BYTES / 1024
+            ),
+        )
+    })?;
+    profile.meta.icon = Some(icon);
+    profiles::write_meta(&profile.dir, &profile.meta)
+        .await
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    info!(profile = %profile.meta.name, "Profile picture set");
+    Ok(Json(profile_info(&state, &profile).await))
+}
+
+pub(crate) async fn api_delete_profile_icon(
+    AxumPath(key): AxumPath<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let _guard = state.profiles_lock.lock().await;
+    let mut profile = lookup_profile(&state, &key).await?;
+    if profile.meta.icon.take().is_some() {
+        profiles::write_meta(&profile.dir, &profile.meta)
+            .await
+            .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        info!(profile = %profile.meta.name, "Profile picture removed");
     }
     Ok(Json(profile_info(&state, &profile).await))
 }
