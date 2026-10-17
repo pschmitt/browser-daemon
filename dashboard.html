@@ -539,7 +539,16 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .player-buffer { height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; margin: 0 2px -2px; }
 .player-buffer.done { visibility: hidden; }
 .player-buffer > span { display: block; height: 100%; width: 0; background: rgba(255,255,255,.45); transition: width .3s; }
-.player-scrubber { width: 100%; margin: 0; height: 18px; accent-color: var(--accent); cursor: pointer; }
+.player-timeline { position: relative; height: 22px; margin: 0 2px; }
+.player-static-spans { position: absolute; inset: 8px 9px; pointer-events: none; }
+.player-static-span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px; background: rgba(255,255,255,.3); }
+.player-scrubber { position: relative; z-index: 1; width: 100%; margin: 0; height: 22px; accent-color: var(--accent); cursor: pointer; background: transparent; }
+.player-scrubber::-webkit-slider-runnable-track { background: transparent; }
+.player-scrubber::-moz-range-track { background: transparent; }
+.player-preview { position: absolute; z-index: 3; bottom: calc(100% + 7px); left: 0; width: 200px; padding: 5px; border: 1px solid rgba(255,255,255,.22); border-radius: 8px; background: #101116; box-shadow: 0 6px 24px #0009; pointer-events: none; transform: translateX(-50%); }
+.player-preview[hidden] { display: none; }
+.player-preview img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: contain; background: #000; border-radius: 4px; }
+.player-preview span { display: block; padding: 4px 2px 1px; color: #fff; font: 12px/1.2 var(--mono); text-align: center; }
 .player-buttons-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .player-controls-left, .player-controls-right { display: flex; align-items: center; gap: 4px; }
 .player-ctrl-btn { height: 34px; min-width: 34px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700; font-size: 12.5px; }
@@ -981,7 +990,11 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     </div>
     <div class="player-controls-wrap">
       <div class="player-buffer" id="playerBufferWrap"><span id="playerBuffered"></span></div>
-      <input type="range" id="playerScrubber" class="player-scrubber" min="0" max="0" value="0" step="1" oninput="onScrubberInput(this.value)" aria-label="Seek" aria-valuetext="00:00 of 00:00">
+      <div class="player-timeline" id="playerTimeline">
+        <div class="player-static-spans" id="playerStaticSpans" aria-hidden="true"></div>
+        <input type="range" id="playerScrubber" class="player-scrubber" min="0" max="0" value="0" step="1" oninput="onScrubberInput(this.value)" aria-label="Seek" aria-valuetext="00:00 of 00:00">
+        <div class="player-preview" id="playerPreview" hidden><img id="playerPreviewImage" alt="Frame preview"><span id="playerPreviewTime"></span></div>
+      </div>
       <div class="player-buttons-row">
         <div class="player-controls-left">
           <button class="player-ctrl-btn play" id="playerPlayBtn" onclick="togglePlayPause()" title="Play (k)"><svg viewBox="0 0 24 24" id="playerPlayIcon"><polygon points="6 4 20 12 6 20 6 4"/></svg></button>
@@ -3663,7 +3676,7 @@ function handleWorkerMessage(e) {
       streamProgress();
       if (e.data.cached) $('playerNodeBadge').textContent = `${activePlayerModalNode || 'local'} · cached`;
     } else if (activePlayerModalId === id && download?.frames.length) {
-      initPlayerWithFrames(id, activePlayerModalNode, download.frames, !!e.data.cached);
+      initPlayerWithFrames(id, activePlayerModalNode, download.frames, !!e.data.cached, { expectedMs: recordingDurationMs(id, activePlayerModalNode) });
     }
   } else if (type === 'RETRY') {
     if (download && download.pToast) {
@@ -3916,15 +3929,19 @@ function startStreamingPlayer(id, download) {
   initPlayerWithFrames(id, download.node, download.frames, false, {
     streaming: true,
     expectedFrames: rec?.frame_count || 0,
-    expectedMs: (rec?.duration_seconds || 0) * 1000,
+    expectedMs: rec?.duration_ms || (rec?.duration_seconds || 0) * 1000,
   });
 }
 
 // The seek bar runs in time (ms), not in frames: frames are far from evenly spread.
 const clock = (ms) => { const s = Math.floor(ms / 1000); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+const recordingDurationMs = (id, node) => {
+  const r = (currentOverview?.recordings || []).find((x) => x.id === id && (!node || x.node_name === node));
+  return r?.duration_ms || (r?.duration_seconds || 0) * 1000;
+};
 const playerDuration = (p) => {
   const last = p.frames[p.frames.length - 1]?.t || 0;
-  return p.streaming ? Math.max(last, p.expectedMs || 0) : last;
+  return Math.max(last, p.expectedMs || 0);
 };
 // The last frame shown at or before this time.
 function frameIndexAt(p, ms) {
@@ -3941,12 +3958,34 @@ function updateScrubber(p, { moveThumb = true } = {}) {
   if (moveThumb) s.value = t;
   s.setAttribute('aria-valuetext', `${clock(+s.value)} of ${clock(max)}`);
 }
+// A long gap between stored frames means the recorder saw the same image in
+// between; mark it so those quiet stretches are easy to find while scrubbing.
+function renderStaticSpans(p) {
+  const host = $('playerStaticSpans');
+  const duration = playerDuration(p);
+  const frames = p.frames;
+  if (!host || !duration || frames.length < 2) { if (host) host.replaceChildren(); return; }
+  const spans = [];
+  const add = (start, end) => {
+    if (end - start < 2000) return;
+    const el = document.createElement('span');
+    el.className = 'player-static-span';
+    el.style.left = `${Math.max(0, start / duration * 100)}%`;
+    el.style.width = `${Math.max(0, (end - start) / duration * 100)}%`;
+    el.title = `No visible change for ${clock(end - start)}`;
+    spans.push(el);
+  };
+  for (let i = 1; i < frames.length; i++) add(frames[i - 1].t, frames[i].t);
+  if (!p.streaming) add(frames[frames.length - 1].t, duration);
+  host.replaceChildren(...spans);
+}
 function streamProgress() {
   const p = activePlayer;
   if (!p) return;
   const have = p.frames.length;
   const total = p.streaming ? Math.max(have, p.expectedFrames || 0) : have;
   updateScrubber(p);
+  renderStaticSpans(p);
   $('playerBuffered').style.width = (p.streaming && total ? Math.min(100, (have / total) * 100) : 100) + '%';
   $('playerBufferWrap').classList.toggle('done', !p.streaming);
   if (p.waiting && (have > p.currentIndex + 1 || !p.streaming)) {
@@ -3992,6 +4031,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     updatePlayPauseButton();
     if (centerPlayBtn) centerPlayBtn.style.display = 'flex';
   }
+  renderStaticSpans(activePlayer);
 
   // Reset speed control to 1x and loop to off
   const speedBtn = document.getElementById('playerSpeedCycleBtn');
@@ -4126,6 +4166,8 @@ async function openPlayerModal(id, node) {
   document.getElementById('playerFrameOffset').textContent = 'frame at 0.0s';
   document.getElementById('playerScrubber').value = 0;
   document.getElementById('playerScrubber').max = 0;
+  $('playerStaticSpans').replaceChildren();
+  hidePlayerPreview();
   $('playerViewportContainer').classList.add('loading');
 
   // Show loading overlay
@@ -4159,7 +4201,7 @@ async function openPlayerModal(id, node) {
     pToast.remove();
     activePlayerModalId = id;
     activePlayerModalNode = node;
-    initPlayerWithFrames(id, node, cachedFrames, true);
+    initPlayerWithFrames(id, node, cachedFrames, true, { expectedMs: recordingDurationMs(id, node) });
     return;
   }
 
@@ -4218,7 +4260,7 @@ async function fallbackDownloadFrames(id, node, url, pToast, expectedBytes = 0) 
     pToast.done('Session Downloaded', `${frames.length} frames ready`);
     const modal = document.getElementById('playerModal');
     if (modal && modal.classList.contains('open') && activePlayerModalId === id) {
-      initPlayerWithFrames(id, node, frames, false);
+      initPlayerWithFrames(id, node, frames, false, { expectedMs: recordingDurationMs(id, node) });
     }
   } catch(e) {
     pToast.error('Download Failed', String(e));
@@ -4514,6 +4556,39 @@ function onScrubberInput(val) {
   renderPlayerFrame(idx, { scrub: true });
 }
 
+let playerPreviewSeq = 0;
+async function showPlayerPreview(event) {
+  const p = activePlayer;
+  if (!p?.frames.length) return;
+  const scrubber = $('playerScrubber');
+  const rect = scrubber.getBoundingClientRect();
+  if (!rect.width) return;
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  const duration = playerDuration(p);
+  const time = ratio * duration;
+  const idx = frameIndexAt(p, time);
+  const bubble = $('playerPreview');
+  const img = $('playerPreviewImage');
+  const seq = ++playerPreviewSeq;
+  bubble.style.left = `clamp(100px, ${ratio * 100}%, calc(100% - 100px))`;
+  bubble.hidden = false;
+  $('playerPreviewTime').textContent = clock(time);
+  img.removeAttribute('src');
+  try {
+    await ensureFrameData(p, idx);
+    if (seq !== playerPreviewSeq || activePlayer !== p) return;
+    const data = peekFrameData(p, idx);
+    if (data) img.src = `data:image/jpeg;base64,${data}`;
+  } catch { /* Keep the time label if a preview frame cannot be fetched. */ }
+}
+function hidePlayerPreview() {
+  playerPreviewSeq++;
+  $('playerPreview').hidden = true;
+}
+$('playerScrubber').addEventListener('pointermove', showPlayerPreview);
+$('playerScrubber').addEventListener('pointerleave', hidePlayerPreview);
+$('playerScrubber').addEventListener('blur', hidePlayerPreview);
+
 function cyclePlaySpeed() {
   if (!activePlayer) return;
   const speeds = [0.5, 1, 1.5, 2];
@@ -4744,7 +4819,7 @@ document.addEventListener('visibilitychange', () => {
   refreshData();
   if ($('playerModal').classList.contains('open') && activePlayerModalId && (!activePlayer || !activePlayer.frames?.length)) {
     getCachedRecording(activePlayerModalId).then((frames) => {
-      if (frames && frames.length) initPlayerWithFrames(activePlayerModalId, activePlayerModalNode, frames, true);
+      if (frames && frames.length) initPlayerWithFrames(activePlayerModalId, activePlayerModalNode, frames, true, { expectedMs: recordingDurationMs(activePlayerModalId, activePlayerModalNode) });
     });
   }
 });
