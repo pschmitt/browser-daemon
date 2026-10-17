@@ -1,7 +1,7 @@
 // Browser Daemon service worker: keeps the static assets (icons, manifest, shared code)
 // for the installed app. Pages and API answers are never cached or touched:
 // they sit behind the sign-in cookie and carry live data.
-const CACHE_NAME = 'browser-daemon-static-v7';
+const CACHE_NAME = 'browser-daemon-static-v8';
 const STATIC_PATHS = new Set([
   '/manifest.webmanifest',
   '/favicon.svg',
@@ -41,7 +41,8 @@ self.addEventListener('fetch', (event) => {
   // The query string is ignored, in the cache key as well as in the lookup.
   const key = new Request(url.origin + url.pathname);
   event.respondWith(
-    fetch(req)
+    // Revalidated: the HTTP cache would otherwise hand back an old icon.
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if (res && res.status === 200 && res.type === 'basic') {
           const copy = res.clone();

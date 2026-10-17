@@ -32,74 +32,98 @@ pub(crate) static COMMON_CSS: &str = include_str!("../assets/common.css");
 
 pub(crate) async fn favicon_ico() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/x-icon"),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("image/x-icon"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         FAVICON_ICO,
     )
 }
 
 pub(crate) async fn favicon_svg() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/svg+xml"),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("image/svg+xml"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         FAVICON_SVG,
     )
 }
 
 pub(crate) async fn handoff_favicon_ico() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/x-icon"),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("image/x-icon"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         HANDOFF_ICO,
     )
 }
 
 pub(crate) async fn handoff_favicon_svg() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/svg+xml"),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("image/svg+xml"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         HANDOFF_SVG,
     )
 }
 
 pub(crate) async fn manifest_webmanifest() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/manifest+json"),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/manifest+json"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         MANIFEST_JSON,
     )
 }
 
 pub(crate) async fn service_worker_js() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/javascript"),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/javascript"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         SW_JS,
     )
 }
 
 pub(crate) async fn icon_192_png() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("image/png")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         ICON_192,
     )
 }
 
 pub(crate) async fn icon_512_png() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("image/png")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         ICON_512,
     )
 }
@@ -107,17 +131,23 @@ pub(crate) async fn icon_512_png() -> impl IntoResponse {
 /// Full-bleed for launchers that cut icons to their own shape.
 pub(crate) async fn icon_maskable_512_png() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("image/png")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         ICON_MASKABLE_512,
     )
 }
 
 pub(crate) async fn download_worker_js() -> impl IntoResponse {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/javascript"),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/javascript"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
+        ],
         DOWNLOAD_WORKER_JS,
     )
 }
