@@ -2891,8 +2891,12 @@ fn ago(secs: Option<u64>) -> String {
 }
 
 fn header(cells: &[&str]) -> Row<'static> {
-    Row::new(cells.iter().map(|c| Cell::from(c.to_string())))
-        .style(Style::new().add_modifier(Modifier::BOLD).fg(Color::Gray))
+    Row::new(cells.iter().map(|c| Cell::from(c.to_uppercase())))
+        .style(
+            Style::new()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::Rgb(125, 133, 190)),
+        )
         .bottom_margin(0)
 }
 
@@ -2967,6 +2971,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(
         Tabs::new(titles)
             .select(selected)
+            .style(Style::new().fg(Color::Rgb(125, 130, 145)))
             .highlight_style(Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD))
             .divider(" "),
         top,
@@ -3114,15 +3119,15 @@ fn draw(f: &mut Frame, app: &mut App) {
                 .map(|p| {
                     vec![
                         Line::from(vec![
-                            Span::raw("id ").dim(),
+                            label("id"),
                             Span::raw(p.profile.id.map(|i| i.to_string()).unwrap_or_default()),
                         ]),
                         Line::from(vec![
-                            Span::raw("storage ").dim(),
+                            label("storage"),
                             Span::raw(p.profile.storage_dir.clone().unwrap_or_default()),
                         ]),
                         Line::from(vec![
-                            Span::raw("tabs ").dim(),
+                            label("tabs"),
                             Span::raw(if p.profile.tabs.is_empty() {
                                 "(none: a blank tab)".to_string()
                             } else {
@@ -3188,18 +3193,17 @@ fn draw(f: &mut Frame, app: &mut App) {
                 .and_then(|n| recordings.get(n))
                 .map(|r| {
                     vec![
+                        Line::from(vec![label("id"), Span::raw(r.recording.id.to_string())]),
                         Line::from(vec![
-                            Span::raw("id ").dim(),
-                            Span::raw(r.recording.id.to_string()),
-                            Span::raw("   frames ").dim(),
+                            label("frames"),
                             Span::raw(r.recording.frame_count.to_string()),
                         ]),
                         Line::from(vec![
-                            Span::raw("from ").dim(),
+                            label("from"),
                             Span::raw(r.recording.initial_url.clone().unwrap_or_default()),
                         ]),
                         Line::from(vec![
-                            Span::raw("to   ").dim(),
+                            label("to"),
                             Span::raw(r.recording.final_url.clone().unwrap_or_default()),
                         ]),
                     ]
@@ -3355,6 +3359,11 @@ fn draw(f: &mut Frame, app: &mut App) {
     } else {
         None
     };
+}
+
+/// A dim label padded so the values under it line up.
+fn label(l: &str) -> Span<'static> {
+    Span::raw(format!("{l:<9}")).dim()
 }
 
 /// `label  value` pairs of the session card, two to a line when there is room.
