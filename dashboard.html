@@ -638,7 +638,6 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
@@ -2329,7 +2328,7 @@ function renderProfileGrid(here, elsewhere) {
     p.session ? '' : esc(relTime(p.modified_at_secs)),
   ].filter(Boolean).join(' · ');
   const parts = [
-    card('', !sessionProfile, `<div class="avatar">${icon('bolt')}</div>`, 'Throwaway', 'Nothing is kept', 'ghost'),
+    card('', !sessionProfile, `<div class="avatar">${icon('trash')}</div>`, 'Throwaway', 'Nothing is kept', 'ghost'),
     ...here.map((p, i) => card('p:' + i, cur(p), avatarOf(p), p.display, meta(p, false))),
   ];
   if (elsewhere.length) {
