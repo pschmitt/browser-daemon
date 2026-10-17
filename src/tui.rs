@@ -273,8 +273,131 @@ fn image_picker() -> Option<Picker> {
     ) {
         return None;
     }
-    let picker = Picker::from_query_stdio().ok()?;
+    let tmux_client = tmux_active_client();
+    let started = Instant::now();
+    let picker = Picker::from_query_stdio().ok();
+    if let Some(client) = tmux_client {
+        reclaim_tmux_window(client);
+    }
+    if started.elapsed() >= Duration::from_millis(900) {
+        // ratatui-image gives up after 1s but leaves its query thread blocked on stdin,
+        // where it swallows keystrokes until it reads a Device Status Report.
+        use std::io::Write as _;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x1b[5n").and_then(|()| out.flush());
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let picker = with_viewer_cell_size(picker?);
     (picker.protocol_type() != ProtocolType::Halfblocks).then_some(picker)
+}
+
+fn tmux(args: &[&str]) -> Option<String> {
+    std::process::Command::new("tmux")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+/// The attached tmux client that most recently used our window, i.e. the one that
+/// launched us. None outside tmux or when only one client views the window.
+fn tmux_active_client() -> Option<String> {
+    let pane = std::env::var("TMUX_PANE").ok()?;
+    std::env::var_os("TMUX")?;
+    let window = tmux(&["display-message", "-p", "-t", &pane, "#{window_id}"])?;
+    let window = window.trim();
+    let clients = tmux(&[
+        "list-clients",
+        "-F",
+        "#{client_activity}\t#{window_id}\t#{client_name}",
+    ])?;
+    let viewers: Vec<(u64, String)> = clients
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            let activity = fields.next()?.parse().ok()?;
+            let window_id = fields.next()?;
+            let name = fields.next()?;
+            (window_id == window).then(|| (activity, name.to_string()))
+        })
+        .collect();
+    // With a single viewer there is no other client to steal the window size.
+    if viewers.len() < 2 {
+        return None;
+    }
+    viewers.into_iter().max().map(|(_, name)| name)
+}
+
+/// The image query is passed through to every tmux client viewing this window. Their
+/// terminals' replies count as input, so with `window-size latest` another (smaller)
+/// client becomes the latest and the window shrinks. Make the launching client the
+/// latest again, now and once more for late replies.
+fn reclaim_tmux_window(client: String) {
+    let reclaim = move || {
+        let Ok(pane) = std::env::var("TMUX_PANE") else {
+            return;
+        };
+        let _ = std::process::Command::new("tmux")
+            .args(["switch-client", "-c", &client, "-t", &pane])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    };
+    reclaim();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        reclaim();
+    });
+}
+
+/// Inside tmux the cell-size query is answered with the size of some client, which is
+/// wrong when clients with different fonts or DPI view the session. Use the cell size
+/// of the client actually looking at this pane.
+fn with_viewer_cell_size(picker: Picker) -> Picker {
+    let Some(cell) = tmux_viewer_cell_size() else {
+        return picker;
+    };
+    if cell == picker.font_size() {
+        return picker;
+    }
+    let protocol = picker.protocol_type();
+    let mut updated = Picker::from_fontsize(cell);
+    updated.set_protocol_type(protocol);
+    updated
+}
+
+fn tmux_viewer_cell_size() -> Option<(u16, u16)> {
+    let pane = std::env::var("TMUX_PANE").ok()?;
+    std::env::var_os("TMUX")?;
+    let window = tmux(&["display-message", "-p", "-t", &pane, "#{window_id}"])?;
+    let clients = tmux(&[
+        "list-clients",
+        "-F",
+        "#{client_activity}\t#{window_id}\t#{client_cell_width}\t#{client_cell_height}",
+    ])?;
+    viewer_cell_size(&clients, window.trim())
+}
+
+/// Cell size of the most recently active client viewing `window`, from `list-clients`
+/// output (activity, window id, cell width, cell height).
+fn viewer_cell_size(clients: &str, window: &str) -> Option<(u16, u16)> {
+    clients
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            let [activity, window_id, width, height] = fields[..] else {
+                return None;
+            };
+            let (width, height): (u16, u16) = (width.parse().ok()?, height.parse().ok()?);
+            (window_id == window && width > 0 && height > 0)
+                .then_some((activity.parse::<u64>().ok()?, (width, height)))
+        })
+        .max_by_key(|(activity, _)| *activity)
+        .map(|(_, cell)| cell)
 }
 
 /// Size of a terminal cell in pixels (a typical one when the terminal does not say).
@@ -2938,7 +3061,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                 });
             if shot_room {
                 // Text on the left, the screenshot (16:10) on the right.
-                let (cw, ch) = cell_px();
+                let (cw, ch) = app.picker.as_ref().map_or_else(cell_px, Picker::font_size);
                 let rows = detail.height.saturating_sub(1);
                 let cols = (u32::from(rows) * u32::from(ch) * 16 / 10 / u32::from(cw.max(1)))
                     .min(u32::from(detail.width / 2)) as u16;
