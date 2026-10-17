@@ -1,6 +1,12 @@
-# browser-daemon
+<p align="center">
+  <img src="favicon.svg" width="128" height="128" alt="Browser Daemon logo: a browser window with a daemon's grin and horns">
+</p>
 
-A fast, lightweight, native remote browser daemon written in Rust for CDP automation, AI agents, Firefox WebDriver BiDi, screencasting, and interactive browser handoff across a peer-to-peer cluster mesh.
+<h1 align="center">browser-daemon</h1>
+
+<p align="center">
+  A fast, lightweight, native remote browser daemon written in Rust for CDP automation, AI agents, Firefox WebDriver BiDi, screencasting, and interactive browser handoff across a peer-to-peer cluster mesh.
+</p>
 
 ![Dashboard: running sessions across two nodes, with their tabs](dashboard.png)
 
