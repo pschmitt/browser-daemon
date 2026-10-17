@@ -22,6 +22,9 @@ use ratatui::widgets::{
     Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap,
 };
 use ratatui::{DefaultTerminal, Frame};
+use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::{Resize, StatefulImage};
 
 use crate::profiles::ColorScheme;
 use crate::settings::{EngineDefaults, NodeSettings};
@@ -211,79 +214,20 @@ impl Action {
     }
 }
 
-/// Id of the one image the TUI keeps on the terminal.
-const KITTY_ID: u32 = 4711;
 /// How often the selected session's screenshot is fetched again.
 const SHOT_EVERY: Duration = Duration::from_secs(10);
 
-/// A session's screenshot, ready for the kitty graphics protocol.
-struct Shot {
-    /// Base64 of the PNG.
-    png: String,
-    w: u32,
-    h: u32,
-}
-
-impl Shot {
-    /// Decode what the daemon sent (JPEG) and keep it as a PNG: kitty has no JPEG.
-    fn from_image(bytes: &[u8]) -> Option<Self> {
-        use base64::Engine as _;
-        let img = image::load_from_memory(bytes).ok()?;
-        let mut png = std::io::Cursor::new(Vec::new());
-        img.write_to(&mut png, image::ImageFormat::Png).ok()?;
-        Some(Self {
-            png: base64::engine::general_purpose::STANDARD.encode(png.into_inner()),
-            w: img.width(),
-            h: img.height(),
-        })
+/// Ask the terminal what it can draw (kitty graphics, sixel, iTerm2; also through
+/// tmux), unless `BROWSER_DAEMON_TUI_IMAGES=off`. None: no images.
+fn image_picker() -> Option<Picker> {
+    if matches!(
+        std::env::var("BROWSER_DAEMON_TUI_IMAGES").as_deref(),
+        Ok("off" | "0" | "no")
+    ) {
+        return None;
     }
-
-    /// Cells the image takes inside `area`: as large as fits, in its own proportions.
-    fn cells(&self, area: Rect) -> (u16, u16) {
-        let (cw, ch) = cell_px();
-        let scale = (f64::from(area.width) * f64::from(cw) / f64::from(self.w))
-            .min(f64::from(area.height) * f64::from(ch) / f64::from(self.h));
-        let cols = (f64::from(self.w) * scale / f64::from(cw)).round() as u16;
-        let rows = (f64::from(self.h) * scale / f64::from(ch)).round() as u16;
-        (cols.clamp(1, area.width), rows.clamp(1, area.height))
-    }
-
-    /// The escape sequence that shows the image at the top left of `area`.
-    fn place(&self, area: Rect) -> String {
-        let (cols, rows) = self.cells(area);
-        let (ox, oy) = tmux_origin();
-        let mut out = passthrough(format!(
-            "\x1b7\x1b[{};{}H",
-            area.y + oy + 1,
-            area.x + ox + 1
-        ));
-        let chunks: Vec<&str> = self
-            .png
-            .as_bytes()
-            .chunks(4096)
-            .map(|c| std::str::from_utf8(c).unwrap_or_default())
-            .collect();
-        for (n, chunk) in chunks.iter().enumerate() {
-            let more = u8::from(n + 1 < chunks.len());
-            if n == 0 {
-                out.push_str(&passthrough(format!(
-                    "\x1b_Ga=T,f=100,i={KITTY_ID},c={cols},r={rows},C=1,q=2,m={more};{chunk}\x1b\\"
-                )));
-            } else {
-                out.push_str(&passthrough(format!("\x1b_Gm={more};{chunk}\x1b\\")));
-            }
-        }
-        out.push_str(&passthrough("\x1b8".into()));
-        out
-    }
-}
-
-/// Inside tmux, escape sequences for the terminal go in a passthrough (ESCs doubled).
-fn passthrough(seq: String) -> String {
-    if std::env::var_os("TMUX").is_none() {
-        return seq;
-    }
-    format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
+    let picker = Picker::from_query_stdio().ok()?;
+    (picker.protocol_type() != ProtocolType::Halfblocks).then_some(picker)
 }
 
 /// Size of a terminal cell in pixels (a typical one when the terminal does not say).
@@ -296,53 +240,6 @@ fn cell_px() -> (u16, u16) {
     } else {
         (8, 16)
     }
-}
-
-/// Output of a tmux command (None outside tmux or when it fails).
-fn tmux_query(args: &str) -> Option<String> {
-    let out = std::process::Command::new("tmux")
-        .args(args.split_whitespace())
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// Top left of this tmux pane on the terminal, in cells (0, 0 outside tmux).
-fn tmux_origin() -> (u16, u16) {
-    if std::env::var_os("TMUX").is_none() {
-        return (0, 0);
-    }
-    let pane = std::env::var("TMUX_PANE").unwrap_or_default();
-    let fmt = "#{pane_left} #{pane_top}";
-    let out = tmux_query(&format!("display-message -p -t {pane} {fmt}")).unwrap_or_default();
-    let mut n = out.split_whitespace().filter_map(|w| w.parse().ok());
-    (n.next().unwrap_or(0), n.next().unwrap_or(0))
-}
-
-/// Does the terminal draw kitty graphics? `BROWSER_DAEMON_TUI_IMAGES=on|off` decides
-/// when set; otherwise kitty, Ghostty and WezTerm are recognised (not inside tmux,
-/// which swallows the sequences unless passthrough is set up).
-fn kitty_supported() -> bool {
-    let var = |k: &str| std::env::var(k).unwrap_or_default();
-    match var("BROWSER_DAEMON_TUI_IMAGES").as_str() {
-        "on" | "1" | "kitty" => return true,
-        "off" | "0" | "no" => return false,
-        _ => {}
-    }
-    if !var("TMUX").is_empty() {
-        // The images go through tmux's passthrough, if it is allowed.
-        return tmux_query("show-options -gv allow-passthrough")
-            .is_some_and(|v| matches!(v.trim(), "on" | "all"));
-    }
-    let term = var("TERM");
-    !var("KITTY_WINDOW_ID").is_empty()
-        || term.contains("kitty")
-        || term.contains("ghostty")
-        || matches!(var("TERM_PROGRAM").as_str(), "ghostty" | "WezTerm")
 }
 
 fn item(label: impl Into<String>, action: Action) -> (String, Action) {
@@ -456,7 +353,7 @@ enum Msg {
         refresh: bool,
     },
     /// A session's screenshot (None: there is none to show).
-    Shot(String, Option<Shot>),
+    Shot(String, Option<image::DynamicImage>),
     /// A profile's backups, for its data menu.
     Backups(MeshProfile, Result<Vec<Value>, String>),
 }
@@ -469,18 +366,12 @@ struct App {
     pending: usize,
     /// The overview is being fetched.
     refreshing: bool,
-    /// Screenshots of sessions go to the terminal as kitty graphics.
-    kitty: bool,
+    /// Draws images on this terminal (None: it cannot, or it is switched off).
+    picker: Option<Picker>,
     /// The screenshots fetched so far, by session id.
-    shots: HashMap<String, Shot>,
+    shots: HashMap<String, StatefulProtocol>,
     /// When a session's screenshot was last asked for.
     shot_asked: HashMap<String, Instant>,
-    /// Bumped with every new screenshot.
-    shot_gen: u64,
-    /// Where the drawn frame wants a session's screenshot.
-    shot_want: Option<(String, Rect)>,
-    /// What the terminal shows now: session, area and generation.
-    shot_shown: Option<(String, Rect, u64)>,
     /// Where the last frame put the tab titles (columns), the table, the popup.
     tab_spans: Vec<(u16, u16)>,
     body: Rect,
@@ -566,9 +457,8 @@ impl App {
             }
             Msg::Live(live) => self.live = live,
             Msg::Shot(id, shot) => {
-                if let Some(shot) = shot {
-                    self.shots.insert(id, shot);
-                    self.shot_gen += 1;
+                if let (Some(img), Some(picker)) = (shot, self.picker.as_ref()) {
+                    self.shots.insert(id, picker.new_resize_protocol(img));
                 }
             }
             Msg::Overview(res) => {
@@ -1651,7 +1541,7 @@ impl App {
 
     /// Ask for the selected session's screenshot when it is missing or a while old.
     fn fetch_shot(&mut self) {
-        if !self.kitty || self.tab != Tab::Sessions || self.modal.is_some() {
+        if self.picker.is_none() || self.tab != Tab::Sessions || self.modal.is_some() {
             return;
         }
         let Some(s) = self.session() else { return };
@@ -1675,7 +1565,7 @@ impl App {
                 _ => None,
             };
             let shot = match jpeg {
-                Some(b) => tokio::task::spawn_blocking(move || Shot::from_image(&b))
+                Some(b) => tokio::task::spawn_blocking(move || image::load_from_memory(&b).ok())
                     .await
                     .ok()
                     .flatten(),
@@ -1683,39 +1573,6 @@ impl App {
             };
             let _ = tx.send(Msg::Shot(id, shot));
         });
-    }
-
-    /// Bring the terminal's image in line with the frame just drawn.
-    fn sync_image(&mut self) {
-        use std::io::Write;
-        if !self.kitty {
-            return;
-        }
-        let want = match (&self.shot_want, self.modal.is_none() && !self.help) {
-            (Some((id, area)), true) => self
-                .shots
-                .get(id)
-                .map(|_| (id.clone(), *area, self.shot_gen)),
-            _ => None,
-        };
-        if want == self.shot_shown {
-            return;
-        }
-        let mut out = String::new();
-        if self.shot_shown.is_some() {
-            out.push_str(&passthrough(format!(
-                "\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\"
-            )));
-        }
-        if let Some((id, area, _)) = &want {
-            if let Some(shot) = self.shots.get(id) {
-                out.push_str(&shot.place(*area));
-            }
-        }
-        self.shot_shown = want;
-        let mut stdout = std::io::stdout().lock();
-        let _ = stdout.write_all(out.as_bytes());
-        let _ = stdout.flush();
     }
 
     // --------------------------------------------------------------- running
@@ -2832,7 +2689,7 @@ fn header(cells: &[&str]) -> Row<'static> {
 
 fn draw(f: &mut Frame, app: &mut App) {
     // Room for the screenshot below the sessions, where the terminal can show one.
-    let shot_room = app.kitty && app.tab == Tab::Sessions && f.area().height >= 30;
+    let shot_room = app.picker.is_some() && app.tab == Tab::Sessions && f.area().height >= 30;
     let [top, body, detail, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
@@ -2911,7 +2768,6 @@ fn draw(f: &mut Frame, app: &mut App) {
     let highlight = Style::new()
         .bg(Color::Rgb(60, 50, 120))
         .add_modifier(Modifier::BOLD);
-    app.shot_want = None;
     let Some(ov) = app.ov.clone() else {
         f.render_widget(Paragraph::new("Connecting…").block(block), body);
         draw_footer(f, app, foot);
@@ -3038,10 +2894,14 @@ fn draw(f: &mut Frame, app: &mut App) {
                     .and_then(|n| sessions.get(n))
                     .map(|s| s.session.id.to_string());
                 if let Some(id) = id {
-                    if !app.shots.contains_key(&id) {
-                        f.render_widget(Paragraph::new("Taking a screenshot…").dim(), area);
+                    match app.shots.get_mut(&id) {
+                        Some(shot) => f.render_stateful_widget(
+                            StatefulImage::default().resize(Resize::Fit(None)),
+                            area,
+                            shot,
+                        ),
+                        None => f.render_widget(Paragraph::new("Taking a screenshot…").dim(), area),
                     }
-                    app.shot_want = Some((id, area));
                 }
             } else {
                 draw_detail(f, detail, detail_lines);
@@ -3654,12 +3514,9 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         tx,
         pending: 0,
         refreshing: false,
-        kitty: kitty_supported(),
+        picker: None,
         shots: HashMap::new(),
         shot_asked: HashMap::new(),
-        shot_gen: 0,
-        shot_want: None,
-        shot_shown: None,
         tab_spans: Vec::new(),
         body: Rect::default(),
         popup: None,
@@ -3690,6 +3547,8 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
     ));
 
     let mut terminal = ratatui::init();
+    // After raw mode is on: the terminal answers the query on stdin.
+    app.picker = image_picker();
     let mouse = !matches!(
         std::env::var("BROWSER_DAEMON_TUI_MOUSE").as_deref(),
         Ok("off" | "0" | "no")
@@ -3700,11 +3559,6 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
     let result = event_loop(&mut terminal, &mut app, &mut rx);
     if mouse {
         let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    }
-    if app.shot_shown.is_some() {
-        use std::io::Write;
-        let _ = std::io::stdout()
-            .write_all(passthrough(format!("\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\")).as_bytes());
     }
     ratatui::restore();
     result
@@ -3722,7 +3576,6 @@ fn event_loop(
         app.tick = app.tick.wrapping_add(1);
         app.fetch_shot();
         terminal.draw(|f| draw(f, app))?;
-        app.sync_image();
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press && !app.key(k) => return Ok(()),
