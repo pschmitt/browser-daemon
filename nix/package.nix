@@ -43,6 +43,13 @@ rustPlatform.buildRustPackage {
 
   nativeBuildInputs = [ installShellFiles ];
 
+  # CI builds aarch64 under qemu-user, which fakes /proc: the relay's
+  # socket -> process lookup cannot find the test process there.
+  checkFlags = lib.optionals stdenv.hostPlatform.isAarch64 [
+    "--skip=relay::tests::serves_only_the_browsers_processes"
+    "--skip=relay::tests::a_strict_relay_refuses_loopback_with_a_ruleset_reply"
+  ];
+
   postInstall = lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
     for shell in bash zsh fish; do
       $out/bin/browser-daemon completions $shell > browser-daemon.$shell
