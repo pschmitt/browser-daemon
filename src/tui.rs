@@ -2878,11 +2878,13 @@ fn header(cells: &[&str]) -> Row<'static> {
 
 fn draw(f: &mut Frame, app: &mut App) {
     // Room for the screenshot below the sessions, where the terminal can show one.
-    let shot_room = app.picker.is_some() && app.tab == Tab::Sessions && f.area().height >= 30;
+    // It scales with the window: 2/5 of the height, between 6 and 15 rows.
+    let shot_room = app.picker.is_some() && app.tab == Tab::Sessions;
+    let detail_rows = (f.area().height * 2 / 5).clamp(6, 15);
     let [top, body, detail, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
-        Constraint::Length(if shot_room { 15 } else { 6 }),
+        Constraint::Length(if shot_room { detail_rows } else { 6 }),
         Constraint::Length(2),
     ])
     .areas(f.area());
