@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Browser Daemon</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <link rel="alternate icon" type="image/x-icon" href="/favicon.ico">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="color-scheme" content="dark light">
@@ -1239,6 +1240,7 @@ async function showDownloads(s) {
       <div class="dl-t"><b title="${esc(d.url)}">${esc(d.name)}</b><span class="muted">${esc(state(d))} · ${relTime(d.started_at_secs)}</span></div>
       ${d.state === 'completed' ? `<a class="btn sm" href="${esc(`${base}/${enc(d.id)}`)}" download="${esc(d.name)}"><svg class="i sm"><use href="#i-download"/></svg>Save</a>` : ''}
     </li>`).join('')}</ul>` : '<p class="hint">Nothing downloaded yet.</p>';
+  for (const d of list) if (d.state === 'completed' && saveNeedsHelp(d.name)) prefetchFile(`${base}/${enc(d.id)}`, d.name).catch(() => {});
 }
 
 function openModal(id) {

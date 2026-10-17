@@ -32,6 +32,47 @@ function authHeaders(extra = {}) {
 
 const $ = (id) => document.getElementById(id);
 
+// Firefox for Android, in an installed web app, cannot take a downloaded PDF: it hands
+// it to its PDF viewer, which has no tab in a web app, and the app ends on about:blank.
+// There a PDF goes to the share sheet (Files, Drive, a PDF app) instead, or, where files
+// cannot be shared, to regular Firefox. Sharing needs a tap: the file is fetched ahead.
+const FIREFOX_ANDROID = /Android/.test(navigator.userAgent) && /Firefox\//.test(navigator.userAgent);
+const inAppWindow = () => matchMedia("(display-mode: standalone), (display-mode: fullscreen), (display-mode: minimal-ui)").matches;
+function saveNeedsHelp(name) {
+  return FIREFOX_ANDROID && inAppWindow() && /\.pdf$/i.test(String(name || ""));
+}
+const prefetchedFiles = new Map();
+function prefetchFile(url, name) {
+  const key = new URL(url, location.href).href;
+  if (!prefetchedFiles.has(key)) {
+    const file = fetch(key, { headers: authHeaders() })
+      .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(res.statusText))))
+      .then((blob) => new File([blob], name, { type: /\.pdf$/i.test(name) ? "application/pdf" : blob.type }));
+    file.catch(() => prefetchedFiles.delete(key));
+    prefetchedFiles.set(key, file);
+  }
+  return prefetchedFiles.get(key);
+}
+async function shareOrOpenInBrowser(url, name) {
+  const file = await prefetchFile(url, name).catch(() => null);
+  if (file && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: name });
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+  }
+  const u = new URL(url, location.href);
+  location.href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.slice(0, -1)};package=org.mozilla.firefox;end`;
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest?.("a[download]");
+  if (!a || !saveNeedsHelp(a.getAttribute("download"))) return;
+  e.preventDefault();
+  shareOrOpenInBrowser(a.href, a.getAttribute("download"));
+}, true);
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }

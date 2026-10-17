@@ -9,6 +9,8 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Browser Handoff</title>
 <link rel="icon" type="image/svg+xml" href="/handoff/favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="alternate icon" type="image/x-icon" href="/handoff/favicon.ico">
 <link rel="stylesheet" href="/assets/common.css">
 <script src="/assets/common.js"></script>
@@ -3520,7 +3522,11 @@ function downloadEvent(d) {
   const fresh = !downloads.list.has(d.id);
   downloads.list.set(d.id, d);
   if (fresh && d.state === "in_progress" && drv?.inputRecent?.(DL_WANT_WINDOW)) downloads.wanted.add(d.id);
-  if (d.state === "completed" && downloads.wanted.delete(d.id)) { saveDownload(d); toast(`Saved ${d.name}`, 2500); }
+  if (d.state === "completed" && saveNeedsHelp(d.name)) {
+    // No saving without a tap here (see saveNeedsHelp): the tray's Save shares it.
+    downloads.wanted.delete(d.id);
+    prefetchFile(dlUrl(d.id), d.name).catch(() => {});
+  } else if (d.state === "completed" && downloads.wanted.delete(d.id)) { saveDownload(d); toast(`Saved ${d.name}`, 2500); }
   showTray(d);
   renderDownloadsMenu();
 }
