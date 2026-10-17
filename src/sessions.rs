@@ -241,6 +241,7 @@ impl AppState {
             record_audio: profile_record_audio.unwrap_or(self.recorder_config.audio),
             created_at: browser.created_at,
             client_count: Arc::new(AtomicUsize::new(0)),
+            viewer_count: Arc::new(AtomicUsize::new(0)),
             activity: Arc::new(idle::Activity::new(
                 idle_timeout_minutes.map_or(self.idle_timeout_secs, idle::minutes_to_secs),
             )),
@@ -349,6 +350,7 @@ impl AppState {
                         record_audio: self.profile_record_audio(browser.profile_id).await,
                         created_at: browser.created_at,
                         client_count: Arc::new(AtomicUsize::new(0)),
+                        viewer_count: Arc::new(AtomicUsize::new(0)),
                         activity: Arc::new(idle::Activity::new(rec.idle_timeout_secs)),
                         adblock: browser.adblock,
                         relay: browser.relay.clone(),
@@ -849,6 +851,7 @@ mod tests {
             record_audio: false,
             created_at: Instant::now(),
             client_count: Arc::new(AtomicUsize::new(0)),
+            viewer_count: Arc::new(AtomicUsize::new(0)),
             activity: Arc::new(idle::Activity::new(0)),
             adblock: false,
             relay: relay::Relay::start(None).await.unwrap(),

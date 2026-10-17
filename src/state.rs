@@ -20,6 +20,8 @@ pub struct ManagedSession {
     pub record_audio: bool,
     pub created_at: Instant,
     pub client_count: Arc<AtomicUsize>,
+    /// Open live views (the web UI's view of the session).
+    pub viewer_count: Arc<AtomicUsize>,
     pub activity: Arc<idle::Activity>,
     pub adblock: bool,
     pub relay: Arc<relay::Relay>,
@@ -95,6 +97,7 @@ impl ManagedSession {
             persistent: self.persistent,
             uptime_seconds: self.created_at.elapsed().as_secs(),
             client_count: self.client_count.load(Ordering::SeqCst),
+            viewer_count: self.viewer_count.load(Ordering::SeqCst),
             tabs_count,
             adblock: self.adblock,
             proxy: self.relay.current(),
@@ -144,6 +147,9 @@ pub struct SessionSummary {
     pub persistent: bool,
     pub uptime_seconds: u64,
     pub client_count: usize,
+    /// Open live views of it, in a browser or the TUI.
+    #[serde(default)]
+    pub viewer_count: usize,
     pub tabs_count: usize,
     #[serde(default)]
     pub adblock: bool,

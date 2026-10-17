@@ -195,6 +195,15 @@ pub(crate) async fn handle_viewers_ws(
         use axum::extract::ws::Message;
         let session = params.session_id;
         let (id, mut rx) = state.viewers.join(session);
+        let count = state
+            .sessions
+            .read()
+            .await
+            .get(&session)
+            .map(|s| s.viewer_count.clone());
+        if let Some(c) = &count {
+            c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         loop {
             tokio::select! {
                 out = rx.recv() => match out {
@@ -217,5 +226,8 @@ pub(crate) async fn handle_viewers_ws(
             }
         }
         state.viewers.leave(session, id);
+        if let Some(c) = &count {
+            c.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
     })
 }

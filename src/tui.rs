@@ -2897,17 +2897,37 @@ fn header(cells: &[&str]) -> Row<'static> {
 }
 
 fn draw(f: &mut Frame, app: &mut App) {
-    // Room for the screenshot below the sessions, where the terminal can show one.
-    // It scales with the window: 2/5 of the height, between 6 and 15 rows.
-    let shot_room = app.picker.is_some() && app.tab == Tab::Sessions;
-    let detail_rows = (f.area().height * 2 / 5).clamp(6, 15);
     let [top, body, detail, foot] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(5),
-        Constraint::Length(if shot_room { detail_rows } else { 6 }),
+        Constraint::Length(6),
         Constraint::Length(2),
     ])
     .areas(f.area());
+    // Sessions: the list is as tall as it needs, the selected session gets the rest.
+    let (body, detail) = if app.tab == Tab::Sessions {
+        let main = Rect {
+            height: body.height + detail.height,
+            ..body
+        };
+        let rows = app.sessions().len() as u16 + 2;
+        let list = rows
+            .clamp(4, (main.height * 2 / 5).max(4))
+            .min(main.height.saturating_sub(8))
+            .max(3);
+        let list_area = Rect {
+            height: list,
+            ..main
+        };
+        let card = Rect {
+            y: main.y + list,
+            height: main.height - list,
+            ..main
+        };
+        (list_area, card)
+    } else {
+        (body, detail)
+    };
 
     // Tabs with counts, and the node summary on the right.
     let counts = app.ov.as_ref().map(|o| {
@@ -3019,6 +3039,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                     ),
                     Cell::from(ss.tabs_count.to_string()),
                     Cell::from(dur(ss.uptime_seconds)),
+                    Cell::from(ss.viewer_count.to_string()),
                     Cell::from(ss.client_count.to_string()),
                     Cell::from(crate::ctl::agents(&ss.clients)),
                     Cell::from(rec).fg(Color::Red),
@@ -3035,91 +3056,20 @@ fn draw(f: &mut Frame, app: &mut App) {
                     Constraint::Length(5),
                     Constraint::Length(9),
                     Constraint::Length(8),
+                    Constraint::Length(8),
                     Constraint::Fill(3),
                     Constraint::Length(7),
                 ],
             )
             .header(header(&[
-                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Clients", "Agent",
-                "",
+                "Name", "Profile", "Node", "Engine", "Proxy", "Tabs", "Uptime", "Viewers",
+                "Clients", "Agent", "",
             ]))
             .row_highlight_style(highlight)
             .block(block);
             f.render_stateful_widget(table, body, &mut app.tables[i]);
-            let detail_lines = app.tables[i]
-                .selected()
-                .and_then(|n| sessions.get(n))
-                .map(|s| {
-                    let mut lines = vec![Line::from(vec![
-                        Span::raw("id ").dim(),
-                        Span::raw(s.session.id.to_string()),
-                        Span::raw("   idle ").dim(),
-                        Span::raw(dur(s.session.idle_seconds)),
-                        Span::raw(if s.session.adblock {
-                            "   ads blocked"
-                        } else {
-                            ""
-                        })
-                        .dim(),
-                    ])];
-                    lines.extend(
-                        ov.targets
-                            .iter()
-                            .filter(|t| {
-                                t.node_name == s.node_name
-                                    && t.target.session_id == Some(s.session.id)
-                                    && t.target.target_type == "page"
-                            })
-                            .map(|t| {
-                                Line::from(vec![
-                                    Span::raw("  • "),
-                                    Span::raw(t.target.title.clone().unwrap_or_default()).bold(),
-                                    Span::raw("  "),
-                                    Span::raw(t.target.url.clone()).dim(),
-                                ])
-                            }),
-                    );
-                    lines
-                });
-            if shot_room {
-                // Text on the left, the screenshot (16:10) on the right.
-                let (cw, ch) = app.picker.as_ref().map_or_else(cell_px, Picker::font_size);
-                let rows = detail.height.saturating_sub(1);
-                let cols = (u32::from(rows) * u32::from(ch) * 16 / 10 / u32::from(cw.max(1)))
-                    .min(u32::from(detail.width / 2)) as u16;
-                f.render_widget(
-                    Block::new()
-                        .borders(Borders::TOP)
-                        .border_style(Style::new().dark_gray()),
-                    detail,
-                );
-                let text = Rect {
-                    width: detail.width.saturating_sub(cols + 1),
-                    ..detail
-                };
-                let area = Rect {
-                    x: detail.x + detail.width - cols,
-                    y: detail.y + 1,
-                    width: cols,
-                    height: rows,
-                };
-                draw_detail(f, text, detail_lines);
-                let id = app.tables[i]
-                    .selected()
-                    .and_then(|n| sessions.get(n))
-                    .map(|s| s.session.id.to_string());
-                if let Some(id) = id {
-                    match app.shots.get_mut(&id) {
-                        Some(shot) => f.render_stateful_widget(
-                            StatefulImage::default().resize(Resize::Fit(None)),
-                            area,
-                            shot,
-                        ),
-                        None => f.render_widget(Paragraph::new("Taking a screenshot…").dim(), area),
-                    }
-                }
-            } else {
-                draw_detail(f, detail, detail_lines);
+            if let Some(sel) = app.tables[i].selected().and_then(|n| sessions.get(n)) {
+                draw_session(f, app, &ov, sel, detail);
             }
         }
         Tab::Profiles => {
@@ -3405,6 +3355,225 @@ fn draw(f: &mut Frame, app: &mut App) {
     } else {
         None
     };
+}
+
+/// `label  value` pairs of the session card, two to a line when there is room.
+fn kv(label: &str, value: Line<'static>) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::raw(format!("{label:<9}")).dim()];
+    spans.extend(value.spans);
+    spans
+}
+
+fn pairs(rows: Vec<Vec<Span<'static>>>, wide: bool) -> Vec<Line<'static>> {
+    const COL: usize = 34;
+    if !wide {
+        return rows.into_iter().map(Line::from).collect();
+    }
+    rows.chunks(2)
+        .map(|c| {
+            let mut left = c[0].clone();
+            let used: usize = left.iter().map(Span::width).sum();
+            if let Some(right) = c.get(1) {
+                left.push(Span::raw(" ".repeat(COL.saturating_sub(used).max(2))));
+                left.extend(right.clone());
+            }
+            Line::from(left)
+        })
+        .collect()
+}
+
+fn chip(text: String, color: Color) -> Vec<Span<'static>> {
+    vec![
+        Span::raw(format!(" {text} ")).fg(Color::Black).bg(color),
+        Span::raw(" "),
+    ]
+}
+
+/// The selected session: facts and tabs on the left, its screenshot as large as fits on
+/// the right (or above, in a narrow window).
+fn draw_session(f: &mut Frame, app: &mut App, ov: &MeshOverview, s: &MeshSession, area: Rect) {
+    let ss = &s.session;
+    let (engine_glyph, engine_color) = if ss.engine == BrowserEngine::Firefox {
+        ('\u{f269}', Color::Rgb(255, 113, 57))
+    } else {
+        ('\u{f268}', Color::Rgb(66, 133, 244))
+    };
+    let block = Block::new()
+        .borders(Borders::TOP)
+        .border_style(Style::new().dark_gray())
+        .title(Line::from(vec![
+            Span::raw(" "),
+            Span::raw(glyph(engine_glyph)).fg(engine_color),
+            Span::raw(ss.name.clone()).bold(),
+            Span::raw(" "),
+        ]));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.height < 3 || inner.width < 20 {
+        return;
+    }
+
+    // Where the screenshot goes.
+    let (cw, ch) = app.picker.as_ref().map_or_else(cell_px, Picker::font_size);
+    let (cw, ch) = (u32::from(cw.max(1)), u32::from(ch.max(1)));
+    let shot_area = |room: Rect, max_w: u16| -> Rect {
+        // 16:10 at the largest size that fits the room.
+        let by_height = u32::from(room.height) * ch * 16 / 10 / cw;
+        let cols = by_height.min(u32::from(max_w)).min(u32::from(room.width)) as u16;
+        let rows = (u32::from(cols) * cw * 10 / 16 / ch).min(u32::from(room.height)) as u16;
+        Rect {
+            x: room.x + room.width - cols,
+            y: room.y,
+            width: cols,
+            height: rows,
+        }
+    };
+    let (info, shot) = if app.picker.is_none() {
+        (inner, None)
+    } else if inner.width >= 100 {
+        let shot = shot_area(
+            Rect {
+                x: inner.x + 1,
+                width: inner.width - 1,
+                ..inner
+            },
+            inner.width * 3 / 5,
+        );
+        let info = Rect {
+            width: inner.width.saturating_sub(shot.width + 2),
+            ..inner
+        };
+        (info, Some(shot))
+    } else {
+        let top = Rect {
+            height: inner.height / 2,
+            ..inner
+        };
+        let shot = shot_area(top, inner.width);
+        let info = Rect {
+            y: inner.y + top.height + 1,
+            height: inner.height.saturating_sub(top.height + 1),
+            ..inner
+        };
+        (info, Some(shot))
+    };
+
+    // Chips: what is going on with it.
+    let mut chips: Vec<Span> = Vec::new();
+    if ss.is_recording {
+        let (text, color) = if ss.recording_paused {
+            ("\u{f04c} paused", Color::Yellow)
+        } else {
+            ("\u{f111} recording", Color::Red)
+        };
+        chips.extend(chip(text.into(), color));
+    }
+    if ss.audible {
+        chips.extend(chip("\u{f028} sound".into(), Color::Cyan));
+    }
+    if ss.adblock {
+        chips.extend(chip("\u{f132} ads blocked".into(), Color::Green));
+    }
+    if ss.persistent && ss.profile.is_some() {
+        chips.extend(chip("\u{f0c7} saved".into(), Color::Gray));
+    }
+    let chips: Vec<Span> = chips
+        .into_iter()
+        .map(|c| {
+            if icons() {
+                c
+            } else {
+                Span::styled(c.content.replace(|ch: char| ch > '\u{2000}', ""), c.style)
+            }
+        })
+        .collect();
+
+    let proxy = ss
+        .proxy
+        .as_deref()
+        .map(|p| app.proxy_name(&s.node_name, p))
+        .unwrap_or_else(|| "direct".into());
+    let wide = info.width >= 70;
+    let facts = vec![
+        kv(
+            "Profile",
+            Line::from(ss.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
+        ),
+        kv(
+            "Node",
+            Line::from(Span::raw(s.node_name.clone()).fg(node_color(&s.node_name))),
+        ),
+        kv("Engine", engine_span(ss.engine)),
+        kv("Proxy", Line::from(proxy)),
+        kv("Uptime", Line::from(dur(ss.uptime_seconds))),
+        kv("Idle", Line::from(dur(ss.idle_seconds))),
+        kv(
+            "Window",
+            Line::from(
+                ss.window_size
+                    .map(|(w, h)| format!("{w}×{h}"))
+                    .unwrap_or_else(|| "–".into()),
+            ),
+        ),
+        kv("Viewers", Line::from(ss.viewer_count.to_string())),
+        kv("Clients", Line::from(crate::ctl::agents(&ss.clients))),
+    ];
+    let mut lines: Vec<Line> = Vec::new();
+    if !chips.is_empty() {
+        lines.push(Line::from(chips));
+        lines.push(Line::from(""));
+    }
+    lines.extend(pairs(facts, wide));
+    lines.push(Line::from(""));
+    let tabs: Vec<_> = ov
+        .targets
+        .iter()
+        .filter(|t| {
+            t.node_name == s.node_name
+                && t.target.session_id == Some(ss.id)
+                && t.target.target_type == "page"
+        })
+        .collect();
+    lines.push(Line::from(vec![
+        Span::raw(glyph('\u{f2d0}')).dim(),
+        Span::raw(format!("Tabs ({})", tabs.len())).bold(),
+    ]));
+    for t in tabs {
+        let title = t.target.title.clone().unwrap_or_default();
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(if title.is_empty() {
+                "(untitled)".to_string()
+            } else {
+                title
+            }),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(t.target.url.clone()).fg(Color::Blue).dim(),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::raw(format!("id {}", ss.id)).dim()));
+    f.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: info.x + 1,
+            width: info.width.saturating_sub(1),
+            ..info
+        },
+    );
+
+    if let Some(area) = shot {
+        match app.shots.get_mut(&ss.id.to_string()) {
+            Some(shot) => f.render_stateful_widget(
+                StatefulImage::default().resize(Resize::Fit(None)),
+                area,
+                shot,
+            ),
+            None => f.render_widget(Paragraph::new("Taking a screenshot…").dim(), area),
+        }
+    }
 }
 
 fn draw_detail(f: &mut Frame, area: Rect, lines: Option<Vec<Line<'static>>>) {
