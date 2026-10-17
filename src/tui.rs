@@ -60,6 +60,16 @@ impl Tab {
             Tab::Engines => "Engines",
         }
     }
+
+    fn glyph(self) -> char {
+        match self {
+            Tab::Sessions => '\u{f108}',
+            Tab::Profiles => '\u{f2bd}',
+            Tab::Recordings => '\u{f03d}',
+            Tab::Nodes => '\u{f233}',
+            Tab::Engines => '\u{f085}',
+        }
+    }
 }
 
 /// An engine, with the defaults its new sessions start with (as set on this node,
@@ -217,6 +227,39 @@ impl Action {
 }
 
 /// How often the selected session's screenshot is fetched again.
+/// Nerd Font glyphs, unless `BROWSER_DAEMON_TUI_ICONS=off` (a terminal font without them).
+fn icons() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("BROWSER_DAEMON_TUI_ICONS").as_deref(),
+            Ok("off" | "0" | "no")
+        )
+    })
+}
+
+/// `glyph` and a space, or nothing when icons are off.
+fn glyph(g: char) -> String {
+    if icons() {
+        format!("{g} ")
+    } else {
+        String::new()
+    }
+}
+
+/// The engine's logo in its brand colour, then its name.
+fn engine_span(e: BrowserEngine) -> Line<'static> {
+    let (g, color) = if e == BrowserEngine::Firefox {
+        ('\u{f269}', Color::Rgb(255, 113, 57))
+    } else {
+        ('\u{f268}', Color::Rgb(66, 133, 244))
+    };
+    Line::from(vec![
+        Span::raw(glyph(g)).fg(color),
+        Span::raw(e.to_string()),
+    ])
+}
+
 /// Rows of the screenshot in a session's details popup.
 const SHOT_ROWS: usize = 16;
 const SHOT_EVERY: Duration = Duration::from_secs(10);
@@ -2738,6 +2781,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             let n = counts.map(|c| format!(" {}", c[i])).unwrap_or_default();
             Line::from(vec![
                 Span::raw(format!("{}{}", i + 1, ". ")),
+                Span::raw(glyph(t.glyph())),
                 Span::raw(t.title()),
                 Span::raw(n).dim(),
             ])
@@ -2769,8 +2813,11 @@ fn draw(f: &mut Frame, app: &mut App) {
             .map(|f| format!("only {f}  ·  "))
             .unwrap_or_default();
         let summary = format!(
-            "{only}{}  ·  {}/{} nodes online ",
-            ov.local_node.name, ov.online_nodes, ov.total_nodes
+            "{only}{}{}  ·  {}/{} nodes online ",
+            glyph('\u{f233}'),
+            ov.local_node.name,
+            ov.online_nodes,
+            ov.total_nodes
         );
         let w = summary.chars().count() as u16;
         if top.width > w + 40 {
@@ -2809,7 +2856,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                     if ss.recording_paused {
                         "paused"
                     } else {
-                        "● rec"
+                        "\u{f111} rec"
                     }
                 } else {
                     ""
@@ -2818,7 +2865,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                     Cell::from(ss.name.clone()),
                     Cell::from(ss.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
                     Cell::from(s.node_name.clone()),
-                    Cell::from(ss.engine.to_string()),
+                    Cell::from(engine_span(ss.engine)),
                     Cell::from(
                         ss.proxy
                             .as_deref()
@@ -2838,7 +2885,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                     Constraint::Fill(2),
                     Constraint::Fill(3),
                     Constraint::Length(9),
-                    Constraint::Length(9),
+                    Constraint::Length(11),
                     Constraint::Fill(2),
                     Constraint::Length(5),
                     Constraint::Length(9),
@@ -2936,7 +2983,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                 Row::new(vec![
                     Cell::from(pp.name.clone()),
                     Cell::from(p.node_name.clone()),
-                    Cell::from(pp.engine.to_string()),
+                    Cell::from(engine_span(pp.engine)),
                     Cell::from(
                         pp.proxy
                             .as_deref()
@@ -2953,7 +3000,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                 [
                     Constraint::Fill(3),
                     Constraint::Length(9),
-                    Constraint::Length(9),
+                    Constraint::Length(11),
                     Constraint::Fill(2),
                     Constraint::Length(10),
                     Constraint::Length(10),
@@ -3130,7 +3177,8 @@ fn draw(f: &mut Frame, app: &mut App) {
                         .into_iter()
                         .map(|p| {
                             Line::from(vec![
-                                Span::raw("  • "),
+                                Span::raw("  "),
+                                Span::raw(glyph('\u{f0ac}')),
                                 Span::raw(p.name).bold(),
                                 Span::raw(format!("  {}://{}:{}", p.scheme, p.host, p.port)).dim(),
                             ])
@@ -3144,7 +3192,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             let rows_data = app.engine_rows();
             let rows = rows_data.iter().map(|r| {
                 Row::new(vec![
-                    Cell::from(r.engine.to_string()),
+                    Cell::from(engine_span(r.engine)),
                     Cell::from(tri_label(r.defaults.adblock)),
                     Cell::from(scheme_label(r.defaults.color_scheme)),
                     Cell::from(if r.defaults.show_touches { "on" } else { "off" }),
@@ -3171,7 +3219,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             let lines = app.tables[i].selected().and_then(|n| rows_data.get(n)).map(|r| {
                 vec![Line::from(vec![
                     Span::raw("New ").dim(),
-                    Span::raw(r.engine.to_string()),
+                    Span::raw(r.engine.to_string()).bold(),
                     Span::raw(" sessions start with these unless the request or the profile says otherwise; a change applies to every online node.").dim(),
                 ])]
             });
