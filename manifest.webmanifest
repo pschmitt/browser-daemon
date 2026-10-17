@@ -1,7 +1,7 @@
 {
   "id": "/",
   "name": "Browser Daemon",
-  "short_name": "Browser",
+  "short_name": "Browser Daemon",
   "description": "Multi-Tenant Remote Browser Mesh with Mobile Handoff",
   "start_url": "/",
   "scope": "/",
