@@ -145,7 +145,7 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-
 .offline-banner { margin: 0 0 14px; padding: 9px 13px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent); font-size: 13px; font-weight: 600; }
 .offline-banner[hidden] { display: none; }
 main.stale .stats, main.stale .view { opacity: .55; filter: grayscale(.4); transition: opacity .3s; }
-.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
 .stat {
   position: relative; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; min-height: 104px;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; text-align: left;
@@ -567,7 +567,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   .top-actions .label { display: none; }
   .top-actions .btn.primary { width: 34px; padding: 0; }
   main { padding: 16px 14px 60px; }
-  .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
   .stat { min-height: 0; padding: 8px 9px; gap: 2px; border-radius: 12px; }
   .stat-label { font-size: 11px; gap: 4px; }
   .stat-label .i, .live-dot, .spark, .meter, .stat-sub, .stat-action { display: none; }
@@ -698,16 +698,6 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       </svg>
       <div class="stat-sub" id="statSessionsSub" style="position:relative"></div>
     </div>
-    <button class="stat" data-act="take-over-latest" id="statTabsCard" title="Take over the most recent tab">
-      <div class="stat-label"><svg class="i sm"><use href="#i-tabs"/></svg>Open tabs</div>
-      <div class="stat-value" id="statTabs">0</div>
-      <div class="stat-sub ellipsis" id="statTabsSub">No pages open</div>
-    </button>
-    <button class="stat nav" data-act="view" data-view="profiles" title="Show profiles">
-      <div class="stat-label"><svg class="i sm"><use href="#i-folder"/></svg>Profiles</div>
-      <div class="stat-value" id="statProfiles">0</div>
-      <div class="stat-sub" id="statProfilesSub">0 B on disk</div>
-    </button>
     <div class="stat nav" data-view="recordings">
       <button class="stat-hit" data-act="view" data-view="recordings" title="Show recordings" aria-label="Show recordings"></button>
       <div class="stat-label"><svg class="i sm"><use href="#i-db"/></svg>Recordings</div>
@@ -1576,16 +1566,7 @@ function renderStats() {
   if (sparkHistory.length) sparkHistory[sparkHistory.length - 1] = active;
   drawSpark(Math.max(2, cap));
 
-  const pages = (ov.targets || []).filter((t) => t.type === 'page' && inFilter(t));
-  $('statTabs').textContent = pages.length;
-  const lead = pages.find((p) => p.url && p.url !== 'about:blank') || pages[0];
-  $('statTabsSub').textContent = lead ? `Take over “${lead.title || shortUrl(lead.url) || 'blank tab'}”` : 'No pages open';
-  $('statTabsCard').disabled = !lead;
-
   const profs = ov.profiles.filter(inFilter);
-  $('statProfiles').textContent = profs.length;
-  const running = profs.filter((p) => byKey.profiles.get(keyOf.profile(p))?.session).length;
-  $('statProfilesSub').textContent = `${formatBytes(profs.reduce((a, p) => a + (p.size_bytes || 0), 0))} on disk` + (running ? ` · ${running} running` : '');
 
   const used = sel ? sel.storage_used_bytes || 0 : ov.total_storage_bytes || 0;
   const max = sel ? sel.max_storage_bytes || (sel.isLocal ? ov.local_node.max_storage_bytes : 0) : ov.max_storage_bytes || 0;
@@ -1993,11 +1974,6 @@ const ACT = {
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
-  'take-over-latest': () => {
-    const pages = (ov?.targets || []).filter((t) => t.type === 'page' && inFilter(t));
-    const lead = pages.find((p) => p.url && p.url !== 'about:blank') || pages[0];
-    if (lead) takeOver(lead.node_name, { page: lead.id }, ov.sessions.find((s) => s.node_name === lead.node_name && s.id === lead.sessionId));
-  },
   'vacuum': () => vacuum(),
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
