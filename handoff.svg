@@ -1,28 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="bd-hbg" x1="10" y1="4" x2="54" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#22d3ee"/>
+    <linearGradient id="bd-hwin" x1="10" y1="16" x2="54" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38d9f5"/>
       <stop offset="1" stop-color="#1d4ed8"/>
     </linearGradient>
-    <linearGradient id="bd-hhorn" x1="0" y1="9" x2="0" y2="22" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bd-hhorn" x1="0" y1="1" x2="0" y2="20" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ffb347"/>
       <stop offset="1" stop-color="#ff5e62"/>
     </linearGradient>
   </defs>
-  <circle cx="32" cy="32" r="32" fill="url(#bd-hbg)"/>
   <!-- horns -->
-  <path d="M18.5 22.5C16 17.5 16.4 12.6 20.6 8.8c-.4 4.6 1.4 8.4 5.6 11.8z" fill="url(#bd-hhorn)"/>
-  <path d="M45.5 22.5C48 17.5 47.6 12.6 43.4 8.8c.4 4.6-1.4 8.4-5.6 11.8z" fill="url(#bd-hhorn)"/>
-  <!-- the browser window -->
-  <rect x="12" y="19" width="40" height="31" rx="6.5" fill="#ffffff"/>
-  <path d="M12 27.5h40" stroke="#c9c2ff" stroke-width="1.6"/>
-  <circle cx="18" cy="23.3" r="1.7" fill="#ff5e62"/>
-  <circle cx="23.2" cy="23.3" r="1.7" fill="#ffb347"/>
-  <circle cx="28.4" cy="23.3" r="1.7" fill="#9b8cff"/>
-  <!-- its face: a cheeky grin -->
-  <path d="M21.5 34.6l5.4 1.8M42.5 34.6l-5.4 1.8" stroke="#2a1873" stroke-width="2" stroke-linecap="round"/>
-  <circle cx="25.6" cy="38.3" r="2.5" fill="#2a1873"/>
-  <circle cx="38.4" cy="38.3" r="2.5" fill="#2a1873"/>
-  <path d="M25 42.6c4.3 3.6 9.7 3.6 14 0" fill="none" stroke="#2a1873" stroke-width="2.2" stroke-linecap="round"/>
-  <path d="M28.6 44.4l1.2 2.4 1.2-2.1z" fill="#2a1873"/>
+  <path d="M7.5 20.5C3.6 13.4 4.2 6.4 10.4 1c-.6 6.6 2 12 8.3 16.8z" fill="url(#bd-hhorn)"/>
+  <path d="M56.5 20.5C60.4 13.4 59.8 6.4 53.6 1c.6 6.6-2 12-8.3 16.8z" fill="url(#bd-hhorn)"/>
+  <!-- the browser window, filling the icon -->
+  <rect x="1" y="16" width="62" height="47" rx="9" fill="url(#bd-hwin)"/>
+  <path d="M1 28.5h62" stroke="#ffffff" stroke-opacity=".45" stroke-width="2.4"/>
+  <circle cx="10" cy="22.3" r="2.6" fill="#ff5e62"/>
+  <circle cx="18" cy="22.3" r="2.6" fill="#ffb347"/>
+  <circle cx="26" cy="22.3" r="2.6" fill="#ffffff" fill-opacity=".85"/>
+  <!-- its face -->
+  <path d="M15 37l8.4 2.8M49 37l-8.4 2.8" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="21.4" cy="44" r="3.9" fill="#ffffff"/>
+  <circle cx="42.6" cy="44" r="3.9" fill="#ffffff"/>
+  <path d="M20.6 51.6c6.7 5.6 16.1 5.6 22.8 0" fill="none" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round"/>
 </svg>
