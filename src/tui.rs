@@ -193,6 +193,8 @@ enum Action {
     Text {
         title: String,
         lines: Vec<String>,
+        /// A session whose screenshot goes above the text.
+        shot: Option<String>,
     },
     /// The form for a new session or profile; the node it starts on.
     Form(FormKind, Option<String>),
@@ -215,6 +217,8 @@ impl Action {
 }
 
 /// How often the selected session's screenshot is fetched again.
+/// Rows of the screenshot in a session's details popup.
+const SHOT_ROWS: usize = 16;
 const SHOT_EVERY: Duration = Duration::from_secs(10);
 
 /// Ask the terminal what it can draw (kitty graphics, sixel, iTerm2; also through
@@ -333,6 +337,7 @@ enum Modal {
         title: String,
         lines: Vec<String>,
         scroll: usize,
+        shot: Option<String>,
     },
     Form(Form),
 }
@@ -982,7 +987,11 @@ impl App {
         match self.tab {
             Tab::Sessions => {
                 let s = self.session()?;
-                Some(details(&s.session.name, &s))
+                Some(details_with_shot(
+                    &s.session.name,
+                    &s,
+                    Some(s.session.id.to_string()),
+                ))
             }
             Tab::Profiles => {
                 let p = self.profile()?;
@@ -1541,7 +1550,13 @@ impl App {
 
     /// Ask for the selected session's screenshot when it is missing or a while old.
     fn fetch_shot(&mut self) {
-        if self.picker.is_none() || self.tab != Tab::Sessions || self.modal.is_some() {
+        if self.picker.is_none()
+            || self.tab != Tab::Sessions
+            || self
+                .modal
+                .as_ref()
+                .is_some_and(|m| !matches!(m, Modal::Text { .. }))
+        {
             return;
         }
         let Some(s) = self.session() else { return };
@@ -1607,11 +1622,12 @@ impl App {
             Action::Confirm { question, then } => {
                 self.modal = Some(Modal::Confirm { question, then });
             }
-            Action::Text { title, lines } => {
+            Action::Text { title, lines, shot } => {
                 self.modal = Some(Modal::Text {
                     title,
                     lines,
                     scroll: 0,
+                    shot,
                 });
             }
             Action::Form(kind, node) => self.open_form(kind, node),
@@ -2186,6 +2202,7 @@ impl App {
                 title,
                 lines,
                 mut scroll,
+                shot,
             } => {
                 let last = lines.len().saturating_sub(1);
                 match k.code {
@@ -2202,6 +2219,7 @@ impl App {
                     title,
                     lines,
                     scroll,
+                    shot,
                 });
             }
             Modal::Form(mut f) => {
@@ -2631,10 +2649,15 @@ fn remove_peer(node: &str) -> Action {
 
 /// Pretty JSON of `value`, line by line, in a scrollable popup.
 fn details(title: &str, value: &impl serde::Serialize) -> Action {
+    details_with_shot(title, value, None)
+}
+
+fn details_with_shot(title: &str, value: &impl serde::Serialize, shot: Option<String>) -> Action {
     let text = serde_json::to_string_pretty(value).unwrap_or_default();
     Action::Text {
         title: title.to_string(),
         lines: text.lines().map(str::to_string).collect(),
+        shot,
     }
 }
 
@@ -3160,7 +3183,27 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     app.screen = f.area();
     app.popup = if let Some(ref modal) = app.modal {
-        Some(draw_modal(f, modal))
+        let rect = draw_modal(f, modal);
+        if let Modal::Text { shot: Some(id), .. } = modal {
+            let area = Rect {
+                x: rect.x + 1,
+                y: rect.y + 1,
+                width: rect.width.saturating_sub(2),
+                height: SHOT_ROWS.min(f.area().height.saturating_sub(6) as usize / 2) as u16,
+            };
+            match app.shots.get_mut(id) {
+                Some(shot) => f.render_stateful_widget(
+                    StatefulImage::default().resize(Resize::Fit(None)),
+                    area,
+                    shot,
+                ),
+                None if app.picker.is_some() => {
+                    f.render_widget(Paragraph::new("Taking a screenshot…").dim(), area)
+                }
+                None => {}
+            }
+        }
+        Some(rect)
     } else if app.help {
         Some(popup(f, "Keys", help_lines()))
     } else {
@@ -3358,12 +3401,22 @@ fn draw_modal(f: &mut Frame, modal: &Modal) -> Rect {
             title,
             lines,
             scroll,
+            shot,
         } => {
-            let mut shown: Vec<Line> = lines
-                .iter()
-                .skip(*scroll)
-                .take(room.max(3))
-                .map(|l| Line::from(l.clone()))
+            // Rows left empty for the screenshot, which draw() paints over them.
+            let gap = if shot.is_some() {
+                SHOT_ROWS.min(room / 2)
+            } else {
+                0
+            };
+            let mut shown: Vec<Line> = std::iter::repeat_n(Line::from(" ".repeat(78)), gap)
+                .chain(
+                    lines
+                        .iter()
+                        .skip(*scroll)
+                        .take(room.saturating_sub(gap).max(3))
+                        .map(|l| Line::from(l.clone())),
+                )
                 .collect();
             shown.push(Line::from(""));
             shown.push(hint("↑↓ scroll   Esc close"));
