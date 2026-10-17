@@ -35,7 +35,9 @@ const $ = (id) => document.getElementById(id);
 // Firefox for Android, in an installed web app, cannot take a downloaded PDF: it hands
 // it to its PDF viewer, which has no tab in a web app, and the app ends on about:blank.
 // There a PDF goes to the share sheet (Files, Drive, a PDF app) instead, or, where files
-// cannot be shared, to regular Firefox. Sharing needs a tap: the file is fetched ahead.
+// cannot be shared (Firefox for Android so far), is shown in this window by Firefox's
+// PDF viewer: its menu shares it or opens it in Firefox, Back returns. Sharing needs a
+// tap: the file is fetched ahead.
 const FIREFOX_ANDROID = /Android/.test(navigator.userAgent) && /Firefox\//.test(navigator.userAgent);
 const inAppWindow = () => matchMedia("(display-mode: standalone), (display-mode: fullscreen), (display-mode: minimal-ui)").matches;
 function saveNeedsHelp(name) {
@@ -43,6 +45,8 @@ function saveNeedsHelp(name) {
 }
 const prefetchedFiles = new Map();
 function prefetchFile(url, name) {
+  // Only worth it where the share sheet takes files.
+  if (!navigator.canShare?.({ files: [new File([""], name, { type: "application/pdf" })] })) return Promise.reject(new Error("no file sharing"));
   const key = new URL(url, location.href).href;
   if (!prefetchedFiles.has(key)) {
     const file = fetch(key, { headers: authHeaders() })
@@ -53,24 +57,28 @@ function prefetchFile(url, name) {
   }
   return prefetchedFiles.get(key);
 }
-async function shareOrOpenInBrowser(url, name) {
-  const file = await prefetchFile(url, name).catch(() => null);
-  if (file && navigator.canShare?.({ files: [file] })) {
+async function saveWithHelp(url, name) {
+  const probe = new File([""], name, { type: "application/pdf" });
+  if (navigator.canShare?.({ files: [probe] })) {
+    const file = await prefetchFile(url, name).catch(() => null);
     try {
-      await navigator.share({ files: [file], title: name });
-      return;
+      if (file) {
+        await navigator.share({ files: [file], title: name });
+        return;
+      }
     } catch (e) {
       if (e.name === "AbortError") return;
     }
   }
   const u = new URL(url, location.href);
-  location.href = `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.slice(0, -1)};package=org.mozilla.firefox;end`;
+  u.searchParams.set("inline", "1");
+  location.href = u.href;
 }
 document.addEventListener("click", (e) => {
   const a = e.target.closest?.("a[download]");
   if (!a || !saveNeedsHelp(a.getAttribute("download"))) return;
   e.preventDefault();
-  shareOrOpenInBrowser(a.href, a.getAttribute("download"));
+  saveWithHelp(a.href, a.getAttribute("download"));
 }, true);
 
 function escapeHtml(s) {

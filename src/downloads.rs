@@ -358,6 +358,16 @@ fn now_secs() -> u64 {
 
 /// `Content-Disposition` for a download: a plain ASCII name plus the real one.
 fn content_disposition(name: &str) -> HeaderValue {
+    disposition("attachment", name)
+}
+
+/// `?inline=1` on a PDF: shown in place (Firefox for Android web apps, see common.js).
+fn shown_inline(name: &str, query: Option<&str>) -> bool {
+    name.to_ascii_lowercase().ends_with(".pdf")
+        && query.is_some_and(|q| q.split('&').any(|kv| kv == "inline=1"))
+}
+
+fn disposition(kind: &'static str, name: &str) -> HeaderValue {
     let ascii: String = name
         .chars()
         .map(|c| {
@@ -379,9 +389,9 @@ fn content_disposition(name: &str) -> HeaderValue {
         })
         .collect();
     HeaderValue::from_str(&format!(
-        "attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}"
+        "{kind}; filename=\"{ascii}\"; filename*=UTF-8''{encoded}"
     ))
-    .unwrap_or_else(|_| HeaderValue::from_static("attachment"))
+    .unwrap_or_else(|_| HeaderValue::from_static(kind))
 }
 
 /// Tell the session's live views about a download.
@@ -653,7 +663,8 @@ pub(crate) async fn api_list(
     Ok(Json(sd.list().iter().map(Download::public).collect()))
 }
 
-/// `GET /api/sessions/{id}/downloads/{dl}`: the file, as an attachment.
+/// `GET /api/sessions/{id}/downloads/{dl}`: the file, as an attachment (a PDF with
+/// `?inline=1` to be shown).
 pub(crate) async fn api_get(
     AxumPath((id, dl)): AxumPath<(Uuid, String)>,
     State(state): State<AppState>,
@@ -672,6 +683,7 @@ pub(crate) async fn api_get(
     let Some(path) = d.path.filter(|p| p.is_file()) else {
         return api_error(StatusCode::GONE, "The file is gone").into_response();
     };
+    let inline = shown_inline(&d.name, req.uri().query());
     match tower_http::services::ServeFile::new(&path)
         .try_call(req)
         .await
@@ -681,9 +693,24 @@ pub(crate) async fn api_get(
             let h = res.headers_mut();
             h.insert(
                 header::CONTENT_TYPE,
-                HeaderValue::from_static("application/octet-stream"),
+                HeaderValue::from_static(if inline {
+                    "application/pdf"
+                } else {
+                    "application/octet-stream"
+                }),
             );
-            h.insert(header::CONTENT_DISPOSITION, content_disposition(&d.name));
+            h.insert(
+                header::CONTENT_DISPOSITION,
+                if inline {
+                    disposition("inline", &d.name)
+                } else {
+                    content_disposition(&d.name)
+                },
+            );
+            h.insert(
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            );
             h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             res
         }
@@ -814,6 +841,15 @@ mod tests {
             "{s}"
         );
         assert_eq!(safe_name("..."), "download");
+    }
+
+    #[test]
+    fn only_a_pdf_asked_for_inline_is_shown_in_place() {
+        assert!(shown_inline("a.PDF", Some("inline=1")));
+        assert!(shown_inline("a.pdf", Some("x=2&inline=1")));
+        assert!(!shown_inline("a.pdf", None));
+        assert!(!shown_inline("a.pdf", Some("inline=0")));
+        assert!(!shown_inline("a.html", Some("inline=1")));
     }
 
     #[tokio::test]
