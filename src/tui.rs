@@ -251,7 +251,12 @@ impl Shot {
     /// The escape sequence that shows the image at the top left of `area`.
     fn place(&self, area: Rect) -> String {
         let (cols, rows) = self.cells(area);
-        let mut out = format!("\x1b7\x1b[{};{}H", area.y + 1, area.x + 1);
+        let (ox, oy) = tmux_origin();
+        let mut out = passthrough(format!(
+            "\x1b7\x1b[{};{}H",
+            area.y + oy + 1,
+            area.x + ox + 1
+        ));
         let chunks: Vec<&str> = self
             .png
             .as_bytes()
@@ -261,16 +266,24 @@ impl Shot {
         for (n, chunk) in chunks.iter().enumerate() {
             let more = u8::from(n + 1 < chunks.len());
             if n == 0 {
-                out.push_str(&format!(
+                out.push_str(&passthrough(format!(
                     "\x1b_Ga=T,f=100,i={KITTY_ID},c={cols},r={rows},C=1,q=2,m={more};{chunk}\x1b\\"
-                ));
+                )));
             } else {
-                out.push_str(&format!("\x1b_Gm={more};{chunk}\x1b\\"));
+                out.push_str(&passthrough(format!("\x1b_Gm={more};{chunk}\x1b\\")));
             }
         }
-        out.push_str("\x1b8");
+        out.push_str(&passthrough("\x1b8".into()));
         out
     }
+}
+
+/// Inside tmux, escape sequences for the terminal go in a passthrough (ESCs doubled).
+fn passthrough(seq: String) -> String {
+    if std::env::var_os("TMUX").is_none() {
+        return seq;
+    }
+    format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
 }
 
 /// Size of a terminal cell in pixels (a typical one when the terminal does not say).
@@ -285,6 +298,31 @@ fn cell_px() -> (u16, u16) {
     }
 }
 
+/// Output of a tmux command (None outside tmux or when it fails).
+fn tmux_query(args: &str) -> Option<String> {
+    let out = std::process::Command::new("tmux")
+        .args(args.split_whitespace())
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Top left of this tmux pane on the terminal, in cells (0, 0 outside tmux).
+fn tmux_origin() -> (u16, u16) {
+    if std::env::var_os("TMUX").is_none() {
+        return (0, 0);
+    }
+    let pane = std::env::var("TMUX_PANE").unwrap_or_default();
+    let fmt = "#{pane_left} #{pane_top}";
+    let out = tmux_query(&format!("display-message -p -t {pane} {fmt}")).unwrap_or_default();
+    let mut n = out.split_whitespace().filter_map(|w| w.parse().ok());
+    (n.next().unwrap_or(0), n.next().unwrap_or(0))
+}
+
 /// Does the terminal draw kitty graphics? `BROWSER_DAEMON_TUI_IMAGES=on|off` decides
 /// when set; otherwise kitty, Ghostty and WezTerm are recognised (not inside tmux,
 /// which swallows the sequences unless passthrough is set up).
@@ -296,7 +334,9 @@ fn kitty_supported() -> bool {
         _ => {}
     }
     if !var("TMUX").is_empty() {
-        return false;
+        // The images go through tmux's passthrough, if it is allowed.
+        return tmux_query("show-options -gv allow-passthrough")
+            .is_some_and(|v| matches!(v.trim(), "on" | "all"));
     }
     let term = var("TERM");
     !var("KITTY_WINDOW_ID").is_empty()
@@ -1663,7 +1703,9 @@ impl App {
         }
         let mut out = String::new();
         if self.shot_shown.is_some() {
-            out.push_str(&format!("\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\"));
+            out.push_str(&passthrough(format!(
+                "\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\"
+            )));
         }
         if let Some((id, area, _)) = &want {
             if let Some(shot) = self.shots.get(id) {
@@ -3661,8 +3703,8 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
     }
     if app.shot_shown.is_some() {
         use std::io::Write;
-        let _ =
-            std::io::stdout().write_all(format!("\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\").as_bytes());
+        let _ = std::io::stdout()
+            .write_all(passthrough(format!("\x1b_Ga=d,d=I,i={KITTY_ID},q=2\x1b\\")).as_bytes());
     }
     ratatui::restore();
     result
