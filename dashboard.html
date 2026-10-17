@@ -1117,6 +1117,8 @@ async function request(method, url, body) {
     const text = await res.text().catch(() => '');
     let msg = text || res.statusText;
     try { msg = JSON.parse(text).error || msg; } catch { /* plain text */ }
+    // An error page from a proxy (nginx's 502 while a node restarts): its status, not its HTML.
+    if (/^\s*</.test(msg)) msg = `HTTP ${res.status} ${res.statusText}`.trim() + (res.status >= 502 && res.status <= 504 ? ': the node may be restarting' : '');
     throw new Error(msg);
   }
   const ct = res.headers.get('content-type') || '';
