@@ -3409,7 +3409,7 @@ let audioWanted = true;
 try { audioWanted = localStorage.getItem("handoff.audio") !== "0"; } catch { /* storage unavailable */ }
 function renderAudioButton() {
   const on = !!audio.el;
-  E.audioBtn.innerHTML = (on ? AUDIO_ICONS.on : AUDIO_ICONS.off) + (on ? "Hearing the page" : "Hear the page");
+  E.audioBtn.innerHTML = (on ? AUDIO_ICONS.on : AUDIO_ICONS.off) + (on ? "Audio on" : "Audio off");
   E.audioBtn.title = on ? "Mute the page's sound in this view" : "Play the page's sound in this view";
   E.audioBtn.setAttribute("aria-checked", String(on));
 }
