@@ -161,7 +161,6 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .stat-sub { font-size: 12px; color: var(--muted); margin-top: auto; }
 .meter { height: 6px; border-radius: 999px; background: var(--hover); overflow: hidden; margin-top: auto; }
 .meter > span { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width .4s ease, background .3s; }
-.spark { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 44px; pointer-events: none; }
 .stat-action { position: absolute; top: 8px; right: 8px; }
 
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
@@ -570,7 +569,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
   .stat { min-height: 0; padding: 8px 9px; gap: 2px; border-radius: 12px; }
   .stat-label { font-size: 11px; gap: 4px; }
-  .stat-label .i, .live-dot, .spark, .meter, .stat-sub, .stat-action { display: none; }
+  .stat-label .i, .live-dot, .meter, .stat-sub, .stat-action { display: none; }
   .stat-value { font-size: 18px; }
   .stat-value small { font-size: 11px; margin-left: 1px; }
   .session-grid { grid-template-columns: 1fr; }
@@ -692,11 +691,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="stat nav" role="button" tabindex="0" data-act="view" data-view="sessions" title="Show sessions">
       <div class="stat-label"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="live-dot" id="liveDot" title="Live updates"></span></div>
       <div class="stat-value" id="statSessions">0<small>/ 0</small></div>
-      <svg class="spark" id="spark" viewBox="0 0 120 40" preserveAspectRatio="none">
-        <defs><linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
-        <path id="sparkArea" fill="url(#sparkFill)"/><path id="sparkLine" fill="none" stroke="var(--accent)" stroke-width="1.6" vector-effect="non-scaling-stroke"/>
-      </svg>
-      <div class="stat-sub" id="statSessionsSub" style="position:relative"></div>
+      <div class="stat-sub" id="statSessionsSub"></div>
+      <div class="meter"><span id="statSessionsBar"></span></div>
     </div>
     <div class="stat nav" data-view="recordings">
       <button class="stat-hit" data-act="view" data-view="recordings" title="Show recordings" aria-label="Show recordings"></button>
@@ -1083,7 +1079,6 @@ let ov = null;                                // last mesh overview
 let currentOverview = null;                   // same, for the player code
 let nodes = [];                               // local node first, then peers
 let filter = 'all';
-const sparkHistory = [];
 
 const localName = () => ov?.local_node?.name;
 const isLocal = (node) => !node || node === localName();
@@ -1563,8 +1558,8 @@ function renderStats() {
   $('statSessions').innerHTML = `${active}<small>/ ${cap}</small>`;
   const pct = cap ? Math.min(100, (active / cap) * 100) : 0;
   $('statSessionsSub').textContent = cap ? `${Math.round(pct)}% of capacity` : '';
-  if (sparkHistory.length) sparkHistory[sparkHistory.length - 1] = active;
-  drawSpark(Math.max(2, cap));
+  $('statSessionsBar').style.width = pct + '%';
+  $('statSessionsBar').style.background = pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)';
 
   const profs = ov.profiles.filter(inFilter);
 
@@ -1582,16 +1577,6 @@ function renderStats() {
   $('countRecordings').textContent = visibleRecordings().length;
   $('countNodes').textContent = nodes.length;
   $('countEngines').textContent = availableEngines().length;
-}
-
-function drawSpark(scale) {
-  const pts = sparkHistory.length > 1 ? sparkHistory : [sparkHistory[0] || 0, sparkHistory[0] || 0];
-  const step = 120 / (pts.length - 1);
-  const y = (v) => 38 - (v / scale) * 32;
-  let d = `M0 ${y(pts[0])}`;
-  pts.forEach((v, i) => { if (i) d += ` L${(i * step).toFixed(1)} ${y(v).toFixed(1)}`; });
-  $('sparkLine').setAttribute('d', d);
-  $('sparkArea').setAttribute('d', `${d} L120 40 L0 40 Z`);
 }
 
 function emptyState(ico, title, text, button = '') {
@@ -3179,8 +3164,6 @@ function applyOverview(data) {
     }
   }
   trackSeen(data);
-  sparkHistory.push(0);                       // filled in by renderStats for the current filter
-  if (sparkHistory.length > 40) sparkHistory.shift();
   render();
 }
 
