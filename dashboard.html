@@ -2131,7 +2131,7 @@ function nodePills(container, selected, onPick, { onlineOnly = false, exclude = 
   container.innerHTML = list.map((n) => {
     const off = n.status !== 'online';
     return `<button type="button" data-node="${esc(n.name)}" aria-pressed="${n.name === selected}" class="${n.name === selected ? 'on' : ''} ${off ? 'off' : ''}" style="--node:${nodeColor(n.name)}" ${off && onlineOnly ? 'disabled' : ''}>
-      <span class="dot"></span>${esc(n.name)}${n.isLocal ? ' <span class="muted" style="font-weight:500">· here</span>' : ''}</button>`;
+      <span class="dot"></span>${esc(n.name)}${n.isLocal ? ' <span class="muted" style="font-weight:500">· local</span>' : ''}</button>`;
   }).join('');
   container.onclick = (e) => {
     const b = e.target.closest('button[data-node]');
