@@ -273,6 +273,21 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .merge-check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .avatar.pic, .engine-badge.pic { background: transparent; }
 .avatar.pic img, .engine-badge.pic img { width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; max-height: 340px; overflow-y: auto; padding: 2px; margin: -2px; }
+.pgrid .ph { grid-column: 1 / -1; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 6px 2px 0; }
+.pcard { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 9px 10px; text-align: left; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; cursor: pointer; font: inherit; transition: border-color .12s, background .12s, transform .12s; }
+.pcard:hover { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); transform: translateY(-1px); }
+.pcard[aria-checked="true"] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 1px var(--accent) inset; }
+.pcard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pcard .avatar { width: 36px; height: 36px; }
+.pcard .pc-txt { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.pcard .pc-name { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pcard .pc-meta { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pcard .pc-meta .run { color: var(--ok); }
+.pcard .pc-meta .nd { color: var(--node, var(--muted)); }
+.pcard.ghost .avatar { background: color-mix(in oklab, var(--muted) 14%, transparent); color: var(--muted); }
+.pcard.add { border-style: dashed; }
+.pcard.add .avatar { background: var(--accent-soft); color: var(--accent); }
 .avatar { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; font-weight: 700; font-size: 13px; text-transform: uppercase; }
 .play-btn { width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); transition: background .15s, color .15s, transform .1s; }
 .play-btn:hover { background: var(--accent-btn); color: var(--accent-fg); transform: scale(1.05); }
@@ -623,6 +638,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
@@ -761,7 +777,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       </div>
       <div class="field">
         <span class="field-label" id="sessionProfileLabel">Profile</span>
-        <select class="input" id="sessionProfiles" aria-labelledby="sessionProfileLabel"></select>
+        <div class="pgrid" id="sessionProfileGrid" role="radiogroup" aria-labelledby="sessionProfileLabel"></div>
+        <select class="input" id="sessionProfiles" aria-labelledby="sessionProfileLabel" hidden></select>
         <input class="input" id="sessionProfileName" placeholder="Profile name, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
         <span class="hint" id="sessionProfileHint"></span>
       </div>
@@ -1060,6 +1077,7 @@ function profIcon(p) {
       if (!blob) return;
       profIcons.set(key, URL.createObjectURL(blob));
       if (ov) render();
+      if ($('newSessionModal')?.open) renderProfilePicker();
     })
     .catch(() => { /* the initials stay */ });
   return '';
@@ -2234,7 +2252,7 @@ function openNewSession(prefill = {}) {
   $('sessionUrl').value = prefill.url || '';
   setEngine(prefill.engine || 'chromium');
   openModal('newSessionModal');
-  setTimeout(() => $('sessionProfiles').focus(), 40);
+  setTimeout(() => $('sessionProfileGrid').querySelector('.pcard[aria-checked="true"]')?.focus(), 40);
 }
 
 /* Profile picker: null = throwaway, { new: true } = name a new one, { node, name } = existing.
@@ -2268,6 +2286,7 @@ function renderProfilePicker() {
       sessionProfile?.node === p.node_name && sessionProfile?.name === p.display)).join('')}</optgroup>` : '',
     opt('new', 'New profile…', !!sessionProfile?.new),
   ].join('');
+  renderProfileGrid(here, elsewhere);
   const isNew = !!sessionProfile?.new;
   $('sessionProfileName').hidden = !isNew;
   const picked = pickedProfile();
@@ -2291,6 +2310,52 @@ function renderProfilePicker() {
   $('sessionSubmit').disabled = !!(remote && (picked.session || clash?.session)) || $('sessionSubmit').dataset.unsupported === '1';
   $('sessionSubmitText').textContent = remote ? 'Copy & launch' : 'Launch';
 }
+// The profiles as cards (the hidden select above holds the choice and the events).
+function renderProfileGrid(here, elsewhere) {
+  const grid = $('sessionProfileGrid');
+  const hadFocus = grid.contains(document.activeElement);
+  const cur = (p) => sessionProfile?.node === p.node_name && sessionProfile?.name === p.display;
+  const card = (key, on, avatar, name, meta, cls = '', title = '') =>
+    `<button type="button" class="pcard ${cls}" role="radio" aria-checked="${on}" tabindex="${on ? 0 : -1}" data-pick="${esc(key)}"${title ? ` title="${esc(title)}"` : ''}>${avatar}<span class="pc-txt"><span class="pc-name">${esc(name)}</span><span class="pc-meta">${meta}</span></span></button>`;
+  const avatarOf = (p) => {
+    const pic = profIcon(p);
+    return pic ? `<div class="avatar pic"><img src="${esc(pic)}" alt=""></div>`
+      : `<div class="avatar" style="color:${nodeColor(p.display)};background:color-mix(in oklab, ${nodeColor(p.display)} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`;
+  };
+  const meta = (p, remote) => [
+    p.session ? '<span class="run">● running</span>' : '',
+    remote ? `<span class="nd" style="--node:${nodeColor(p.node_name)}">● ${esc(p.node_name)}</span>` : '',
+    `${formatBytes(p.size_bytes)}`,
+    p.session ? '' : esc(relTime(p.modified_at_secs)),
+  ].filter(Boolean).join(' · ');
+  const parts = [
+    card('', !sessionProfile, `<div class="avatar">${icon('bolt')}</div>`, 'Throwaway', 'Nothing is kept', 'ghost'),
+    ...here.map((p, i) => card('p:' + i, cur(p), avatarOf(p), p.display, meta(p, false))),
+  ];
+  if (elsewhere.length) {
+    parts.push(`<div class="ph">On other nodes · copied to ${esc(sessionNode)}</div>`);
+    parts.push(...elsewhere.map((p, i) => card('p:' + (here.length + i), cur(p), avatarOf(p), p.display, meta(p, true))));
+  }
+  parts.push(card('new', !!sessionProfile?.new, `<div class="avatar">${icon('plus')}</div>`, 'New profile…', 'Created on first launch', 'add'));
+  grid.innerHTML = parts.join('');
+  if (hadFocus) grid.querySelector('.pcard[aria-checked="true"]')?.focus();
+}
+$('sessionProfileGrid').addEventListener('click', (e) => {
+  const b = e.target.closest('.pcard');
+  if (!b) return;
+  $('sessionProfiles').value = b.dataset.pick;
+  $('sessionProfiles').dispatchEvent(new Event('change'));
+});
+$('sessionProfileGrid').addEventListener('keydown', (e) => {
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  if (!step) return;
+  const cards = [...$('sessionProfileGrid').querySelectorAll('.pcard')];
+  const at = cards.indexOf(document.activeElement);
+  if (at < 0) return;
+  e.preventDefault();
+  cards[(at + step + cards.length) % cards.length].click();
+});
+
 /* Proxy for the new session: null = the profile's default, 'none' = direct, or an id. */
 let sessionProxy = null;
 function renderProxyPicker(profile) {
