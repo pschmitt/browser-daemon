@@ -21,6 +21,7 @@ pub(crate) static SW_JS: &str = include_str!("../sw.js");
 pub(crate) static ICON_192: &[u8] = include_bytes!("../icon-192.png");
 
 pub(crate) static ICON_512: &[u8] = include_bytes!("../icon-512.png");
+pub(crate) static ICON_MASKABLE_512: &[u8] = include_bytes!("../icon-maskable-512.png");
 
 pub(crate) static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 
@@ -100,6 +101,14 @@ pub(crate) async fn icon_512_png() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
         ICON_512,
+    )
+}
+
+/// Full-bleed for launchers that cut icons to their own shape.
+pub(crate) async fn icon_maskable_512_png() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, HeaderValue::from_static("image/png"))],
+        ICON_MASKABLE_512,
     )
 }
 

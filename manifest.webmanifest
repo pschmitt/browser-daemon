@@ -7,7 +7,10 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "categories": ["utilities", "productivity"],
+  "categories": [
+    "utilities",
+    "productivity"
+  ],
   "background_color": "#090d16",
   "theme_color": "#090d16",
   "icons": [
@@ -24,16 +27,10 @@
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
-    },
-    {
-      "src": "/favicon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any"
     }
   ],
   "shortcuts": [
@@ -42,7 +39,12 @@
       "short_name": "Handoff",
       "description": "Launch interactive Mobile Handoff session",
       "url": "/handoff/",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }

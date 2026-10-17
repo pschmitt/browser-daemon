@@ -245,6 +245,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
             | "/sw.js"
             | "/icon-192.png"
             | "/icon-512.png"
+            | "/icon-maskable-512.png"
             | "/download-worker.js"
     ) || path.starts_with("/assets/")
 }
@@ -648,6 +649,7 @@ mod tests {
             "/sw.js",
             "/favicon.svg",
             "/icon-192.png",
+            "/icon-maskable-512.png",
             "/assets/common.js",
         ] {
             assert!(decide(&a, &req(path)).is_ok(), "{path}");
