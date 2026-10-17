@@ -260,6 +260,26 @@ fn engine_span(e: BrowserEngine) -> Line<'static> {
     ])
 }
 
+/// The web UI's colour for a node (`hueOf` in assets/common.js, at the dark theme's lightness).
+fn node_color(name: &str) -> Color {
+    let hash = name.to_lowercase().chars().fold(0i32, |h, c| {
+        h.wrapping_mul(31).wrapping_add(c as u32 as i32)
+    });
+    let hue = (f64::from(hash).abs() * 137.508 % 360.0).round();
+    let (s, l) = (0.68, 0.68);
+    let a = s * f64::min(l, 1.0 - l);
+    let channel = |n: f64| {
+        let k = (n + hue / 30.0) % 12.0;
+        let v = l - a * f64::min(k - 3.0, 9.0 - k).clamp(-1.0, 1.0);
+        (v * 255.0).round() as u8
+    };
+    Color::Rgb(channel(0.0), channel(8.0), channel(4.0))
+}
+
+fn node_cell(name: &str) -> Cell<'static> {
+    Cell::from(name.to_string()).fg(node_color(name))
+}
+
 /// Rows of the screenshot in a session's details popup.
 const SHOT_ROWS: usize = 16;
 const SHOT_EVERY: Duration = Duration::from_secs(10);
@@ -2989,7 +3009,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                 Row::new(vec![
                     Cell::from(ss.name.clone()),
                     Cell::from(ss.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
-                    Cell::from(s.node_name.clone()),
+                    node_cell(&s.node_name),
                     Cell::from(engine_span(ss.engine)),
                     Cell::from(
                         ss.proxy
@@ -3107,7 +3127,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                 let pp = &p.profile;
                 Row::new(vec![
                     Cell::from(pp.name.clone()),
-                    Cell::from(p.node_name.clone()),
+                    node_cell(&p.node_name),
                     Cell::from(engine_span(pp.engine)),
                     Cell::from(
                         pp.proxy
@@ -3175,7 +3195,7 @@ fn draw(f: &mut Frame, app: &mut App) {
                             .unwrap_or_default(),
                     ),
                     Cell::from(m.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
-                    Cell::from(r.node_name.clone()),
+                    node_cell(&r.node_name),
                     Cell::from(dur(m.duration_seconds)),
                     Cell::from(bytes(m.size_bytes)),
                     Cell::from(ago(Some(m.started_at_secs))),
@@ -3238,7 +3258,10 @@ fn draw(f: &mut Frame, app: &mut App) {
         }
         Tab::Nodes => {
             let mut rows = vec![Row::new(vec![
-                Cell::from(format!("{} (here)", ov.local_node.name)),
+                Cell::from(Line::from(vec![
+                    Span::raw(ov.local_node.name.clone()).fg(node_color(&ov.local_node.name)),
+                    Span::raw(" (local)").dim(),
+                ])),
                 Cell::from("online").fg(Color::Green),
                 Cell::from(format!(
                     "{}/{}",
@@ -3251,7 +3274,7 @@ fn draw(f: &mut Frame, app: &mut App) {
             ])];
             rows.extend(ov.peers.iter().map(|p| {
                 Row::new(vec![
-                    Cell::from(p.name.clone()),
+                    node_cell(&p.name),
                     Cell::from(p.status.clone()).fg(if p.status == "online" {
                         Color::Green
                     } else {
@@ -3951,6 +3974,18 @@ async fn run_call(
         return Ok(format!("Saved {file} ({})", bytes(size)));
     }
     Ok(String::new())
+}
+
+#[cfg(test)]
+mod node_color_tests {
+    use super::*;
+
+    #[test]
+    fn node_colours_match_the_web_ui() {
+        assert_eq!(node_color("fnuc"), Color::Rgb(229, 210, 118));
+        assert_eq!(node_color("rofl-13"), Color::Rgb(118, 223, 229));
+        assert_eq!(node_color("ROFL-14"), Color::Rgb(229, 118, 190));
+    }
 }
 
 #[cfg(test)]
