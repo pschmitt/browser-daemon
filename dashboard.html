@@ -214,6 +214,8 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .fact { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 99px; background: var(--hover);
   color: var(--muted); font-size: 11.5px; font-weight: 600; white-space: nowrap; cursor: default; }
 .fact .i { width: 12px; height: 12px; }
+.node-warn { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; margin-bottom: 12px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); font-size: 13px; }
+.node-warn .i { margin-top: 2px; }
 .node-url { color: inherit; text-decoration: none; }
 .node-url:hover, .node-url:focus-visible { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .fact-pic { width: 14px; height: 14px; border-radius: 4px; object-fit: contain; flex: none; margin-left: -3px; }
@@ -3147,7 +3149,19 @@ function renderNodes() {
   if (!ov) return;
   // Not while a setting is being changed: re-rendering would close its picker.
   if ($('nodesList').contains(document.activeElement) && document.activeElement.matches('select, input')) return;
-  const html = nodes.map((n) => {
+  // Nodes that run another build than the rest (the most common one; the local node on a tie).
+  const buildOf = (n) => `${n.version || ''} · ${(n.revision || '').slice(0, 7)}`;
+  const known = nodes.filter((n) => n.status === 'online' && (n.version || n.revision));
+  const tally = new Map();
+  for (const n of known) tally.set(buildOf(n), (tally.get(buildOf(n)) || 0) + 1);
+  const top = Math.max(0, ...tally.values());
+  const localBuild = known.find((n) => n.isLocal);
+  const mainBuild = localBuild && tally.get(buildOf(localBuild)) === top ? buildOf(localBuild)
+    : [...tally].find(([, c]) => c === top)?.[0];
+  const odd = new Set(tally.size > 1 ? known.filter((n) => buildOf(n) !== mainBuild).map((n) => n.name) : []);
+  const mismatch = odd.size
+    ? `<div class="node-warn" role="alert">${icon('alert', 'sm')}<span>${[...odd].map(esc).join(', ')} ${odd.size === 1 ? 'runs' : 'run'} another version than the other nodes (${esc(mainBuild)}). Mixed versions can behave differently: update them together.</span></div>` : '';
+  const html = mismatch + nodes.map((n) => {
     const online = n.status === 'online';
     const proxies = n.proxies || [];
     const def = n.settings?.default_proxy || '';
@@ -3165,7 +3179,9 @@ function renderNodes() {
       <div class="node-head">
         <div class="avatar">${icon('server')}</div>
         <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${esc(n.latency_ms)} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
-          <span>${/^https?:\/\//.test(n.url) ? `<a class="node-url" href="${esc(n.url)}" target="_blank" rel="noopener" title="Open ${esc(n.url)}">${esc(n.url)}</a>` : esc(n.url)}${n.version ? ` · v${esc(n.version)}${esc(rev)}` : ''}</span>
+          <span>${/^https?:\/\//.test(n.url) ? `<a class="node-url" href="${esc(n.url)}" target="_blank" rel="noopener" title="Open ${esc(n.url)}">${esc(n.url)}</a>` : esc(n.url)}${n.version ? (odd.has(n.name)
+            ? ` · <span class="chip warn" title="${esc(`Another version than the other nodes (${mainBuild})`)}">${icon('alert', 'sm')}v${esc(n.version)}${esc(rev)}</span>`
+            : ` · v${esc(n.version)}${esc(rev)}`) : ''}</span>
           ${online ? `<div class="bars"><span><b>${esc(n.active_sessions)}</b>/${esc(n.max_sessions)} sessions</span><span><b>${esc(n.profiles_count)}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.map(esc).join(' · ')}</span>` : ''}</div>` : ''}
         </div>
         <div style="display:flex;gap:6px;flex:none">
