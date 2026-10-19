@@ -2,16 +2,15 @@
 """Build Firefox and Chromium extensions without third-party build dependencies.
 
 Like rbw's browser/build.py: shared MV3 source, engine-specific manifests,
-and the version from Cargo.toml. ZIP timestamps and ordering are reproducible.
+and a version shared by both browsers. ZIP timestamps and ordering are reproducible.
 """
 import json
 from pathlib import Path
 import shutil
-import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-VERSION = tomllib.loads((ROOT.parent / "Cargo.toml").read_text())["package"]["version"]
+VERSION = json.loads((ROOT / "version.json").read_text())["version"]
 
 
 def main():
@@ -26,7 +25,7 @@ def main():
             "name": "Browser Daemon Node",
             "version": VERSION,
             "description": "Temporarily share selected tabs with your browser daemon, with optional remote control.",
-            "permissions": ["tabs", "storage", "scripting"],
+            "permissions": ["tabs", "storage", "scripting", "alarms"],
             "optional_host_permissions": ["http://*/*", "https://*/*"],
             "action": {"default_popup": "popup.html", "default_title": "Browser node", "default_icon": "icon.png"},
             "icons": {"192": "icon.png"},

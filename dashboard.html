@@ -900,6 +900,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="sessSearch" placeholder="Filter sessions: name, agent, topic, address…" autocomplete="off" spellcheck="false" aria-label="Filter sessions"></label>
       <button class="btn" id="agentsOnlyBtn" data-act="agents-only" aria-pressed="false" title="Only the sessions an agent is driving"><svg class="i sm"><use href="#i-bot"/></svg>Agents only</button>
     </div>
+    <div id="sharedBrowserSessions" class="session-grid"></div>
     <div class="session-grid" id="sessionGrid"></div>
   </section>
   <section class="view profiles" id="view-profiles" hidden></section>
@@ -907,7 +908,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view nodes" id="view-nodes" hidden>
+    <p><button id="pairBrowser" class="btn primary" type="button">Pair browser extension</button> <span id="pairBrowserStatus" role="status"></span></p>
+  <label><input id="rememberBrowser" type="checkbox"> Remember this browser and reconnect after restart (no key expiry)</label>
     <p><a class="btn" href="/extension/">Temporary browsers · share and control your own tabs</a></p>
+    <div id="temporaryBrowserSummary" class="nodes-list" role="status"></div>
     <div id="nodesList" class="nodes-list"></div>
     <form id="addPeerForm" class="field add-peer"><label for="peerUrl">Add a peer</label>
       <div style="display:flex;gap:8px"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.rofl-13.example.net"><button class="btn primary" type="submit"><svg class="i"><use href="#i-plus"/></svg>Add</button></div>
@@ -1378,6 +1382,14 @@ let ov = null;                                // last mesh overview
 let currentOverview = null;                   // same, for the player code
 let nodes = [];                               // local node first, then peers
 let filter = 'all';
+let extensionBrowserNodes = [];
+function sharedBrowserTabCount() {
+  return extensionBrowserNodes.filter(n => filter === 'all' || (n.daemon || ov?.local_node.name) === filter).reduce((total, n) => total + n.tabs.length, 0);
+}
+window.addEventListener('browser-daemon-extension-nodes', event => {
+  extensionBrowserNodes = event.detail;
+  if (ov) { renderStats(); renderSessions(); }
+});
 
 const localName = () => ov?.local_node?.name;
 const isLocal = (node) => !node || node === localName();
@@ -1944,7 +1956,7 @@ function renderStats() {
   const cap = sel ? sel.max_sessions : ov.total_capacity;
   $('statSessions').innerHTML = `${active}<small>/ ${cap}</small>`;
   const pct = cap ? Math.min(100, (active / cap) * 100) : 0;
-  $('statSessionsSub').textContent = cap ? `${Math.round(pct)}% of capacity` : '';
+  $('statSessionsSub').textContent = (cap ? `${Math.round(pct)}% of capacity` : '') + (sharedBrowserTabCount() ? ` · ${sharedBrowserTabCount()} shared browser tab(s)` : '');
   $('statSessionsBar').style.width = pct + '%';
   $('statSessionsBar').style.background = pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)';
 
@@ -1959,10 +1971,10 @@ function renderStats() {
   $('statStorageBar').style.width = sp + '%';
   $('statStorageBar').style.background = sp > 85 ? 'var(--bad)' : sp > 65 ? 'var(--warn)' : 'var(--accent)';
 
-  $('countSessions').textContent = ov.sessions.filter(inFilter).length;
+  $('countSessions').textContent = ov.sessions.filter(inFilter).length + sharedBrowserTabCount();
   $('countProfiles').textContent = profs.length;
   $('countRecordings').textContent = visibleRecordings().length;
-  $('countNodes').textContent = nodes.length;
+  $('countNodes').textContent = nodes.length + extensionBrowserNodes.length;
   $('countEngines').textContent = availableEngines().length;
 }
 
@@ -2010,6 +2022,9 @@ function renderSessions() {
   $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery;
   $('agentsOnlyBtn').setAttribute('aria-pressed', String(agentsOnly));
   $('agentsOnlyBtn').innerHTML = `${icon('bot', 'sm')}Agents only`;
+  if (!list.length && !stale.length && sharedBrowserTabCount() && !sessQuery && !agentsOnly) {
+    grid.style.display = 'none'; return;
+  }
   if (!list.length && !stale.length) {
     grid.style.display = 'block';
     if (all.length) {
@@ -5557,5 +5572,6 @@ connectOverviewWs();
 })();
 setInterval(() => { if (ov) { renderProfiles(); renderRecordings(); } }, 60000);   // keep relative times fresh
 </script>
+<script src="/assets/pairing.js"></script>
 </body>
 </html>

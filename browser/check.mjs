@@ -49,10 +49,12 @@ function harness(firefox = false) {
       update: async (...args) => { calls.push(['update', ...args]); }, remove: async id => tabs.delete(id)},
     debugger: {attach: async target => { calls.push(['attach', target]); }, detach: async target => { calls.push(['detach', target]); },
       sendCommand: async (...args) => { calls.push(['cdp', ...args]); return {data: 'image'}; }, onDetach: event('detach')},
+    alarms: {clear: async () => false, create: async () => {}, onAlarm: event('alarm')},
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
-    storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({})}},
+    storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({}), remove: async () => {}},
+      session: {get: async () => ({}), set: async () => {}, remove: async () => {}}},
     scripting: {executeScript: async args => { calls.push(['script', args]); return [{result: 'snapshot'}]; }},
-    permissions: {onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
+    permissions: {contains: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
   };
   if (firefox) api.runtime.getBrowserInfo = async () => ({name: 'Firefox'});
   const context = vm.createContext({URL, console, chrome: api, WebSocket: Socket,

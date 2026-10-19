@@ -2,6 +2,7 @@
 if (typeof importScripts === 'function') importScripts('policy.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
+void api.storage.local.setAccessLevel?.({accessLevel: 'TRUSTED_CONTEXTS'});
 let socket = null;
 let registration = null;
 let shared = new Map();
@@ -9,13 +10,80 @@ const attached = new Set();
 let heartbeat = null;
 let expiryTimer = null;
 let lastAnswer = 0;
+let restoring = false;
 let status = 'Disconnected';
 let generation = 0;
 let busy = 0;
 let tabSerial = Promise.resolve();
 let nativePort = null;
 let nativeReady = false;
+let pendingConnection = null;
+let pendingTimer = null;
+let history = [];
+let historyWrites = Promise.resolve();
+const historyReady = api.storage.session.get('connectionHistory').then(saved => {
+  history = Array.isArray(saved.connectionHistory) ? saved.connectionHistory.slice(-12) : [];
+  if (history.at(-1)?.message === 'Connected') status = 'Background restarted — pair again to reconnect';
+});
+function record(message) {
+  history.push({at: Date.now(), message});
+  history = history.slice(-12);
+  historyWrites = historyWrites.then(() => api.storage.session.set({connectionHistory: history})).catch(() => {});
+}
+function permissionPattern(server) {
+  const u = new URL(server);
+  return `${u.protocol}//${u.hostname}/*`;
+}
+async function connectPrepared() {
+  if (!pendingConnection) return;
+  const candidate = pendingConnection;
+  if (!(await api.permissions.contains({origins: [permissionPattern(candidate.server)]}))) return;
+  if (pendingConnection !== candidate) return;
+  pendingConnection = null;
+  clearTimeout(pendingTimer);
+  try { await connect(candidate); }
+  catch { await stop('Connection could not start — check the daemon URL and permissions'); }
+}
 const nativePending = new Map();
+
+let lastDashboardRequest = 0;
+async function installDashboardBridge() {
+  const {server} = await api.storage.local.get('server');
+  if (!server) return;
+  let base;
+  try { base = NodePolicy.serverURL(server); } catch { return; }
+  if (!(await api.permissions.contains({origins: [permissionPattern(base)]}))) return;
+  const matches = [permissionPattern(base).replace('/*', '/'), permissionPattern(base).replace('/*', '/extension/*')];
+  const registered = await api.scripting.getRegisteredContentScripts({ids: ['daemon-pairing']});
+  if (JSON.stringify(registered[0]?.matches) !== JSON.stringify(matches)) {
+    if (registered.length) await api.scripting.unregisterContentScripts({ids: ['daemon-pairing']});
+    await api.scripting.registerContentScripts([{id: 'daemon-pairing', matches, js: ['dashboard-bridge.js'], runAt: 'document_idle', allFrames: false}]);
+  }
+  for (const tab of await api.tabs.query({url: permissionPattern(base)})) {
+    const url = new URL(tab.url);
+    if (url.origin === base && ['/', '/extension/'].includes(url.pathname)) {
+      try { await api.scripting.executeScript({target: {tabId: tab.id}, files: ['dashboard-bridge.js']}); } catch { /* Tab may have closed. */ }
+    }
+  }
+}
+async function dashboardMessage(message, sender) {
+  const {server} = await api.storage.local.get('server');
+  const url = new URL(sender.url);
+  if (sender.id !== api.runtime.id || sender.frameId !== 0 || !sender.tab ||
+      !server || url.origin !== NodePolicy.serverURL(server) || !['/', '/extension/'].includes(url.pathname)) {
+    throw new Error('Dashboard pairing is available only on the configured daemon.');
+  }
+  if (!(await api.permissions.contains({origins: [permissionPattern(server)]}))) throw new Error('Daemon site access was removed. Enable dashboard pairing again.');
+  if (message.action === 'discover') return {origin: api.runtime.getURL('').replace(/\/$/, ''), connected: !!registration, browser: chromium ? 'Chromium' : 'Firefox'};
+  if (message.action !== 'approve' || !/^[a-f0-9]{64}$/.test(message.code)) throw new Error('Invalid pairing request.');
+  if (registration) throw new Error('Already connected. Stop sharing in the extension before pairing again.');
+  if (Date.now() - lastDashboardRequest < 5000) throw new Error('A pairing request is already being shown.');
+  lastDashboardRequest = Date.now();
+  await api.storage.session.set({dashboardPairing: {server: url.origin, code: message.code, remember: message.remember === true, expires: Date.now() + 300000}});
+  await api.tabs.create({url: api.runtime.getURL('popup.html')});
+  record('Dashboard requested pairing — waiting for your approval in the extension');
+  return {pending: true};
+}
 
 function nativeRequest(message) {
   if (!nativeReady || !nativePort) return Promise.reject(new Error('Firefox companion is not ready.'));
@@ -82,7 +150,7 @@ async function syncNativeGrants() {
   if (!nativeReady) return;
   try {
     await nativeRequest({type: 'grants', grants: [...shared].map(([tab, grant]) => ({
-      tab, origin: grant.origin, control: grant.control, expires_at: registration.expires_at,
+      tab, origin: grant.origin, control: grant.control, expires_at: registration.expires_at || Math.floor(Date.now() / 1000) + 300,
     }))});
   } catch {
     await stop('Could not synchronize native tab permissions');
@@ -104,9 +172,13 @@ async function detach(tab) {
   try { await api.debugger.detach({tabId: tab}); } catch { /* Already closed/detached. */ }
 }
 
-async function stop(reason = 'Disconnected') {
+async function stop(reason = 'Disconnected', retry = false) {
   generation++;
+  const clearedAlarm = api.alarms.clear('node-reconnect');
   status = reason;
+  record(reason);
+  pendingConnection = null;
+  clearTimeout(pendingTimer);
   const old = socket;
   socket = null;
   registration = null;
@@ -115,8 +187,16 @@ async function stop(reason = 'Disconnected') {
   shared.clear();
   disconnectNative();
   if (old) old.close();
+  await clearedAlarm;
   await Promise.all([...attached].map(detach));
   await badge();
+  if (retry) {
+    const {rememberedNode} = await api.storage.local.get('rememberedNode');
+    if (rememberedNode && !rememberedNode.paused) {
+      status = 'Disconnected — reconnecting automatically within a minute'; record(status);
+      await api.alarms.create('node-reconnect', {delayInMinutes: 1});
+    }
+  }
 }
 
 function send(value) {
@@ -155,7 +235,7 @@ function safeTab(tab) {
 
 async function grantFor(command) {
   const grant = shared.get(command.tab);
-  if (!registration || Date.now() >= registration.expires_at * 1000 ||
+  if (!registration || (registration.expires_at !== 0 && Date.now() >= registration.expires_at * 1000) ||
       !grant || !NodePolicy.allowed(command, grant.control)) throw new Error('Tab grant does not permit this action.');
   const tab = await api.tabs.get(command.tab);
   if (!safeTab(tab) || new URL(tab.url).origin !== grant.origin || shared.get(command.tab) !== grant) {
@@ -293,59 +373,149 @@ async function handleCommand(command, connection, currentGeneration) {
   } finally { busy--; }
 }
 
-async function connect({server, code, name}) {
-  if (!/^[a-f0-9]{64}$/.test(code) || !name?.trim() || name.length > 80) throw new Error('Enter a pairing code and browser name.');
+async function connect({server, code = '', key = '', name, remember = false}) {
+  if ((!/^[a-f0-9]{64}$/.test(code) && !/^[a-f0-9]{64}$/.test(key)) || code && key || !name?.trim() || name.length > 80) throw new Error('Enter a pairing code and browser name.');
   server = NodePolicy.serverURL(server);
+  if (code) {
+    const {rememberedNode} = await api.storage.local.get('rememberedNode');
+    if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
+  }
   await stop();
   const myGeneration = generation;
-  status = 'Connecting';
+  status = 'Connecting to daemon';
+  record(status);
   const url = new URL('/api/extension/connect', server);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   const connection = new WebSocket(url);
   socket = connection;
-  const timeout = setTimeout(() => { if (socket === connection && !registration) void stop('Pairing timed out'); }, 10000);
+  const timeout = setTimeout(() => { if (socket === connection && !registration) void stop('Pairing timed out', true); }, 10000);
   connection.onopen = () => {
-    connection.send(JSON.stringify({code, name: name.trim(), browser: chromium ? 'chromium' : 'firefox'}));
-    code = '';
+    status = 'Socket connected — checking pairing code';
+    record(status);
+    connection.send(JSON.stringify({code, key, remember, name: name.trim(), browser: chromium ? 'chromium' : 'firefox'}));
+    code = ''; key = '';
   };
-  connection.onmessage = event => {
+  connection.onmessage = async event => {
     if (socket !== connection) return;
     if (event.data.length > 256 * 1024) { void stop('Invalid daemon message'); return; }
     let message;
     try { message = JSON.parse(event.data); } catch { void stop('Invalid daemon message'); return; }
     if (message.type === 'registered' && !registration) {
-      if (!Number.isSafeInteger(message.expires_at) || message.expires_at * 1000 <= Date.now() || message.expires_at * 1000 > Date.now() + 28800000) { void stop('Invalid grant'); return; }
+      if (!Number.isSafeInteger(message.expires_at) || message.expires_at !== 0 &&
+          (message.expires_at * 1000 <= Date.now() || message.expires_at * 1000 > Date.now() + 28800000)) { void stop('Invalid grant'); return; }
       clearTimeout(timeout);
-      registration = {...message, server};
+      const {remember_key: savedKey, ...grant} = message;
+      if (savedKey) {
+        if (!/^[a-f0-9]{64}$/.test(savedKey)) { void stop('Invalid remembered browser key'); return; }
+        await api.storage.local.set({rememberedNode: {server, name: name.trim(), key: savedKey,
+          origin: api.runtime.getURL('').replace(/\/$/, ''), paused: false}});
+        if (socket !== connection) {
+          const {rememberedNode} = await api.storage.local.get('rememberedNode');
+          if (rememberedNode?.key === savedKey) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
+          return;
+        }
+      }
+      registration = {...grant, server};
       status = 'Connected';
+      record(status);
+      void api.storage.session.remove('pairingDraft');
       lastAnswer = Date.now();
-      expiryTimer = setTimeout(() => void stop('Grant expired'), message.expires_at * 1000 - Date.now());
+      if (message.expires_at) expiryTimer = setTimeout(() => void stop('Grant expired'), message.expires_at * 1000 - Date.now());
       heartbeat = setInterval(() => {
-        if (Date.now() - lastAnswer > 50000) void stop('Daemon stopped answering');
-        else send({type: 'heartbeat'});
+        if (Date.now() - lastAnswer > 50000) void stop('Daemon stopped answering', true);
+        else { send({type: 'heartbeat'}); if (nativeReady && registration?.expires_at === 0) void syncNativeGrants(); }
       }, 20000);
       void badge();
+    } else if (message.type === 'authorization_revoked') {
+      await api.storage.local.remove('rememberedNode');
+      await stop('Browser authorization was revoked — pair again to reconnect');
     } else if (message.type === 'heartbeat') lastAnswer = Date.now();
     else if (message.type === 'command' && registration) void handleCommand(message, connection, myGeneration);
     else void stop('Invalid daemon message');
   };
-  connection.onclose = () => { clearTimeout(timeout); if (socket === connection) void stop('Disconnected — pair again to reconnect'); };
-  connection.onerror = () => { if (socket === connection) void stop('Connection failed — check URL and pairing code'); };
+  connection.onclose = event => { clearTimeout(timeout); if (socket === connection) void stop(registration
+    ? `Connection closed (${event.code}) — pair again to reconnect`
+    : `Pairing rejected or connection closed (${event.code}). Check that the code is unused, under five minutes old, and issued for this exact extension origin.`, true); };
+  connection.onerror = () => { if (socket === connection) void stop('WebSocket connection failed. Check daemon URL, network/TLS, and that /api/extension/connect bypasses the login proxy.', true); };
   // Remember only non-secret convenience settings. Grants/codes/tab IDs never
   // enter persistent storage, and are never restored after a browser restart.
   await api.storage.local.set({server, name});
 }
 
+async function restoreRemembered(force = false) {
+  if (restoring || registration || socket) return;
+  restoring = true;
+  try {
+    const {rememberedNode: saved} = await api.storage.local.get('rememberedNode');
+    if (!saved || saved.paused && !force) return;
+    if (saved.origin !== api.runtime.getURL('').replace(/\/$/, '') ||
+        !(await api.permissions.contains({origins: [permissionPattern(saved.server)]}))) {
+      status = 'Remembered browser needs daemon site permission — open setup';
+      record(status); return;
+    }
+    if (force) await api.storage.local.set({rememberedNode: {...saved, paused: false}});
+    await connect({server: saved.server, key: saved.key, name: saved.name});
+  } catch { await stop('Remembered browser could not reconnect', true); }
+  finally { restoring = false; }
+}
+
 async function localMessage(message, sender) {
   // Accept only our own extension UI, never a content script or web page.
+  if (message.type === 'dashboardPair') return dashboardMessage(message, sender);
   if (sender.id !== api.runtime.id ||
       sender.url !== api.runtime.getURL('popup.html')) throw new Error('Extension UI only.');
+  await historyReady;
+  if (message.type === 'configureDashboard') {
+    const server = NodePolicy.serverURL(message.server);
+    await api.storage.local.set({server, name: message.name || ''});
+    await installDashboardBridge();
+    return {ok: true};
+  }
+  if (message.type === 'approveDashboard') {
+    const {dashboardPairing: pending} = await api.storage.session.get('dashboardPairing');
+    if (!pending || pending.expires <= Date.now()) throw new Error('Dashboard request expired. Click Pair browser extension again.');
+    const {server} = await api.storage.local.get('server');
+    if (server !== pending.server || !(await api.permissions.contains({origins: [permissionPattern(pending.server)]}))) throw new Error('Daemon configuration or permission changed. Request pairing again.');
+    await api.storage.session.remove('dashboardPairing');
+    await connect({server: pending.server, code: pending.code, name: message.name, remember: pending.remember && message.remember === true});
+    return {ok: true};
+  }
+  if (message.type === 'rejectDashboard') {
+    await api.storage.session.remove('dashboardPairing');
+    record('Dashboard pairing declined');
+    return {ok: true};
+  }
+  if (message.type === 'prepareConnect') {
+    const server = NodePolicy.serverURL(message.server);
+    if (!/^[a-f0-9]{64}$/.test(message.code) || !message.name?.trim() || message.name.length > 80) throw new Error('Enter a 64-character pairing code and browser name.');
+    await api.storage.local.set({server, name: message.name});
+    await stop('Waiting for daemon site permission');
+    pendingConnection = {server, code: message.code, name: message.name, remember: message.remember === true};
+    pendingTimer = setTimeout(() => { if (pendingConnection) void stop('Daemon permission was not granted — connect again when ready'); }, 60000);
+    await connectPrepared();
+    return {ok: true};
+  }
+  if (message.type === 'finishConnect') { await connectPrepared(); return {ok: true}; }
   if (message.type === 'state') {
     const tabs = (await api.tabs.query({})).filter(safeTab).map(t => ({id: t.id, title: t.title || '', url: t.url, control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
-    return {status, registration, tabs, saved: await api.storage.local.get(['server', 'name']), chromium, nativeReady};
+    const {dashboardPairing} = await api.storage.session.get('dashboardPairing');
+    const {rememberedNode} = await api.storage.local.get('rememberedNode');
+    return {rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), chromium, nativeReady};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
-  if (message.type === 'stop') { await stop(); return {ok: true}; }
+  if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
+  if (message.type === 'resumeRemembered') { await restoreRemembered(true); return {ok: true}; }
+  if (message.type === 'forgetRemembered') {
+    if (socket?.readyState !== WebSocket.OPEN) throw new Error('Reconnect first, or revoke this browser from the dashboard.');
+    send({type: 'forget'});
+    await api.storage.local.remove('rememberedNode');
+    await stop('Remembered browser forgotten'); return {ok: true};
+  }
+  if (message.type === 'stop') {
+    const {rememberedNode} = await api.storage.local.get('rememberedNode');
+    if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
+    await stop('Sharing stopped — automatic reconnect paused'); return {ok: true};
+  }
   if (message.type === 'native') {
     if (!registration) throw new Error('Pair this browser first.');
     if (message.enable) { await enableNative(); if (registration) await syncNativeGrants(); }
@@ -353,7 +523,7 @@ async function localMessage(message, sender) {
     return {ok: true};
   }
   if (message.type === 'share') {
-    if (!registration || Date.now() >= registration.expires_at * 1000) throw new Error('Pair first.');
+    if (!registration || (registration.expires_at !== 0 && Date.now() >= registration.expires_at * 1000)) throw new Error('Pair first.');
     if (!Array.isArray(message.tabs) || message.tabs.length > 128) throw new Error('Select at most 128 tabs.');
     const next = new Map();
     for (const id of new Set(message.tabs)) {
@@ -394,6 +564,17 @@ if (chromium) api.debugger.onDetach.addListener(source => {
   shared.delete(source.tabId);
   publishSafely();
 });
+api.permissions.onAdded.addListener(() => { void historyReady.then(async () => { await connectPrepared(); await installDashboardBridge(); }).catch(() => stop('Could not start connection after permission grant')); });
 api.permissions.onRemoved.addListener(() => { void stop('Permissions removed'); });
-api.commands.onCommand.addListener(command => { if (command === 'stop-sharing') void stop('Sharing stopped by keyboard shortcut'); });
+api.commands.onCommand.addListener(command => { if (command === 'stop-sharing') {
+  void api.storage.local.get('rememberedNode').then(async ({rememberedNode}) => {
+    if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
+    await stop('Sharing stopped by keyboard shortcut — automatic reconnect paused');
+  });
+} });
 void badge();
+
+void historyReady.then(installDashboardBridge).catch(() => record('Dashboard integration unavailable — open extension setup to grant site access'));
+
+api.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'node-reconnect') void historyReady.then(() => restoreRemembered()); });
+void historyReady.then(() => restoreRemembered());

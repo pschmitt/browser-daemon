@@ -8,9 +8,48 @@ companion.
 
 The build and release layout follows the rbw fork: shared Manifest V3 source,
 engine-specific manifests, a Python build without npm dependencies, the version
-from `Cargo.toml`, and AMO/CRX signing in CI.
+from `browser/version.json`, and AMO/CRX signing in CI.
 
-## Install and pair
+## Pair from the dashboard
+
+Enter the daemon URL in the extension and click **Enable dashboard pairing**
+once to grant access to that site. Then click **Pair browser extension** on the
+signed-in HTTPS dashboard. An extension tab opens for your local approval;
+choose a browser name and click **Approve connection**, then select tabs and
+click **Apply**. No terminal command or code copying is needed.
+
+Only the configured daemon gets a small content-script pairing bridge. It
+accepts discovery and pairing requests from its top-level dashboard pages,
+never tab-control commands. Each request still requires approval in the
+extension's own UI. Codes stay in memory, expire in five minutes, and are bound
+to this installation's extension origin. Dashboard pairing requires a valid
+sign-in cookie, the daemon's HTTPS Origin, and a same-origin browser fetch;
+bearer viewer tokens alone cannot pair.
+
+URL/name drafts save immediately. Code and tab-selection drafts and the last
+12 connection events live only in `storage.session`, across popup closes but
+not browser restarts; code drafts expire after five minutes. Active grants are
+not restored. **Open setup in a tab** gives a stable page for permission prompts.
+
+## Remembered browsers and key expiry
+
+Select **Remember this browser and reconnect after restart (no key expiry)** on
+the dashboard and approve that choice in the extension. The daemon stores a
+hash of a random browser-only key in `browser-keys.json` (mode 0600). The key
+itself stays in the extension's local storage; it is bound to the extension
+origin and browser type and can only register that browser, never act as a peer
+or control another node. Its stable node entry remains visible while offline.
+
+The extension reconnects on startup or within a minute after a network failure.
+Tab grants are not persisted or automatically restored: choose tabs again after
+a restart/reconnection. **Stop sharing** and the stop shortcut pause automatic
+reconnect; **Reconnect remembered browser** resumes it. **Forget browser** while
+connected or **Forget browser and revoke key** on the dashboard revokes the key.
+The dashboard can revoke offline remembered browsers too. Pairing codes still
+expire in five minutes. Manual pairing uses `extension pair --remember`; a
+memory-only connection with no time limit uses `--lifetime-secs 0` instead.
+
+## Install and pair manually
 
 1. Build with `python3 browser/build.py` (or download the CI artifacts).
    Chromium: load `browser/dist/chromium` unpacked at `chrome://extensions`.
@@ -47,8 +86,9 @@ it again to continue. New tabs are not automatically shared.
 
 **Stop sharing**, **Ctrl+Shift+Period**, expiry, socket loss, browser restart,
 remote disconnect, and Chromium's **Cancel debugging** bar all revoke access.
-Reconnecting requires another pairing code. Grants and codes are never restored
-from persistent storage.
+Temporary browsers require another pairing code or dashboard approval to reconnect.
+Remembered browsers use their revocable key. Tab grants and pairing codes are
+never restored from persistent storage.
 
 ## Firefox trusted input
 
@@ -132,11 +172,12 @@ API: `POST /api/extension/pair`, `GET /api/extension/nodes`,
 `DELETE /api/extension/nodes/<browser>`, and
 `POST /api/extension/nodes/<browser>/command {tab, action, params}`.
 The existing peer proxy forwards listing, commands and revocation, but **never
-pairing**. Pair directly with the hosting daemon using its cluster credential.
+pairing**. Pair directly with the hosting daemon using the dashboard or its cluster credential.
 
 ## Security boundary
 
-- Pairing needs the cluster secret, not a viewer cookie. The extension receives
+- Pairing needs the CLI secret or a valid dashboard cookie with a same-origin
+  HTTPS browser fetch. Bare viewer bearer tokens are refused. The extension receives
   only an origin-bound single-use code, sent in its first WebSocket message,
   never a URL, cookie, or cluster-wide credential. The daemon stores a digest of
   unused codes. Host validation and existing origin protections remain intact;
@@ -159,10 +200,11 @@ pairing**. Pair directly with the hosting daemon using its cluster credential.
 - Limits: 32 extension sockets (including pending handshakes), 128 shared tabs,
   bounded command queues, a five-second authentication deadline, heartbeat
   liveness checks, and an eight-MiB response limit. Registrations and grants are
-  memory-only. Sensitive responses have `Cache-Control: no-store`.
-- The extension has no content-script bridge, externally-connectable interface,
+  memory-only; remembered identities and key digests persist. Sensitive responses have `Cache-Control: no-store`.
+- The extension has no externally-connectable interface,
   remote-loaded code, analytics, or background tab discovery sent to a server.
-  Only server URL and display name are saved locally. Screenshots and commands
+  Server URL, display name and preferences are saved persistently; a browser key
+  is stored only when you explicitly choose to remember the browser. Screenshots and commands
   are not recorded by this feature. Agent tool arguments/results may be logged:
   do not type credentials through these tools.
 

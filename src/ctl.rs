@@ -680,9 +680,12 @@ pub enum ExtensionCmd {
     Pair {
         #[arg(long)]
         origin: String,
-        /// Seconds the browser may remain connected (60–28800).
+        /// Seconds the browser may remain connected (60–28800; 0 disables expiry).
         #[arg(long, default_value_t = 3600)]
         lifetime_secs: u64,
+        /// Remember this browser without key expiry, allowing reconnection after restart.
+        #[arg(long)]
+        remember: bool,
     },
     /// List connected browsers and explicitly shared tabs on this daemon.
     List,
@@ -704,9 +707,10 @@ pub async fn extension(args: ExtensionArgs) -> R<()> {
         ExtensionCmd::Pair {
             origin,
             lifetime_secs,
+            remember,
         } => c
             .req(Method::POST, "/api/extension/pair")
-            .json(&json!({"origin": origin, "lifetime_secs": lifetime_secs})),
+            .json(&json!({"origin": origin, "lifetime_secs": lifetime_secs, "remember": remember})),
         ExtensionCmd::List => c.req(Method::GET, "/api/extension/nodes"),
         ExtensionCmd::Revoke { id } => c.req(Method::DELETE, &format!("/api/extension/nodes/{id}")),
         ExtensionCmd::Command {

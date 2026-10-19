@@ -617,6 +617,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         relay::deny_url(url);
     }
     let auth = Arc::new(auth::Auth::new(cluster_secret.clone(), hosts));
+    let extensions = Arc::new(extension::Broker::load(
+        &config.state_dir().join("browser-keys.json"),
+    ));
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -652,7 +655,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dir_sizes: Arc::default(),
         overview: Arc::default(),
         downloads: Arc::default(),
-        extensions: Arc::new(extension::Broker::new()),
+        extensions,
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -821,6 +824,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/auth/token", get(api_auth_token))
         .route("/extension/", get(extension::page))
         .route("/assets/extension.js", get(extension::javascript))
+        .route("/assets/pairing.js", get(extension::pairing_javascript))
         .route("/assets/extension.css", get(extension::stylesheet))
         .route("/api/extension/pair", post(extension::pair))
         .route("/api/extension/connect", get(extension::connect))

@@ -6,6 +6,7 @@ let imaging = false;
 let polling = false;
 let nodeReports = [];
 let wheelBusy = false;
+let initialSelection = true;
 
 async function request(method, path, body) {
   const response = await fetch(path, {method, headers: {'Content-Type': 'application/json'},
@@ -34,14 +35,14 @@ async function refresh() {
     }));
     nodeReports = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
     const unavailable = results.filter(r => r.status === 'rejected').length;
-    $('status').textContent = `${nodeReports.length} temporary browser(s) connected.${unavailable ? ` ${unavailable} daemon(s) could not report extension support.` : ''}`;
+    $('status').textContent = `${nodeReports.filter(n => n.online !== false).length} browser(s) connected; ${nodeReports.filter(n => n.online === false).length} remembered offline.${unavailable ? ` ${unavailable} daemon(s) could not report extension support.` : ''}`;
     const fragment = document.createDocumentFragment();
     for (const node of nodeReports) {
       const section = document.createElement('section');
       const heading = document.createElement('h2'); heading.textContent = node.name;
       const detail = document.createElement('p');
-      detail.textContent = `${node.browser}${node.native_control ? ' + native control' : ''} via ${node.daemon || mesh.local_node.name} · expires ${new Date(node.expires_at * 1000).toLocaleTimeString()} · ${node.tabs.length} shared tab(s)`;
-      section.append(heading, detail, button('Disconnect browser', async () => {
+      detail.textContent = `${node.browser}${node.native_control ? ' + native control' : ''} via ${node.daemon || mesh.local_node.name} · ${node.online === false ? 'offline' : node.expires_at ? `expires ${new Date(node.expires_at * 1000).toLocaleTimeString()}` : 'no time limit'} · ${node.tabs.length} shared tab(s)`;
+      section.append(heading, detail, button(node.remembered ? 'Forget browser and revoke key' : 'Disconnect browser', async () => {
         await request('DELETE', `${base(node.daemon)}/extension/nodes/${node.id}`);
         if (selected?.node.id === node.id) leave();
         await refresh();
@@ -56,6 +57,12 @@ async function refresh() {
       section.append(list); fragment.append(section);
     }
     $('nodes').replaceChildren(fragment);
+    if (initialSelection && !selected) {
+      const query = new URLSearchParams(location.search);
+      const node = nodeReports.find(n => n.id === query.get('browser') && n.daemon === (query.get('daemon') || ''));
+      const tab = node?.tabs.find(t => String(t.id) === query.get('tab'));
+      if (tab) { initialSelection = false; await open(node, tab); }
+    }
     if (selected) {
       const tab = nodeReports.find(n => n.id === selected.node.id && n.daemon === selected.node.daemon)?.tabs.find(t => t.id === selected.tab.id);
       if (!tab) { leave(); $('status').textContent = 'The browser disconnected or stopped sharing this tab.'; }

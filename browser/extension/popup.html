@@ -4,10 +4,22 @@
 <title>Browser node</title><link rel="stylesheet" href="popup.css">
 <body>
 <header><img src="icon.png" alt="" width="36" height="36"><div><h1>Browser node</h1><p id="status" role="status">Disconnected</p></div><button id="stop" class="danger">Stop sharing</button></header>
+<p><button id="openSettings" type="button">Open setup in a tab</button> <a id="dashboard" hidden target="_blank" rel="noreferrer">View in daemon</a></p>
 <p id="error" role="alert" hidden></p>
+<section><p id="diagnosticStatus" role="status"></p><details><summary>Connection history</summary><ol id="connectionHistory"></ol></details></section>
 <section id="companion" hidden><h2>Firefox native control</h2>
   <p>For trusted pointer and keyboard input, install the companion with <code>python3 browser/install.py</code> and restart Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette</code>. This enables a powerful local automation interface; keep it on loopback.</p>
   <button id="native" type="button">Enable installed companion</button><p id="nativeStatus" role="status"></p>
+</section>
+<section id="remembered" hidden><p id="rememberedStatus"></p>
+  <button id="resumeRemembered" type="button">Reconnect remembered browser</button>
+  <button id="forgetRemembered" class="danger" type="button">Forget browser</button>
+</section>
+<section id="approval" hidden>
+  <h2>Approve dashboard pairing</h2><p id="approvalServer"></p>
+  <p>This connects this browser only. You choose shared tabs and control permissions afterward.</p>
+  <button id="approvePairing" type="button">Approve connection</button>
+  <button id="rejectPairing" type="button">Decline</button>
 </section>
 <section id="setup">
   <h2>Pair this browser</h2>
@@ -17,7 +29,11 @@
   <form id="connect">
     <label>Daemon URL<input id="server" type="url" placeholder="https://browser.example.org" required></label>
     <label>Browser name<input id="name" maxlength="80" placeholder="My laptop" required></label>
+    <button id="enableDashboard" type="button">Enable dashboard pairing</button>
+    <p class="hint">Grant access to your daemon once, then use its Pair browser extension button.</p>
+    <label class="check"><input id="rememberKey" type="checkbox">Remember this browser and reconnect after restart (no key expiry)</label>
     <label>Pairing code<input id="code" type="password" autocomplete="off" spellcheck="false" required pattern="[a-f0-9]{64}"></label>
+    <p class="hint">URL and name are saved as you type. The code draft stays in browser memory for up to five minutes.</p>
     <button type="submit">Connect temporarily</button>
   </form>
 </section>
@@ -29,9 +45,9 @@
     <label class="check"><input id="control" type="checkbox">Allow remote control of selected tabs</label>
     <p class="hint">Control lets trusted daemon clients act as you on these sites, including reading page data and using signed-in accounts. Chromium also permits page JavaScript through CDP. View only shares screenshots and page content.</p>
     <p id="browserNote" class="hint"></p>
-    <button type="submit">Apply tab sharing</button>
+    <button type="submit">Apply</button><p id="sharingFeedback" role="status"></p>
   </form>
 </section>
-<footer>Sharing ends on disconnect, expiry or browser restart. Shortcut: Ctrl+Shift+Period.</footer>
+<footer>Tab sharing ends on disconnect, expiry or browser restart. A remembered browser reconnects with no tabs shared. Shortcut: Ctrl+Shift+Period.</footer>
 <script src="policy.js"></script><script src="popup.js"></script>
 </body></html>

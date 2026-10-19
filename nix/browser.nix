@@ -1,6 +1,6 @@
 { pkgs }:
 let
-  version = (builtins.fromTOML (builtins.readFile ../Cargo.toml)).package.version;
+  inherit (builtins.fromJSON (builtins.readFile ../browser/version.json)) version;
   addonId = "browser-daemon-node@pschmitt.dev";
   metadata = builtins.fromJSON (builtins.readFile ../browser/packages/metadata.json);
   hostName = "dev.pschmitt.browser_daemon";

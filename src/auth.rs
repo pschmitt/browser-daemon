@@ -97,6 +97,31 @@ impl Auth {
         mac.verify_slice(&tag).is_ok() && expires_at > now
     }
 
+    /// Dashboard pairing requires its HTTPS origin and a browser-controlled
+    /// same-origin fetch with a valid sign-in cookie. Bearer/viewer tokens on
+    /// their own cannot mint extension codes. CLI pairing uses the secret.
+    pub fn can_pair(&self, headers: &HeaderMap, now: u64) -> bool {
+        if self.credential(headers, None, now) == Some(Credential::Secret) {
+            return true;
+        }
+        let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+        let same_origin =
+            headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) == Some("same-origin");
+        let trusted_origin =
+            origin.is_some_and(|o| o.starts_with("https://") && self.hosts.allows_origin(o));
+        same_origin
+            && trusted_origin
+            && headers.get_all(header::COOKIE).iter().any(|cookie| {
+                cookie.to_str().is_ok_and(|value| {
+                    value.split(';').any(|part| {
+                        part.trim().split_once('=').is_some_and(|(name, value)| {
+                            name == COOKIE && self.verify_token(value, now)
+                        })
+                    })
+                })
+            })
+    }
+
     /// Whether `candidate` is the cluster secret, in constant time.
     pub fn is_secret(&self, candidate: &str) -> bool {
         let (Some(secret), Some(key)) = (self.secret.as_deref(), self.key.as_deref()) else {
@@ -189,7 +214,10 @@ impl Auth {
                 "Unauthorized: invalid or missing credentials",
             ));
         };
-        if cred == Credential::Token && secret_only(req.method, req.path) {
+        let dashboard_pair = req.method == Method::POST
+            && req.path == "/api/extension/pair"
+            && self.can_pair(req.headers, now);
+        if cred == Credential::Token && secret_only(req.method, req.path) && !dashboard_pair {
             return Err(Refusal::new(
                 StatusCode::FORBIDDEN,
                 "This needs the cluster secret, not a viewer token",

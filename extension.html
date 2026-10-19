@@ -7,6 +7,8 @@
 <main>
   <p><a href="/">← Dashboard</a></p><h1>Temporary browsers</h1>
   <p>Browsers connected through the extension. Only tabs explicitly shared by their owner are available. Control requires their separate permission.</p>
+  <p><button id="pairBrowser" class="btn primary" type="button">Pair browser extension</button> <span id="pairBrowserStatus" role="status"></span></p>
+  <label><input id="rememberBrowser" type="checkbox"> Remember this browser and reconnect after restart (no key expiry)</label>
   <p id="status" role="status">Loading…</p><div id="nodes"></div>
   <section id="viewer" hidden>
     <h2 id="title"></h2><p id="access"></p>
@@ -18,4 +20,5 @@
   </section>
 </main>
 <script src="/assets/extension.js"></script>
+<script src="/assets/pairing.js"></script>
 </body></html>

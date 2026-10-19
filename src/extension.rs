@@ -13,6 +13,9 @@ use futures_util::SinkExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path as FilePath, PathBuf};
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use uuid::Uuid;
 
@@ -28,6 +31,8 @@ pub struct Broker {
     nodes: Mutex<HashMap<Uuid, Arc<Node>>>,
     // Includes sockets still waiting for their first (authentication) message.
     slots: Arc<Semaphore>,
+    credentials: Mutex<Vec<Remembered>>,
+    credential_path: Option<PathBuf>,
 }
 
 impl Broker {
@@ -36,19 +41,83 @@ impl Broker {
             pairs: Mutex::default(),
             nodes: Mutex::default(),
             slots: Arc::new(Semaphore::new(MAX_NODES)),
+            credentials: Mutex::default(),
+            credential_path: None,
         }
     }
+    pub fn load(path: &FilePath) -> Self {
+        let mut broker = Self::new();
+        let records = match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice::<Vec<Remembered>>(&bytes)
+                .expect("Invalid remembered browser authorization store"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(_) => panic!("Cannot read remembered browser authorization store"),
+        };
+        *broker.credentials.get_mut().unwrap() = records;
+        broker.credential_path = Some(path.to_path_buf());
+        broker
+    }
+
+    fn save_credentials(&self, records: &[Remembered]) -> Result<(), ()> {
+        let Some(path) = &self.credential_path else {
+            return Err(());
+        };
+        let parent = path.parent().ok_or(())?;
+        std::fs::create_dir_all(parent).map_err(|_| ())?;
+        let temporary = parent.join(format!(".browser-keys-{}", Uuid::new_v4()));
+        let result = (|| {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temporary)
+                .map_err(|_| ())?;
+            file.write_all(&serde_json::to_vec(records).map_err(|_| ())?)
+                .map_err(|_| ())?;
+            file.sync_all().map_err(|_| ())?;
+            std::fs::rename(&temporary, path).map_err(|_| ())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(temporary);
+        }
+        result
+    }
+
+    fn forget(&self, id: Uuid) -> Result<(), ()> {
+        let mut records = self.credentials.lock().unwrap();
+        if records.iter().any(|r| r.id == id) {
+            let remaining: Vec<_> = records.iter().filter(|r| r.id != id).cloned().collect();
+            self.save_credentials(&remaining)?;
+            *records = remaining;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Remembered {
+    id: Uuid,
+    origin: String,
+    name: String,
+    browser: String,
+    // Only a SHA-256 digest reaches disk; the random credential stays client-side.
+    key_digest: String,
+}
+
+fn key_digest(key: &str) -> String {
+    digest(key).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 struct Pair {
     origin: String,
     deadline: Instant,
     lifetime: Duration,
+    remember: bool,
 }
 
 struct Node {
     info: Mutex<NodeInfo>,
-    deadline: Instant,
+    deadline: Option<Instant>,
     outbound: mpsc::Sender<Value>,
     pending: Mutex<HashMap<Uuid, oneshot::Sender<Value>>>,
     stop: tokio::sync::Notify,
@@ -70,6 +139,8 @@ pub struct NodeInfo {
     pub browser: String,
     pub native_control: bool,
     pub expires_at: u64,
+    pub remembered: bool,
+    pub online: bool,
     pub tabs: Vec<Tab>,
 }
 
@@ -79,6 +150,8 @@ pub struct PairRequest {
     pub origin: String,
     #[serde(default = "default_lifetime")]
     pub lifetime_secs: u64,
+    #[serde(default)]
+    pub remember: bool,
 }
 
 fn default_lifetime() -> u64 {
@@ -118,17 +191,20 @@ pub async fn pair(
     headers: HeaderMap,
     Json(body): Json<PairRequest>,
 ) -> Result<Response, ApiError> {
-    // Deliberately unavailable even on a daemon configured without authentication.
-    if state.auth.credential(&headers, None, auth::now()) != Some(auth::Credential::Secret) {
+    // CLI secret, or an authenticated same-origin HTTPS dashboard request.
+    // An open daemon and a viewer bearer token alone cannot pair.
+    if !state.auth.can_pair(&headers, auth::now()) {
         return Err(failure(
             StatusCode::FORBIDDEN,
-            "Pairing needs the cluster secret",
+            "Pairing needs the CLI secret or a signed-in HTTPS dashboard",
         ));
     }
-    if !extension_origin(&body.origin) || !(60..=28800).contains(&body.lifetime_secs) {
+    if !extension_origin(&body.origin)
+        || (body.lifetime_secs != 0 && !(60..=28800).contains(&body.lifetime_secs))
+    {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "Expected an exact extension origin and a lifetime of 60–28800 seconds",
+            "Expected an exact extension origin and a lifetime of 0 (no time limit) or 60–28800 seconds",
         ));
     }
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -145,13 +221,14 @@ pub async fn pair(
         Pair {
             origin: body.origin,
             deadline: Instant::now() + Duration::from_secs(300),
-            lifetime: Duration::from_secs(body.lifetime_secs),
+            lifetime: Duration::from_secs(if body.remember { 0 } else { body.lifetime_secs }),
+            remember: body.remember,
         },
     );
     Ok((
         [("cache-control", "no-store")],
         Json(json!({
-            "code": token, "expires_in_secs": 300, "lifetime_secs": body.lifetime_secs,
+            "code": token, "expires_in_secs": 300, "lifetime_secs": if body.remember { 0 } else { body.lifetime_secs }, "remember": body.remember,
         })),
     )
         .into_response())
@@ -159,15 +236,29 @@ pub async fn pair(
 
 pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     state.check_auth(&headers)?;
-    let nodes: Vec<NodeInfo> = state
+    let mut nodes: Vec<NodeInfo> = state
         .extensions
         .nodes
         .lock()
         .unwrap()
         .values()
-        .filter(|n| n.deadline > Instant::now())
+        .filter(|n| n.deadline.is_none_or(|d| d > Instant::now()))
         .map(|n| n.info.lock().unwrap().clone())
         .collect();
+    for record in state.extensions.credentials.lock().unwrap().iter() {
+        if !nodes.iter().any(|n| n.id == record.id) {
+            nodes.push(NodeInfo {
+                id: record.id,
+                name: record.name.clone(),
+                browser: record.browser.clone(),
+                native_control: false,
+                expires_at: 0,
+                remembered: true,
+                online: false,
+                tabs: vec![],
+            });
+        }
+    }
     Ok((
         [("cache-control", "no-store")],
         Json(json!({"nodes": nodes})),
@@ -181,6 +272,12 @@ pub async fn revoke(
     Path(id): Path<Uuid>,
 ) -> Result<Json<Value>, ApiError> {
     state.check_auth(&headers)?;
+    state.extensions.forget(id).map_err(|_| {
+        failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not revoke remembered browser authorization",
+        )
+    })?;
     if let Some(node) = state.extensions.nodes.lock().unwrap().remove(&id) {
         node.stop.notify_one();
         node.pending.lock().unwrap().clear();
@@ -275,7 +372,7 @@ pub async fn command(
         .get(&id)
         .cloned()
         .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Browser disconnected"))?;
-    if node.deadline <= Instant::now() {
+    if node.deadline.is_some_and(|d| d <= Instant::now()) {
         return Err(failure(StatusCode::GONE, "Browser grant expired"));
     }
     let control = node
@@ -324,7 +421,8 @@ pub async fn command(
         .map_err(|_| failure(StatusCode::GATEWAY_TIMEOUT, "Browser did not answer"))?
         .map_err(|_| failure(StatusCode::GONE, "Browser disconnected"))?;
     // Revocation/expiry wins even when a response was already being delivered.
-    if node.deadline <= Instant::now() || !state.extensions.nodes.lock().unwrap().contains_key(&id)
+    if node.deadline.is_some_and(|d| d <= Instant::now())
+        || !state.extensions.nodes.lock().unwrap().contains_key(&id)
     {
         return Err(failure(StatusCode::GONE, "Browser grant ended"));
     }
@@ -341,7 +439,12 @@ pub async fn command(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Hello {
+    #[serde(default)]
     code: String,
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    remember: bool,
     name: String,
     browser: String,
 }
@@ -406,24 +509,79 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
         return Err(());
     }
     let hello: Hello = serde_json::from_str(&text).map_err(|_| ())?;
-    if hello.code.len() != 64
+    if (hello.code.len() != 64 && hello.key.len() != 64)
+        || (!hello.code.is_empty() && !hello.key.is_empty())
         || hello.name.is_empty()
         || hello.name.len() > 80
         || !matches!(hello.browser.as_str(), "chromium" | "firefox")
     {
         return Err(());
     }
-    let pair = {
-        let mut pairs = broker.pairs.lock().unwrap();
-        let key = digest(&hello.code);
-        let pair = pairs.get(&key).ok_or(())?;
-        if pair.deadline <= Instant::now() || pair.origin != origin {
-            return Err(());
+    let mut remembered = false;
+    let mut new_key = None;
+    let (id, lifetime) = if !hello.key.is_empty() {
+        let record = {
+            let records = broker.credentials.lock().unwrap();
+            records
+                .iter()
+                .find(|r| {
+                    r.origin == origin
+                        && r.browser == hello.browser
+                        && r.key_digest == key_digest(&hello.key)
+                })
+                .cloned()
+        };
+        // A failover URL can temporarily reach another daemon. An unknown key
+        // must be refused without telling the client to erase its authorization
+        // for the original host. Explicit revocation of a live node sends the
+        // separate authorization_revoked message below.
+        let Some(record) = record else { return Err(()) };
+        remembered = true;
+        (record.id, Duration::ZERO)
+    } else {
+        let pair = {
+            let mut pairs = broker.pairs.lock().unwrap();
+            let key = digest(&hello.code);
+            let pair = pairs.get(&key).ok_or(())?;
+            if pair.deadline <= Instant::now() || pair.origin != origin {
+                return Err(());
+            }
+            pairs.remove(&key).ok_or(())?
+        };
+        let id = Uuid::new_v4();
+        if pair.remember && hello.remember {
+            let key = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let mut records = broker.credentials.lock().unwrap();
+            if records.len() >= 128 {
+                return Err(());
+            }
+            let mut updated = records.clone();
+            updated.push(Remembered {
+                id,
+                origin: origin.to_string(),
+                name: hello.name.clone(),
+                browser: hello.browser.clone(),
+                key_digest: key_digest(&key),
+            });
+            broker.save_credentials(&updated)?;
+            *records = updated;
+            remembered = true;
+            new_key = Some(key);
         }
-        pairs.remove(&key).ok_or(())?
+        (
+            id,
+            if pair.remember && !hello.remember {
+                Duration::from_secs(3600)
+            } else {
+                pair.lifetime
+            },
+        )
     };
-    let id = Uuid::new_v4();
-    let expires_at = auth::now() + pair.lifetime.as_secs();
+    let expires_at = if lifetime.is_zero() {
+        0
+    } else {
+        auth::now() + lifetime.as_secs()
+    };
     let (outbound, mut commands) = mpsc::channel(MAX_PENDING);
     let node = Arc::new(Node {
         info: Mutex::new(NodeInfo {
@@ -432,36 +590,47 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
             browser: hello.browser,
             native_control: false,
             expires_at,
+            remembered,
+            online: true,
             tabs: vec![],
         }),
-        deadline: Instant::now() + pair.lifetime,
+        deadline: (!lifetime.is_zero()).then(|| Instant::now() + lifetime),
         outbound,
         pending: Mutex::default(),
         stop: tokio::sync::Notify::new(),
     });
-    broker.nodes.lock().unwrap().insert(id, node.clone());
+    if let Some(previous) = broker.nodes.lock().unwrap().insert(id, node.clone()) {
+        previous.stop.notify_one();
+        previous.pending.lock().unwrap().clear();
+    }
     // All exits, including a task cancellation, remove the registration.
-    struct Registration(Arc<Broker>, Uuid);
+    struct Registration(Arc<Broker>, Uuid, Arc<Node>);
     impl Drop for Registration {
         fn drop(&mut self) {
-            if let Some(n) = self.0.nodes.lock().unwrap().remove(&self.1) {
-                n.pending.lock().unwrap().clear();
+            let mut nodes = self.0.nodes.lock().unwrap();
+            if nodes.get(&self.1).is_some_and(|n| Arc::ptr_eq(n, &self.2)) {
+                if let Some(n) = nodes.remove(&self.1) {
+                    n.pending.lock().unwrap().clear();
+                }
             }
         }
     }
-    let _registration = Registration(broker.clone(), id);
+    let _registration = Registration(broker.clone(), id, node.clone());
     send(
         ws,
-        json!({"type": "registered", "id": id, "expires_at": expires_at}),
+        json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key}),
     )
     .await?;
     let mut last_seen = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     loop {
         tokio::select! {
-            _ = node.stop.notified() => break,
+            _ = node.stop.notified() => {
+                send(ws, json!({"type": "authorization_revoked"})).await?;
+                break;
+            },
             _ = tick.tick() => {
-                if Instant::now() >= node.deadline || last_seen.elapsed() > Duration::from_secs(50) { break; }
+                if node.deadline.is_some_and(|d| Instant::now() >= d) || last_seen.elapsed() > Duration::from_secs(50) { break; }
             }
             Some(command) = commands.recv() => send(ws, command).await?,
             incoming = ws.recv() => {
@@ -471,6 +640,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                         let value: Value = serde_json::from_str(&text).map_err(|_| ())?;
                         last_seen = Instant::now();
                         match value["type"].as_str() {
+                            Some("forget") => { broker.forget(id)?; break; }
                             Some("heartbeat") => send(ws, json!({"type": "heartbeat"})).await?,
                             Some("tabs") => {
                                 let tabs: Vec<Tab> = serde_json::from_value(value["tabs"].clone()).map_err(|_| ())?;
@@ -517,6 +687,16 @@ pub async fn javascript() -> impl IntoResponse {
     )
 }
 
+pub async fn pairing_javascript() -> impl IntoResponse {
+    (
+        [
+            ("content-type", "text/javascript"),
+            ("cache-control", "no-cache"),
+        ],
+        include_str!("../assets/pairing.js"),
+    )
+}
+
 pub async fn stylesheet() -> impl IntoResponse {
     (
         [("content-type", "text/css"), ("cache-control", "no-cache")],
@@ -555,6 +735,7 @@ mod tests {
                 origin: origin.into(),
                 deadline: Instant::now() + Duration::from_secs(60),
                 lifetime: Duration::from_secs(600),
+                remember: false,
             },
         );
         let handler_broker = broker.clone();
