@@ -11,11 +11,27 @@ const attaching = new Map();
 // Live views (daemon relay channels) per tab, and Firefox's emulated screencasts.
 const channels = new Map();
 const casts = new Map();
-// New tabs join sharing while connected; they inherit the last applied control choice.
-let sharing = {autoShare: true, control: false};
-const sharingReady = api.storage.local.get(['autoShare', 'shareControl']).then(saved => {
-  sharing = {autoShare: saved.autoShare !== false, control: saved.shareControl === true};
+// By default every tab is shared (all: true), with the remote control choice.
+// Without that, chosen tabs are, and new ones join if autoShare.
+let sharing = {all: true, autoShare: true, control: false};
+const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl']).then(saved => {
+  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true};
 });
+// Controllers may open tabs where those are shared with control.
+const canOpen = () => sharing.control && (sharing.all || sharing.autoShare);
+async function shareEverything() {
+  if (!registration || !sharing.all) return;
+  for (const tab of await api.tabs.query({})) {
+    if (!tab.incognito && !shared.has(tab.id)) shared.set(tab.id, {origin: null, control: sharing.control, paused: true});
+  }
+  publishSoon();
+}
+async function openTab(url, windowId) {
+  const created = await api.tabs.create({url, active: true, ...(windowId ? {windowId} : {})});
+  shared.set(created.id, {origin: null, control: true, paused: true});
+  publishSoon();
+  return {tab: created.id};
+}
 // Every allowed daemon origin, so no shared tab can ever show a daemon page.
 let daemons = new Set();
 let policyCache = null;
@@ -301,7 +317,7 @@ async function publish() {
   await syncNativeGrants();
   if (generation !== currentGeneration) return;
   published = tabs;
-  send({type: 'tabs', tabs, native_control: nativeReady});
+  send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen()});
   await badge();
 }
 
@@ -415,11 +431,7 @@ async function execute(command) {
     return {ok: true};
   } else if (action === 'open') {
     // A controller opens a tab next to the one it controls; it is shared with control.
-    const opener = await api.tabs.get(tab);
-    const created = await api.tabs.create({url: params.url, windowId: opener.windowId, active: true});
-    shared.set(created.id, {origin: null, control: true, paused: true});
-    publishSoon();
-    return {tab: created.id};
+    return openTab(params.url, (await api.tabs.get(tab)).windowId);
   } else if (action === 'reload') { await api.tabs.reload(tab); return {ok: true}; }
   else if (action === 'back') { await api.tabs.goBack(tab); return {ok: true}; }
   else if (action === 'forward') { await api.tabs.goForward(tab); return {ok: true}; }
@@ -603,6 +615,13 @@ async function handleCommand(command, connection, currentGeneration) {
   if (busy >= 16) return;
   busy++;
   try {
+    // Tab 0: the browser's first tab, where the owner lets controllers open tabs.
+    if (command.tab === 0 && command.action === 'open') {
+      if (!registration || !canOpen() || !NodePolicy.webURL(command.params?.url)) throw new Error('Opening tabs is not allowed.');
+      const result = await openTab(command.params.url);
+      if (socket === connection && currentGeneration === generation) connection.send(JSON.stringify({type: 'result', id: command.id, result}));
+      return;
+    }
     const grant = await grantFor(command);
     const result = await execute(command);
     // Never return data after local unsharing, expiry or replacement of a grant.
@@ -677,6 +696,8 @@ async function connect({server, code = '', key = '', name, remember = false}) {
         else { send({type: 'heartbeat'}); if (nativeReady && registration?.expires_at === 0) void syncNativeGrants(); }
       }, 20000);
       void badge();
+      await sharingReady;
+      if (sharing.all) await shareEverything(); else publishSafely();
     } else if (message.type === 'authorization_revoked') {
       await api.storage.local.remove('rememberedNode');
       await stop('Browser authorization was revoked — pair again to reconnect');
@@ -775,7 +796,7 @@ async function localMessage(message, sender) {
       control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
     const {dashboardPairing} = await api.storage.session.get('dashboardPairing');
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
-    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, chromium, nativeReady};
+    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -820,6 +841,22 @@ async function localMessage(message, sender) {
   if (message.type === 'autoShare') {
     sharing.autoShare = message.enabled === true;
     await api.storage.local.set({autoShare: sharing.autoShare});
+    publishSoon();
+    return {ok: true};
+  }
+  if (message.type === 'shareAll') {
+    // Off keeps what is shared now; the tabs can then be switched off one by one.
+    sharing.all = message.enabled === true;
+    await api.storage.local.set({shareAll: sharing.all});
+    if (sharing.all) await shareEverything(); else publishSoon();
+    return {ok: true};
+  }
+  if (message.type === 'setControl') {
+    // The same grant objects stay: open live views keep running, with or without input.
+    sharing.control = message.control === true;
+    await api.storage.local.set({shareControl: sharing.control});
+    for (const grant of shared.values()) grant.control = sharing.control;
+    await publish();
     return {ok: true};
   }
   throw new Error('Unknown action.');
@@ -852,7 +889,7 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
 // Which shared tab is in front: recordings follow it.
 api.tabs.onActivated.addListener(() => { if (registration) publishSoon(); });
 api.tabs.onCreated.addListener(tab => {
-  if (!registration || !sharing.autoShare || tab.incognito) return;
+  if (!registration || !(sharing.all || sharing.autoShare) || tab.incognito) return;
   // Paused until it shows a shareable page; then listed like any other shared tab.
   shared.set(tab.id, {origin: null, control: sharing.control, paused: true});
   publishSoon();

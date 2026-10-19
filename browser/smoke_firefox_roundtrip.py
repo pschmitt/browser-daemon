@@ -130,6 +130,7 @@ def main():
     const origin=fixtureApi.runtime.getURL('').replace(/\/$/,'');
     const setup=await fetch(`${fixtureURL}/bootstrap?origin=${encodeURIComponent(origin)}`).then(r=>r.json());
     await message({type:'setDaemonAllowlist',origins:[setup.server]});
+    await message({type:'shareAll',enabled:false});
     await message({type:'connect',server:setup.server,code:setup.code,name:'Firefox roundtrip'});
     let state;
     for(let i=0;i<100;i++){state=await message({type:'state'}); if(state.registration)break; await delay(100);}

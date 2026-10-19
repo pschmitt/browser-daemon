@@ -25,7 +25,8 @@ test('malformed and oversized commands are rejected', () => {
   for (const command of [null, {}, {tab: '1', action: 'screenshot', params: {}}, {tab: 1, action: 'snapshot', params: []}, {tab: 1, action: 'type', params: {text: 'x'.repeat(140000)}}]) assert.equal(p.allowed(command, true), false);
 });
 
-function harness(firefox = false) {
+// Manual sharing unless a test says otherwise: most check per-tab grants.
+function harness(firefox = false, stored = {shareAll: false}) {
   const listeners = {};
   const calls = [];
   const sockets = [];
@@ -47,12 +48,13 @@ function harness(firefox = false) {
     runtime: {id: 'test', getURL: s => `chrome-extension://test/${s}`, getManifest: () => ({version: '0.3.1'}), onMessage: event('message')},
     tabs: {get: async id => { if (!tabs.has(id)) throw Error('No tab'); return tabs.get(id); }, query: async () => [...tabs.values()], onRemoved: event('removed'), onUpdated: event('updated'), onCreated: event('created'), onActivated: event('activated'),
       update: async (...args) => { calls.push(['update', ...args]); }, remove: async id => tabs.delete(id),
-      captureTab: async () => { calls.push(['capture']); return 'data:image/jpeg;base64,/9jframe'; }},
+      captureTab: async () => { calls.push(['capture']); return 'data:image/jpeg;base64,/9jframe'; },
+      create: async props => { const id = 100 + tabs.size; tabs.set(id, {id, title: '', url: props.url, incognito: false, windowId: 1}); calls.push(['create', props]); return tabs.get(id); }},
     debugger: {attach: async target => { calls.push(['attach', target]); }, detach: async target => { calls.push(['detach', target]); },
       sendCommand: async (...args) => { calls.push(['cdp', ...args]); return {data: 'image'}; }, onDetach: event('detach'), onEvent: event('cdpEvent')},
     alarms: {clear: async () => false, create: async () => {}, onAlarm: event('alarm')},
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
-    storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true}), remove: async () => {}},
+    storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true, ...stored}), remove: async () => {}},
       session: {get: async () => ({}), set: async () => {}, remove: async () => {}},
       managed: {get: async () => ({allowedDaemonOrigins: ['https://daemon.example']})}, onChanged: event('storage')},
     scripting: {executeScript: async args => { calls.push(['script', args]); return [{result: 'snapshot'}]; }},
@@ -86,6 +88,7 @@ test('only extension UI may grant tabs; private and daemon tabs are excluded', a
   const state = await h.message({type: 'state'});
   assert.deepEqual(Array.from(state.tabs, t => t.id), [1, 4]);
   const stored = h.calls.filter(c => c[0] === 'store' && 'server' in c[1]);
+  // (The pairing code never reaches storage; checked below.)
   assert.equal(stored.length, 1);
   assert.deepEqual(Object.keys(stored[0][1]).sort(), ['name', 'server']);
   assert.ok(stored.every(([, data]) => !JSON.stringify(data).includes('aaaa')));
@@ -165,6 +168,27 @@ test('new tabs join sharing while connected, with the last control choice', asyn
   h.tabs.set(7, {id: 7, title: 'Later', url: 'https://seven.example/', incognito: false});
   h.listeners.created(h.tabs.get(7));
   assert.equal((await h.message({type: 'state'})).tabs.find(t => t.id === 7).shared, false);
+});
+test('by default every shareable tab is shared once connected; control applies to all', async () => {
+  const h = harness(false, {}); const s = await h.pair();
+  await h.flush();
+  const state = await h.message({type: 'state'});
+  assert.equal(state.sharing.all, true);
+  assert.deepEqual(state.tabs.filter(t => t.shared).map(t => t.id), [1, 4]);
+  await h.message({type: 'setControl', control: true});
+  assert.ok((await h.message({type: 'state'})).tabs.every(t => t.control));
+  assert.equal(s.sent.filter(m => m.type === 'tabs').at(-1).can_open, true);
+  // The first tab can be opened by a controller: tab 0, web pages only.
+  s.receive({type: 'command', id: 'open', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
+  s.receive({type: 'command', id: 'file', tab: 0, action: 'open', params: {url: 'file:///etc/passwd'}});
+  await h.flush();
+  assert.ok(s.sent.find(m => m.id === 'open').result.tab);
+  assert.ok(s.sent.find(m => m.id === 'file').error);
+  // Off: no tab-less opening without control.
+  await h.message({type: 'setControl', control: false});
+  s.receive({type: 'command', id: 'denied', tab: 0, action: 'open', params: {url: 'https://x.example/'}});
+  await h.flush();
+  assert.ok(s.sent.find(m => m.id === 'denied').error);
 });
 test('a stale popup cannot share a replacement URL under its previous label', async () => {
   const h = harness(); await h.pair();

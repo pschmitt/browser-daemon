@@ -40,10 +40,10 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function renderHeader() {
   const reg = state.registration;
-  const shared = state.tabs.filter(t => t.shared).length;
   $('title').textContent = reg ? (state.saved.name || 'Browser node') : 'Browser node';
-  $('subtitle').textContent = reg ? `${new URL(reg.server).host} · ${shared ? `${plural(shared, 'tab')} shared` : 'nothing shared yet'}`
-    : state.connecting ? 'Connecting…' : state.status;
+  // The version where the eye looks first; the daemon gets room in the main card.
+  $('subtitle').textContent = `v${state.version} · ${state.chromium ? 'Chromium' : 'Firefox'}${state.nativeReady ? ' · companion' : ''}`;
+  $('subtitle').title = reg ? '' : state.status;
   $('pill').textContent = reg ? 'Connected' : state.connecting ? 'Connecting' : 'Offline';
   $('pill').className = `pill${reg ? ' on' : state.connecting ? ' wait' : ''}`;
 }
@@ -67,8 +67,10 @@ function renderTabs() {
   renderedTabs = signature;
   const shared = state.tabs.filter(t => t.shared).length;
   $('sharedCount').textContent = state.tabs.length ? `${shared}/${state.tabs.length}` : '';
-  $('shareAll').textContent = shared === state.tabs.length && shared ? 'Unshare all' : 'Share all';
-  $('shareAll').hidden = !state.tabs.length;
+  const all = state.sharing.all;
+  $('shareAllTabs').textContent = shared === state.tabs.length && shared ? 'Unshare all' : 'Share all';
+  $('shareAllTabs').hidden = !state.tabs.length || all;
+  $('tabs').classList.toggle('locked', all);
   $('noTabs').hidden = !!state.tabs.length;
   $('tabs').hidden = !state.tabs.length;
   $('tabs').replaceChildren(...state.tabs.map(tab => {
@@ -84,6 +86,8 @@ function renderTabs() {
     text.append(title, host);
     const toggle = document.createElement('input');
     toggle.type = 'checkbox'; toggle.className = 'switch'; toggle.checked = tab.shared; toggle.dataset.id = tab.id;
+    toggle.disabled = all;
+    if (all) toggle.title = 'Every tab is shared: turn off "Share all tabs" to choose';
     toggle.setAttribute('aria-label', `Share ${tab.title || tab.url}`);
     label.append(favicon(tab), text, toggle);
     item.append(label);
@@ -137,6 +141,10 @@ async function refresh() {
     $('code').value = '';
     if (document.activeElement !== $('control')) $('control').checked = state.sharing.control;
     if (document.activeElement !== $('autoShare')) $('autoShare').checked = state.sharing.autoShare;
+    if (document.activeElement !== $('shareAll')) $('shareAll').checked = state.sharing.all;
+    $('autoShareRow').hidden = state.sharing.all;
+    $('serverHost').textContent = new URL(reg.server).host;
+    $('serverHost').title = reg.server;
     $('dashboard').href = `${reg.server}/#nodes`;
     renderTabs();
   } else renderedTabs = '';
@@ -187,11 +195,20 @@ $('tabs').addEventListener('click', event => {
   const ids = toggle.checked ? [...sharedIds(), id] : sharedIds().filter(t => t !== id);
   void (toggle.checked ? capturePermission() : Promise.resolve()).then(() => share(ids), error => { toggle.checked = false; showError(error); });
 });
-$('shareAll').addEventListener('click', () => {
+$('shareAllTabs').addEventListener('click', () => {
   const all = sharedIds().length === state.tabs.length;
   void (all ? Promise.resolve() : capturePermission()).then(() => share(all ? [] : state.tabs.map(t => t.id)), showError);
 });
-$('control').addEventListener('change', () => void share(sharedIds(), $('control').checked));
+$('control').addEventListener('change', () => {
+  clearError();
+  void message({type: 'setControl', control: $('control').checked}).then(refresh, showError);
+});
+$('shareAll').addEventListener('click', () => {
+  const enabled = $('shareAll').checked;
+  void (enabled ? capturePermission() : Promise.resolve())
+    .then(() => message({type: 'shareAll', enabled}))
+    .then(() => { renderedTabs = ''; return refresh(); }, error => { $('shareAll').checked = !enabled; showError(error); });
+});
 $('autoShare').addEventListener('click', () => {
   const enabled = $('autoShare').checked;
   void (enabled ? capturePermission() : Promise.resolve())

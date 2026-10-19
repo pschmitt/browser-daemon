@@ -1414,7 +1414,8 @@ let extensionBrowserNodes = [];
 const extensionNodeKey = n => `browser:${n.daemon || ''}:${n.id}`;
 const extensionNodeOf = name => extensionBrowserNodes.find(n => extensionNodeKey(n) === name);
 const nodeLabel = name => extensionNodeOf(name)?.name || name;
-const extensionSessions = () => extensionBrowserNodes.filter(n => n.online !== false && n.tabs.length).map(n => ({
+// A connected browser is a session from the start, also before anything is shared.
+const extensionSessions = () => extensionBrowserNodes.filter(n => n.online !== false).map(n => ({
   id: n.id, node_name: extensionNodeKey(n), name: n.name, engine: n.browser, persistent: true,
   uptime_seconds: 0, client_count: 0, tabs_count: n.tabs.length, _extension: n,
 }));
@@ -2139,7 +2140,8 @@ async function refreshShots() {
     const r = el.getBoundingClientRect();
     if (r.bottom < 0 || r.top > innerHeight) continue;
     try {
-      const front = s._extension?.tabs[0];
+      const front = s._extension && (s._extension.tabs.find(t => t.active) || s._extension.tabs[0]);
+      if (s._extension && !front) continue;
       const res = s._extension
         ? await fetch(extensionApi(s._extension, '/command'), {method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}), body: JSON.stringify({tab: front.id, action: 'screenshot', params: {}}), signal: AbortSignal.timeout(12000)})
         : await fetch(api(s.node_name, `/sessions/${enc(s.id)}/screenshot`), {headers: authHeaders(), signal: AbortSignal.timeout(12000)});
@@ -3991,14 +3993,14 @@ function extensionNodeCard(n) {
     <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
       <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span><span class="chip">browser</span>${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
         <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
-        <div class="bars"><span><b>${online && n.tabs.length ? 1 : 0}</b> session${online && n.tabs.length ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Reconnects after restart' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span>${!online && n.forget_at ? (() => {
+        <div class="bars"><span><b>${online ? 1 : 0}</b> session${online ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Reconnects after restart' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span>${!online && n.forget_at ? (() => {
           const days = Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400));
           return `<span class="chip warn" title="Offline browsers are forgotten (key revoked) after a while; reconnecting resets it. Forgotten ${esc(absTime(n.forget_at))}.">${icon('clock', 'sm')}${days ? `Forgotten in ${days} day${days === 1 ? '' : 's'}` : 'Forgotten today'}</span>`;
         })() : ''}</div>
       </div>
       <div style="display:flex;gap:6px;flex:none">
         <button class="btn sm${filter === key ? ' primary' : ''}" data-act="filter" data-node="${esc(key)}">${icon('layers', 'sm')}${filter === key ? 'Showing only' : 'Show only'}</button>
-        ${online && n.tabs.length ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls ? 'Take over' : 'View'}</a>` : ''}
+        ${online && (n.tabs.length || n.can_open) ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}</a>` : ''}
         <button class="btn icon sm ghost" data-extension-revoke="${esc(key)}" title="${n.remembered ? 'Forget browser and revoke key' : 'Disconnect browser'}" aria-label="${n.remembered ? 'Forget' : 'Disconnect'} ${esc(n.name)}">${icon('trash', 'sm')}</button>
       </div>
     </div>

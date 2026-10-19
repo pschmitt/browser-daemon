@@ -90,6 +90,8 @@ try {
   await until(() => popup.evaluate(`location.href === ${JSON.stringify(`${origin}/popup.html`)} && document.readyState === 'complete' && typeof globalThis.chrome?.runtime?.sendMessage === 'function'`));
   await until(async () => Array.isArray((await message({type: 'state'}))?.tabs));
   assert.ok(!(await message({type: 'setDaemonAllowlist', origins: [base]})).error);
+  // Per-tab grants first; sharing everything (the default) is checked at the end.
+  assert.ok(!(await message({type: 'shareAll', enabled: false})).error);
   const pairing = await api('/api/extension/pair', 'POST', {origin});
   assert.equal(pairing.status, 200);
   assert.ok(!(await message({type: 'connect', server: base, code: pairing.value.code, name: 'Chromium integration'})).error);
@@ -182,9 +184,20 @@ try {
   const opened = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent(`${pageURL}new`)}`, {method: 'PUT'}).then(r => r.json());
   await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs.some(t => t.url === `${pageURL}new` && t.control === false));
   await fetch(`http://127.0.0.1:${chromePort}/json/close/${opened.id}`, {method: 'PUT'});
+  // Sharing everything: every shareable tab is listed; with control, a controller
+  // opens the browser's first tab without any tab (0).
+  await message({type: 'shareAll', enabled: true});
+  await message({type: 'setControl', control: true});
+  await until(async () => { const n = (await api('/api/extension/nodes')).value.nodes[0]; return n?.can_open && n.tabs.length >= 1 && n.tabs.every(t => t.control); });
+  const first = await command('open', {url: `${pageURL}first`}, 0);
+  assert.equal(first.status, 200);
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs.some(t => t.id === first.value.result.tab));
+  await message({type: 'setControl', control: false});
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.can_open !== true);
+  assert.equal((await command('open', {url: `${pageURL}refused`}, 0)).status, 403);
   await api(`/api/extension/nodes/${browserId}`, 'DELETE');
   await until(async () => (await message({type: 'state'})).registration === null);
-  console.log('Chromium: pairing, screenshots, typing, live CDP relay (screencast, trusted clicks, protocol limits, reload), recording, opening tabs, control across navigation, pausing on daemon pages, view-only enforcement, automatic sharing of new tabs and disconnect passed');
+  console.log('Chromium: pairing, screenshots, typing, live CDP relay (screencast, trusted clicks, protocol limits, reload), recording, opening tabs, control across navigation, pausing on daemon pages, view-only enforcement, automatic sharing of new tabs, sharing all tabs, opening the first tab and disconnect passed');
 } finally {
   for (const socket of sockets) socket.close();
   for (const child of children) child.kill('SIGTERM');

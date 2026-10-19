@@ -216,6 +216,9 @@ pub struct NodeInfo {
     /// When an offline remembered browser will be forgotten (Unix seconds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forget_at: Option<u64>,
+    /// Its owner lets controllers open tabs (they are shared with control).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub can_open: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub recording: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -338,6 +341,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<R
                 online: false,
                 version: String::new(),
                 forget_at: forget_after.map(|a| record.last_seen + a.as_secs()),
+                can_open: false,
                 recording: false,
                 recording_paused: false,
                 tabs: vec![],
@@ -505,15 +509,14 @@ pub async fn command(
     if node.deadline.is_some_and(|d| d <= Instant::now()) {
         return Err(failure(StatusCode::GONE, "Browser grant expired"));
     }
-    let control = node
-        .info
-        .lock()
-        .unwrap()
-        .tabs
-        .iter()
-        .find(|t| t.id == command.tab)
-        .map(|t| t.control)
-        .ok_or_else(|| failure(StatusCode::FORBIDDEN, "Tab is not shared"))?;
+    // Tab 0: open the browser's first tab, where its owner allows that.
+    let tabless = command.action == "open" && command.tab == 0;
+    let control = if tabless {
+        node.info.lock().unwrap().can_open
+    } else {
+        node.control(command.tab)
+            .ok_or_else(|| failure(StatusCode::FORBIDDEN, "Tab is not shared"))?
+    };
     if !valid_command(&command, control) {
         return Err(failure(
             StatusCode::FORBIDDEN,
@@ -556,10 +559,11 @@ pub async fn command(
     {
         return Err(failure(StatusCode::GONE, "Browser grant ended"));
     }
-    let still_shared = node.info.lock().unwrap().tabs.iter().any(|t| {
-        t.id == command.tab
-            && (matches!(command.action.as_str(), "screenshot" | "snapshot") || t.control)
-    });
+    let still_shared = tabless
+        || node.info.lock().unwrap().tabs.iter().any(|t| {
+            t.id == command.tab
+                && (matches!(command.action.as_str(), "screenshot" | "snapshot") || t.control)
+        });
     if !still_shared {
         return Err(failure(StatusCode::FORBIDDEN, "Tab grant ended"));
     }
@@ -732,6 +736,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
             online: true,
             version: hello.version,
             forget_at: None,
+            can_open: false,
             recording: false,
             recording_paused: false,
             tabs: vec![],
@@ -798,6 +803,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 let mut info = node.info.lock().unwrap();
                                 info.tabs = tabs;
                                 info.native_control = value["native_control"].as_bool().unwrap_or(false);
+                                info.can_open = value["can_open"].as_bool().unwrap_or(false);
                             }
                             Some("cdp_result") => {
                                 let channel = value["channel"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or(())?;

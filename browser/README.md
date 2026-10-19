@@ -104,13 +104,18 @@ memory-only connection with no time limit uses `--lifetime-secs 0` instead.
    actions disconnect the browser or revoke its remembered key. Old
    `/extension/` links redirect to these views.
 
-No tabs are shared merely by connecting. Private tabs, browser/extension pages,
-any allowed daemon's pages, and localhost pages are never shared. Sharing
+**Share all tabs** (on by default) shares every tab as soon as the browser
+connects, and every tab opened afterwards; the browser shows up as a node and a
+session right away, even before it has a shareable page. Turn it off to choose
+tabs one by one (and **Share new tabs** for new ones). **Remote control**
+applies to every shared tab at once; with it, a controller may also open tabs,
+including the browser's first one (`open` with tab 0). Private tabs,
+browser/extension pages, any allowed daemon's pages, and localhost pages are
+never shared. Sharing
 belongs to the tab and follows it across navigations and sites. While a shared
 tab shows a page that must never be shared, it is paused: unlisted, its live
 views closed, nothing read from it or sent to it, until it shows a shareable
-page again. **Share new tabs** (on by default) shares tabs you open while
-connected, with the current **Remote control** choice. The toolbar badge counts
+page again. The toolbar badge counts
 shared tabs: red while any may be controlled, green when all are view only.
 
 **Stop sharing**, **Ctrl+Shift+Period**, expiry, socket loss, browser restart,

@@ -2640,7 +2640,8 @@ async function openSharedTab() {
   try {
     const res = await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {
       method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ tab: Number(pageId), action: "open", params: { url } }),
+      // Next to the shown tab when it may be controlled, else as the browser's own new tab.
+      body: JSON.stringify({ tab: sharedBrowser?.tabs.some((t) => String(t.id) === String(pageId) && t.control) ? Number(pageId) : 0, action: "open", params: { url } }),
     });
     const body = await res.json().catch(() => ({}));
     const id = body.result?.tab;
@@ -4477,7 +4478,7 @@ function renderSharedSession() {
   setEngineIcon($('smEngine'), sharedBrowser.browser);
   for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow', 'vaultBtn', 'audioBtn']) $(id).hidden = true;
   // New tabs need control (they are shared with it); recording needs none.
-  for (const id of ['tabAddBtn', 'newTabBtn']) $(id).hidden = !control;
+  for (const id of ['tabAddBtn', 'newTabBtn']) $(id).hidden = !(control || sharedBrowser.can_open);
   $('smRec').hidden = false;
   const rec = !!sharedBrowser.recording, paused = rec && sharedBrowser.recording_paused;
   E.sessBtn.classList.toggle('rec', rec);
@@ -4606,10 +4607,15 @@ async function boot() {
     try {
       const pages = await fetchTargets();
       if (!pageId && pages.length) {
-        pageId = pages[0].id;
+        pageId = (pages.find(p => p.active) || pages[0]).id;
         const url = new URL(location.href); url.searchParams.set('page', pageId); history.replaceState(null, '', url);
       }
-      if (!pageId) { setState('bad', 'No shared tabs. Switch tabs on in the browser extension to share them.'); return; }
+      if (!pageId) {
+        renderSharedSession();
+        setState('bad', sharedBrowser?.can_open ? 'Nothing is shared yet. Open a tab with + above, or share one in the browser extension.'
+          : 'No shared tabs. Switch tabs on in the browser extension to share them.');
+        return;
+      }
       await connect();
     } catch (error) { setState('bad', error.message); }
     return;
