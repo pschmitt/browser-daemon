@@ -676,7 +676,9 @@ async fn record_session_loop(
 
         // 2. If handoff.html is actively streaming (frames received in last 2 seconds),
         // wait for more proxy frames without competing on background screencast!
-        if port.is_none() || last_proxy_frame.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
+        if port.is_none()
+            || last_proxy_frame.is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+        {
             match tokio::time::timeout(Duration::from_millis(500), frame_rx.recv()).await {
                 Ok(Some(pf)) => {
                     last_proxy_frame = Some(Instant::now());

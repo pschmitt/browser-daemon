@@ -137,35 +137,40 @@ Quit Firefox normally and restart it with the automation interface explicitly
 enabled:
 
 ```text
-MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette
+MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222
 ```
 
 Pair the extension, then click **Enable installed companion** before sharing
 tabs. Firefox asks for the optional native messaging permission. The popup and
 remote node list report whether native control is connected.
 
-This startup setting enables a powerful local Firefox automation interface.
-Keep Marionette on loopback; do not forward its port or add permissive remote
-host/origin flags. Its default port is 2828. For multiple Firefox processes,
-give each profile a distinct `marionette.port` preference and launch it with the
-matching `BROWSER_DAEMON_FIREFOX_PORT` environment variable. The companion checks
-the reported Firefox PID against its own process ancestry and refuses to act on
-another instance.
+The companion speaks WebDriver BiDi to Firefox's Remote Agent (standard
+library Python, its own minimal WebSocket client). This startup setting enables
+a powerful local Firefox automation interface: any local process can reach the
+port, and system access lets it run privileged code. Keep it on loopback; do
+not forward the port or add permissive `--remote-allow-hosts`/`-origins` flags.
+For several Firefox processes, give each its own `--remote-debugging-port` and
+set the matching `BROWSER_DAEMON_FIREFOX_PORT` (default 9222) for it. The
+companion checks the session's Firefox PID against its own process ancestry and
+refuses to act on another instance.
 
-One fixed privileged script resolves extension tab IDs to Firefox's own
-WebDriver handles. No matching by URL or active tab is used. Actual page
-evaluation uses a second fixed wrapper that creates a fresh sandbox with the
-page's own principal and no privileged automation globals. Script and arguments
-are data until evaluated in that sandbox; results are cloned out before the
-sandbox is destroyed. The caller cannot choose a principal, chrome context or
-system sandbox. Document identity,
-origin, expiry, and the independent companion grant table are checked too.
-Closing the native pipe detaches the automation session; it does not quit Firefox.
+One fixed privileged script, run in a chrome context, resolves extension tab
+IDs to Firefox's own BiDi browsing contexts. No matching by URL or active tab
+is used. Commands then address that context directly (no window switching):
+screenshots as JPEG, trusted input through `input.performActions`. Page code
+(snapshots, selectors, evaluation) runs in a named BiDi sandbox: a realm with
+the page's own principal, apart from the page's globals and without chrome
+privileges. Script and arguments are data until evaluated there; the origin is
+checked before the script body runs, and results come back as serialized
+values. The caller cannot choose a context, sandbox, chrome scope or BiDi
+method. Origin, expiry, and the independent companion grant table are checked
+too. Closing the native pipe ends the BiDi session; it does not quit Firefox.
 
 Without the companion, Firefox uses DOM clicks and form editing. Those events
 are not trusted keyboard/pointer input, so some web apps will ignore them.
-Screenshots in this mode require Firefox's `<all_urls>` permission. With the
-companion, screenshot capture does not need that broad host grant.
+Live views capture frames with Firefox's own `tabs.captureTab` (JPEG at CSS
+pixels), which needs the `<all_urls>` permission; the companion's screenshots
+are the fallback without it.
 
 Chromium requires `debugger` permission at installation because Chrome does not
 allow it as an optional permission. That installation permission does not share
@@ -278,8 +283,8 @@ Chromium supports the CRX through `programs.chromium.extensions` with its ID,
 vault and GitHub repository secrets, outside Nix and the source tree.
 
 For trusted Firefox control, fully exit Firefox, then launch it with
-`MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette` using the same profile.
-Launching against an already-running ordinary Firefox reuses that process and
-does not enable Marionette. Installation does not connect or share any tabs:
+`MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222` using
+the same profile. Launching against an already-running ordinary Firefox reuses
+that process and does not enable the Remote Agent. Installation does not connect or share any tabs:
 pair the extension, enable the companion, then explicitly select tabs and
 whether to allow control.

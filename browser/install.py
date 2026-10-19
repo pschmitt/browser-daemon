@@ -24,7 +24,7 @@ def main():
         "allowed_extensions": ["browser-daemon-node@pschmitt.dev"],
     }, indent=2) + "\n")
     manifest.chmod(0o600)
-    print(f"Installed {manifest}. Restart Firefox with MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette, then enable the companion in the popup.")
+    print(f"Installed {manifest}. Restart Firefox with MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222, then enable the companion in the popup.")
 
 
 if __name__ == "__main__":

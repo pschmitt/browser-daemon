@@ -200,7 +200,7 @@ async function enableNative() {
     });
     port.onDisconnect.addListener(() => {
       clearTimeout(timer);
-      reject(new Error('Companion unavailable. Install it and restart Firefox with the documented startup flags.'));
+      reject(new Error('Companion unavailable. Install it and restart Firefox with MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 and --remote-debugging-port 9222.'));
       if (nativePort === port) void stop('Firefox companion disconnected');
     });
   });

@@ -7,6 +7,7 @@ on PATH. No existing profile or browser is used.
 import argparse
 import contextlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import socket
@@ -15,16 +16,21 @@ import tempfile
 import threading
 import time
 
-from companion import ADDON, Companion, Marionette
+from companion import Bidi, Companion
 
 
-class FixtureDriver(Marionette):
+class FixtureDriver(Bidi):
     """Errors are safe to inspect only in this disposable fixture browser."""
-    def read(self):
-        message = super().read()
-        if isinstance(message, list) and len(message) == 4 and message[2] is not None:
-            raise RuntimeError(f"Fixture WebDriver error: {message[2].get('message', 'unknown')}")
-        return message
+    def call(self, method, params=None):
+        self.sequence += 1
+        self.ws.send(json.dumps({"id": self.sequence, "method": method, "params": params or {}}))
+        while True:
+            reply = json.loads(self.ws.recv())
+            if reply.get("id") != self.sequence:
+                continue
+            if reply.get("type") != "success":
+                raise RuntimeError(f"Fixture BiDi error in {method}: {reply.get('error')}: {reply.get('message')}")
+            return reply["result"]
 
 
 class Page(BaseHTTPRequestHandler):
@@ -50,13 +56,13 @@ def main():
             port = reservation.getsockname()[1]
         profile = directory / "profile"
         profile.mkdir()
-        (profile / "user.js").write_text(f'user_pref("marionette.port", {port});\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("browser.aboutwelcome.enabled", false);\n')
+        (profile / "user.js").write_text('user_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("browser.aboutwelcome.enabled", false);\n')
         server = ThreadingHTTPServer(("127.0.0.1", 0), Page)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         environment = {**os.environ, "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1"}
         with (directory / "firefox.log").open("wb") as output:
-            process = subprocess.Popen([args.firefox, "--headless", "--no-remote", "--profile", str(profile), "--marionette"], env=environment, stdout=output, stderr=output)
+            process = subprocess.Popen([args.firefox, "--headless", "--no-remote", "--profile", str(profile), "--remote-debugging-port", str(port)], env=environment, stdout=output, stderr=output)
         driver = None
         try:
             deadline = time.monotonic() + 45
@@ -64,21 +70,22 @@ def main():
                 try:
                     driver = FixtureDriver(port, {process.pid})
                     break
-                except (ConnectionError, OSError):
+                except (ConnectionError, OSError, ValueError, EOFError):
                     time.sleep(0.2)
-            assert driver is not None, "Firefox did not start Marionette"
+            assert driver is not None, "Firefox did not start its Remote Agent"
             package, = (root / "dist").glob("*-firefox.zip")
-            driver.call("Addon:Install", {"path": str(package), "temporary": True})
+            driver.call("webExtension.install", {"extensionData": {"type": "archivePath", "path": str(package)}})
             origin = f"http://127.0.0.1:{server.server_port}"
-            driver.call("WebDriver:Navigate", {"url": origin})
-            driver.call("Marionette:SetContext", {"value": "chrome"})
-            tab = driver.script("const {ExtensionParent}=ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs'); return ExtensionParent.apiManager.global.tabTracker.getId(gBrowser.selectedTab);")
+            first = driver.call("browsingContext.getTree", {"maxDepth": 0})["contexts"][0]["context"]
+            driver.call("browsingContext.navigate", {"context": first, "url": origin, "wait": "complete"})
+            tab = driver.function("() => { const {ExtensionParent} = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs'); return ExtensionParent.apiManager.global.tabTracker.getId(gBrowser.selectedTab); }",
+                                  [], {"context": driver.chrome_context()})
             companion = Companion(driver)
             grant = {"tab": tab, "origin": origin, "control": False, "expires_at": int(time.time()) + 600}
             companion.update([grant])
             assert companion.execute({"tab": tab, "action": "snapshot"})["title"] == "Companion test"
             image = companion.execute({"tab": tab, "action": "screenshot"})
-            assert image["format"] == "png" and image["data"].startswith("iVBOR")
+            assert image["format"] == "jpeg" and image["data"].startswith("/9j")
             try:
                 companion.execute({"tab": tab, "action": "type", "params": {"text": "refuse"}})
             except ValueError:
@@ -99,7 +106,7 @@ def main():
                 pass
             else:
                 raise AssertionError("Revoked grant remained readable")
-            print("Firefox: real tab mapping, screenshot, snapshot, trusted click/type, view-only enforcement and revocation passed")
+            print("Firefox (WebDriver BiDi): real tab mapping, screenshot, snapshot, trusted click/type, sandboxed evaluation, view-only enforcement and revocation passed")
         finally:
             if driver:
                 with contextlib.suppress(OSError, ValueError, EOFError):

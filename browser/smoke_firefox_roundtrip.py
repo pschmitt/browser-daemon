@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 import zipfile
 
-from companion import ADDON, Marionette
+from companion import ADDON, Bidi
 from smoke_firefox import Page
 
 HTTP = build_opener(ProxyHandler({}))
@@ -79,7 +79,7 @@ def main():
         directory = Path(temporary)
         home = directory / "home"
         home.mkdir()
-        marionette_port, daemon_port = port(), port()
+        remote_port, daemon_port = port(), port()
         secret = secrets.token_hex(32)
         secret_file = directory / "secret"
         secret_file.write_text(secret)
@@ -155,23 +155,20 @@ def main():
                         archive.write(path, path.relative_to(source))
             profile = directory / "profile"
             profile.mkdir()
-            (profile / "user.js").write_text(f'user_pref("marionette.port", {marionette_port});\nuser_pref("browser.aboutwelcome.enabled", false);\n')
-            environment = {**os.environ, "HOME": str(home), "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "BROWSER_DAEMON_FIREFOX_PORT": str(marionette_port)}
+            (profile / "user.js").write_text('user_pref("browser.aboutwelcome.enabled", false);\n')
+            environment = {**os.environ, "HOME": str(home), "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "BROWSER_DAEMON_FIREFOX_PORT": str(remote_port)}
             with (directory / "firefox.log").open("wb") as output:
-                firefox = subprocess.Popen([args.firefox, "--headless", "--no-remote", "--profile", str(profile), "--marionette"], env=environment, stdout=output, stderr=output)
+                firefox = subprocess.Popen([args.firefox, "--headless", "--no-remote", "--profile", str(profile), "--remote-debugging-port", str(remote_port)], env=environment, stdout=output, stderr=output)
             def connect_driver():
-                return Marionette(marionette_port, {firefox.pid})
+                return Bidi(remote_port, {firefox.pid})
             driver = wait_for(connect_driver)
-            driver.call("Addon:Install", {"path": str(package), "temporary": True})
-            driver.call("WebDriver:Navigate", {"url": fixture_url + "/page"})
-            new_window = driver.call("WebDriver:NewWindow", {"type": "tab"})
-            driver.call("Marionette:SetContext", {"value": "chrome"})
-            popup = driver.script("const {ExtensionParent}=ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs'); return ExtensionParent.GlobalManager.getExtension(arguments[0]).baseURI.resolve('popup.html');", [ADDON])
-            driver.call("Marionette:SetContext", {"value": "content"})
-            # Explicitly select the new tab (NewWindow doesn't necessarily do so).
-            handle = new_window["handle"]
-            driver.call("WebDriver:SwitchToWindow", {"handle": handle})
-            driver.call("WebDriver:Navigate", {"url": popup})
+            driver.call("webExtension.install", {"extensionData": {"type": "archivePath", "path": str(package)}})
+            first = driver.call("browsingContext.getTree", {"maxDepth": 0})["contexts"][0]["context"]
+            driver.call("browsingContext.navigate", {"context": first, "url": fixture_url + "/page", "wait": "complete"})
+            popup = driver.function("(addon) => { const {ExtensionParent} = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs'); return ExtensionParent.GlobalManager.getExtension(addon).baseURI.resolve('popup.html'); }",
+                                    [ADDON], {"context": driver.chrome_context()})
+            tab = driver.call("browsingContext.create", {"type": "tab"})["context"]
+            driver.call("browsingContext.navigate", {"context": tab, "url": popup})
             driver.close()
             driver = None
             wait_for(lambda: fixture.stage == "view" or fixture.stage.startswith("failed"))
@@ -183,7 +180,7 @@ def main():
                 return api(f'/api/extension/nodes/{node["id"]}/command', "POST", {"tab": tab, "action": action, "params": params or {}})
 
             status, screenshot = command("screenshot")
-            assert status == 200 and screenshot["result"]["format"] == "png", "Native screenshot failed"
+            assert status == 200 and screenshot["result"]["format"] == "jpeg" and screenshot["result"]["data"].startswith("/9j"), "Native screenshot failed"
             assert command("type", {"text": "refuse"})[0] == 403
             fixture.control = True
             wait_for(lambda: fixture.stage == "control" or fixture.stage.startswith("failed"))
@@ -194,7 +191,7 @@ def main():
             assert status == 200 and result["result"] == {"value": "hello", "click": True, "input": True, "system": "undefined", "components": "undefined"}, (status, result)
             api(f'/api/extension/nodes/{node["id"]}', "DELETE")
             wait_for(lambda: not api("/api/extension/nodes")[1]["nodes"])
-            print("Firefox round trip: real extension registration, native pipe identity, PNG transport, trusted click/type, content evaluation, view-only enforcement and revocation passed")
+            print("Firefox round trip (WebDriver BiDi): real extension registration, native pipe identity, JPEG screenshots, trusted click/type, sandboxed content evaluation, view-only enforcement and revocation passed")
         finally:
             if driver:
                 with contextlib.suppress(OSError, ValueError, EOFError):
