@@ -200,6 +200,11 @@ pub struct Args {
     #[arg(long, default_value = "/var/lib/browser-daemon/recordings")]
     pub recordings_dir: PathBuf,
 
+    /// Forget a remembered browser (extension node) that has not connected for
+    /// this many hours, revoking its key; 0 keeps them until revoked.
+    #[arg(long, default_value_t = 24)]
+    pub browser_forget_after_hours: u64,
+
     /// Record new sessions unless they opt out (`--record-sessions false` to turn off).
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub record_sessions: bool,
@@ -619,6 +624,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auth = Arc::new(auth::Auth::new(cluster_secret.clone(), hosts));
     let extensions = Arc::new(extension::Broker::load(
         &config.state_dir().join("browser-keys.json"),
+        (args.browser_forget_after_hours > 0)
+            .then(|| Duration::from_secs(args.browser_forget_after_hours * 3600)),
     ));
     let state = AppState {
         config,

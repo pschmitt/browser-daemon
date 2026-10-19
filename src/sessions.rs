@@ -489,7 +489,7 @@ impl AppState {
         };
         let handle = recorder::start_recording(
             session.id,
-            session.port,
+            Some(session.port),
             session.profile.clone(),
             self.node_name.clone(),
             (*self.recorder_config).clone(),

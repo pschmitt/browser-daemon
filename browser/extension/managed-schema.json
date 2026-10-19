@@ -6,7 +6,14 @@
       "description": "Exact HTTPS origins this extension may pair or reconnect with; an empty list denies all daemons.",
       "type": "array",
       "maxItems": 128,
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
+    },
+    "defaultName": {
+      "title": "Default browser name",
+      "description": "The name this browser gets when it pairs without one being entered, e.g. laptop-chromium.",
+      "type": "string"
     }
   }
 }

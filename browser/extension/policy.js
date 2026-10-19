@@ -49,7 +49,7 @@ globalThis.NodePolicy = (() => {
         JSON.stringify(command.params).length > 128 * 1024) return false;
     if (['screenshot', 'snapshot'].includes(command.action)) return true;
     if (!control) return false;
-    if (command.action === 'navigate') return webURL(command.params.url);
+    if (command.action === 'navigate' || command.action === 'open') return webURL(command.params.url);
     if (command.action === 'cdp') return methods.has(command.params.method);
     return ['click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate'].includes(command.action);
   }

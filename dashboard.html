@@ -619,6 +619,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .add-card .add-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .add-card .add-row .input { flex: 1; min-width: 0; }
 .add-card .add-check { font-size: 13px; color: var(--muted); gap: 8px; }
+.add-card .add-options { gap: 6px 18px; }
 .add-card .add-status { font-size: 13px; min-height: 0; margin: 0; }
 .add-card .add-status:empty { display: none; }
 .node-card { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
@@ -931,6 +932,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
           <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-globe"/></svg></span>
             <div><h3>This browser</h3><p>Share your own tabs through the extension.</p></div></div>
           <div class="add-row"><button id="pairBrowser" class="btn primary" type="button"><svg class="i sm"><use href="#i-link"/></svg>Pair browser</button>
+          </div>
+          <div class="add-row add-options">
+            <label class="switch add-check"><input id="controlBrowser" type="checkbox" checked><span class="track"></span>Allow remote control</label>
             <label class="switch add-check"><input id="rememberBrowser" type="checkbox" checked><span class="track"></span>Stay paired after restarts</label></div>
           <p id="pairBrowserStatus" class="add-status" role="status"></p>
         </div>
@@ -1423,6 +1427,13 @@ function syncExtensionSessions() {
 window.addEventListener('browser-daemon-extension-nodes', event => {
   extensionBrowserNodes = event.detail;
   if (ov) { syncExtensionSessions(); render(); }
+});
+// The browser this dashboard runs in, when its extension is connected (see pairing.js).
+let thisBrowserNode = null;
+window.addEventListener('browser-daemon-this-browser', event => {
+  if (thisBrowserNode === event.detail) return;
+  thisBrowserNode = event.detail;
+  if (ov) render();
 });
 async function revokeExtension(n) {
   const ok = await ask({title: `${n.remembered ? 'Forget' : 'Disconnect'} ${n.name}?`,
@@ -3978,9 +3989,12 @@ function extensionNodeCard(n) {
   const controls = n.tabs.filter(t => t.control).length;
   return `<div class="node-card" style="--node:${nodeColor(key)}">
     <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
-      <div class="t"><b>${esc(n.name)} <span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span><span class="chip">browser</span></b>
-        <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}</span>
-        <div class="bars"><span><b>${online && n.tabs.length ? 1 : 0}</b> session${online && n.tabs.length ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Reconnects after restart' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span></div>
+      <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span><span class="chip">browser</span>${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
+        <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
+        <div class="bars"><span><b>${online && n.tabs.length ? 1 : 0}</b> session${online && n.tabs.length ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Reconnects after restart' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span>${!online && n.forget_at ? (() => {
+          const days = Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400));
+          return `<span class="chip warn" title="Offline browsers are forgotten (key revoked) after a while; reconnecting resets it. Forgotten ${esc(absTime(n.forget_at))}.">${icon('clock', 'sm')}${days ? `Forgotten in ${days} day${days === 1 ? '' : 's'}` : 'Forgotten today'}</span>`;
+        })() : ''}</div>
       </div>
       <div style="display:flex;gap:6px;flex:none">
         <button class="btn sm${filter === key ? ' primary' : ''}" data-act="filter" data-node="${esc(key)}">${icon('layers', 'sm')}${filter === key ? 'Showing only' : 'Show only'}</button>
@@ -3988,7 +4002,7 @@ function extensionNodeCard(n) {
         <button class="btn icon sm ghost" data-extension-revoke="${esc(key)}" title="${n.remembered ? 'Forget browser and revoke key' : 'Disconnect browser'}" aria-label="${n.remembered ? 'Forget' : 'Disconnect'} ${esc(n.name)}">${icon('trash', 'sm')}</button>
       </div>
     </div>
-    ${!n.tabs.length ? `<div class="node-settings"><span class="hint">${online ? 'Choose tabs in the browser extension, then click Apply to make them available in Sessions.' : 'This browser will reconnect when it starts. Shared tabs require approval in the extension.'}</span></div>` : ''}
+    ${!n.tabs.length ? `<div class="node-settings"><span class="hint">${online ? 'Switch tabs on in the browser extension to share them here.' : 'This browser reconnects when it starts; its tabs stay private until shared again.'}</span></div>` : ''}
   </div>`;
 }
 // Defaults per browser engine, the same on every node: shown as the local node has

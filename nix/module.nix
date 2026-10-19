@@ -225,6 +225,12 @@ in
       description = "Directory where session screencast recordings are saved.";
     };
 
+    browserForgetAfterHours = lib.mkOption {
+      type = lib.types.ints.unsigned;
+      default = 24;
+      description = "Forget remembered browsers (extension nodes) that have not connected for this many hours, revoking their key. 0 keeps them until revoked.";
+    };
+
     recordSessions = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -499,6 +505,8 @@ in
               (lib.boolToString cfg.recordAudio)
               "--record-sessions"
               (lib.boolToString cfg.recordSessions)
+              "--browser-forget-after-hours"
+              (toString cfg.browserForgetAfterHours)
               "--ffmpeg"
               (lib.getExe cfg.audio.ffmpegPackage)
               "--max-sessions"

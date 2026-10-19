@@ -10,12 +10,18 @@
 </header>
 <p id="error" class="banner bad" role="alert" hidden></p>
 
-<section id="approval" class="card accent" hidden>
-  <h2>Connect to the dashboard?</h2>
-  <p id="approvalServer" class="muted"></p>
+<section id="approval" class="approval" hidden>
+  <div class="approval-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></div>
+  <h2>Connect to <span id="approvalHost"></span>?</h2>
+  <ul class="facts">
+    <li>Nothing is shared until you switch tabs on.</li>
+    <li>You can disconnect at any time.</li>
+  </ul>
   <label class="field">Name this browser<input id="approvalName" maxlength="80" placeholder="My laptop"></label>
+  <label class="row"><span><b>Remote control</b><small>Viewers can click, type and navigate</small></span><input id="approvalControl" type="checkbox" class="switch danger"></label>
   <label class="row"><span><b>Reconnect automatically</b><small>Also after a browser restart</small></span><input id="approvalRemember" type="checkbox" class="switch"></label>
-  <div class="actions"><button id="rejectPairing" type="button">Decline</button><button id="approvePairing" type="button" class="primary">Connect</button></div>
+  <button id="approvePairing" type="button" class="primary wide big">Connect</button>
+  <button id="rejectPairing" type="button" class="link wide quiet">Not now</button>
 </section>
 
 <main id="connected" hidden>

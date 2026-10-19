@@ -368,7 +368,9 @@ impl RecordingClock {
 
 pub fn start_recording(
     session_id: Uuid,
-    port: u16,
+    // The browser's CDP port for recording while nobody watches; None: only the
+    // frames sent to `frame_tx` (a shared browser's tab, see `extension`).
+    port: Option<u16>,
     profile: Option<String>,
     node_name: String,
     config: RecorderConfig,
@@ -543,7 +545,7 @@ const RECORD_MAX: (f64, f64) = (1024.0, 640.0);
 async fn record_session_loop(
     recording_id: Uuid,
     session_id: Uuid,
-    port: u16,
+    port: Option<u16>,
     profile: Option<String>,
     node_name: String,
     config: RecorderConfig,
@@ -610,7 +612,7 @@ async fn record_session_loop(
     info!(
         recording_id = %recording_id,
         session_id = %session_id,
-        port = port,
+        port = ?port,
         "Started session recording"
     );
 
@@ -674,7 +676,7 @@ async fn record_session_loop(
 
         // 2. If handoff.html is actively streaming (frames received in last 2 seconds),
         // wait for more proxy frames without competing on background screencast!
-        if last_proxy_frame.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
+        if port.is_none() || last_proxy_frame.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
             match tokio::time::timeout(Duration::from_millis(500), frame_rx.recv()).await {
                 Ok(Some(pf)) => {
                     last_proxy_frame = Some(Instant::now());
@@ -708,6 +710,7 @@ async fn record_session_loop(
         }
 
         // 3. Otherwise, record with timed screenshots while nobody watches
+        let Some(port) = port else { continue };
         let targets_url = format!("http://127.0.0.1:{}/json/list", port);
         let active_page_target = match http_client.get(&targets_url).send().await {
             Ok(res) => {

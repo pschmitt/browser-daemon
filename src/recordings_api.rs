@@ -299,12 +299,10 @@ pub(crate) async fn api_session_start_record(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     state.check_auth(&headers)?;
-    let session = {
-        let guard = state.sessions.read().await;
-        guard.get(&id).cloned().ok_or((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "Session not found" })),
-        ))?
+    let session = state.sessions.read().await.get(&id).cloned();
+    // A shared browser (extension node) is recorded through its extension.
+    let Some(session) = session else {
+        return crate::extension::start_recording(&state, id).await;
     };
 
     let Some((rec_id, started)) = state.start_recording(&session, params.audio).await else {

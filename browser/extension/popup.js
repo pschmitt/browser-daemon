@@ -100,10 +100,12 @@ async function refresh() {
   if (state.dashboardRequest && approvalIdentity !== state.dashboardRequest.server) {
     approvalIdentity = state.dashboardRequest.server;
     $('approvalRemember').checked = state.dashboardRequest.remember;
-    $('approvalName').value = state.saved.name || '';
+    $('approvalControl').checked = state.dashboardRequest.control;
+    $('approvalName').value = state.saved.name || state.defaultName;
   }
   if (!state.dashboardRequest) approvalIdentity = '';
-  if (state.dashboardRequest) $('approvalServer').textContent = `${new URL(state.dashboardRequest.server).host} asks to connect this browser. You choose what to share afterwards.`;
+  if (state.dashboardRequest) $('approvalHost').textContent = new URL(state.dashboardRequest.server).host;
+  document.body.classList.toggle('asking', !!state.dashboardRequest);
   $('connected').hidden = !reg;
   $('setup').hidden = !!reg || !!state.dashboardRequest;
 
@@ -118,6 +120,7 @@ async function refresh() {
     $('server').value = state.saved.server || '';
     if (origins.includes(state.saved.server)) $('serverChoice').value = state.saved.server;
     $('name').value = state.saved.name || '';
+    $('name').placeholder = state.defaultName;
     $('rememberKey').checked = state.saved.rememberPreference === true;
     initialized = true;
   }
@@ -202,7 +205,7 @@ $('connect').addEventListener('submit', async event => {
   busy = true; clearError();
   try {
     const address = NodePolicy.approvedServer(server(), state?.allowlist.origins || []);
-    const prepared = message({type: 'prepareConnect', server: address, code: $('code').value.trim(), name: $('name').value || 'My browser', remember: $('rememberKey').checked});
+    const prepared = message({type: 'prepareConnect', server: address, code: $('code').value.trim(), name: $('name').value || state.defaultName, remember: $('rememberKey').checked});
     const permission = api.permissions.request({origins: [permissionPattern(address)]});
     await prepared;
     if (!(await permission)) { await message({type: 'cancelConnect'}); throw new Error('Allow access to the daemon to connect.'); }
@@ -227,20 +230,22 @@ $('enableDashboard').addEventListener('click', async () => {
   clearError();
   try {
     const address = NodePolicy.approvedServer(server(), state?.allowlist.origins || []);
-    const name = $('name').value || 'My browser';
+    const name = $('name').value || state.defaultName;
     const configured = message({type: 'configureDashboard', server: address, name});
-    const permission = api.permissions.request({origins: [permissionPattern(address)]});
+    // Every allowed daemon at once: any of their dashboards can pair afterwards.
+    const origins = [...new Set([address, ...state.allowlist.origins].map(permissionPattern))];
+    const permission = api.permissions.request({origins});
     await configured;
-    if (!(await permission)) throw new Error('Allow access to the daemon to pair from its dashboard.');
+    if (!(await permission)) throw new Error('Allow access to your daemons to pair from their dashboards.');
     await message({type: 'configureDashboard', server: address, name});
     await api.tabs.create({url: `${address}/#nodes`});
   } catch (error) { showError(error); }
 });
 $('approvePairing').addEventListener('click', async () => {
   try {
-    const name = $('approvalName').value.trim() || 'My browser';
+    const name = $('approvalName').value.trim() || state.defaultName;
     $('name').value = name; await saveSettings();
-    await message({type: 'approveDashboard', name, remember: $('approvalRemember').checked});
+    await message({type: 'approveDashboard', name, remember: $('approvalRemember').checked, control: $('approvalControl').checked});
     await refresh();
   } catch (error) { showError(error); }
 });

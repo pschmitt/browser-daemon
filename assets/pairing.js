@@ -38,9 +38,15 @@
     } catch { /* Retried on the next round. */ }
     finally { refreshing = false; }
   }
-  window.addEventListener('browser-daemon-refresh-extensions', refreshBrowsers);
-  void refreshBrowsers();
+  // Which listed browser is this one: asked of the extension, if it is installed.
+  async function identify() {
+    const node = await extension('discover').then(r => r.node || null, () => null);
+    window.dispatchEvent(new CustomEvent('browser-daemon-this-browser', {detail: node}));
+  }
+  window.addEventListener('browser-daemon-refresh-extensions', () => { void refreshBrowsers(); void identify(); });
+  void refreshBrowsers(); void identify();
   setInterval(refreshBrowsers, 5000);
+  setInterval(identify, 15000);
   button.addEventListener('click', async () => {
     button.disabled = true;
     status.textContent = 'Looking for the extension…';
@@ -48,6 +54,7 @@
       const browser = await extension('discover');
       if (browser.connected) {
         status.textContent = 'Already paired: pick tabs to share in the extension.';
+        void identify();
         return;
       }
       const response = await fetch('/api/extension/pair', {
@@ -56,8 +63,10 @@
       });
       if (!response.ok) throw new Error(`Pairing failed (${response.status}). Sign in to this dashboard and try again.`);
       const pair = await response.json();
-      await extension('approve', {code: pair.code, remember: pair.remember});
-      status.textContent = 'Approve the connection in the extension tab that just opened.';
+      const control = document.getElementById('controlBrowser')?.checked !== false;
+      const opened = await extension('approve', {code: pair.code, remember: pair.remember, control});
+      status.textContent = opened.where === 'popup' ? 'Answer in the extension popup (top right of this window).'
+        : 'Answer in the extension tab that just opened.';
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   });

@@ -24,9 +24,14 @@ class CDP {
     this.socket = socket; this.id = 0; this.pending = new Map(); this.events = [];
     socket.addEventListener('message', event => {
       const message = JSON.parse(event.data);
-      if (message.method) { this.events.push(message); return; }
+      if (message.method) {
+        this.events.push(message);
+        // Like the live view: acknowledge frames so the screencast keeps going.
+        if (this.autoAck && message.method === 'Page.screencastFrame') this.call('Page.screencastFrameAck', {sessionId: message.params.sessionId}).catch(() => {});
+        return;
+      }
       const p = this.pending.get(message.id);
-      if (p) { this.pending.delete(message.id); clearTimeout(p.timer); message.error ? p.reject(new Error('CDP rejected an integration operation')) : p.resolve(message.result); }
+      if (p) { this.pending.delete(message.id); clearTimeout(p.timer); message.error ? p.reject(new Error(`CDP rejected ${p.method}: ${message.error.message || message.error}`)) : p.resolve(message.result); }
     });
   }
   static async open(url, options) {
@@ -38,7 +43,7 @@ class CDP {
     const id = ++this.id;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP check timed out: ${method}`)); }, 15000);
-      this.pending.set(id, {resolve, reject, timer}); this.socket.send(JSON.stringify({id, method, params}));
+      this.pending.set(id, {resolve, reject, timer, method}); this.socket.send(JSON.stringify({id, method, params}));
     });
   }
   async evaluate(expression) {
@@ -120,6 +125,37 @@ try {
   assert.equal((await live.call('Runtime.evaluate', {expression: 'window.trusted', returnByValue: true})).result.value, true);
   await assert.rejects(live.call('Target.createTarget', {url: 'about:blank'}));
   await assert.rejects(live.call('Page.navigate', {url: 'file:///etc/passwd'}));
+  // A reload keeps the view's frames coming (for the tab in front: Chromium
+  // paints no other; the live view shows screenshots of those).
+  await fetch(`http://127.0.0.1:${chromePort}/json/activate/${(await targets()).find(t => t.url === pageURL).id}`);
+  live.autoAck = true;
+  for (const e of live.events) if (e.method === 'Page.screencastFrame') await live.call('Page.screencastFrameAck', {sessionId: e.params.sessionId}).catch(() => {});
+  await live.call('Page.reload');
+  await until(() => live.events.some(e => e.method === 'Page.loadEventFired'));
+  const afterReload = live.events.length;
+  // As the live view does after every load (an extension's debugger stops the screencast).
+  await live.call('Page.stopScreencast');
+  await live.call('Page.startScreencast', {format: 'jpeg', quality: 60, maxWidth: 800, maxHeight: 600});
+  await until(() => live.events.slice(afterReload).some(e => e.method === 'Page.screencastFrame'));
+  // Recording a shared browser: frames through the daemon's own relay channel.
+  assert.equal((await api(`/api/sessions/${browserId}/record`, 'POST')).value.status, 'recording_started');
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.recording === true);
+  await sleep(2500);
+  assert.equal((await api(`/api/sessions/${browserId}/stop-record`, 'POST')).value.status, 'recording_stopped');
+  const recorded = await until(async () => {
+    const list = (await api('/api/recordings')).value;
+    const r = (list.recordings || list).find(x => x.session_id === browserId && x.ended_at_secs);
+    return r?.frame_count > 0 && r;
+  });
+  assert.equal(recorded.initial_url, pageURL);
+  // A controller opens a tab: next to this one, shared with control.
+  const openedTab = await command('open', {url: `${pageURL}opened`});
+  assert.equal(openedTab.status, 200);
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs.some(t => t.id === openedTab.value.result.tab && t.control && t.url === `${pageURL}opened`));
+  assert.equal((await command('open', {url: 'file:///etc/passwd'})).status, 403);
+  assert.equal((await command('close', {}, openedTab.value.result.tab)).status, 200);
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs.length === 1);
+  await fetch(`http://127.0.0.1:${chromePort}/json/activate/${(await targets()).find(t => t.url === pageURL).id}`);
   // Control follows the tab across navigations; the view keeps working.
   await live.call('Page.navigate', {url: `${pageURL}next`});
   await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs[0]?.url === `${pageURL}next`);
@@ -148,7 +184,7 @@ try {
   await fetch(`http://127.0.0.1:${chromePort}/json/close/${opened.id}`, {method: 'PUT'});
   await api(`/api/extension/nodes/${browserId}`, 'DELETE');
   await until(async () => (await message({type: 'state'})).registration === null);
-  console.log('Chromium: pairing, screenshots, typing, live CDP relay (screencast, trusted clicks, protocol limits), control across navigation, pausing on daemon pages, view-only enforcement, automatic sharing of new tabs and disconnect passed');
+  console.log('Chromium: pairing, screenshots, typing, live CDP relay (screencast, trusted clicks, protocol limits, reload), recording, opening tabs, control across navigation, pausing on daemon pages, view-only enforcement, automatic sharing of new tabs and disconnect passed');
 } finally {
   for (const socket of sockets) socket.close();
   for (const child of children) child.kill('SIGTERM');

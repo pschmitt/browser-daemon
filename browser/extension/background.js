@@ -59,43 +59,66 @@ async function connectPrepared() {
 const nativePending = new Map();
 
 let lastDashboardRequest = 0;
+// Allowed daemons whose site access was granted: their dashboards can pair.
+async function dashboardOrigins() {
+  let policy;
+  try { policy = await cachedPolicy(); } catch { return []; }
+  const granted = [];
+  for (const origin of policy.origins) {
+    if (await api.permissions.contains({origins: [permissionPattern(origin)]})) granted.push(origin);
+  }
+  return granted;
+}
 async function installDashboardBridge() {
-  const {server} = await api.storage.local.get('server');
-  if (!server) return;
-  let base;
-  try { base = await requireDaemon(server); } catch { return; }
-  if (!(await api.permissions.contains({origins: [permissionPattern(base)]}))) return;
-  const matches = [permissionPattern(base).replace('/*', '/'), permissionPattern(base).replace('/*', '/extension/*')];
+  const bases = await dashboardOrigins();
+  const matches = bases.flatMap(base => [permissionPattern(base).replace('/*', '/'), permissionPattern(base).replace('/*', '/extension/*')]);
   const registered = await api.scripting.getRegisteredContentScripts({ids: ['daemon-pairing']});
   if (JSON.stringify(registered[0]?.matches) !== JSON.stringify(matches)) {
     if (registered.length) await api.scripting.unregisterContentScripts({ids: ['daemon-pairing']});
-    await api.scripting.registerContentScripts([{id: 'daemon-pairing', matches, js: ['dashboard-bridge.js'], runAt: 'document_idle', allFrames: false}]);
+    if (matches.length) await api.scripting.registerContentScripts([{id: 'daemon-pairing', matches, js: ['dashboard-bridge.js'], runAt: 'document_idle', allFrames: false}]);
   }
-  for (const tab of await api.tabs.query({url: permissionPattern(base)})) {
-    const url = new URL(tab.url);
-    if (url.origin === base && ['/', '/extension/'].includes(url.pathname)) {
-      try { await api.scripting.executeScript({target: {tabId: tab.id}, files: ['dashboard-bridge.js']}); } catch { /* Tab may have closed. */ }
+  for (const base of bases) {
+    for (const tab of await api.tabs.query({url: permissionPattern(base)})) {
+      const url = new URL(tab.url);
+      if (url.origin === base && ['/', '/extension/'].includes(url.pathname)) {
+        try { await api.scripting.executeScript({target: {tabId: tab.id}, files: ['dashboard-bridge.js']}); } catch { /* Tab may have closed. */ }
+      }
     }
   }
 }
+// The administrator's name for this browser (e.g. laptop-firefox), else os-browser.
+async function defaultName() {
+  try {
+    const {defaultName: name} = await api.storage.managed.get('defaultName');
+    if (typeof name === 'string' && name.trim()) return name.trim().slice(0, 80);
+  } catch { /* No managed policy. */ }
+  const os = (await api.runtime.getPlatformInfo?.().catch(() => null))?.os;
+  return `${os && os !== 'linux' ? os : 'linux'}-${chromium ? 'chromium' : 'firefox'}`;
+}
 async function dashboardMessage(message, sender) {
-  const {server} = await api.storage.local.get('server');
   const url = new URL(sender.url);
   if (sender.id !== api.runtime.id || sender.frameId !== 0 || !sender.tab ||
-      !server || url.origin !== NodePolicy.serverURL(server) || !['/', '/extension/'].includes(url.pathname)) {
-    throw new Error('Dashboard pairing is available only on the configured daemon.');
+      !(await dashboardOrigins()).includes(url.origin) || !['/', '/extension/'].includes(url.pathname)) {
+    throw new Error('Dashboard pairing is available only on allowed daemons.');
   }
-  await requireDaemon(server);
-  if (!(await api.permissions.contains({origins: [permissionPattern(server)]}))) throw new Error('Daemon site access was removed. Enable dashboard pairing again.');
-  if (message.action === 'discover') return {origin: api.runtime.getURL('').replace(/\/$/, ''), connected: !!registration, browser: chromium ? 'Chromium' : 'Firefox'};
+  // The node ID lets the dashboard mark this browser's own entry.
+  if (message.action === 'discover') return {origin: api.runtime.getURL('').replace(/\/$/, ''), connected: !!registration, node: registration?.id || null, browser: chromium ? 'Chromium' : 'Firefox'};
   if (message.action !== 'approve' || !/^[a-f0-9]{64}$/.test(message.code)) throw new Error('Invalid pairing request.');
   if (registration) throw new Error('Already connected. Stop sharing in the extension before pairing again.');
   if (Date.now() - lastDashboardRequest < 5000) throw new Error('A pairing request is already being shown.');
   lastDashboardRequest = Date.now();
-  await api.storage.session.set({dashboardPairing: {server: url.origin, code: message.code, remember: message.remember === true, expires: Date.now() + 300000}});
-  await api.tabs.create({url: api.runtime.getURL('popup.html')});
-  record('Dashboard requested pairing — waiting for your approval in the extension');
-  return {pending: true};
+  await api.storage.session.set({dashboardPairing: {server: url.origin, code: message.code, remember: message.remember === true, control: message.control !== false, expires: Date.now() + 300000}});
+  approvalPending = Date.now() + 300000;
+  await badge();
+  record('Dashboard requested pairing — waiting for your approval');
+  return {pending: true, where: await openApproval(sender.tab.windowId)};
+}
+
+// The toolbar popup where the browser allows opening it, else an extension tab.
+async function openApproval(windowId) {
+  try { await api.action.openPopup(windowId ? {windowId} : {}); return 'popup'; } catch { /* Not allowed here. */ }
+  await api.tabs.create({url: api.runtime.getURL('popup.html?tab'), windowId});
+  return 'tab';
 }
 
 async function daemonPolicy() {
@@ -198,8 +221,16 @@ async function syncNativeGrants() {
 function publishSafely() { void publish().catch(() => stop('Could not update shared tabs')); }
 
 let published = [];
+let approvalPending = 0;
 // The number of shared tabs: red when any may be controlled, green when view only.
+// A "?" asks for a decision: a dashboard waits for pairing approval.
 async function badge() {
+  if (approvalPending > Date.now() && !registration) {
+    await api.action.setBadgeText({text: '?'});
+    await api.action.setBadgeBackgroundColor({color: '#6d4aff'});
+    await api.action.setTitle({title: 'Browser node: a dashboard asks to connect — click to answer'});
+    return;
+  }
   const count = registration ? published.length : 0;
   const control = published.some(t => t.control);
   await api.action.setBadgeText({text: registration ? String(count) : ''});
@@ -263,7 +294,7 @@ async function publish() {
       grant.paused = !safeTab(tab);
       if (grant.paused) continue;
       grant.origin = new URL(tab.url).origin;
-      if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), control: grant.control});
+      if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), control: grant.control, active: tab.active === true});
     } catch { shared.delete(id); await detach(id); }
   }
   if (generation !== currentGeneration) return;
@@ -382,6 +413,13 @@ async function execute(command) {
   } else if (action === 'navigate') {
     await api.tabs.update(tab, {url: params.url});
     return {ok: true};
+  } else if (action === 'open') {
+    // A controller opens a tab next to the one it controls; it is shared with control.
+    const opener = await api.tabs.get(tab);
+    const created = await api.tabs.create({url: params.url, windowId: opener.windowId, active: true});
+    shared.set(created.id, {origin: null, control: true, paused: true});
+    publishSoon();
+    return {tab: created.id};
   } else if (action === 'reload') { await api.tabs.reload(tab); return {ok: true}; }
   else if (action === 'back') { await api.tabs.goBack(tab); return {ok: true}; }
   else if (action === 'forward') { await api.tabs.goForward(tab); return {ok: true}; }
@@ -512,13 +550,17 @@ async function pointer(tab, params, run) {
   touchCast(tab);
   return run('click', {x: down.x, y: down.y, button: down.button, path: [...down.path, {x: params.x, y: params.y}]});
 }
+// The browser's own capture: a JPEG at CSS pixels, quick and small. The
+// companion's PNG screenshot only without access to the tab's site.
 async function capture(tab) {
-  if (nativeReady) {
+  try {
+    const data = await api.tabs.captureTab(tab, {format: 'jpeg', quality: 65, scale: 1});
+    return {data: data.split(',')[1], format: 'jpeg'};
+  } catch (error) {
+    if (!nativeReady) throw error;
     const r = await execute({tab, action: 'screenshot', params: {}});
     return {data: r.data, format: r.format || 'png'};
   }
-  const data = await api.tabs.captureTab(tab, {format: 'jpeg', quality: 65});
-  return {data: data.split(',')[1], format: 'jpeg'};
 }
 function startCast(tab, channel) {
   stopCast(channel);
@@ -601,7 +643,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
     if (socket !== connection) return;
     status = 'Socket connected — checking pairing code';
     record(status);
-    connection.send(JSON.stringify({code, key, remember, name: name.trim(), browser: chromium ? 'chromium' : 'firefox'}));
+    connection.send(JSON.stringify({code, key, remember, name: name.trim(), browser: chromium ? 'chromium' : 'firefox', version: api.runtime.getManifest().version}));
     code = ''; key = '';
   };
   connection.onmessage = async event => {
@@ -642,7 +684,8 @@ async function connect({server, code = '', key = '', name, remember = false}) {
     else if (message.type === 'command' && registration) void handleCommand(message, connection, myGeneration);
     else if (message.type === 'cdp' && registration) void relayCdp(message, connection, myGeneration);
     else if (message.type === 'cdp_close') closeChannel(message.channel);
-    else void stop('Invalid daemon message');
+    // A newer daemon may know more message types: ignore them, stay connected.
+    else if (typeof message.type !== 'string') void stop('Invalid daemon message');
   };
   connection.onclose = event => { clearTimeout(timeout); if (socket === connection) void stop(registration
     ? `Connection closed (${event.code}) — pair again to reconnect`
@@ -685,15 +728,21 @@ async function localMessage(message, sender) {
   }
   if (message.type === 'approveDashboard') {
     const {dashboardPairing: pending} = await api.storage.session.get('dashboardPairing');
-    if (!pending || pending.expires <= Date.now()) throw new Error('Dashboard request expired. Click Pair browser extension again.');
-    const {server} = await api.storage.local.get('server');
-    if (server !== pending.server || !(await api.permissions.contains({origins: [permissionPattern(pending.server)]}))) throw new Error('Daemon configuration or permission changed. Request pairing again.');
+    if (!pending || pending.expires <= Date.now()) throw new Error('Dashboard request expired. Click Pair browser again.');
+    if (!(await dashboardOrigins()).includes(pending.server)) throw new Error('Daemon policy or permission changed. Request pairing again.');
     await api.storage.session.remove('dashboardPairing');
-    await connect({server: pending.server, code: pending.code, name: message.name, remember: pending.remember && message.remember === true});
+    approvalPending = 0;
+    // The control choice applies to the tabs shared from now on (and new tabs).
+    sharing.control = message.control === true;
+    await api.storage.local.set({shareControl: sharing.control});
+    const name = (message.name || '').trim() || await defaultName();
+    await connect({server: pending.server, code: pending.code, name, remember: pending.remember && message.remember === true});
     return {ok: true};
   }
   if (message.type === 'rejectDashboard') {
     await api.storage.session.remove('dashboardPairing');
+    approvalPending = 0;
+    await badge();
     record('Dashboard pairing declined');
     return {ok: true};
   }
@@ -726,7 +775,7 @@ async function localMessage(message, sender) {
       control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
     const {dashboardPairing} = await api.storage.session.get('dashboardPairing');
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
-    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), sharing, chromium, nativeReady};
+    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, chromium, nativeReady};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -800,6 +849,8 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
   if (!chromium && change.status === 'complete') { sendEvent(id, 'Page.loadEventFired', {timestamp: Date.now() / 1000}); touchCast(id); }
   if (change.url || change.title || change.status === 'complete') publishSoon();
 });
+// Which shared tab is in front: recordings follow it.
+api.tabs.onActivated.addListener(() => { if (registration) publishSoon(); });
 api.tabs.onCreated.addListener(tab => {
   if (!registration || !sharing.autoShare || tab.incognito) return;
   // Paused until it shows a shareable page; then listed like any other shared tab.
@@ -834,6 +885,13 @@ api.commands.onCommand.addListener(command => { if (command === 'stop-sharing') 
   });
 } });
 void badge();
+
+// An update waits until the extension is idle, which a connected browser never
+// is: apply it at once. A remembered browser reconnects by itself afterwards.
+api.runtime.onUpdateAvailable?.addListener(() => {
+  record('Extension update available — restarting it');
+  void historyWrites.then(() => api.runtime.reload());
+});
 
 void historyReady.then(installDashboardBridge).catch(() => record('Dashboard integration unavailable — open extension setup to grant site access'));
 

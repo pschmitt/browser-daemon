@@ -36,6 +36,8 @@ pub struct Broker {
     slots: Arc<Semaphore>,
     credentials: Mutex<Vec<Remembered>>,
     credential_path: Option<PathBuf>,
+    // Offline remembered browsers are forgotten after this long (None: never).
+    forget_after: Option<Duration>,
 }
 
 impl Broker {
@@ -46,19 +48,59 @@ impl Broker {
             slots: Arc::new(Semaphore::new(MAX_NODES)),
             credentials: Mutex::default(),
             credential_path: None,
+            forget_after: None,
         }
     }
-    pub fn load(path: &FilePath) -> Self {
+    pub fn load(path: &FilePath, forget_after: Option<Duration>) -> Self {
         let mut broker = Self::new();
+        broker.forget_after = forget_after;
         let records = match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice::<Vec<Remembered>>(&bytes)
                 .expect("Invalid remembered browser authorization store"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(_) => panic!("Cannot read remembered browser authorization store"),
         };
-        *broker.credentials.get_mut().unwrap() = records;
+        // Records from before last_seen existed count from now.
+        let now = auth::now();
+        *broker.credentials.get_mut().unwrap() = records
+            .into_iter()
+            .map(|r| Remembered {
+                last_seen: if r.last_seen == 0 { now } else { r.last_seen },
+                ..r
+            })
+            .collect();
         broker.credential_path = Some(path.to_path_buf());
         broker
+    }
+
+    /// Remembered browsers that stayed offline too long are forgotten: their
+    /// key is revoked and they leave the node list.
+    fn sweep(&self) {
+        let Some(after) = self.forget_after else {
+            return;
+        };
+        let online: Vec<Uuid> = self.nodes.lock().unwrap().keys().copied().collect();
+        let now = auth::now();
+        let mut records = self.credentials.lock().unwrap();
+        let stale =
+            |r: &Remembered| !online.contains(&r.id) && r.last_seen + after.as_secs() <= now;
+        if records.iter().any(stale) {
+            let keep: Vec<_> = records.iter().filter(|r| !stale(r)).cloned().collect();
+            if self.save_credentials(&keep).is_ok() {
+                *records = keep;
+            }
+        }
+    }
+
+    fn touch(&self, id: Uuid) {
+        let mut records = self.credentials.lock().unwrap();
+        if let Some(i) = records.iter().position(|r| r.id == id) {
+            let mut updated = records.clone();
+            updated[i].last_seen = auth::now();
+            if self.save_credentials(&updated).is_ok() {
+                *records = updated;
+            }
+        }
     }
 
     fn save_credentials(&self, records: &[Remembered]) -> Result<(), ()> {
@@ -105,6 +147,9 @@ struct Remembered {
     browser: String,
     // Only a SHA-256 digest reaches disk; the random credential stays client-side.
     key_digest: String,
+    // Unix seconds of its last connection or disconnection.
+    #[serde(default)]
+    last_seen: u64,
 }
 
 fn key_digest(key: &str) -> String {
@@ -151,6 +196,9 @@ pub struct Tab {
     pub title: String,
     pub url: String,
     pub control: bool,
+    /// In front of its window: what the owner sees, and what a recording shows.
+    #[serde(default)]
+    pub active: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -162,6 +210,16 @@ pub struct NodeInfo {
     pub expires_at: u64,
     pub remembered: bool,
     pub online: bool,
+    /// The extension's version; empty for releases before live views (0.3.0).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    /// When an offline remembered browser will be forgotten (Unix seconds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forget_at: Option<u64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub recording: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub recording_paused: bool,
     pub tabs: Vec<Tab>,
 }
 
@@ -257,6 +315,8 @@ pub async fn pair(
 
 pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
     state.check_auth(&headers)?;
+    state.extensions.sweep();
+    let forget_after = state.extensions.forget_after;
     let mut nodes: Vec<NodeInfo> = state
         .extensions
         .nodes
@@ -276,8 +336,21 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<R
                 expires_at: 0,
                 remembered: true,
                 online: false,
+                version: String::new(),
+                forget_at: forget_after.map(|a| record.last_seen + a.as_secs()),
+                recording: false,
+                recording_paused: false,
                 tabs: vec![],
             });
+        }
+    }
+    {
+        let recordings = state.active_recordings.read().await;
+        for node in &mut nodes {
+            if let Some(handle) = recordings.get(&node.id) {
+                node.recording = true;
+                node.recording_paused = handle.is_paused();
+            }
         }
     }
     Ok((
@@ -329,7 +402,7 @@ fn valid_command(command: &Command, control: bool) -> bool {
         return false;
     }
     match command.action.as_str() {
-        "navigate" => command.params["url"].as_str().is_some_and(web_url),
+        "navigate" | "open" => command.params["url"].as_str().is_some_and(web_url),
         "click" | "type" | "key" | "scroll" | "reload" | "back" | "forward" | "focus" | "close"
         | "evaluate" => true,
         "cdp" => command.params["method"].as_str().is_some_and(cdp_allowed),
@@ -504,6 +577,8 @@ struct Hello {
     remember: bool,
     name: String,
     browser: String,
+    #[serde(default)]
+    version: String,
 }
 
 pub async fn connect(
@@ -571,6 +646,11 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
         || hello.name.is_empty()
         || hello.name.len() > 80
         || !matches!(hello.browser.as_str(), "chromium" | "firefox")
+        || hello.version.len() > 32
+        || !hello
+            .version
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == '.')
     {
         return Err(());
     }
@@ -619,6 +699,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                 name: hello.name.clone(),
                 browser: hello.browser.clone(),
                 key_digest: key_digest(&key),
+                last_seen: auth::now(),
             });
             broker.save_credentials(&updated)?;
             *records = updated;
@@ -649,6 +730,10 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
             expires_at,
             remembered,
             online: true,
+            version: hello.version,
+            forget_at: None,
+            recording: false,
+            recording_paused: false,
             tabs: vec![],
         }),
         deadline: (!lifetime.is_zero()).then(|| Instant::now() + lifetime),
@@ -665,15 +750,20 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
     struct Registration(Arc<Broker>, Uuid, Arc<Node>);
     impl Drop for Registration {
         fn drop(&mut self) {
-            let mut nodes = self.0.nodes.lock().unwrap();
-            if nodes.get(&self.1).is_some_and(|n| Arc::ptr_eq(n, &self.2)) {
-                if let Some(n) = nodes.remove(&self.1) {
-                    n.end();
+            {
+                let mut nodes = self.0.nodes.lock().unwrap();
+                if nodes.get(&self.1).is_some_and(|n| Arc::ptr_eq(n, &self.2)) {
+                    if let Some(n) = nodes.remove(&self.1) {
+                        n.end();
+                    }
                 }
             }
+            // The forget timer counts from the disconnection.
+            self.0.touch(self.1);
         }
     }
     let _registration = Registration(broker.clone(), id, node.clone());
+    broker.touch(id);
     send(
         ws,
         json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key}),
@@ -777,6 +867,13 @@ pub async fn cdp(
     if node.deadline.is_some_and(|d| d <= Instant::now()) {
         return Err(failure(StatusCode::GONE, "Browser grant expired"));
     }
+    // Older extensions do not know the relay and would drop the connection.
+    if node.info.lock().unwrap().version.is_empty() {
+        return Err(failure(
+            StatusCode::UPGRADE_REQUIRED,
+            "Update the browser extension (restart the browser) for live views",
+        ));
+    }
     if node.control(tab).is_none() {
         return Err(failure(StatusCode::FORBIDDEN, "Tab is not shared"));
     }
@@ -841,6 +938,149 @@ async fn relay(node: &Arc<Node>, tab: u32, ws: &mut WebSocket) {
                 }
             }
         }
+    }
+}
+
+/// Record a shared browser like a session: its own relay channel runs a
+/// screencast of the shared tab in front (screenshots while the browser paints
+/// none, e.g. a minimized window). Stop, pause and resume use the session API.
+pub async fn start_recording(state: &AppState, id: Uuid) -> Result<Json<Value>, ApiError> {
+    let node = state
+        .extensions
+        .nodes
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Session not found"))?;
+    if node.info.lock().unwrap().version.is_empty() {
+        return Err(failure(
+            StatusCode::UPGRADE_REQUIRED,
+            "Update the browser extension (restart the browser) to record it",
+        ));
+    }
+    let mut recordings = state.active_recordings.write().await;
+    if let Some(running) = recordings.get(&id) {
+        return Ok(Json(
+            json!({"status": "already_recording", "session_id": id, "recording_id": running.recording_id}),
+        ));
+    }
+    let handle = crate::recorder::start_recording(
+        id,
+        None,
+        None,
+        state.node_name.clone(),
+        (*state.recorder_config).clone(),
+        None,
+        None,
+    );
+    let recording_id = handle.recording_id;
+    tokio::spawn(feed(state.clone(), id, node, handle.clone()));
+    recordings.insert(id, handle);
+    Ok(Json(
+        json!({"status": "recording_started", "session_id": id, "recording_id": recording_id}),
+    ))
+}
+
+const RECORD_SHOT: u64 = 1 << 40;
+
+async fn feed(
+    state: AppState,
+    id: Uuid,
+    node: Arc<Node>,
+    handle: crate::recorder::SessionRecorderHandle,
+) {
+    use std::sync::atomic::Ordering;
+    let channel = Uuid::new_v4();
+    let (tx, mut rx) = mpsc::channel::<String>(64);
+    let mut tab: Option<u32> = None;
+    let mut next = 1u64;
+    let mut last_frame = Instant::now();
+    let mut tick = tokio::time::interval(Duration::from_millis(750));
+    let request = |tab: u32, id: u64, method: &str, params: Value| {
+        let _ = node
+            .outbound
+            .try_send(json!({"type": "cdp", "channel": channel, "tab": tab,
+            "id": id, "method": method, "params": params}));
+    };
+    let screencast = json!({"format": "jpeg", "quality": 60, "maxWidth": 1600, "maxHeight": 1000});
+    while !handle.stop_flag.load(Ordering::SeqCst) {
+        tokio::select! {
+            _ = tick.tick() => {
+                let current = state.extensions.nodes.lock().unwrap().get(&id).is_some_and(|n| Arc::ptr_eq(n, &node));
+                if !current { break; }
+                let want = {
+                    let info = node.info.lock().unwrap();
+                    info.tabs.iter().find(|t| t.active).or(info.tabs.first()).map(|t| t.id)
+                };
+                let registered = node.channels.lock().unwrap().contains_key(&channel);
+                if want != tab || !registered {
+                    if let Some(old) = tab.filter(|_| want != tab) {
+                        node.channels.lock().unwrap().remove(&channel);
+                        let _ = node.outbound.try_send(json!({"type": "cdp_close", "channel": channel, "tab": old}));
+                    }
+                    tab = want;
+                    if let Some(t) = tab {
+                        node.channels.lock().unwrap().insert(channel, Channel { tab: t, tx: tx.clone() });
+                        request(t, next, "Page.enable", json!({}));
+                        request(t, next + 1, "Page.startScreencast", screencast.clone());
+                        next += 2;
+                        last_frame = Instant::now();
+                    }
+                } else if let Some(t) = tab {
+                    if last_frame.elapsed() > Duration::from_millis(1500) {
+                        request(t, RECORD_SHOT + next, "Page.captureScreenshot", json!({"format": "jpeg", "quality": 60}));
+                        next += 1;
+                    }
+                }
+            }
+            Some(text) = rx.recv() => {
+                let Ok(message) = serde_json::from_str::<Value>(&text) else { continue };
+                let Some(t) = tab else { continue };
+                // An extension's debugger stops sending frames when the page
+                // reloads (the screencast stays "active"): restart it.
+                if message["method"] == "Page.loadEventFired" {
+                    request(t, next, "Page.stopScreencast", json!({}));
+                    request(t, next + 1, "Page.startScreencast", screencast.clone());
+                    next += 2;
+                    continue;
+                }
+                let data = if message["method"] == "Page.screencastFrame" {
+                    request(t, next, "Page.screencastFrameAck", json!({"sessionId": message["params"]["sessionId"]}));
+                    next += 1;
+                    message["params"]["data"].as_str()
+                } else if message["id"].as_u64().is_some_and(|i| i >= RECORD_SHOT) {
+                    message["result"]["data"].as_str()
+                } else {
+                    None
+                };
+                let Some(data) = data else { continue };
+                last_frame = Instant::now();
+                let (url, title) = {
+                    let info = node.info.lock().unwrap();
+                    let shown = info.tabs.iter().find(|x| x.id == t);
+                    (shown.map(|x| x.url.clone()), shown.map(|x| x.title.clone()))
+                };
+                let frame = crate::recorder::ProxyRecordingFrame { url, title, data: data.to_string() };
+                if handle.frame_tx.send(frame).is_err() { break; }
+            }
+        }
+    }
+    if node.channels.lock().unwrap().remove(&channel).is_some() {
+        if let Some(t) = tab {
+            let _ = node
+                .outbound
+                .try_send(json!({"type": "cdp_close", "channel": channel, "tab": t}));
+        }
+    }
+    // The browser went away: the recording ends with it.
+    handle.stop();
+    let mut recordings = state.active_recordings.write().await;
+    if recordings
+        .get(&id)
+        .is_some_and(|h| h.recording_id == handle.recording_id)
+    {
+        recordings.remove(&id);
     }
 }
 
@@ -994,6 +1234,47 @@ mod tests {
         .await
         .unwrap();
         server.abort();
+    }
+
+    #[test]
+    fn offline_remembered_browsers_are_forgotten_after_the_timeout() {
+        let dir = std::env::temp_dir().join(format!("browser-keys-{}", Uuid::new_v4()));
+        let path = dir.join("browser-keys.json");
+        let now = auth::now();
+        let record = |last_seen| Remembered {
+            id: Uuid::new_v4(),
+            origin: "chrome-extension://abc".into(),
+            name: "laptop".into(),
+            browser: "chromium".into(),
+            key_digest: key_digest("k"),
+            last_seen,
+        };
+        let (fresh, stale, legacy) = (record(now - 3600), record(now - 20 * 86400), record(0));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&[&fresh, &stale, &legacy]).unwrap(),
+        )
+        .unwrap();
+        let broker = Broker::load(&path, Some(Duration::from_secs(14 * 86400)));
+        broker.sweep();
+        let ids: Vec<Uuid> = broker
+            .credentials
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        // Records from before the timestamp count from the daemon's start.
+        assert_eq!(ids, vec![fresh.id, legacy.id]);
+        let saved: Vec<Remembered> =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved.len(), 2);
+        let never = Broker::load(&path, None);
+        never.credentials.lock().unwrap()[0].last_seen = 1;
+        never.sweep();
+        assert_eq!(never.credentials.lock().unwrap().len(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

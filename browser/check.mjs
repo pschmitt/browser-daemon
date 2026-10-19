@@ -44,8 +44,8 @@ function harness(firefox = false) {
     receive(message) { this.onmessage({data: JSON.stringify(message)}); }
   }
   const api = {
-    runtime: {id: 'test', getURL: s => `chrome-extension://test/${s}`, onMessage: event('message')},
-    tabs: {get: async id => { if (!tabs.has(id)) throw Error('No tab'); return tabs.get(id); }, query: async () => [...tabs.values()], onRemoved: event('removed'), onUpdated: event('updated'), onCreated: event('created'),
+    runtime: {id: 'test', getURL: s => `chrome-extension://test/${s}`, getManifest: () => ({version: '0.3.1'}), onMessage: event('message')},
+    tabs: {get: async id => { if (!tabs.has(id)) throw Error('No tab'); return tabs.get(id); }, query: async () => [...tabs.values()], onRemoved: event('removed'), onUpdated: event('updated'), onCreated: event('created'), onActivated: event('activated'),
       update: async (...args) => { calls.push(['update', ...args]); }, remove: async id => tabs.delete(id),
       captureTab: async () => { calls.push(['capture']); return 'data:image/jpeg;base64,/9jframe'; }},
     debugger: {attach: async target => { calls.push(['attach', target]); }, detach: async target => { calls.push(['detach', target]); },
@@ -90,6 +90,7 @@ test('only extension UI may grant tabs; private and daemon tabs are excluded', a
   assert.deepEqual(Object.keys(stored[0][1]).sort(), ['name', 'server']);
   assert.ok(stored.every(([, data]) => !JSON.stringify(data).includes('aaaa')));
   assert.ok(!h.sockets[0].url.href?.includes('aaaa'));
+  assert.equal(h.sockets[0].sent[0].version, '0.3.1');
 });
 test('unshared and view-only tabs reject control locally even if the daemon asks', async () => {
   const h = harness(); const s = await h.pair();
