@@ -14,7 +14,9 @@
 <link rel="alternate icon" type="image/x-icon" href="/handoff/favicon.ico">
 <link rel="stylesheet" href="/assets/common.css">
 <script src="/assets/common.js"></script>
+<script src="/assets/extension.js"></script>
 <style>
+[hidden] { display: none !important; }
   :root { --bar: #11141c; --line: #262b38; --bad: #e11d48; --btn: #1b2030; --pub: #f472b6; --warn-fg: #f59e0b; }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) { --bar: #ffffff; --line: #dfe2ec; --btn: #eceef6; --bad: #d4213f; --pub: #be185d; --warn-fg: #b45309; }
@@ -664,6 +666,10 @@
 "use strict";
 
 const params = new URLSearchParams(location.search);
+const sharedBrowserId = params.get("browser");
+const sharedDaemon = params.get("daemon") || "";
+let sharedBrowser = null;
+const sharedBase = sharedDaemon ? `/api/peers/${encodeURIComponent(sharedDaemon)}` : "/api";
 let pageId = params.get("page");
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const E = {
@@ -1422,6 +1428,19 @@ async function getJson(url) {
   return res.json();
 }
 async function fetchTargets() {
+  if (sharedBrowserId) {
+    const result = await getJson(`${sharedBase}/extension/nodes`);
+    sharedBrowser = result.nodes.find(n => n.id === sharedBrowserId);
+    if (!sharedBrowser || sharedBrowser.online === false) throw new Error("This browser is offline. Reconnect it from the extension.");
+    const pages = sharedBrowser.tabs.map(t => ({...t, id: String(t.id), type: "page", sessionId: sharedBrowser.id, engine: sharedBrowser.browser}));
+    if (drv instanceof ExtensionDriver) {
+      drv.node = sharedBrowser;
+      const current = pages.find(p => p.id === pageId);
+      if (!current) { drv.close(); handlers.gone("Sharing ended for this tab. Share it again in the browser extension, or choose another tab."); }
+      renderSharedSession();
+    }
+    return pages;
+  }
   const list = await getJson("/json/list");
   return list.filter((x) => x.type === "page");
 }
@@ -1622,6 +1641,10 @@ async function doConnect({ quiet = false } = {}) {
     connectStep("finding the tab");
     const targets = await fetchTargets();
     target = targets.find((t) => t.id === pageId) || null;
+    if (!target && sharedBrowserId) {
+      setState("bad", "This tab is no longer shared. Choose another tab or approve it again in the browser extension.");
+      loadTabs(); return;
+    }
     if (!target) {
       // Gone (closed, or its session ended), e.g. when coming back here with Back:
       // another tab of the same session, else the dashboard, not a dead end.
@@ -1643,7 +1666,9 @@ async function doConnect({ quiet = false } = {}) {
     if (history.state?.session !== target.sessionId) history.replaceState({ ...history.state, session: target.sessionId }, "");
     const scheme = testHost || location.protocol === "https:" ? "wss://" : "ws://";
     const host = testHost || location.host;
-    drv = target.engine === "firefox"
+    drv = sharedBrowserId
+      ? new ExtensionDriver(sharedBrowser, pageId, sharedDaemon, handlers, {headers: () => authHeaders(), error: text => toast(text, 4000)})
+      : target.engine === "firefox"
       ? new BidiDriver(`${scheme}${host}/firefox?session_id=${encodeURIComponent(target.sessionId)}&observer=true`, pageId, handlers)
       : new CdpDriver(`${scheme}${host}/devtools/page/${encodeURIComponent(pageId)}?observer=true`, handlers);
     document.body.dataset.engine = target.engine || "chromium";
@@ -1694,7 +1719,7 @@ let applied = null, metricsYielding = false;
 // This view itself runs on a phone (touch, small screen): Phone then uses its real size.
 const onPhone = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 600;
 async function applyMetrics({ ifDrifted = false } = {}) {
-  if (!drv) return;
+  if (!drv || sharedBrowserId) return;
   const r = E.stage.getBoundingClientRect();
   let w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
   const dpr = devicePixelRatio || 1;
@@ -1795,17 +1820,19 @@ async function drawFrame(data, frameMeta, mime = "image/jpeg", seq = ++frameSeq)
 async function refreshInfo() {
   if (!drv) return;
   try {
-    const info = await drv.evaluate("({ u: location.href, t: document.title })");
+    const sharedTab = sharedBrowser?.tabs.find(t => String(t.id) === pageId);
+    const info = sharedBrowserId ? (sharedTab && {u: sharedTab.url, t: sharedTab.title}) : await drv.evaluate("({ u: location.href, t: document.title })");
     if (info) {
       if (info.u && info.u !== "about:blank") currentUrl = info.u;
       if (document.activeElement !== E.urlInput && currentUrl) E.urlInput.value = currentUrl;
       document.title = (info.t ? info.t + " · " : "") + "Browser handoff";
-      vaultPeek();
+      if (!sharedBrowserId) vaultPeek();
     }
     const h = await drv.historyState();
     E.back.disabled = h ? !h.back : false;
     E.fwd.disabled = h ? !h.fwd : false;
     loadTabs();
+    if (sharedBrowserId) renderSharedSession();
   } catch { /* page navigating */ }
 }
 
@@ -2535,6 +2562,7 @@ addEventListener("popstate", () => {
 });
 
 async function openNewTab() {
+  if (sharedBrowserId) { toast("Choose tabs in the browser extension, then click Apply.", 4000); return; }
   try {
     const qs = new URLSearchParams();
     qs.set("url", "about:blank");
@@ -2571,6 +2599,20 @@ function askLastTab() {
 }
 
 async function closeTab(id) {
+  if (sharedBrowserId) {
+    const tab = sharedBrowser?.tabs.find(t => String(t.id) === String(id));
+    if (!tab?.control || !confirm(`Close ${tab.title || 'this tab'} in the owner's browser?`)) return;
+    try {
+      await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}), body: JSON.stringify({tab: Number(id), action: 'close', params: {}})}).then(r => { if (!r.ok) throw Error('Close request failed'); });
+      const remaining = await fetchTargets();
+      if (String(id) === pageId) {
+        if (remaining.length) await switchTab(remaining[0].id);
+        else { drv?.close(); setState('bad', 'No shared tabs. Choose tabs in the browser extension, then click Apply.'); }
+      }
+      await loadTabs();
+    } catch (error) { toast(error.message, 4000); }
+    return;
+  }
   const isCurrent = id === pageId;
   const siblings = (await fetchTargets().catch(() => [])).filter((p) => p.sessionId === target?.sessionId);
   if (siblings.length <= 1 && siblings.some((p) => p.id === id)) {
@@ -2635,7 +2677,7 @@ const knownTabs = new Set();
 let tabsAll = [];
 async function loadTabs() {
   try {
-    const list = await getJson("/json/list");
+    const list = sharedBrowserId ? await fetchTargets() : await getJson("/json/list");
     // The tabs of this browser only; the node's other sessions are in the drawer's picker.
     const all = list.filter((x) => x.type === "page");
     const pages = all.filter((x) => !target?.sessionId || x.sessionId === target.sessionId);
@@ -2694,6 +2736,7 @@ function renderTabStrip(pages) {
       e.preventDefault();
       closeTab(p.id);
     };
+    closeBtn.hidden = !!sharedBrowserId && !p.control;
     item.appendChild(closeBtn);
 
     E.tabsScroll.appendChild(item);
@@ -2744,7 +2787,7 @@ function renderTabsModal(pages) {
       profTag.className = "tab-tag";
       profTag.textContent = "Profile: " + p.profile;
       metaWrap.appendChild(profTag);
-    } else if (p.sessionId) {
+    } else if (p.sessionId && !sharedBrowserId) {
       const sessTag = document.createElement("span");
       sessTag.className = "tab-tag";
       sessTag.textContent = "Session: " + p.sessionId.slice(0, 8);
@@ -2765,6 +2808,7 @@ function renderTabsModal(pages) {
       e.stopPropagation();
       closeTab(p.id);
     };
+    closeBtn.hidden = !!sharedBrowserId && !p.control;
     card.appendChild(closeBtn);
 
     card.onclick = () => {
@@ -3264,6 +3308,15 @@ const ICON = {
 };
 
 async function sessionApi(method, path) {
+  if (sharedBrowserId) {
+    if (method === "GET" && !path) return {session: {id: sharedBrowserId, name: sharedBrowser?.name, engine: sharedBrowser?.browser, tabs_count: sharedBrowser?.tabs.length || 0, persistent: true}};
+    if (method === "DELETE" && !path) {
+      const res = await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}`, {method, headers: authHeaders()});
+      if (!res.ok) throw Error("Could not disconnect browser");
+      return {};
+    }
+    throw Error("This action is unavailable for shared browsers.");
+  }
   const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}${path}`, { method, headers: authHeaders() });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   return res.json().catch(() => ({}));
@@ -3295,6 +3348,7 @@ $("smProxy").onchange = async () => {
 };
 
 async function refreshSession() {
+  if (sharedBrowserId) { await fetchTargets().catch(() => {}); renderSharedSession(); return; }
   if (!target?.sessionId) return;
   try {
     sess = (await sessionApi("GET", "")).session;
@@ -3954,6 +4008,7 @@ $("smDownloads").addEventListener("click", () => { renderDownloadsList(); $("dow
 // layout and gets back the smallest width and height among those views.
 const viewers = { ws: null, session: null, native: null, forced: false, heard: false, own: null, sent: undefined, count: 1 };
 function connectViewers() {
+  if (sharedBrowserId) return;
   const sessionId = target?.sessionId;
   if (viewers.ws && viewers.session === sessionId) return;
   try { viewers.ws?.close(); } catch { /* closed */ }
@@ -4266,6 +4321,7 @@ function setEngineIcon(el, engine) {
 }
 
 function renderSession() {
+  if (sharedBrowserId) { renderSharedSession(); return; }
   if (!sess) return;
   E.sessBtn.hidden = false;
   const rec = sess.is_recording, paused = rec && sess.recording_paused;
@@ -4332,6 +4388,27 @@ function renderSession() {
   if (box._html !== html) { box.innerHTML = html; box._html = html; }
 }
 
+// Capabilities come from the active tab's local grant, never from dashboard controls.
+function renderSharedSession() {
+  if (!sharedBrowser) return;
+  const tab = sharedBrowser.tabs.find(t => String(t.id) === pageId), control = tab?.control === true;
+  E.sessBtn.hidden = false; E.profChip.hidden = false; E.agentChip.hidden = true;
+  E.sessBtn.title = 'Shared browser';
+  $('profChipText').textContent = sharedBrowser.name + (control ? '' : ' · View only');
+  E.profChip.title = `${sharedBrowser.name} · ${control ? 'Control allowed' : 'View only'} · Tabs shared by their owner`;
+  E.profChip.onclick = e => { e.stopPropagation(); toggleSessMenu(true); };
+  $('smTitle').textContent = sharedBrowser.name; $('smTitle').title = 'Shared browser';
+  $('smTitle').onclick = null; $('smTitle').removeAttribute('role'); $('smTitle').removeAttribute('tabindex');
+  $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Reconnects after restart' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}`;
+  setEngineIcon($('smEngine'), sharedBrowser.browser);
+  for (const id of ['smRec', 'smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow', 'vaultBtn', 'tabAddBtn', 'newTabBtn', 'audioBtn']) $(id).hidden = true;
+  for (const id of ['back', 'fwd', 'reload', 'smFwd', 'smReload', 'kbbtn', 'smKeyboard', 'urlGo', 'smCapture']) { const el = $(id); if (el) el.disabled = !control; }
+  E.urlInput.readOnly = !control;
+  E.view.setAttribute('aria-label', control ? 'Remote shared tab; click and type to control' : 'Shared tab; view only');
+  if (!stopArmed) $('smStopText').textContent = sharedBrowser.remembered ? 'Forget browser and revoke key' : 'Disconnect browser';
+  $('smStop').title = sharedBrowser.remembered ? 'Revoke its remembered key and stop sharing. Your browser and tabs stay open.' : 'Stop sharing. Your browser and tabs stay open.';
+}
+
 // Whether a recording started here takes the sound: the session's default (its
 // profile's setting, else the node's) until toggled for this session.
 const recSoundPick = new Map();
@@ -4371,7 +4448,7 @@ function toggleSessMenu(open = E.sessMenu.hidden) {
 function disarmStop() {
   clearTimeout(stopArmed); stopArmed = 0;
   $("smStop").classList.remove("armed");
-  $("smStopText").textContent = "Stop session";
+  $("smStopText").textContent = sharedBrowserId ? (sharedBrowser?.remembered ? "Forget browser and revoke key" : "Disconnect browser") : "Stop session";
 }
 
 E.sessBtn.onclick = (e) => { e.stopPropagation(); toggleSessMenu(); };
@@ -4413,7 +4490,7 @@ $("smRec").onclick = async (e) => {
 $("smStop").onclick = async () => {
   if (!stopArmed) {
     $("smStop").classList.add("armed");
-    $("smStopText").textContent = sess?.persistent || sess?.profile ? "Tap again to stop (profile is kept)" : "Tap again to stop and discard";
+    $("smStopText").textContent = sharedBrowserId ? (sharedBrowser?.remembered ? "Tap again to forget browser and revoke key" : "Tap again to disconnect browser") : sess?.persistent || sess?.profile ? "Tap again to stop (profile is kept)" : "Tap again to stop and discard";
     stopArmed = setTimeout(disarmStop, 4000);
     return;
   }
@@ -4427,7 +4504,7 @@ $("smStop").onclick = async () => {
   } catch (err) {
     stopping = false;
     $("smStatus").textContent = "Could not stop: " + err.message;
-    $("smStopText").textContent = "Stop session";
+    $("smStopText").textContent = sharedBrowserId ? (sharedBrowser?.remembered ? "Forget browser and revoke key" : "Disconnect browser") : "Stop session";
   }
 };
 function startSessionPolling() {
@@ -4438,6 +4515,19 @@ function startSessionPolling() {
 
 // ?session=<id> (dashboard launch): open that session's first tab.
 async function boot() {
+  if (sharedBrowserId) {
+    layoutMode = "window"; mobileLayout = false; fitLayout = false;
+    try {
+      const pages = await fetchTargets();
+      if (!pageId && pages.length) {
+        pageId = pages[0].id;
+        const url = new URL(location.href); url.searchParams.set('page', pageId); history.replaceState(null, '', url);
+      }
+      if (!pageId) { setState('bad', 'No shared tabs. Choose tabs in the browser extension, then click Apply.'); return; }
+      await connect();
+    } catch (error) { setState('bad', error.message); }
+    return;
+  }
   const sessionId = params.get("session");
   if (!pageId && sessionId) {
     setState("wait");

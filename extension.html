@@ -1,24 +1,7 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Temporary browsers · Browser Daemon</title><link rel="icon" href="/favicon.svg">
-<link rel="stylesheet" href="/assets/extension.css">
-<body>
-<main>
-  <p><a href="/">← Dashboard</a></p><h1>Temporary browsers</h1>
-  <p>Browsers connected through the extension. Only tabs explicitly shared by their owner are available. Control requires their separate permission.</p>
-  <p><button id="pairBrowser" class="btn primary" type="button">Pair browser extension</button> <span id="pairBrowserStatus" role="status"></span></p>
-  <label><input id="rememberBrowser" type="checkbox"> Remember this browser and reconnect after restart (no key expiry)</label>
-  <p id="status" role="status">Loading…</p><div id="nodes"></div>
-  <section id="viewer" hidden>
-    <h2 id="title"></h2><p id="access"></p>
-    <div><button id="back">Back</button> <button id="forward">Forward</button> <button id="reload">Reload</button> <button id="focus">Focus tab</button> <button id="snapshot">Read page</button> <button id="leave">Close view</button></div>
-    <p><input id="address" type="url" aria-label="Page URL" placeholder="https://example.org"> <button id="navigate">Go</button></p>
-    <p><input id="text" type="text" aria-label="Text to type" placeholder="Text to type in the focused field"> <button id="type">Type text</button> <button id="enter">Enter</button> <button id="tab">Tab</button></p>
-    <p>Click the screenshot to interact; scroll over it to scroll the page. Navigation ends sharing until approved again.</p>
-    <img id="screen" alt="Remote tab screenshot" width="1000" tabindex="0"><pre id="output"></pre>
-  </section>
-</main>
+<title>Browser Daemon</title><link rel="icon" href="/favicon.svg">
+<body><p>Opening Browser Daemon… <a href="/#nodes">Dashboard</a></p>
 <script src="/assets/extension.js"></script>
-<script src="/assets/pairing.js"></script>
 </body></html>

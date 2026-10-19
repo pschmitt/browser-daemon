@@ -257,16 +257,36 @@ class Companion:
             point = d.script("const e=document.querySelector(arguments[0]); if(!e) throw Error('Not found'); e.scrollIntoView({block:'center'}); e.focus(); const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};", [params["selector"]])
             params = {**params, **point}
         if action == "click":
-            return d.actions("pointer", [{"type": "pointerMove", "duration": 0, "origin": "viewport", "x": round(finite(params["x"])), "y": round(finite(params["y"]))}, {"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}])
+            button = params.get("button", 0)
+            if type(button) is not int or button not in (0, 1, 2):
+                raise ValueError("Invalid pointer button")
+            path = params.get("path", [])
+            if not isinstance(path, list) or len(path) > 128:
+                raise ValueError("Invalid pointer path")
+            points = [{"x": round(finite(point["x"])), "y": round(finite(point["y"]))} for point in path]
+            actions = [{"type": "pointerMove", "duration": 0, "origin": "viewport", "x": round(finite(params["x"])), "y": round(finite(params["y"]))}, {"type": "pointerDown", "button": button}]
+            actions.extend({"type": "pointerMove", "duration": 16, "origin": "viewport", **point} for point in points)
+            actions.append({"type": "pointerUp", "button": button})
+            return d.actions("pointer", actions)
         if action == "scroll":
             return d.actions("wheel", [{"type": "scroll", "duration": 100, "x": 0, "y": 0, "deltaX": round(finite(params["x"])), "deltaY": round(finite(params["y"]))}])
         keys = {"Enter": "\ue007", "Tab": "\ue004", "Escape": "\ue00c", "Backspace": "\ue003", "Delete": "\ue017", "ArrowLeft": "\ue012", "ArrowRight": "\ue014", "ArrowUp": "\ue013", "ArrowDown": "\ue015", "Home": "\ue011", "End": "\ue010", "PageUp": "\ue00e", "PageDown": "\ue00f"}
-        text = keys[params["key"]] if action == "key" else params.get("text")
+        if action == "key":
+            key = params.get("key")
+            if key not in keys and (not isinstance(key, str) or len(key) != 1):
+                raise ValueError("Invalid key")
+            text = keys.get(key, key)
+        else:
+            text = params.get("text")
         if not isinstance(text, str) or len(text) > 4096:
             raise ValueError("Invalid text")
+        modifiers = params.get("modifiers", {}) if action == "key" else {}
+        if not isinstance(modifiers, dict) or any(k not in ("ctrl", "shift", "alt", "meta") or type(v) is not bool for k, v in modifiers.items()):
+            raise ValueError("Invalid key modifiers")
+        held = [value for name, value in (("ctrl", "\ue009"), ("shift", "\ue008"), ("alt", "\ue00a"), ("meta", "\ue03d")) if modifiers.get(name)]
         for start in range(0, len(text), 64):
             actions = [event for character in text[start:start + 64] for event in ({"type": "keyDown", "value": character}, {"type": "keyUp", "value": character})]
-            d.actions("key", actions)
+            d.actions("key", [{"type": "keyDown", "value": value} for value in held] + actions + [{"type": "keyUp", "value": value} for value in reversed(held)])
         return {"ok": True}
 
 

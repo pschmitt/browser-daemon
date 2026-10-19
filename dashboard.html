@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/assets/common.css">
 <script src="/assets/common.js"></script>
 <style>
+[hidden] { display: none !important; }
 :root {
   --surface: #11141c; --raised: #161a24; --hover: #1b2030; --line: #232836; --line-strong: #30364a;
   --faint: #7f87a0;
@@ -606,6 +607,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .endpoint { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .endpoint .lbl { font-size: 12px; font-weight: 700; color: var(--muted); width: 110px; flex: none; }
 .endpoint code { flex: 1; min-width: 0; font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-pairing { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
 .nodes-list { display: flex; flex-direction: column; gap: 10px; }
 .add-peer { margin-top: 18px; max-width: 640px; }
 .node-card { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
@@ -903,7 +905,6 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="sessSearch" placeholder="Filter sessions: name, agent, topic, address…" autocomplete="off" spellcheck="false" aria-label="Filter sessions"></label>
       <button class="btn" id="agentsOnlyBtn" data-act="agents-only" aria-pressed="false" title="Only the sessions an agent is driving"><svg class="i sm"><use href="#i-bot"/></svg>Agents only</button>
     </div>
-    <div id="sharedBrowserSessions" class="session-grid"></div>
     <div class="session-grid" id="sessionGrid"></div>
   </section>
   <section class="view profiles" id="view-profiles" hidden></section>
@@ -911,10 +912,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view nodes" id="view-nodes" hidden>
-    <p><button id="pairBrowser" class="btn primary" type="button">Pair browser extension</button> <span id="pairBrowserStatus" role="status"></span></p>
-  <label><input id="rememberBrowser" type="checkbox"> Remember this browser and reconnect after restart (no key expiry)</label>
-    <p><a class="btn" href="/extension/">Temporary browsers · share and control your own tabs</a></p>
-    <div id="temporaryBrowserSummary" class="nodes-list" role="status"></div>
+    <div class="node-pairing"><button id="pairBrowser" class="btn" type="button"><svg class="i sm"><use href="#i-plus"/></svg>Pair browser extension</button>
+      <label class="hint"><input id="rememberBrowser" type="checkbox"> Reconnect after restart · no key expiry</label>
+      <span id="pairBrowserStatus" class="hint" role="status"></span></div>
     <div id="nodesList" class="nodes-list"></div>
     <form id="addPeerForm" class="field add-peer"><label for="peerUrl">Add a peer</label>
       <div style="display:flex;gap:8px"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.rofl-13.example.net"><button class="btn primary" type="submit"><svg class="i"><use href="#i-plus"/></svg>Add</button></div>
@@ -1378,20 +1378,38 @@ const nodeColor = (name) => `hsl(${hueOf(name)} 68% var(--node-l))`;
 const nodeProxies = (node) => nodes.find((n) => n.name === node)?.proxies || [];
 const proxyName = (node, id) => nodeProxies(node).find((x) => x.id === id)?.name || id;
 const proxyChip = (node, id) => (id ? `<span class="chip proxy" title="Traffic goes through ${esc(proxyName(node, id))}">${icon('route')}${esc(proxyName(node, id))}</span>` : '');
-const nodeChip = (name) => `<span class="chip node" style="--node:${nodeColor(name)}">${esc(name || 'local')}</span>`;
+const nodeChip = (name) => `<span class="chip node" style="--node:${nodeColor(name)}">${esc(nodeLabel(name) || 'local')}</span>`;
 
 let ov = null;                                // last mesh overview
 let currentOverview = null;                   // same, for the player code
 let nodes = [];                               // local node first, then peers
 let filter = 'all';
 let extensionBrowserNodes = [];
-function sharedBrowserTabCount() {
-  return extensionBrowserNodes.filter(n => filter === 'all' || (n.daemon || ov?.local_node.name) === filter).reduce((total, n) => total + n.tabs.length, 0);
+const extensionNodeKey = n => `browser:${n.daemon || ''}:${n.id}`;
+const extensionNodeOf = name => extensionBrowserNodes.find(n => extensionNodeKey(n) === name);
+const nodeLabel = name => extensionNodeOf(name)?.name || name;
+const extensionSessions = () => extensionBrowserNodes.filter(n => n.online !== false && n.tabs.length).map(n => ({
+  id: n.id, node_name: extensionNodeKey(n), name: n.name, engine: n.browser, persistent: true,
+  uptime_seconds: 0, client_count: 0, tabs_count: n.tabs.length, _extension: n,
+}));
+const dashboardSessions = () => [...(ov?.sessions || []), ...extensionSessions()];
+const sharedBrowserTabCount = () => extensionSessions().filter(inFilter).reduce((sum, s) => sum + s.tabs_count, 0);
+const extensionApi = (n, path = '') => api(n.daemon, `/extension/nodes/${enc(n.id)}${path}`);
+function syncExtensionSessions() {
+  byKey.sessions = new Map(dashboardSessions().map(s => [keyOf.session(s), s]));
 }
 window.addEventListener('browser-daemon-extension-nodes', event => {
   extensionBrowserNodes = event.detail;
-  if (ov) { renderStats(); renderSessions(); }
+  if (ov) { syncExtensionSessions(); render(); }
 });
+async function revokeExtension(n) {
+  const ok = await ask({title: `${n.remembered ? 'Forget' : 'Disconnect'} ${n.name}?`,
+    text: n.remembered ? 'Revoke this browser’s remembered key and stop sharing its tabs. Pair again to reconnect.' : 'End this connection and stop sharing its tabs. Your browser and tabs stay open.',
+    ok: n.remembered ? 'Forget browser' : 'Disconnect', danger: true});
+  if (!ok) return;
+  await act(`Disconnecting ${n.name}`, () => request('DELETE', extensionApi(n)), `${n.name} disconnected`);
+  window.dispatchEvent(new Event('browser-daemon-refresh-extensions'));
+}
 
 const localName = () => ov?.local_node?.name;
 const isLocal = (node) => !node || node === localName();
@@ -1403,6 +1421,8 @@ function nodeBase(node) {
   return /^https?:\/\//i.test(url) ? url : '';
 }
 function handoffUrl(node, { page, session } = {}) {
+  const browser = extensionNodeOf(node);
+  if (browser) return '/handoff/?' + new URLSearchParams({browser: browser.id, daemon: browser.daemon || '', ...(page ? {page} : {})});
   const qs = page ? `?page=${enc(page)}` : session ? `?session=${enc(session)}` : '';
   return `${nodeBase(node)}/handoff/${qs}`;
 }
@@ -1863,6 +1883,7 @@ async function drivenClick(e) {
 document.addEventListener('click', drivenClick);
 document.addEventListener('auxclick', drivenClick);
 function pagesOf(session) {
+  if (session._extension) return session._extension.tabs.map(t => ({...t, id: String(t.id), type: 'page', sessionId: session.id, node_name: session.node_name}));
   return (ov?.targets || []).filter((t) => t.type === 'page' && t.node_name === session.node_name && t.sessionId === session.id);
 }
 
@@ -1916,8 +1937,8 @@ function render() {
     { ...ov.local_node, isLocal: true, status: 'online', latency_ms: 0 },
     ...ov.peers.map((p) => ({ ...p, isLocal: false })),
   ];
-  if (filter !== 'all' && !nodes.some((n) => n.name === filter)) filter = 'all';
-  byKey.sessions = new Map(ov.sessions.map((s) => [keyOf.session(s), s]));
+  if (filter !== 'all' && !nodes.some((n) => n.name === filter) && !extensionNodeOf(filter)) filter = 'all';
+  syncExtensionSessions();
   byKey.profiles = new Map(ov.profiles.map((p) => [keyOf.profile(p), profileInfo(p)]));
   byKey.recordings = new Map((ov.recordings || []).map((r) => [keyOf.recording(r), r]));
   for (const [key, url] of recIcons) {
@@ -1940,25 +1961,28 @@ function render() {
 // The node filter lives on the Nodes tab; this shows when one is active (and
 // lets it be dropped from any tab), and flags offline nodes on the tab itself.
 function renderHeader() {
-  const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter);
+  const ext = extensionNodeOf(filter);
+  const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter) || (ext && {name: filter, status: ext.online === false ? 'offline' : 'online', active_sessions: ext.tabs.length ? 1 : 0, max_sessions: 0});
   const chip = $('nodeFilterChip');
   chip.hidden = !sel;
   if (sel) {
     chip.style.setProperty('--node', nodeColor(sel.name));
     chip.classList.toggle('off', sel.status !== 'online');
-    $('nodeFilterName').textContent = sel.name;
+    $('nodeFilterName').textContent = nodeLabel(sel.name);
   }
   $('countNodes').classList.toggle('warn', ov.online_nodes < ov.total_nodes);
-  $('countNodes').title = `${ov.online_nodes}/${ov.total_nodes} online`;
+  $('countNodes').title = `${ov.online_nodes + extensionBrowserNodes.filter(n => n.online !== false).length}/${ov.total_nodes + extensionBrowserNodes.length} online`;
 }
 
 function renderStats() {
-  const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter);
+  const ext = extensionNodeOf(filter);
+  const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter) || (ext && {name: filter, status: ext.online === false ? 'offline' : 'online', active_sessions: ext.tabs.length ? 1 : 0, max_sessions: 0});
   const active = sel ? sel.active_sessions : ov.total_sessions;
-  const cap = sel ? sel.max_sessions : ov.total_capacity;
-  $('statSessions').innerHTML = `${active}<small>/ ${cap}</small>`;
-  const pct = cap ? Math.min(100, (active / cap) * 100) : 0;
-  $('statSessionsSub').textContent = (cap ? `${Math.round(pct)}% of capacity` : '') + (sharedBrowserTabCount() ? ` · ${sharedBrowserTabCount()} shared browser tab(s)` : '');
+  const cap = sel ? (ext ? 1 : sel.max_sessions) : ov.total_capacity + extensionBrowserNodes.filter(n => n.online !== false).length;
+  const shared = extensionSessions().filter(inFilter).length;
+  $('statSessions').innerHTML = ext ? String(shared) : `${active + shared}<small>${cap ? ` / ${cap}` : ''}</small>`;
+  const pct = cap ? Math.min(100, ((ext ? shared : active + shared) / cap) * 100) : 0;
+  $('statSessionsSub').textContent = (cap ? `${Math.round(pct)}% of capacity` : '') + (sharedBrowserTabCount() ? ` · ${plural(sharedBrowserTabCount(), 'shared tab')}` : '');
   $('statSessionsBar').style.width = pct + '%';
   $('statSessionsBar').style.background = pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)';
 
@@ -1973,7 +1997,7 @@ function renderStats() {
   $('statStorageBar').style.width = sp + '%';
   $('statStorageBar').style.background = sp > 85 ? 'var(--bad)' : sp > 65 ? 'var(--warn)' : 'var(--accent)';
 
-  $('countSessions').textContent = ov.sessions.filter(inFilter).length + sharedBrowserTabCount();
+  $('countSessions').textContent = dashboardSessions().filter(inFilter).length;
   $('countProfiles').textContent = profs.length;
   $('countRecordings').textContent = visibleRecordings().length;
   $('countNodes').textContent = nodes.length + extensionBrowserNodes.length;
@@ -1983,7 +2007,7 @@ function renderStats() {
 function emptyState(ico, title, text, button = '') {
   return `<div class="empty"><div class="ico">${icon(ico)}</div><h3>${esc(title)}</h3><p>${text}</p>${button}</div>`;
 }
-const onNode = () => (filter === 'all' ? '' : ` on ${esc(filter)}`);
+const onNode = () => (filter === 'all' ? '' : ` on ${esc(nodeLabel(filter))}`);
 
 // Sessions of a node that dropped out stay on screen, greyed out, as last seen.
 const lastSeen = new Map();   // node -> { at, sessions }
@@ -2010,12 +2034,12 @@ function staleCard(s) {
 }
 let sessQuery = '', agentsOnly = false;
 $('sessSearch').addEventListener('input', (e) => { sessQuery = e.target.value; renderSessions(); });
-const sessHaystack = (s) => [sessName(s), s.profile, s.node_name, s.engine, s.id,
+const sessHaystack = (s) => [sessName(s), s.profile, nodeLabel(s.node_name), s.engine, s.id,
   ...(s.clients || []).flatMap((c) => [c.agent_name, c.topic, c.conversation, c.cwd, c.machine, c.from]),
   ...pagesOf(s).flatMap((t) => [t.title, t.url]), s.notes?.last].filter(Boolean).join(' ').toLowerCase();
 function renderSessions() {
   const grid = $('sessionGrid');
-  const all = ov.sessions.filter(inFilter);
+  const all = dashboardSessions().filter(inFilter);
   const words = sessQuery.toLowerCase().split(/\s+/).filter(Boolean);
   // Sessions an agent drives first (that is usually the one you are looking for), then the newest.
   const list = all.filter((s) => (!agentsOnly || driverOf(s)) && words.every((w) => sessHaystack(s).includes(w)))
@@ -2024,9 +2048,6 @@ function renderSessions() {
   $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery;
   $('agentsOnlyBtn').setAttribute('aria-pressed', String(agentsOnly));
   $('agentsOnlyBtn').innerHTML = `${icon('bot', 'sm')}Agents only`;
-  if (!list.length && !stale.length && sharedBrowserTabCount() && !sessQuery && !agentsOnly) {
-    grid.style.display = 'none'; return;
-  }
   if (!list.length && !stale.length) {
     grid.style.display = 'block';
     if (all.length) {
@@ -2045,7 +2066,7 @@ function renderSessions() {
   reconcile(grid, [...list, ...stale], keyOf.session, (s) => (s._stale ? staleCard(s) : sessionCard(s)), (el, s) => {
     if (s._stale) return;
     showShot(el, keyOf.session(s));
-    const up = el.querySelector('[data-up]');
+    const up = s._extension ? null : el.querySelector('[data-up]');
     if (up) {
       up.dataset.start = sessionStart(s);
       up.textContent = cardAge(Math.max(0, Math.floor(Date.now() / 1000 - sessionStart(s))));
@@ -2074,17 +2095,26 @@ function showShot(el, key) {
 async function refreshShots() {
   if (document.hidden || !ov) return;
   let frontChanged = false;
-  for (const s of ov.sessions) {
+  for (const s of dashboardSessions()) {
     const key = keyOf.session(s), el = document.querySelector(`.scard[data-key="${CSS.escape(key)}"]`);
     if (!el) continue;
     const r = el.getBoundingClientRect();
     if (r.bottom < 0 || r.top > innerHeight) continue;
     try {
-      const res = await fetch(api(s.node_name, `/sessions/${enc(s.id)}/screenshot`), { headers: authHeaders() });
+      const front = s._extension?.tabs[0];
+      const res = s._extension
+        ? await fetch(extensionApi(s._extension, '/command'), {method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}), body: JSON.stringify({tab: front.id, action: 'screenshot', params: {}}), signal: AbortSignal.timeout(12000)})
+        : await fetch(api(s.node_name, `/sessions/${enc(s.id)}/screenshot`), {headers: authHeaders(), signal: AbortSignal.timeout(12000)});
       if (res.status !== 200) continue;
-      const page = res.headers.get('x-page-id');
+      const page = s._extension ? String(front.id) : res.headers.get('x-page-id');
       if (page && shotPages.get(key) !== page) { shotPages.set(key, page); frontChanged = true; }
-      const url = URL.createObjectURL(await res.blob()), old = shots.get(key);
+      let blob;
+      if (s._extension) {
+        const image = (await res.json()).result;
+        if (!image || !['jpeg', 'png'].includes(image.format) || typeof image.data !== 'string') continue;
+        blob = new Blob([Uint8Array.from(atob(image.data), c => c.charCodeAt(0))], {type: `image/${image.format}`});
+      } else blob = await res.blob();
+      const url = URL.createObjectURL(blob), old = shots.get(key);
       shots.set(key, url);
       showShot(el, key);
       if (old) setTimeout(() => URL.revokeObjectURL(old), 1000);
@@ -2170,14 +2200,14 @@ function sessionCard(s) {
     <a class="scard-hero" href="${esc(handoffUrl(s.node_name, { session: s.id }))}" title="Take over"${drv}>
       <span class="hero-ph" aria-hidden="true">${front ? `<span class="fav">${favicon(front.url)}</span>` : icon(engine)}</span>
       <span class="shot" data-shot hidden></span>
-      <span class="hero-top"><span class="hero-badges">${badges}</span><button class="chip node" style="--node:${nodeColor(s.node_name)}" data-act="node-menu" data-node="${esc(s.node_name)}" title="Node ${esc(s.node_name)}">${esc(s.node_name)}</button></span>
+      <span class="hero-top"><span class="hero-badges">${badges}</span><button class="chip node" style="--node:${nodeColor(s.node_name)}" data-act="node-menu" data-node="${esc(s.node_name)}" title="Node ${esc(nodeLabel(s.node_name))}">${esc(nodeLabel(s.node_name))}</button></span>
       <span class="hero-foot">${front ? `<span class="fav">${favicon(front.url)}</span><span class="hero-title"><b>${front.audible ? `${icon('speaker', 'sm')} ` : ''}${esc(tabTitle(front))}</b><span>${esc(shortUrl(front.url) || 'about:blank')}</span></span>` : '<span class="hero-title"><b>No open tabs</b></span>'}${more}</span>
     </a>`;
 
   // Under the name: one muted line.
   const meta = [
-    `<span title="${esc(s.profile ? `Profile ${s.profile}: its logins and cookies are kept` : 'No profile: nothing is kept')}">${esc(s.profile || 'Throwaway')}</span>`,
-    `<span data-up title="Uptime"></span>`,
+    `<span title="${esc(s._extension ? 'Tabs explicitly shared from your browser' : s.profile ? `Profile ${s.profile}: its logins and cookies are kept` : 'No profile: nothing is kept')}">${esc(s._extension ? 'Shared browser' : s.profile || 'Throwaway')}</span>`,
+    s._extension ? `<span>${s._extension.tabs.some(t => t.control) ? 'Control allowed' : 'View only'}</span>` : `<span data-up title="Uptime"></span>`,
   ].join('<span class="sep">·</span>') + '<span data-idle hidden></span>';
 
   // The rest: small icons with tooltips.
@@ -2209,7 +2239,7 @@ function sessionCard(s) {
     <div class="scard-foot">
       <div class="tab-strip">${strip}</div>
       <div class="scard-inds">${inds}</div>
-      <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}Take over</a>
+      <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}${s._extension && !s._extension.tabs.some(t => t.control) ? 'View' : 'Take over'}</a>
     </div>
   </article>`;
 }
@@ -2430,6 +2460,15 @@ const ACT = {
   // session, its browser, the session itself, and stopping it.
   'session-menu': (el) => {
     const s = byKey.sessions.get(el.dataset.key); if (!s) return;
+    if (s._extension) {
+      openMenu(el, [
+        {label: sessName(s)},
+        {icon: 'takeover', label: s._extension.tabs.some(t => t.control) ? 'Take over' : 'View', run: () => { location.href = handoffUrl(s.node_name); }},
+        {icon: 'server', label: 'Node details', run: () => { filter = s.node_name; setView('nodes'); render(); }},
+        '-',
+        {icon: 'power', label: s._extension.remembered ? 'Forget browser…' : 'Disconnect browser…', danger: true, run: () => revokeExtension(s._extension)},
+      ]); return;
+    }
     openMenu(el, [
       { label: sessName(s) },
       s.is_recording
@@ -2464,8 +2503,8 @@ const ACT = {
   'node-menu': (el) => {
     const node = el.dataset.node;
     openMenu(el, [
-      { label: node },
-      { icon: 'server', label: filter === node ? 'Show all nodes' : `Only ${node}`, run: () => { filter = filter === node ? 'all' : node; render(); } },
+      { label: nodeLabel(node) },
+      { icon: 'server', label: filter === node ? 'Show all nodes' : `Only ${nodeLabel(node)}`, run: () => { filter = filter === node ? 'all' : node; render(); } },
       { icon: 'info-c', label: 'Node details', run: () => setView('nodes') },
     ], { align: 'left' });
   },
@@ -2610,7 +2649,7 @@ $('sessionAdblock').addEventListener('change', () => { adblockTouched = true; })
 const engineDefaults = (node, engine) => nodes.find((n) => n.name === node)?.settings?.engines?.[engine] || {};
 
 function openNewSession(prefill = {}) {
-  sessionNode = prefill.node || (filter !== 'all' ? filter : localName());
+  sessionNode = prefill.node || (filter !== 'all' && !extensionNodeOf(filter) ? filter : localName());
   nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true });
   sessionProfile = prefill.profile ? { node: sessionNode, name: prefill.profile } : null;
   sessionProxy = null;
@@ -3420,7 +3459,7 @@ function showSessionDetails(s) {
 /* ---------------------------------------------------------------- profiles */
 let profileNode = null;
 function openNewProfile() {
-  profileNode = filter !== 'all' ? filter : localName();
+  profileNode = filter !== 'all' && !extensionNodeOf(filter) ? filter : localName();
   nodePills($('profileNodes'), profileNode, (n) => { profileNode = n; fillCloneOptions(); fillProxyOptions(); }, { onlineOnly: true });
   fillProxyOptions();
   $('profileName').value = '';
@@ -3904,8 +3943,26 @@ function renderNodes() {
       </div>
       ${settings}
     </div>`;
-  }).join('');
+  }).join('') + extensionBrowserNodes.map(extensionNodeCard).join('');
   if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
+}
+function extensionNodeCard(n) {
+  const key = extensionNodeKey(n), online = n.online !== false;
+  const controls = n.tabs.filter(t => t.control).length;
+  return `<div class="node-card" style="--node:${nodeColor(key)}">
+    <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
+      <div class="t"><b>${esc(n.name)} <span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span><span class="chip">browser</span></b>
+        <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}</span>
+        <div class="bars"><span><b>${online && n.tabs.length ? 1 : 0}</b> session${online && n.tabs.length ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Reconnects after restart' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span></div>
+      </div>
+      <div style="display:flex;gap:6px;flex:none">
+        <button class="btn sm${filter === key ? ' primary' : ''}" data-act="filter" data-node="${esc(key)}">${icon('layers', 'sm')}${filter === key ? 'Showing only' : 'Show only'}</button>
+        ${online && n.tabs.length ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls ? 'Take over' : 'View'}</a>` : ''}
+        <button class="btn icon sm ghost" data-extension-revoke="${esc(key)}" title="${n.remembered ? 'Forget browser and revoke key' : 'Disconnect browser'}" aria-label="${n.remembered ? 'Forget' : 'Disconnect'} ${esc(n.name)}">${icon('trash', 'sm')}</button>
+      </div>
+    </div>
+    ${!n.tabs.length ? `<div class="node-settings"><span class="hint">${online ? 'Choose tabs in the browser extension, then click Apply to make them available in Sessions.' : 'This browser will reconnect when it starts. Shared tabs require approval in the extension.'}</span></div>` : ''}
+  </div>`;
 }
 // Defaults per browser engine, the same on every node: shown as the local node has
 // them. A change is a draft until it is applied (to every online node, after a
@@ -3997,6 +4054,8 @@ $('nodesList').addEventListener('change', async (e) => {
   renderNodes();
 });
 $('nodesList').addEventListener('click', async (e) => {
+  const revoke = e.target.closest('[data-extension-revoke]');
+  if (revoke) { const n = extensionNodeOf(revoke.dataset.extensionRevoke); if (n) await revokeExtension(n); return; }
   const launch = e.target.closest('[data-node-launch]');
   if (launch) { openNewSession({ node: launch.dataset.nodeLaunch }); return; }
   const rm = e.target.closest('[data-node-remove]');
@@ -4118,6 +4177,7 @@ function renderOffline() {
 setInterval(renderOffline, 5000);
 
 async function vacuum() {
+  if (extensionNodeOf(filter)) { showToast('Shared browsers do not store recordings on the daemon.', 'info'); return; }
   const targets = filter === 'all' ? nodes.filter((n) => n.status === 'online').map((n) => n.name) : [filter];
   const ok = await ask({ title: 'Vacuum recordings?', text: `Applies the retention policy (age, count and size limits) on ${targets.join(', ')} now.`, ok: 'Vacuum' });
   if (!ok) return;

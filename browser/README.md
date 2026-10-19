@@ -90,10 +90,13 @@ memory-only connection with no time limit uses `--lifetime-secs 0` instead.
    after five minutes. `--lifetime-secs` sets the registration lifetime
    (default 3600, minimum 60, maximum 28800 seconds).
 4. Enter the daemon URL and a browser name, then connect. Select tabs and click
-   **Apply tab sharing**. **Allow remote control** is off by default.
-5. On the daemon dashboard, open **Nodes → Temporary browsers**, or visit
-   `/extension/`. This page discovers extensions on this daemon and online
-   peers, offers live screenshots, page text, input, navigation, and revocation.
+   **Apply**. **Allow remote control** is off by default.
+5. The browser appears alongside regular nodes in **Nodes**. Its shared tabs
+   form one session in **Sessions**, with the same screenshot preview and tab
+   strip as a managed browser. **Take over** opens the regular `/handoff/` view;
+   view-only grants use the same canvas with input disabled. Shared browsers keep
+   their owner's window size. Node actions disconnect the browser or revoke its
+   remembered key. Old `/extension/` links redirect to these views.
 
 No tabs are shared merely by connecting. Private tabs, browser/extension pages,
 the connected daemon's own pages, and localhost pages cannot be selected. Tab

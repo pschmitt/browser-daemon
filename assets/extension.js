@@ -1,140 +1,109 @@
-/* Temporary nodes are displayed apart from trusted daemons. They cannot spawn
-   sessions, accept peer forwarding, or change cluster configuration. */
-const $ = id => document.getElementById(id);
-let selected = null;
-let imaging = false;
-let polling = false;
-let nodeReports = [];
-let wheelBusy = false;
-let initialSelection = true;
-
-async function request(method, path, body) {
-  const response = await fetch(path, {method, headers: {'Content-Type': 'application/json'},
-    body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store'});
-  if (!response.ok) throw new Error(`Request failed (${response.status}). The browser may have disconnected or stopped sharing.`);
-  const result = await response.json();
-  if (result.error) throw new Error(result.error);
-  return result;
-}
-function error(e) { $('status').textContent = e.message; }
-function button(text, action) {
-  const b = document.createElement('button'); b.textContent = text;
-  b.addEventListener('click', () => void action().catch(error));
-  return b;
-}
-function base(daemon) { return daemon ? `/api/peers/${encodeURIComponent(daemon)}` : '/api'; }
-async function refresh() {
-  if (polling) return;
-  polling = true;
-  try {
-    const mesh = await request('GET', '/api/mesh/overview');
-    const daemons = ['', ...mesh.peers.filter(p => p.status === 'online').map(p => p.name)];
-    const results = await Promise.allSettled(daemons.map(async daemon => {
-      const response = await request('GET', `${base(daemon)}/extension/nodes`);
-      return response.nodes.map(node => ({...node, daemon}));
-    }));
-    nodeReports = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
-    const unavailable = results.filter(r => r.status === 'rejected').length;
-    $('status').textContent = `${nodeReports.filter(n => n.online !== false).length} browser(s) connected; ${nodeReports.filter(n => n.online === false).length} remembered offline.${unavailable ? ` ${unavailable} daemon(s) could not report extension support.` : ''}`;
-    const fragment = document.createDocumentFragment();
-    for (const node of nodeReports) {
-      const section = document.createElement('section');
-      const heading = document.createElement('h2'); heading.textContent = node.name;
-      const detail = document.createElement('p');
-      detail.textContent = `${node.browser}${node.native_control ? ' + native control' : ''} via ${node.daemon || mesh.local_node.name} · ${node.online === false ? 'offline' : node.expires_at ? `expires ${new Date(node.expires_at * 1000).toLocaleTimeString()}` : 'no time limit'} · ${node.tabs.length} shared tab(s)`;
-      section.append(heading, detail, button(node.remembered ? 'Forget browser and revoke key' : 'Disconnect browser', async () => {
-        await request('DELETE', `${base(node.daemon)}/extension/nodes/${node.id}`);
-        if (selected?.node.id === node.id) leave();
-        await refresh();
-      }));
-      const list = document.createElement('ul');
-      for (const tab of node.tabs) {
-        const li = document.createElement('li');
-        li.append(button(`${tab.title || tab.url} — ${tab.control ? 'control' : 'view only'}`, async () => open(node, tab)));
-        const url = document.createElement('small'); url.textContent = ` ${tab.url}`;
-        li.append(url); list.append(li);
-      }
-      section.append(list); fragment.append(section);
-    }
-    $('nodes').replaceChildren(fragment);
-    if (initialSelection && !selected) {
-      const query = new URLSearchParams(location.search);
-      const node = nodeReports.find(n => n.id === query.get('browser') && n.daemon === (query.get('daemon') || ''));
-      const tab = node?.tabs.find(t => String(t.id) === query.get('tab'));
-      if (tab) { initialSelection = false; await open(node, tab); }
-    }
-    if (selected) {
-      const tab = nodeReports.find(n => n.id === selected.node.id && n.daemon === selected.node.daemon)?.tabs.find(t => t.id === selected.tab.id);
-      if (!tab) { leave(); $('status').textContent = 'The browser disconnected or stopped sharing this tab.'; }
-      else { selected.tab = tab; setControl(tab.control); }
-    }
-  } catch (e) { error(e); }
-  finally { polling = false; }
-}
-function setControl(control) {
-  $('access').textContent = control ? 'Control allowed by the browser owner' : 'View only';
-  for (const id of ['back', 'forward', 'reload', 'focus', 'navigate', 'type', 'enter', 'tab', 'address', 'text']) $(id).disabled = !control;
-}
-function leave() {
-  selected = null; $('viewer').hidden = true; $('screen').removeAttribute('src');
-  $('output').textContent = ''; $('text').value = '';
-}
-async function open(node, tab) {
-  selected = {node, tab}; $('viewer').hidden = false;
-  $('title').textContent = tab.title || tab.url; $('address').value = tab.url;
-  $('output').textContent = ''; setControl(tab.control);
-  await screenshot();
-}
-async function command(action, params = {}) {
-  const current = selected;
-  if (!current) throw new Error('Select a shared tab.');
-  const response = await request('POST', `${base(current.node.daemon)}/extension/nodes/${current.node.id}/command`, {tab: current.tab.id, action, params});
-  return response.result;
-}
-async function screenshot() {
-  if (!selected || imaging || document.hidden) return;
-  imaging = true;
-  const current = selected;
-  try {
-    const result = await command('screenshot');
-    if (selected === current && typeof result?.data === 'string' && ['jpeg', 'png'].includes(result.format)) {
-      selected.viewport = {width: result.width, height: result.height};
-      $('screen').src = `data:image/${result.format};base64,${result.data}`;
-    }
-  } catch (e) { error(e); }
-  finally { imaging = false; }
-}
-for (const action of ['back', 'forward', 'reload', 'focus']) $(action).addEventListener('click', () => void command(action).then(screenshot).catch(error));
-$('navigate').addEventListener('click', () => void command('navigate', {url: $('address').value}).catch(error));
-$('type').addEventListener('click', () => {
-  const text = $('text').value; $('text').value = '';
-  void command('type', {text}).then(screenshot).catch(error);
-});
-$('enter').addEventListener('click', () => void command('key', {key: 'Enter'}).then(screenshot).catch(error));
-$('tab').addEventListener('click', () => void command('key', {key: 'Tab'}).then(screenshot).catch(error));
-$('snapshot').addEventListener('click', () => void command('snapshot').then(result => { $('output').textContent = JSON.stringify(result, null, 2); }).catch(error));
-$('leave').addEventListener('click', leave);
-$('screen').addEventListener('click', event => {
-  if (!selected?.tab.control) return;
-  const screen = $('screen'); const rect = screen.getBoundingClientRect();
-  void command('click', {x: (event.clientX - rect.left) * (selected.viewport?.width || screen.naturalWidth) / rect.width,
-    y: (event.clientY - rect.top) * (selected.viewport?.height || screen.naturalHeight) / rect.height}).then(screenshot).catch(error);
-});
-$('screen').addEventListener('wheel', event => {
-  if (!selected?.tab.control) return;
-  event.preventDefault();
-  if (wheelBusy) return;
-  wheelBusy = true;
-  void command('scroll', {x: event.deltaX, y: event.deltaY}).then(screenshot).catch(error).finally(() => { wheelBusy = false; });
-}, {passive: false});
-$('screen').addEventListener('keydown', event => {
-  if (!selected?.tab.control || event.ctrlKey || event.metaKey || event.altKey) return;
-  if (event.key.length === 1) {
-    event.preventDefault(); void command('type', {text: event.key}).then(screenshot).catch(error);
-  } else if (['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
-    event.preventDefault(); void command('key', {key: event.key}).then(screenshot).catch(error);
+/* The handoff view uses the same driver contract for managed and shared browsers. */
+globalThis.ExtensionDriver = class ExtensionDriver {
+  constructor(node, page, daemon, handlers, options = {}) {
+    this.node = node; this.page = String(page); this.h = handlers; this.options = options;
+    this.base = daemon ? `/api/peers/${encodeURIComponent(daemon)}` : '/api';
+    this.open = true; this.queue = Promise.resolve(); this.ready = Promise.resolve();
   }
-});
-void refresh();
-setInterval(() => { if (!document.hidden) void refresh(); }, 3000);
-setInterval(() => void screenshot(), 1200);
+  isOpen() { return this.open; }
+  close() { this.open = false; clearTimeout(this.timer); }
+  async command(action, params = {}) {
+    if (!this.open) throw new Error('View closed');
+    const response = await fetch(`${this.base}/extension/nodes/${encodeURIComponent(this.node.id)}/command`, {
+      method: 'POST', headers: {...this.options.headers?.(), 'Content-Type': 'application/json'},
+      body: JSON.stringify({tab: Number(this.page), action, params}), signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error(response.status === 403 ? 'Sharing or control permission ended. Approve this tab again in the browser extension.' : 'The browser is unavailable or stopped sharing this tab.');
+    const body = await response.json();
+    if (body.error) throw new Error('The browser could not complete that action.');
+    return body.result;
+  }
+  get tab() { return this.node.tabs.find(t => String(t.id) === this.page); }
+  get control() { return this.tab?.control === true; }
+  send(action, params) {
+    if (!this.control) return;
+    this.lastInput = performance.now();
+    this.queue = this.queue.then(() => this.open && this.command(action, params)).catch(error => this.options.error?.(error.message));
+  }
+  async start() { await this.frame(); this.loop(); }
+  async frame() {
+    const r = await this.command('screenshot');
+    if (!this.open) return;
+    if (!['jpeg', 'png'].includes(r?.format) || typeof r.data !== 'string') throw new Error('Invalid browser screenshot');
+    let width = r.width, height = r.height;
+    if (!(width > 0 && height > 0)) {
+      const img = new Image(); img.src = `data:image/${r.format};base64,${r.data}`; await img.decode();
+      width = img.naturalWidth; height = img.naturalHeight;
+    }
+    await this.h.frame(r.data, {deviceWidth: width, deviceHeight: height, pageScaleFactor: 1, offsetTop: 0}, `image/${r.format}`);
+  }
+  loop() {
+    this.timer = setTimeout(async () => {
+      if (!this.open) return;
+      try { if (!document.hidden) await this.frame(); }
+      catch (error) { this.close(); this.h.gone(error.message); return; }
+      this.loop();
+    }, performance.now() - (this.lastInput || 0) < 1500 ? 150 : 700);
+  }
+  async applyMetrics() {} // A shared browser keeps its owner's window size.
+  async setVideo() {}
+  async historyState() { return this.control ? null : {back: false, fwd: false}; }
+  async evaluate(expression) {
+    if (!this.control) throw new Error('View only');
+    if (this.node.browser === 'chromium') {
+      const r = await this.command('cdp', {method: 'Runtime.evaluate', params: {expression, returnByValue: true}});
+      return r?.result?.value;
+    }
+    return this.command('evaluate', {script: `return (${expression});`, args: []});
+  }
+  insertText(text) { this.send('type', {text}); }
+  pressKey(key, mods = {}) {
+    if (this.node.browser !== 'chromium') { this.send('key', {key, modifiers: mods}); return; }
+    const modifiers = (mods.alt ? 1 : 0) | (mods.ctrl ? 2 : 0) | (mods.meta ? 4 : 0) | (mods.shift ? 8 : 0);
+    const codes = {Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Delete: 46, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Home: 36, End: 35, PageUp: 33, PageDown: 34};
+    const base = {key, modifiers, windowsVirtualKeyCode: codes[key] || key.toUpperCase().charCodeAt(0)};
+    const text = !mods.ctrl && !mods.alt && !mods.meta && (key === 'Enter' ? '\r' : key === 'Tab' ? '\t' : '');
+    this.send('cdp', {method: 'Input.dispatchKeyEvent', params: {...base, type: text ? 'keyDown' : 'rawKeyDown', ...(text ? {text} : {})}});
+    this.send('cdp', {method: 'Input.dispatchKeyEvent', params: {...base, type: 'keyUp'}});
+  }
+  shortcut(key, shift) { this.pressKey(key, {ctrl: true, shift}); }
+  mouse(type, x, y, button = 0, clicks = 1, down = false) {
+    if (this.node.browser !== 'chromium') {
+      if (type === 'mousePressed') this.pointer = {x, y, button, path: []};
+      else if (type === 'mouseMoved' && down && this.pointer) {
+        this.pointer.path.push({x, y});
+        if (this.pointer.path.length > 127) this.pointer.path.splice(1, 1);
+      } else if (type === 'mouseReleased' && this.pointer) {
+        const pointer = this.pointer; this.pointer = null;
+        this.send('click', {...pointer, path: [...pointer.path, {x, y}]});
+      }
+      return;
+    }
+    this.send('cdp', {method: 'Input.dispatchMouseEvent', params: {type, x, y, button: type === 'mouseMoved' && !down ? 'none' : ['left', 'middle', 'right'][button], buttons: type === 'mouseReleased' || !down && type === 'mouseMoved' ? 0 : [1, 4, 2][button], clickCount: clicks}});
+  }
+  click(x, y) { this.send('click', {x, y}); }
+  mouseDown(x, y, clicks, button) { this.mouse('mousePressed', x, y, button, clicks, true); }
+  mouseMove(x, y, down, button) { this.mouse('mouseMoved', x, y, button, 0, down); }
+  mouseUp(x, y, clicks, button) { this.mouse('mouseReleased', x, y, button, clicks); }
+  wheel(x, y, dx, dy) { this.send('scroll', {x: dx, y: dy}); }
+  touch(type, x, y) {
+    if (this.node.browser === 'chromium') this.send('cdp', {method: 'Input.dispatchTouchEvent', params: {type, touchPoints: x === undefined ? [] : [{x, y}]}});
+    else if (type === 'touchStart') { this.touchStart = {x, y}; this.touchMoved = false; }
+    else if (type === 'touchMove' && this.touchStart) { this.touchMoved = true; this.wheel(x, y, this.touchStart.x - x, this.touchStart.y - y); this.touchStart = {x, y}; }
+    else if (type === 'touchEnd' && this.touchStart) { if (!this.touchMoved) this.click(this.touchStart.x, this.touchStart.y); this.touchStart = null; }
+  }
+  async navigate(url) { if (this.control) return this.command('navigate', {url}); }
+  reload() { this.send('reload'); }
+  async history(delta) { if (this.control) return this.command(delta < 0 ? 'back' : 'forward'); }
+  async dropFiles() { throw new Error('File upload is not available for shared browsers.'); }
+};
+
+// Keep old bookmarks working; all browsing and control now use the regular view.
+if (location.pathname.startsWith('/extension/')) {
+  const query = new URLSearchParams(location.search);
+  if (query.has('browser')) {
+    const target = new URLSearchParams({browser: query.get('browser'), daemon: query.get('daemon') || ''});
+    const page = query.get('tab') || query.get('page'); if (page) target.set('page', page);
+    location.replace('/handoff/?' + target);
+  } else location.replace('/#nodes');
+}
