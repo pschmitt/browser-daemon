@@ -295,6 +295,7 @@ pub(crate) async fn api_peer_forward(
                 header::CACHE_CONTROL,
                 header::ETAG,
                 header::LAST_MODIFIED,
+                axum::http::HeaderName::from_static("x-page-id"),
             ] {
                 if let Some(v) = res.headers().get(name.as_str()) {
                     if let Ok(v) = HeaderValue::from_bytes(v.as_bytes()) {

@@ -15,33 +15,40 @@ const FRESH: Duration = Duration::from_secs(8);
 /// Width of the images; the cards show them at most this wide.
 const WIDTH: f64 = 640.0;
 
+/// A capture and the tab it shows (its target id, when known).
+#[derive(Clone)]
+pub struct Shot {
+    pub jpeg: Vec<u8>,
+    pub page: Option<String>,
+}
+
 #[derive(Default)]
 pub struct Thumbnails {
-    cache: Mutex<HashMap<Uuid, (Instant, Vec<u8>)>>,
+    cache: Mutex<HashMap<Uuid, (Instant, Shot)>>,
 }
 
 impl Thumbnails {
-    pub fn fresh(&self, id: Uuid) -> Option<Vec<u8>> {
+    pub fn fresh(&self, id: Uuid) -> Option<Shot> {
         let cache = self.cache.lock().unwrap();
         cache
             .get(&id)
             .filter(|(at, _)| at.elapsed() < FRESH)
-            .map(|(_, jpeg)| jpeg.clone())
+            .map(|(_, shot)| shot.clone())
     }
 
     /// The last capture whatever its age (better than nothing while a new one fails).
-    pub fn stale(&self, id: Uuid) -> Option<Vec<u8>> {
+    pub fn stale(&self, id: Uuid) -> Option<Shot> {
         self.cache
             .lock()
             .unwrap()
             .get(&id)
-            .map(|(_, jpeg)| jpeg.clone())
+            .map(|(_, shot)| shot.clone())
     }
 
-    pub fn store(&self, id: Uuid, jpeg: Vec<u8>) {
+    pub fn store(&self, id: Uuid, shot: Shot) {
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|_, (at, _)| at.elapsed() < Duration::from_secs(3600));
-        cache.insert(id, (Instant::now(), jpeg));
+        cache.insert(id, (Instant::now(), shot));
     }
 
     pub fn forget(&self, id: Uuid) {
@@ -50,13 +57,18 @@ impl Thumbnails {
 }
 
 /// A JPEG of the tab in front of the Chromium listening on `port`.
-pub async fn chromium(http: &reqwest::Client, port: u16) -> Option<Vec<u8>> {
-    capture(http, port, WIDTH, 60).await.map(|c| c.jpeg)
+pub async fn chromium(http: &reqwest::Client, port: u16) -> Option<Shot> {
+    capture(http, port, WIDTH, 60).await.map(|c| Shot {
+        jpeg: c.jpeg,
+        page: c.id,
+    })
 }
 
 /// A picture of a tab, with the page it shows.
 pub struct Capture {
     pub jpeg: Vec<u8>,
+    /// The tab's target id.
+    pub id: Option<String>,
     pub url: Option<String>,
     pub title: Option<String>,
 }
@@ -81,7 +93,7 @@ pub async fn capture(
     let page = crate::recorder::pick_visible(crate::recorder::page_candidates(targets)).await?;
     let ws_url = page.get("webSocketDebuggerUrl")?.as_str()?.to_string();
     let text = |key: &str| page.get(key).and_then(|v| v.as_str()).map(str::to_string);
-    let (url, title) = (text("url"), text("title"));
+    let (url, title, id) = (text("url"), text("title"), text("id"));
     let shot = async {
         let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.ok()?;
         let mut next = 0u64;
@@ -124,7 +136,12 @@ pub async fn capture(
         .await
         .ok()
         .flatten()?;
-    Some(Capture { jpeg, url, title })
+    Some(Capture {
+        jpeg,
+        id,
+        url,
+        title,
+    })
 }
 
 /// The `result` of the reply to command `id`.

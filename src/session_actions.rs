@@ -14,34 +14,45 @@ pub(crate) async fn api_session_screenshot(
     let Some(session) = state.sessions.read().await.get(&id).cloned() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let jpeg = match state.thumbnails.fresh(id) {
-        Some(jpeg) => Some(jpeg),
+    let shot = match state.thumbnails.fresh(id) {
+        Some(shot) => Some(shot),
         None => {
             let shot = match session.bidi {
                 Some(ref hub) => match hub.active_context().await {
                     Some(ctx) => hub.screenshot_jpeg(&ctx).await.ok().and_then(|b64| {
                         use base64::Engine as _;
-                        base64::engine::general_purpose::STANDARD.decode(b64).ok()
+                        let jpeg = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+                        Some(thumbnail::Shot {
+                            jpeg,
+                            page: Some(ctx),
+                        })
                     }),
                     None => None,
                 },
                 None => thumbnail::chromium(&state.http_client, session.port).await,
             };
-            if let Some(ref jpeg) = shot {
-                state.thumbnails.store(id, jpeg.clone());
+            if let Some(ref shot) = shot {
+                state.thumbnails.store(id, shot.clone());
             }
             shot.or_else(|| state.thumbnails.stale(id))
         }
     };
-    match jpeg {
-        Some(jpeg) => (
-            [
-                (header::CONTENT_TYPE, "image/jpeg"),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-            jpeg,
-        )
-            .into_response(),
+    match shot {
+        Some(shot) => {
+            let mut res = (
+                [
+                    (header::CONTENT_TYPE, "image/jpeg"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                shot.jpeg,
+            )
+                .into_response();
+            // Which tab the picture shows, so the card can name it.
+            if let Some(v) = shot.page.and_then(|p| HeaderValue::from_str(&p).ok()) {
+                res.headers_mut().insert("x-page-id", v);
+            }
+            res
+        }
         None => StatusCode::NO_CONTENT.into_response(),
     }
 }

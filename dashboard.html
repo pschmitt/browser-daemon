@@ -288,7 +288,59 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .tab-row:hover .go { opacity: 1; }
 .tabs-empty { padding: 10px 8px; font-size: 12.5px; color: var(--muted); }
 .tabs-more { padding: 4px 8px 6px; font-size: 12px; color: var(--muted); }
-.scard-foot { display: flex; align-items: center; gap: 6px; padding: 10px 12px 12px; margin-top: auto; }
+.scard-foot { display: flex; align-items: center; gap: 8px; padding: 8px 12px 12px; margin-top: auto; }
+/* The picture leads; what needs attention sits on it. */
+.scard-hero { position: relative; display: block; aspect-ratio: 16 / 10; overflow: hidden; color: inherit; text-decoration: none;
+  background: linear-gradient(135deg, var(--hover), color-mix(in oklab, var(--line) 60%, transparent)); border-bottom: 1px solid var(--line); }
+.scard-hero .shot { position: absolute; inset: 0; margin: 0; border: 0; border-radius: 0; aspect-ratio: auto; background: transparent; }
+.scard-hero .shot img { object-position: top center; }
+.hero-ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--faint); }
+.hero-ph .fav, .hero-ph > .i { width: 40px; height: 40px; opacity: .5; display: grid; place-items: center; }
+.hero-ph .fav img { width: 40px; height: 40px; }
+.hero-top { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; align-items: flex-start; gap: 6px; }
+.hero-top .chip.node { margin-left: auto; flex: none; background: color-mix(in oklab, var(--surface) 82%, transparent); backdrop-filter: blur(6px); box-shadow: 0 1px 4px #0004; }
+.hero-badges { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.hb { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 99px; border: 0; font: inherit; font-size: 11.5px; font-weight: 700;
+  color: #fff; background: rgba(15, 17, 24, .72); backdrop-filter: blur(6px); box-shadow: 0 1px 4px #0004; white-space: nowrap; }
+.hb .i { width: 12px; height: 12px; }
+.hb.rec { background: color-mix(in oklab, var(--bad) 88%, #000); }
+.hb.rec .rec-dot { background: #fff; }
+.hb.public { background: color-mix(in oklab, var(--public) 85%, #000); cursor: pointer; }
+.hb.sound { color: #fff; background: color-mix(in oklab, var(--accent) 85%, #000); padding: 0 6px; }
+.hb-n { display: inline-flex; align-items: center; gap: 3px; padding-left: 5px; margin-left: 1px; border-left: 1px solid #fff6; }
+.hero-foot { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 22px 10px 8px;
+  background: linear-gradient(to top, rgba(8, 10, 16, .88), rgba(8, 10, 16, .55) 60%, transparent); color: #fff; }
+.hero-foot .fav { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
+.hero-foot .fav img { width: 16px; height: 16px; border-radius: 4px; background: #f4f5fa; padding: 1px; }
+.hero-title { flex: 1; min-width: 0; }
+.hero-title b { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero-title b .i { width: 12px; height: 12px; vertical-align: -1px; }
+.hero-title span { display: block; font-size: 11px; opacity: .75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hero-more { flex: none; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: #fff2; }
+.scard-hero:hover .hero-foot { background: linear-gradient(to top, rgba(8, 10, 16, .95), rgba(8, 10, 16, .6) 60%, transparent); }
+.scard-hero:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.scard .scard-head { padding: 10px 12px 4px; }
+.scard .scard-head .engine-badge { width: 32px; height: 32px; }
+.scard-sub .sep { color: var(--faint); }
+.scard-who { padding: 2px 12px 2px 55px; display: flex; flex-direction: column; gap: 2px; }
+.scard-who .scard-agent { margin-top: 0; }
+.tab-strip { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
+.tab-ico { position: relative; width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 7px; color: var(--faint); }
+.tab-ico:hover, .tab-ico:focus-visible { background: var(--hover); }
+.tab-ico img { width: 16px; height: 16px; border-radius: 4px; object-fit: contain; }
+.tab-ico.more { width: auto; padding: 0 6px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.tab-ico-sound { position: absolute; right: 2px; top: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
+.scard-inds { display: flex; align-items: center; gap: 2px; flex: none; }
+.ind { display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 5px; border-radius: 7px; color: var(--muted); font-size: 11.5px; font-weight: 700; cursor: default; }
+.ind[hidden] { display: none; }
+.ind .i { width: 14px; height: 14px; }
+.ind.ok { color: var(--ok); }
+.ind.accent { color: var(--accent); }
+.ind.warn { color: var(--warn); background: var(--warn-soft); }
+.ind.bad { color: var(--bad); }
+.ind[role="button"] { cursor: pointer; }
+.ind[role="button"]:hover { background: var(--hover); }
+.ind > span { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ------------------------------------------------------------ lists (profiles, recordings) */
 .list { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
@@ -1873,7 +1925,7 @@ function renderSessions() {
     if (idle) {
       const st = idleState(s);
       idle.hidden = !st;
-      if (st) { idle.textContent = st.text; idle.className = 'fact ' + st.cls; idle.title = st.title; }
+      if (st) { idle.textContent = st.text; idle.className = 'ind ' + st.cls; idle.title = st.title; }
     }
   });
 }
@@ -1881,6 +1933,7 @@ function renderSessions() {
 // A recent picture of the tab each session shows. Fetched with the auth headers into
 // a blob (an <img> can't send them), only for cards in view, every few seconds.
 const shots = new Map();   // session key -> blob URL
+const shotPages = new Map();   // session key -> the tab its picture shows
 function showShot(el, key) {
   const box = el.querySelector('[data-shot]'), url = shots.get(key);
   if (!box || !url) return;
@@ -1891,6 +1944,7 @@ function showShot(el, key) {
 }
 async function refreshShots() {
   if (document.hidden || !ov) return;
+  let frontChanged = false;
   for (const s of ov.sessions) {
     const key = keyOf.session(s), el = document.querySelector(`.scard[data-key="${CSS.escape(key)}"]`);
     if (!el) continue;
@@ -1899,6 +1953,8 @@ async function refreshShots() {
     try {
       const res = await fetch(api(s.node_name, `/sessions/${enc(s.id)}/screenshot`), { headers: authHeaders() });
       if (res.status !== 200) continue;
+      const page = res.headers.get('x-page-id');
+      if (page && shotPages.get(key) !== page) { shotPages.set(key, page); frontChanged = true; }
       const url = URL.createObjectURL(await res.blob()), old = shots.get(key);
       shots.set(key, url);
       showShot(el, key);
@@ -1906,8 +1962,10 @@ async function refreshShots() {
     } catch { /* the card stays as it is */ }
   }
   for (const [key, url] of shots) {
-    if (!byKey.sessions.has(key)) { URL.revokeObjectURL(url); shots.delete(key); }
+    if (!byKey.sessions.has(key)) { URL.revokeObjectURL(url); shots.delete(key); shotPages.delete(key); }
   }
+  // A picture of another tab than the card names: name that one.
+  if (frontChanged) renderSessions();
 }
 setInterval(refreshShots, 10000);
 setTimeout(refreshShots, 1500);
@@ -1942,20 +2000,18 @@ function idleLabel(secs) {
   return !secs ? 'never' : secs % 3600 === 0 ? `${secs / 3600} h` : `${Math.round(secs / 60)} min`;
 }
 
+// A session at a glance: its picture first, with what needs attention on top of it
+// (recording, public, sound, node); then who it is and what drives it; the rest as
+// small icons with tooltips; its tabs as a strip of icons.
 function sessionCard(s) {
   const key = esc(keyOf.session(s)), drv = drivenAttr(s);
   const engine = s.engine === 'firefox' ? 'firefox' : 'chromium';
   const all = pagesOf(s);
   const real = all.filter((p) => p.url && p.url !== 'about:blank');
   const pages = real.length ? real : all;
-  const shown = pages.slice(0, 4);
-  const tabs = shown.map((p) => `
-    <a class="tab-row" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="Take over this tab"${drv}>
-      <span class="fav">${favicon(p.url)}</span>
-      <span class="t"><b>${p.audible ? `<span class="audible" title="Playing sound" aria-label="Playing sound">${icon('speaker', 'sm')}</span>` : ''}${esc(p.url === 'about:blank' ? 'New tab' : p.title || shortUrl(p.url) || 'New tab')}</b><span>${esc(shortUrl(p.url) || 'about:blank')}</span></span>
-      <span class="go">${icon('arrow', 'sm')}</span>
-    </a>`).join('');
-  const more = pages.length > shown.length ? `<div class="tabs-more">+${pages.length - shown.length} more tabs</div>` : '';
+  // The tab the picture shows (its screenshot says which), else the first.
+  const front = pages.find((p) => p.id === shotPages.get(keyOf.session(s))) || pages[0];
+  const tabTitle = (p) => (p.url === 'about:blank' ? 'New tab' : p.title || shortUrl(p.url) || 'New tab');
   const n = s.client_count || 0;
   // Who is connected (an older node reports only the count): agents are Playwright/Puppeteer.
   const clients = s.clients || [];
@@ -1966,37 +2022,60 @@ function sessionCard(s) {
   // An integration (Home Assistant's HRworks worker, say) says what it is: no agent.
   const integRow = integrations.length ? `<div class="scard-agent integ" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(`An integration is connected:\n\n${integrations.map(clientInfo).join('\n\n')}`)}">${icon(/home\s*assistant/i.test(integrations[0].integration) ? 'homeassistant' : 'plug', 'sm')}<span class="ellipsis">${esc(integrations[0].integration)}</span>${integrations.length > 1 ? `<span class="chip">+${integrations.length - 1}</span>` : ''}</div>` : '';
   const sessPic = profIcon(profileOfSession(s));
-  const fact = (cls, ico, text, title) => `<span class="fact ${cls}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
-  const clientsFact = (cls, ico, text, title) => `<span class="fact clickable ${cls}" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(title)}" aria-label="${esc(title)}">${ico}${esc(text)}</span>`;
-  const facts = [
-    fact('', sessPic ? `<img class="fact-pic" src="${esc(sessPic)}" alt="">` : icon(s.profile ? 'folder' : 'trash', 'sm'), s.profile || 'Throwaway', s.profile ? `Profile ${s.profile}` : 'No profile: nothing is kept'),
-    !s.persistent && fact('', icon('clock', 'sm'), 'Ephemeral', 'Ephemeral: stops when its last client disconnects'),
-    s.audible && fact('accent', icon('speaker', 'sm'), 'Playing', 'Playing sound'),
+
+  // On the picture: only what needs attention.
+  const sh = s.share;
+  const badges = [
     s.is_recording && (s.recording_paused
-      ? fact('', icon('pause', 'sm'), 'REC paused', 'Recording paused')
-      : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
-    s.share && `<span class="fact clickable public" role="button" tabindex="0" data-act="share-session" data-key="${key}" title="${esc(`Public: anyone with the link can ${s.share.control ? 'watch and control' : 'watch'} this session${s.share.expires_at ? ` (until ${absTime(s.share.expires_at)})` : ''}${s.share.watching ? `; ${s.share.watching} watching now` : ''}. Click for the link.`)}">${icon('globe', 'sm')}${s.share.control ? 'Public · control' : 'Public'}${s.share.watching ? ` · ${icon('eye', 'sm')}${s.share.watching}` : ''}</span>`,
-    s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
-    s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
-    others.length && clientsFact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
-      `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`),
-    !clients.length && n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
+      ? `<span class="hb" title="Recording paused">${icon('pause', 'sm')}Paused</span>`
+      : `<span class="hb rec" title="Recording this session"><span class="rec-dot" aria-hidden="true"></span>REC</span>`),
+    sh && `<button class="hb public" data-act="share-session" data-key="${key}" title="${esc(`Shared publicly: anyone with the link can ${sh.control ? 'watch and control' : 'watch'} it${sh.expires_at ? ` (until ${absTime(sh.expires_at)})` : ''}${sh.watching ? `; ${sh.watching} watching now` : ''}. Manage the link`)}">${icon('globe', 'sm')}${sh.control ? 'Public · control' : 'Public'}${sh.watching ? `<span class="hb-n">${icon('eye', 'sm')}${sh.watching}</span>` : ''}</button>`,
+    s.audible && `<span class="hb sound" title="Playing sound">${icon('speaker', 'sm')}</span>`,
+  ].filter(Boolean).join('');
+  const more = pages.length > 1 ? `<span class="hero-more">+${pages.length - 1} tab${pages.length === 2 ? '' : 's'}</span>` : '';
+  const hero = `
+    <a class="scard-hero" href="${esc(handoffUrl(s.node_name, { session: s.id }))}" title="Take over"${drv}>
+      <span class="hero-ph" aria-hidden="true">${front ? `<span class="fav">${favicon(front.url)}</span>` : icon(engine)}</span>
+      <span class="shot" data-shot hidden></span>
+      <span class="hero-top"><span class="hero-badges">${badges}</span>${nodeChip(s.node_name)}</span>
+      <span class="hero-foot">${front ? `<span class="fav">${favicon(front.url)}</span><span class="hero-title"><b>${front.audible ? `${icon('speaker', 'sm')} ` : ''}${esc(tabTitle(front))}</b><span>${esc(shortUrl(front.url) || 'about:blank')}</span></span>` : '<span class="hero-title"><b>No open tabs</b></span>'}${more}</span>
+    </a>`;
+
+  // Under the name: one muted line.
+  const meta = [
+    `<span title="${esc(s.profile ? `Profile ${s.profile}: its logins and cookies are kept` : 'No profile: nothing is kept')}">${esc(s.profile || 'Throwaway')}</span>`,
+    `<span data-up title="Uptime"></span>`,
+    !s.persistent && '<span title="Ephemeral: stops when its last client disconnects">ephemeral</span>',
+  ].filter(Boolean).join('<span class="sep">·</span>');
+
+  // The rest: small icons with tooltips.
+  const ind = (cls, ico, text, title, act = '') => `<span class="ind ${cls}"${act ? ` role="button" tabindex="0" data-act="${act}" data-key="${key}"` : ''} title="${esc(title)}" aria-label="${esc(title)}">${ico}${text ? `<span>${esc(text)}</span>` : ''}</span>`;
+  const inds = [
+    s.adblock && ind('ok', icon('shield', 'sm'), '', 'Ads and trackers are blocked'),
+    s.proxy && ind('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
+    others.length && ind('', icon('users', 'sm'), String(others.length), `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`, 'session-clients'),
+    !clients.length && n && ind('', icon('users', 'sm'), String(n), `${n} automation client${n === 1 ? '' : 's'} attached`),
   ].filter(Boolean).join('') + '<span data-idle hidden></span>';
+
+  // Its tabs, as icons: each opens that tab.
+  const strip = pages.slice(0, 6).map((p) => `<a class="tab-ico" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="${esc(`${tabTitle(p)}\n${p.url}`)}" aria-label="${esc(`Take over the tab ${tabTitle(p)}`)}"${drv}>${favicon(p.url)}${p.audible ? '<span class="tab-ico-sound" aria-hidden="true"></span>' : ''}</a>`).join('')
+    + (pages.length > 6 ? `<span class="tab-ico more" title="${pages.length - 6} more tabs">+${pages.length - 6}</span>` : '');
+
   return `
-  <article class="scard${lead ? ' driven' : ''}${s.share ? ' public' : ''}" data-key="${key}">
+  <article class="scard${lead ? ' driven' : ''}${sh ? ' public' : ''}" data-key="${key}">
+    ${hero}
     <div class="scard-head">
       ${sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`}
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span></div>
-        ${agentRow}${integRow}
-        <div class="scard-sub">${nodeChip(s.node_name)}<span data-up title="Uptime"></span></div>
+        <div class="scard-sub">${meta}</div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
     </div>
-    <div class="scard-facts">${facts}</div>
-    <a class="shot" data-shot hidden href="${esc(handoffUrl(s.node_name, { session: s.id }))}" title="Take over" tabindex="-1" aria-hidden="true"${drv}></a>
-    <div class="tabs-list">${tabs || '<div class="tabs-empty">No open tabs</div>'}${more}</div>
+    ${agentRow || integRow ? `<div class="scard-who">${agentRow}${integRow}</div>` : ''}
     <div class="scard-foot">
+      <div class="tab-strip">${strip}</div>
+      <div class="scard-inds">${inds}</div>
       <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}Take over</a>
     </div>
   </article>`;
