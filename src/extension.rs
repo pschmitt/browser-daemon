@@ -533,6 +533,26 @@ pub async fn command(
             "Action is not permitted for this tab",
         ));
     }
+    let response = ask(&node, command.tab, &command.action, command.params).await?;
+    // Revocation/expiry wins even when a response was already being delivered.
+    if node.deadline.is_some_and(|d| d <= Instant::now())
+        || !state.extensions.nodes.lock().unwrap().contains_key(&id)
+    {
+        return Err(failure(StatusCode::GONE, "Browser grant ended"));
+    }
+    let still_shared = tabless
+        || node.info.lock().unwrap().tabs.iter().any(|t| {
+            t.id == command.tab
+                && (matches!(command.action.as_str(), "screenshot" | "snapshot") || t.control)
+        });
+    if !still_shared {
+        return Err(failure(StatusCode::FORBIDDEN, "Tab grant ended"));
+    }
+    Ok(([("cache-control", "no-store")], Json(response)).into_response())
+}
+
+/// Sends one command to the browser and waits for its answer ({result, error}).
+async fn ask(node: &Arc<Node>, tab: u32, action: &str, params: Value) -> Result<Value, ApiError> {
     let request = Uuid::new_v4();
     let (tx, rx) = oneshot::channel();
     {
@@ -551,33 +571,109 @@ pub async fn command(
     }
     let _pending = Pending(node.clone(), request);
     node.outbound
-        .try_send(json!({"type": "command", "id": request, "tab": command.tab,
-        "action": command.action, "params": command.params}))
+        .try_send(json!({"type": "command", "id": request, "tab": tab,
+        "action": action, "params": params}))
         .map_err(|_| {
             failure(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Browser is busy or disconnected",
             )
         })?;
-    let response = tokio::time::timeout(Duration::from_secs(20), rx)
+    tokio::time::timeout(Duration::from_secs(20), rx)
         .await
         .map_err(|_| failure(StatusCode::GATEWAY_TIMEOUT, "Browser did not answer"))?
-        .map_err(|_| failure(StatusCode::GONE, "Browser disconnected"))?;
-    // Revocation/expiry wins even when a response was already being delivered.
-    if node.deadline.is_some_and(|d| d <= Instant::now())
-        || !state.extensions.nodes.lock().unwrap().contains_key(&id)
-    {
-        return Err(failure(StatusCode::GONE, "Browser grant ended"));
+        .map_err(|_| failure(StatusCode::GONE, "Browser disconnected"))
+}
+
+/// Vault requests name a shared tab as a page: "ext-<browser>-<tab>".
+pub(crate) fn page_id(node: Uuid, tab: u32) -> String {
+    format!("ext-{node}-{tab}")
+}
+pub(crate) fn parse_page_id(page: &str) -> Option<(Uuid, u32)> {
+    let (node, tab) = page.strip_prefix("ext-")?.rsplit_once('-')?;
+    Some((Uuid::parse_str(node).ok()?, tab.parse().ok()?))
+}
+
+/// A shared tab its owner lets viewers control: the browser and the tab's address
+/// (as the browser reports it). Vault logins and passkeys are only for these.
+pub(crate) struct Controlled {
+    node: Arc<Node>,
+    pub(crate) tab: u32,
+    pub(crate) url: String,
+    pub(crate) firefox: bool,
+}
+pub(crate) fn controlled(state: &AppState, id: Uuid, tab: u32) -> Result<Controlled, ApiError> {
+    let node = state
+        .extensions
+        .nodes
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Browser disconnected"))?;
+    if node.deadline.is_some_and(|d| d <= Instant::now()) {
+        return Err(failure(StatusCode::GONE, "Browser grant expired"));
     }
-    let still_shared = tabless
-        || node.info.lock().unwrap().tabs.iter().any(|t| {
-            t.id == command.tab
-                && (matches!(command.action.as_str(), "screenshot" | "snapshot") || t.control)
+    let (url, firefox) = {
+        let info = node.info.lock().unwrap();
+        let t = info
+            .tabs
+            .iter()
+            .find(|t| t.id == tab && t.control)
+            .ok_or_else(|| failure(StatusCode::FORBIDDEN, "Tab is not shared with control"))?;
+        (t.url.clone(), info.browser == "firefox")
+    };
+    Ok(Controlled {
+        node,
+        tab,
+        url,
+        firefox,
+    })
+}
+
+impl Controlled {
+    /// Fills a vault login into the tab, in its frames on the entry's sites only
+    /// (the browser lists the frames; each is filled only if still at that address).
+    pub(crate) async fn fill(
+        &self,
+        frame_ok: impl Fn(&str) -> bool,
+        creds: &crate::autofill::Creds,
+    ) -> Result<Vec<String>, ApiError> {
+        let answer = |v: Value| -> Result<Value, ApiError> {
+            if let Some(e) = v["error"].as_str() {
+                return Err(failure(StatusCode::BAD_GATEWAY, e));
+            }
+            Ok(v["result"].clone())
+        };
+        let listed = answer(ask(&self.node, self.tab, "frames", json!({})).await?)?;
+        let frames: Vec<Value> = listed
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|f| {
+                f["url"].as_str().is_some_and(&frame_ok)
+                    && (f["frame"].is_u64() || f["frame"].is_string())
+            })
+            .map(|f| json!({"frame": f["frame"], "url": f["url"]}))
+            .collect();
+        if frames.is_empty() {
+            return Ok(Vec::new());
+        }
+        let params = json!({
+            "frames": frames,
+            "css": crate::autofill::secret_css(self.firefox),
+            "username": creds.username,
+            "password": creds.password,
+            "totp": creds.totp,
         });
-    if !still_shared {
-        return Err(failure(StatusCode::FORBIDDEN, "Tab grant ended"));
+        let filled = answer(ask(&self.node, self.tab, "fill", params).await?)?;
+        Ok(filled["filled"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f.as_str().map(str::to_string))
+            .collect())
     }
-    Ok(([("cache-control", "no-store")], Json(response)).into_response())
 }
 
 #[derive(Deserialize)]

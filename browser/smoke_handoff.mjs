@@ -66,7 +66,7 @@ try {
   const launch = (program, args) => { const child = spawn(program, args, {stdio: 'ignore'}); children.push(child); return child; };
   launch(resolve('target/debug/browser-daemon'), ['run', '--bind', `127.0.0.1:${daemonPort}`, '--public-url', base, '--profile-dir', join(directory, 'daemon/profiles'), '--recordings-dir', join(directory, 'daemon/recordings'), '--cluster-secret-file', secretFile, '--record-sessions', 'false']);
   await until(async () => (await fetch(`${base}/health`)).ok);
-  const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); res.end('<!doctype html><title>Later tab</title><h1>Later</h1><p id=c></p><script>let n=0;(function f(){document.getElementById("c").textContent=n++;requestAnimationFrame(f)})()</script>'); });
+  const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); if (req.url === '/login') return res.end('<!doctype html><title>Sign in</title><form><input name=user autocomplete=username><input name=pw type=password></form>'); res.end('<!doctype html><title>Later tab</title><h1>Later</h1><p id=c></p><script>let n=0;(function f(){document.getElementById("c").textContent=n++;requestAnimationFrame(f)})()</script>'); });
   await new Promise(r => pageServer.listen(0, '127.0.0.2', r));
   const pageURL = `http://127.0.0.2:${pageServer.address().port}/`;
   launch('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
@@ -155,7 +155,44 @@ try {
   await dash.evaluate(`(() => { document.getElementById('sessionUrl').value = ${JSON.stringify(`${pageURL}dash`)}; document.getElementById('sessionHandoff').checked = false; document.getElementById('newSessionForm').requestSubmit(); })()`);
   const fromDash = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}dash`));
   assert.ok(fromDash.shared && fromDash.control, 'the dashboard opened a shared, controllable tab');
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it passed`);
+  // Vault logins: the live view asks, the passkey helper (played here) fills, the
+  // extension puts the values into the tab's form.
+  const helper = (path, init = {}) => fetch(`${base}/api${path}`, {...init, headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json', ...init.headers}});
+  await message({type: 'share', tabs: [typed.id], urls: {[typed.id]: `${pageURL}typed`}, control: true});
+  await fetch(`${base}/api/extension/nodes/${state.registration.id}/command`, {method: 'POST', headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json'}, body: JSON.stringify({tab: typed.id, action: 'navigate', params: {url: `${pageURL}login`}})});
+  await until(async () => (await message({type: 'state'})).tabs.find(t => t.id === typed.id && t.url === `${pageURL}login` && t.shared));
+  await until(async () => (await (await fetch(`${base}/api/extension/nodes`, {headers: {'X-Browser-Cluster-Secret': secret}})).json()).nodes.some(n => n.tabs?.some(t => t.id === typed.id && t.url === `${pageURL}login`)));
+  const taken = helper('/passkey-helper/next?finds=true&autofill=true').then(r => r.json());
+  await sleep(300);
+  const asked = await (await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/autofill`, {method: 'POST', body: JSON.stringify({page_id: String(typed.id), entry: 'entry-1', fields: ['username', 'password']})})).json();
+  assert.ok(asked.request, `vault request: ${JSON.stringify(asked)}`);
+  const job = await taken;
+  assert.equal(job.kind, 'fill');
+  const loginOrigin = new URL(pageURL).origin;
+  const filled = await (await helper(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'alice', password: 's3cret'})})).json();
+  assert.deepEqual(filled.filled, ['username', 'password'], JSON.stringify(filled));
+  const loginTab = (await targets()).find(t => t.url === `${pageURL}login`);
+  const login = await CDP.open(loginTab.webSocketDebuggerUrl);
+  assert.equal(await login.evaluate(`[document.querySelector('[name=user]').value, document.querySelector('[name=pw]').value].join()`), 'alice,s3cret');
+  // A second fill for the same approval is refused.
+  const again = await helper(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'x'})});
+  assert.equal(again.status, 403);
+  // Passkeys: the extension hooks the tab; with the view watching, the page's request
+  // reaches the view, and the vault signs for the tab's own origin.
+  await until(() => login.evaluate(`navigator.credentials.__bdHooked === true && Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000`));
+  await view.evaluate(`window.__seen = []; passkeyRequested = (d, p) => window.__seen.push(JSON.parse(p))`);
+  await login.evaluate(`void navigator.credentials.get({publicKey: {challenge: new Uint8Array([1, 2, 3, 4]), rpId: location.hostname}}).catch(() => {}), true`);
+  const seenReq = await until(async () => (await view.evaluate(`window.__seen[0] || null`)));
+  assert.equal(seenReq.rpId, new URL(pageURL).hostname);
+  const signTaken = helper('/passkey-helper/next?finds=true&autofill=true').then(r => r.json());
+  await sleep(300);
+  const signAsked = await (await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: String(typed.id), rp_id: seenReq.rpId, find: false, challenge: seenReq.challenge, allow: []})})).json();
+  assert.ok(signAsked.request, JSON.stringify(signAsked));
+  const signJob = await signTaken;
+  assert.deepEqual([signJob.kind, signJob.origin, signJob.challenge], ['assert', loginOrigin, seenReq.challenge]);
+  const wrongSite = await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: '1', rp_id: 'example.org', find: false, challenge: 'AQID'})});
+  assert.equal(wrongSite.status, 403);
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it; vault logins; passkeys passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

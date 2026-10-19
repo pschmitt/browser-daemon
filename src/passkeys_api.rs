@@ -77,6 +77,60 @@ pub(crate) async fn api_session_passkey(
     Ok(Json(serde_json::json!({ "request": request })))
 }
 
+/// A passkey approved in the live view of a shared browser's tab (with control):
+/// the helper signs the page's challenge and the page's hook answers with it (the
+/// browser's own authenticator is never touched). The origin and site come from the
+/// tab's address as the browser reports it.
+pub(crate) async fn api_extension_passkey(
+    AxumPath((id, tab)): AxumPath<(Uuid, u32)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<PasskeyRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let shared = crate::extension::controlled(&state, id, tab)?;
+    let kind = match (req.find, &req.challenge) {
+        (true, _) => "find",
+        (false, Some(_)) => "assert",
+        (false, None) => {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "A shared browser's passkey needs the page's challenge",
+            ))
+        }
+    };
+    let page_url = url::Url::parse(&shared.url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page has no web origin"))?;
+    let rp_id = req.rp_id.trim().trim_end_matches('.').to_ascii_lowercase();
+    if !secrets::rp_id_valid_for(page_url.host_str().unwrap_or_default(), &rp_id) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            format!("The page is not on {rp_id} or a subdomain of it"),
+        ));
+    }
+    if !req.find {
+        info!(browser = %id, rp_id = %rp_id, "Passkey approved in a shared browser's live view");
+    }
+    let signing = passkeys::Signing {
+        origin: (kind == "assert").then(|| page_url.origin().ascii_serialization()),
+        challenge: req.challenge,
+        allow: req.allow,
+    };
+    let request = state
+        .passkeys
+        .start(
+            crate::extension::page_id(id, tab),
+            rp_id,
+            kind,
+            req.entry,
+            signing,
+        )
+        .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
+    Ok(Json(serde_json::json!({ "request": request })))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct AutofillRequest {
     pub(crate) page_id: String,
@@ -157,6 +211,106 @@ pub(crate) async fn api_session_autofill(
     ))
 }
 
+/// The vault button in the live view of a shared browser's tab (with control):
+/// as `api_session_autofill`, for the site the browser reports for the tab.
+pub(crate) async fn api_extension_autofill(
+    AxumPath((id, tab)): AxumPath<(Uuid, u32)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AutofillRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let shared = crate::extension::controlled(&state, id, tab)?;
+    let host = url::Url::parse(&shared.url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https"))
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+    if req.entry.is_some() {
+        info!(browser = %id, host = %host, any_site = req.any_site, "Login fill approved in a shared browser's live view");
+    }
+    let query = req
+        .query
+        .map(|q| q.trim().chars().take(100).collect::<String>())
+        .filter(|q| !q.is_empty());
+    let fields = if req.fields.is_empty() {
+        vec!["username".into(), "password".into()]
+    } else {
+        req.fields
+    };
+    let request = state
+        .passkeys
+        .start_autofill(
+            crate::extension::page_id(id, tab),
+            host.clone(),
+            passkeys::Autofill {
+                session: None,
+                entry: req.entry,
+                fields,
+                unlock: req.unlock,
+                query,
+                any_site: req.any_site,
+            },
+        )
+        .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
+    Ok(Json(
+        serde_json::json!({ "request": request, "host": host }),
+    ))
+}
+
+/// The helper's fill for a shared browser's tab (see `api_page_autofill`).
+async fn extension_page_autofill(
+    state: &AppState,
+    page_id: &str,
+    (id, tab): (Uuid, u32),
+    req: PageAutofill,
+) -> Result<Vec<String>, ApiError> {
+    let shared = crate::extension::controlled(state, id, tab)?;
+    let page = url::Url::parse(&shared.url).ok();
+    if page
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+        != Some(req.host.to_ascii_lowercase().as_str())
+    {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            format!("The page is not on {} anymore", req.host),
+        ));
+    }
+    let uris = if req.any_site {
+        let origin = page
+            .map(|u| u.origin().ascii_serialization())
+            .filter(|o| o.starts_with("http"))
+            .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+        vec![secrets::Uri {
+            uri: origin,
+            match_type: Some(1),
+        }]
+    } else {
+        req.uris
+    };
+    if !secrets::url_matches(&shared.url, &uris) {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            format!("The entry is not for {}", req.host),
+        ));
+    }
+    if !state
+        .passkeys
+        .authorize_fill(req.request, page_id, &req.host, None)
+    {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "No approved fill request for this page",
+        ));
+    }
+    shared
+        .fill(move |u: &str| secrets::url_matches(u, &uris), &req.creds)
+        .await
+}
+
 #[derive(Deserialize)]
 pub(crate) struct PageAutofill {
     /// The "fill" request this answers: only one the helper took, for this page and
@@ -183,6 +337,16 @@ pub(crate) async fn api_page_autofill(
     Json(req): Json<PageAutofill>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
+    if let Some(shared) = crate::extension::parse_page_id(&page_id) {
+        let filled = extension_page_autofill(&state, &page_id, shared, req).await?;
+        if filled.is_empty() {
+            return Err(api_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "No login form found on this page",
+            ));
+        }
+        return Ok(Json(serde_json::json!({ "filled": filled })));
+    }
     let targets = get_local_targets(&state).await;
     let page =
         resolve_page(&targets, &page_id, None).map_err(|e| api_error(StatusCode::NOT_FOUND, e))?;

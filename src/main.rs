@@ -905,6 +905,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/sessions/{id}/autofill", post(api_session_autofill))
         .route("/api/pages/{page_id}/autofill", post(api_page_autofill))
+        .route(
+            "/api/extension/nodes/{id}/tabs/{tab}/autofill",
+            post(api_extension_autofill),
+        )
+        .route(
+            "/api/extension/nodes/{id}/tabs/{tab}/passkey",
+            post(api_extension_passkey),
+        )
         .route("/api/sessions/{id}/name", post(api_session_rename))
         .route("/api/sessions/{id}/history", get(api_session_history))
         .route("/api/sessions/{id}/screenshot", get(api_session_screenshot))

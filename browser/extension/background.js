@@ -268,6 +268,7 @@ async function badge() {
 
 async function detach(tab) {
   for (const [channel, owner] of channels) if (owner === tab) { channels.delete(channel); stopCast(channel); }
+  hooked.delete(tab);
   if (!attached.delete(tab)) return;
   try { await api.debugger.detach({tabId: tab}); } catch { /* Already closed/detached. */ }
 }
@@ -353,6 +354,66 @@ async function grantFor(command) {
   return grant;
 }
 
+// Passkeys in a live view (Chromium): the page's navigator.credentials.get() asks the
+// view while one is watching with control (it keeps __bdPasskeyAlive fresh), which has
+// the vault sign the challenge; unwatched, the browser's own passkey dialog opens as
+// usual. The same hook as in the daemon's own sessions (handoff.html).
+const PASSKEY_HOOK = `(() => {
+  const c = navigator.credentials;
+  if (!c || c.__bdHooked) return;
+  Object.defineProperty(c, "__bdHooked", { value: true });
+  const get = c.get.bind(c), waiting = new Map();
+  const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf)))
+    .replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
+  const bytes = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4); return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0)).buffer; };
+  // A signed assertion (from the vault, signed outside the browser) as the
+  // PublicKeyCredential the page asked for.
+  const credential = (a) => {
+    const r = a.response, own = (o, props) => { for (const [k, v] of Object.entries(props)) Object.defineProperty(o, k, { value: v, enumerable: true }); return o; };
+    const response = own(Object.create(AuthenticatorAssertionResponse.prototype), {
+      clientDataJSON: bytes(r.clientDataJSON), authenticatorData: bytes(r.authenticatorData),
+      signature: bytes(r.signature), userHandle: r.userHandle ? bytes(r.userHandle) : null,
+    });
+    const cred = own(Object.create(PublicKeyCredential.prototype), {
+      id: a.id, rawId: bytes(a.rawId), type: "public-key", response, authenticatorAttachment: a.authenticatorAttachment || "platform",
+    });
+    Object.defineProperty(cred, "getClientExtensionResults", { value: () => ({}) });
+    Object.defineProperty(cred, "toJSON", { value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
+    return cred;
+  };
+  // answer: true = let the browser handle it (its authenticator has the passkey now),
+  // false = cancelled, an object = the signed assertion to resolve with.
+  globalThis.__bdPasskeyAnswer = (id, answer = true) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
+  c.get = function (opts) {
+    const pk = opts && opts.publicKey;
+    const viewed = Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
+    if (!pk || opts.mediation === "conditional" || !viewed || typeof globalThis.__bdPasskey !== "function") return get(opts);
+    const id = Math.random().toString(36).slice(2);
+    let req;
+    try {
+      req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)) };
+    } catch { return get(opts); }
+    return new Promise((go) => {
+      waiting.set(id, go);
+      setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
+      try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
+    }).then((answer) => answer === true ? get(opts)
+      : answer && typeof answer === "object" ? credential(answer)
+      : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
+  };
+})()`;
+// Only tabs shared with control (a view-only tab gets nothing but page events), once per attachment.
+const hooked = new Set();
+async function hookPasskeys(tab) {
+  if (!chromium || hooked.has(tab) || !attached.has(tab) || !shared.get(tab)?.control) return;
+  hooked.add(tab);
+  const send = (method, params = {}) => api.debugger.sendCommand({tabId: tab}, method, params);
+  await send('Runtime.enable');
+  await send('Runtime.addBinding', {name: '__bdPasskey'});
+  await send('Page.addScriptToEvaluateOnNewDocument', {source: PASSKEY_HOOK});
+  await send('Runtime.evaluate', {expression: PASSKEY_HOOK}).catch(() => {});
+}
+
 // One attachment per tab, shared by concurrent requests so input keeps its order.
 function attach(tab) {
   if (attached.has(tab)) return Promise.resolve();
@@ -364,6 +425,7 @@ function attach(tab) {
         if (!shared.has(tab) || !registration) { await detach(tab); throw new Error('Sharing ended.'); }
         // Page events tell navigations apart before any frame of the new page.
         await api.debugger.sendCommand({tabId: tab}, 'Page.enable', {});
+        await hookPasskeys(tab).catch(() => hooked.delete(tab));
       } finally { attaching.delete(tab); }
     })());
   }
@@ -418,6 +480,85 @@ function pageAction(action, params, expectedOrigin) {
   return {ok: true};
 }
 
+// The vault login fill of src/autofill.rs (FILL with GUARD), run in the tab's
+// isolated world: the same fields as in a daemon's own sessions.
+// Only in a frame still at an address the daemon checked (`urls`).
+const fillLogin = (c, urls) => {
+  if (!urls.includes(location.href)) return null;
+  const inputs = [];
+  const walk = (root) => root.querySelectorAll("*").forEach((el) => {
+    if (el.tagName === "INPUT") inputs.push(el);
+    if (el.shadowRoot) walk(el.shadowRoot);
+  });
+  walk(document);
+  const type = (el) => (el.getAttribute("type") || "").toLowerCase();
+  const ac = (el) => (el.getAttribute("autocomplete") || "").toLowerCase();
+  const hint = (el) => [el.name, el.id, el.getAttribute("placeholder"), el.getAttribute("aria-label"), ac(el)].join(" ").toLowerCase();
+  const shown = (el) => {
+    if (el.disabled || el.readOnly) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) > 0;
+  };
+  const textTypes = new Set(["", "text", "email", "tel", "number", "url"]);
+  const visible = inputs.filter(shown);
+  const pw = visible.filter((el) => type(el) === "password");
+  const texty = visible.filter((el) => textTypes.has(type(el)));
+  const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const guard = (el, css) => {
+  el.setAttribute("data-bd-secret", "");
+  const root = el.getRootNode();
+  const sheets = root.adoptedStyleSheets;
+  try {
+    if (sheets.some((s) => s.cssRules[0] && s.cssRules[0].selectorText === "[data-bd-secret]")) return;
+    const s = new CSSStyleSheet();
+    s.replaceSync(css);
+    root.adoptedStyleSheets = [...sheets, s];
+  } catch (e) {
+    const st = document.createElement("style");
+    st.textContent = css;
+    (root.head || root).appendChild(st);
+  }
+};
+  const put = (el, v) => {
+    guard(el, c.css);
+    el.focus();
+    setter.call(el, v);
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data: v }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const userLike = (el) => /username|email/.test(ac(el));
+  const filled = [];
+  let otp = [];
+  if (c.totp) {
+    const boxes = texty.filter((el) => el.maxLength === 1);
+    const otpHint = /one.?time|otp|2fa|mfa|two.?factor|verification|security.?code|auth.?code|passcode|token/;
+    const one = texty.find((el) => ac(el) === "one-time-code") || (!pw.length && texty.find((el) => otpHint.test(hint(el))));
+    if (one) otp = [one];
+    else if (boxes.length === c.totp.length) otp = boxes;
+  }
+  if (c.password && pw.length) {
+    const p = pw.find((el) => ac(el) !== "new-password") || pw[0];
+    if (c.username) {
+      const prior = texty.filter((el) => (!p.form || el.form === p.form) && before(el, p) && !otp.includes(el));
+      const u = prior.findLast(userLike) || prior.at(-1);
+      if (u) { put(u, c.username); filled.push("username"); }
+    }
+    put(p, c.password);
+    filled.push("password");
+  } else if (c.username && !otp.length) {
+    const u = texty.find(userLike) || texty.find((el) => type(el) === "email")
+      || texty.find((el) => /user|login|mail|account|identifier|benutzer|kennung|anmelde/.test(hint(el)));
+    if (u) { put(u, c.username); filled.push("username"); }
+  }
+  if (otp.length === 1) put(otp[0], c.totp);
+  else otp.forEach((el, i) => put(el, c.totp[i]));
+  if (otp.length) filled.push("totp");
+  return { filled };
+};
+
 async function execute(command) {
   const grant = await grantFor(command);
   const {tab, action, params} = command;
@@ -425,6 +566,41 @@ async function execute(command) {
     return nativeRequest({tab, action, params});
   }
   if (action === 'evaluate') throw new Error('Evaluation requires the Firefox companion; use CDP Runtime.evaluate on Chromium.');
+  // Vault logins (picked in a live view, sent by the daemon): the frames first, so it
+  // can keep to the entry's sites; then the fill, in those frames if still there.
+  // Chromium: through the debugger (no host permission needed), in an isolated world per frame.
+  if (action === 'frames') {
+    if (chromium) {
+      const out = [];
+      const walk = node => { out.push({frame: node.frame.id, url: node.frame.url}); (node.childFrames || []).forEach(walk); };
+      walk((await cdp(tab, 'Page.getFrameTree')).frameTree);
+      return out;
+    }
+    const found = await api.scripting.executeScript({target: {tabId: tab, allFrames: true}, func: () => location.href});
+    return found.map(f => ({frame: f.frameId, url: f.result}));
+  }
+  if (action === 'fill') {
+    const frames = (Array.isArray(params.frames) ? params.frames : [])
+      .filter(f => (chromium ? typeof f?.frame === 'string' : Number.isSafeInteger(f?.frame)) && typeof f.url === 'string');
+    if (!frames.length) return {filled: []};
+    const creds = {css: String(params.css || ''), username: params.username ?? null, password: params.password ?? null, totp: params.totp ?? null};
+    const urls = frames.map(f => f.url);
+    if (chromium) {
+      const filled = new Set();
+      for (const {frame} of frames) {
+        const world = await cdp(tab, 'Page.createIsolatedWorld', {frameId: frame, worldName: 'browser-daemon-fill'});
+        const r = await cdp(tab, 'Runtime.evaluate', {expression: `(${fillLogin})(${JSON.stringify(creds)}, ${JSON.stringify(urls)})`, contextId: world.executionContextId, returnByValue: true});
+        (r.result?.value?.filled || []).forEach(f => filled.add(f));
+      }
+      return {filled: [...filled]};
+    }
+    const done = await api.scripting.executeScript({
+      target: {tabId: tab, frameIds: frames.map(f => f.frame)},
+      func: fillLogin,
+      args: [creds, urls],
+    });
+    return {filled: [...new Set(done.flatMap(d => d.result?.filled || []))]};
+  }
   if (action === 'screenshot') {
     if (chromium) {
       const metrics = await cdp(tab, 'Page.getLayoutMetrics');
@@ -890,6 +1066,7 @@ async function localMessage(message, sender) {
     sharing.control = message.control === true;
     await api.storage.local.set({shareControl: sharing.control});
     for (const grant of shared.values()) grant.control = sharing.control;
+    for (const id of attached) void hookPasskeys(id).catch(() => hooked.delete(id));
     await publish();
     return {ok: true};
   }
@@ -936,6 +1113,8 @@ if (chromium) api.debugger.onEvent.addListener((source, method, params) => {
     if (!grant.paused) grant.origin = new URL(params.frame.url).origin;
     publishSoon();
   }
+  // Runtime is enabled only for the passkey hook: nothing else of it leaves the browser.
+  if (method.startsWith('Runtime.') && !(method === 'Runtime.bindingCalled' && params.name === '__bdPasskey')) return;
   if (method === 'Page.screencastFrame') {
     api.debugger.sendCommand({tabId: source.tabId}, 'Page.screencastFrameAck', {sessionId: params.sessionId}).catch(() => {});
     const cast = castState(source.tabId);
@@ -946,6 +1125,7 @@ if (chromium) api.debugger.onEvent.addListener((source, method, params) => {
 });
 if (chromium) api.debugger.onDetach.addListener((source, reason) => {
   attached.delete(source.tabId);
+  hooked.delete(source.tabId);
   // Clicking the browser's "Cancel debugging" bar revokes sharing, and is never
   // silently undone by the next remote request. Other detaches (a browser page,
   // a crash) only end the attachment; the next request attaches again.

@@ -885,7 +885,16 @@ class CdpDriver {
     // Chromium only paints (and screencasts) the tab in front of its window.
     // A shared browser brings it forward only if its user lets views follow.
     await this.cdp.call("Page.bringToFront").catch(() => {});
-    if (this.shared) { this.watchFrames(); return; }
+    if (this.shared) {
+      this.watchFrames();
+      // The owner's extension hooks passkeys in the tab; this view only says it is watching
+      // (refused without control, and the page then uses its own passkey dialog).
+      const beat = () => this.cdp.send("Runtime.evaluate", { expression: "globalThis.__bdPasskeyAlive = Date.now()" });
+      this.passkeyBeatNow = beat;
+      beat();
+      this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
+      return;
+    }
     // Toolbar height, measured before any emulation: where the page starts on the
     // display (for the H.264 stream's capture region).
     this.chromeH = await this.evaluate("outerWidth === innerWidth ? outerHeight - innerHeight : null").catch(() => null);
@@ -1513,12 +1522,16 @@ let passkeyPending = null;
 // calls. The helper may wait minutes for the phone unlock, and a request held open
 // that long gets dropped (Firefox gave up on it after ~2 s). onNote: progress notes.
 async function passkeyHelper(rpId, find, onNote = () => {}, entry = null, signing = {}, signal = null) {
+  if (sharedBrowserId) {
+    return helperRequest(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/tabs/${encodeURIComponent(pageId)}/passkey`,
+      { page_id: pageId, rp_id: rpId, find, entry, ...signing }, onNote, signal, sharedBase);
+  }
   return helperRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
     { page_id: pageId, rp_id: rpId, find, entry, ...signing }, onNote, signal);
 }
 // Any request for the passkey helper (passkeys, vault logins): started at `url`, then
 // polled until the helper has answered.
-async function helperRequest(url, body, onNote = () => {}, signal = null) {
+async function helperRequest(url, body, onNote = () => {}, signal = null, base = "/api") {
   const call = async (url, opts = {}) => {
     const res = await fetch(url, { ...opts, headers: authHeaders(opts.body ? { "Content-Type": "application/json" } : {}) });
     const body = await res.json().catch(() => ({}));
@@ -1531,7 +1544,7 @@ async function helperRequest(url, body, onNote = () => {}, signal = null) {
   for (let n = 0, until = Date.now() + 340000; Date.now() < until; n++) {
     await new Promise((r) => setTimeout(r, [150, 250, 400, 600][n] ?? 1000));
     if (signal?.aborted) throw Object.assign(new Error("cancelled"), { aborted: true });
-    const st = await call(`/api/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
+    const st = await call(`${base}/passkey/${encodeURIComponent(request)}`).catch((e) => (e.message === "Failed to fetch" || /NetworkError/.test(e.message) ? { state: "pending" } : Promise.reject(e)));
     if (st.state === "ready") return st.info;
     if (st.state === "failed") throw new Error(st.error);
     if (st.note) onNote(st.note);
@@ -1588,7 +1601,7 @@ async function askPasskey({ rpId, challenge, allow }) {
   dlg.showModal();
   showPasskeyEntry(rpId, dlg);
   const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
-  if (choice !== "vault" || !target?.sessionId) return false;
+  if (choice !== "vault" || !vaultReady()) return false;
   toast(`Getting the passkey for ${rpId}…`, 0);
   try {
     let shown = "";
@@ -1596,7 +1609,8 @@ async function askPasskey({ rpId, challenge, allow }) {
     const onNote = (note) => { if (note !== shown) { shown = note; toast(`${rpId}: ${note}`, 0); } };
     // Chromium: the passkey goes into its authenticator and the page's request goes on.
     // Firefox: the request is signed outside the browser and the page gets the result.
-    const signed = target?.engine === "firefox";
+    // A shared browser: always signed (its own authenticator is never touched).
+    const signed = target?.engine === "firefox" || !!sharedBrowserId;
     const result = await passkeyHelper(rpId, false, onNote, entry, signed ? { challenge, allow } : {});
     toast(`Signing in to ${rpId} with your passkey`);
     return signed ? result : true;
@@ -1913,7 +1927,7 @@ async function refreshInfo() {
       if (info.u && info.u !== "about:blank") currentUrl = info.u;
       if (document.activeElement !== E.urlInput && currentUrl) E.urlInput.value = currentUrl;
       document.title = (info.t ? info.t + " · " : "") + "Browser handoff";
-      if (!sharedBrowserId) vaultPeek();
+      vaultPeek();
     }
     const h = await drv.historyState();
     E.back.disabled = h ? !h.back : false;
@@ -4346,8 +4360,11 @@ function pageHost() {
   } catch { return ""; }
 }
 let vaultAbort = null;
-const vaultCall = (body, onNote, signal = null) =>
-  helperRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/autofill`, { page_id: pageId, ...body }, onNote, signal);
+// A shared browser's tab (with control) is filled by the extension, via its daemon.
+const vaultCall = (body, onNote, signal = null) => sharedBrowserId
+  ? helperRequest(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/tabs/${encodeURIComponent(pageId)}/autofill`, { page_id: pageId, ...body }, onNote, signal, sharedBase)
+  : helperRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/autofill`, { page_id: pageId, ...body }, onNote, signal);
+const vaultReady = () => (sharedBrowserId ? !!sharedBrowser?.tabs.some((t) => String(t.id) === String(pageId) && t.control) : !!target?.sessionId);
 function vaultBadge() {
   const n = vault.host === pageHost() && Array.isArray(vault.list) ? vault.list.length : 0;
   $("vaultCount").textContent = n > 9 ? "9+" : String(n);
@@ -4358,7 +4375,7 @@ function vaultBadge() {
 function vaultPeek() {
   const host = pageHost();
   vaultBadge();
-  if (!host || !target?.sessionId || vault.peeking || Date.now() < vault.off) return;
+  if (!host || !vaultReady() || vault.peeking || Date.now() < vault.off) return;
   if (vault.host === host && Date.now() - vault.at < VAULT_FRESH) return;
   vault.peekHost = host;
   vault.peeking = vaultCall({}).then((found) => {
@@ -4412,7 +4429,7 @@ async function vaultLoad(host, unlock = false, query = "") {
   const pop = $("vaultPop");
   const body = (html) => { if (!pop.hidden && seq === vaultSeq) { $("vaultList").innerHTML = html; placeVaultPop(); } };
   if (!host) return body('<div class="sp-empty">This page is not on a website: there is nothing to fill.</div>');
-  if (!target?.sessionId) return body('<div class="sp-empty">Not connected to a session yet.</div>');
+  if (!vaultReady()) return body('<div class="sp-empty">Not connected to a session yet.</div>');
   // The badge's lookup for this page is underway: wait for it rather than ask twice.
   if (!unlock && !query && vault.peeking && vault.peekHost === host) {
     body('<div class="sp-empty checking">Looking in the vault…</div>');
@@ -4642,7 +4659,9 @@ function renderSharedSession() {
   $('smTitle').onclick = null; $('smTitle').removeAttribute('role'); $('smTitle').removeAttribute('tabindex');
   $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Key expiry disabled' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}`;
   setEngineIcon($('smEngine'), sharedBrowser.browser);
-  for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow', 'vaultBtn', 'audioBtn']) $(id).hidden = true;
+  for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow', 'audioBtn']) $(id).hidden = true;
+  // The vault fills logins into tabs the owner lets viewers control.
+  $('vaultBtn').hidden = !control;
   // New tabs need control (they are shared with it); recording needs none.
   for (const id of ['tabAddBtn', 'newTabBtn']) $(id).hidden = !(control || sharedBrowser.can_open);
   $('smRec').hidden = false;

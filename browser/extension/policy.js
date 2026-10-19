@@ -51,7 +51,7 @@ globalThis.NodePolicy = (() => {
     if (!control) return false;
     if (command.action === 'navigate' || command.action === 'open') return webURL(command.params.url);
     if (command.action === 'cdp') return methods.has(command.params.method);
-    return ['click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate'].includes(command.action);
+    return ['click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate', 'frames', 'fill'].includes(command.action);
   }
   function relayAllowed(method, params, control) {
     if (typeof method !== 'string' || !params || typeof params !== 'object' || Array.isArray(params) ||

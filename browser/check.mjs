@@ -240,3 +240,13 @@ test('extension and daemon CDP allowlists agree', () => {
   const jsMethods = new Set([...source('policy.js').matchAll(/'([A-Z][A-Za-z]+\.[A-Za-z]+)'/g)].map(m => m[1]));
   assert.deepEqual(jsMethods, rustMethods);
 });
+test('the extension fills logins exactly as the daemon does', () => {
+  const rust = readFileSync(new URL('../src/autofill.rs', import.meta.url), 'utf8');
+  const raw = name => rust.match(new RegExp(`const ${name}: &str = r#"([\\s\\S]*?)"#;`))[1];
+  const body = raw('FILL').replace('/*GUARD*/', raw('GUARD')).replace('return JSON.stringify({ filled });', 'return { filled };').replace('(c) => {\n', '');
+  assert.ok(source('background.js').includes(body), 'fillLogin in background.js drifted from FILL in src/autofill.rs');
+});
+test('the extension hooks passkeys exactly as live views do', () => {
+  const hook = text => text.match(/const PASSKEY_HOOK = `[\s\S]*?`;\n/)[0];
+  assert.equal(hook(source('background.js')), hook(readFileSync(new URL('../handoff.html', import.meta.url), 'utf8')));
+});
