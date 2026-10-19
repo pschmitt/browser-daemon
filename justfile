@@ -33,3 +33,12 @@ browser-smoke:
   node browser/smoke_chromium.mjs
   python3 browser/smoke_firefox.py
   python3 browser/smoke_firefox_roundtrip.py
+
+# Bump to VERSION (X.Y.Z), date the changelog, commit and push.
+release-prepare version:
+  tools/release.sh prepare '{{ version }}'
+
+# Push a GPG-signed vVERSION tag once build and test are green for HEAD;
+# the release workflow publishes binaries and the signed browser extension.
+release-tag:
+  tools/release.sh tag

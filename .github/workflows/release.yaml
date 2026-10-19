@@ -2,56 +2,139 @@ name: release
 on:
   push:
     tags: ['v*']
-  workflow_dispatch: {}
+  # (Re)publish an existing tag with this workflow, e.g. one older than it.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to publish (vX.Y.Z)
+        required: true
+      latest:
+        description: Mark it as the latest release
+        type: boolean
+        default: false
+env:
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  LC_ALL: C
+  TZ: UTC
+  TAG: ${{ inputs.tag || github.ref_name }}
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 jobs:
-  # Same signing model as rbw: AMO unlisted XPI and Chromium CRX3, reusing the
-  # checked-in signed packages when they match the tag's source. AMO signs a
-  # version once; reuse this job's artifacts if a later publish step fails.
-  browser:
+  build:
+    name: build (${{ matrix.target }})
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Match tag and package version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          test "$TAG" = "v$version" || { echo "::error::$TAG does not match Cargo.toml's $version"; exit 1; }
+      - name: Set reproducible build environment
+        run: |
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=--remap-path-prefix=${GITHUB_WORKSPACE}=." >> "$GITHUB_ENV"
+      - name: Install musl build dependencies
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y clang-18
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build (musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: TARGET_CC=clang-18 TARGET_AR=llvm-ar-18 cargo build --locked --release --target x86_64-unknown-linux-musl
+      - name: Build
+        if: matrix.target != 'x86_64-unknown-linux-musl'
+        run: cargo build --locked --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          set -o pipefail
+          pkg="browser-daemon-${TAG#v}-${{ matrix.target }}"
+          bin="target/${{ matrix.target }}/release/browser-daemon"
+          mkdir "$pkg"
+          cp "$bin" LICENSE README.md "$pkg/"
+          # Completions, from releases that have the subcommand.
+          if "./$bin" completions bash > /dev/null 2>&1
+          then
+            mkdir -p "$pkg/completions/bash" "$pkg/completions/zsh" "$pkg/completions/fish"
+            "./$bin" completions bash > "$pkg/completions/bash/browser-daemon"
+            "./$bin" completions zsh > "$pkg/completions/zsh/_browser-daemon"
+            "./$bin" completions fish > "$pkg/completions/fish/browser-daemon.fish"
+          fi
+          tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
+            --owner=0 --group=0 --numeric-owner -cf - "$pkg" |
+            gzip -n -9 > "$pkg.tar.gz"
+          tar -tzf "$pkg.tar.gz" | grep -Fqx "$pkg/browser-daemon"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.target }}
+          path: browser-daemon-*.tar.gz
+          if-no-files-found: error
+  # The browser extension of the tagged source: the checked-in signed packages
+  # when they match it, else (version tags only) signed here, as in rbw: AMO
+  # (unlisted) for Firefox, the CRX key for Chromium. AMO signs each version
+  # once: after a later job fails, rerun only the failed jobs.
+  browser:
+    name: Signed browser packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Match tag and package version
+      - name: Does this release have the extension?
+        id: has
         run: |
-          python3 - <<'PY'
-          import os, tomllib
-          from pathlib import Path
-          version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
-          assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Tag must match Cargo.toml'
-          PY
+          if [[ -f browser/build.py && -d browser/packages ]]
+          then
+            echo "extension=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No browser extension in $TAG."
+          fi
       - name: Build extension packages
+        if: steps.has.outputs.extension
         run: python3 browser/build.py
       - name: Reuse signed packages matching this source
+        if: steps.has.outputs.extension
         id: signed-packages
         continue-on-error: true
         run: |
           python3 browser/verify.py --signed-directory browser/packages
           mkdir -p browser/dist/signed
           cp browser/packages/*.xpi browser/packages/*.crx browser/dist/signed/
+      - name: Refuse to sign outside a version tag push
+        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure' && github.event_name != 'push'
+        run: |
+          echo "::error::The checked-in packages do not match $TAG; only a pushed version tag signs new ones."
+          exit 1
       - name: Sign Firefox with AMO
-        if: steps.signed-packages.outcome == 'failure'
+        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure'
         env:
           WEB_EXT_API_KEY: ${{ secrets.BROWSER_NODE_AMO_API_KEY }}
           WEB_EXT_API_SECRET: ${{ secrets.BROWSER_NODE_AMO_API_SECRET }}
         run: |
           npm install --global web-ext@8
-          web-ext sign --channel=unlisted --source-dir=browser/dist/firefox --artifacts-dir=browser/dist/signed
+          web-ext sign --channel=unlisted --source-dir=browser/dist/firefox --artifacts-dir=browser/dist/signed-firefox
+          mkdir -p browser/dist/signed
+          cp browser/dist/signed-firefox/*.xpi browser/dist/signed/browser-daemon-node-firefox.xpi
       - uses: browser-actions/setup-chrome@v2
-        if: steps.signed-packages.outcome == 'failure'
+        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure'
       - name: Sign Chromium CRX3
-        if: steps.signed-packages.outcome == 'failure'
+        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure'
         env:
           CRX_PRIVATE_KEY: ${{ secrets.BROWSER_NODE_CHROMIUM_SIGNING_KEY }}
         run: |
@@ -65,21 +148,107 @@ jobs:
             --pack-extension-key="$key_file"
           cp browser/dist/chromium.crx browser/dist/signed/browser-daemon-node-chromium.crx
       - name: Verify signed packages match source
-        run: python3 browser/verify.py
+        if: steps.has.outputs.extension
+        run: |
+          cp browser/dist/signed/*.xpi browser/dist/signed/*.crx browser/packages/
+          python3 browser/verify.py --signed-directory browser/packages
+          mkdir -p dist
+          for f in browser/dist/signed/*.xpi browser/dist/signed/*.crx
+          do
+            name=$(basename "$f")
+            cp "$f" "dist/${name%.*}-${TAG#v}.${name##*.}"
+          done
       - uses: actions/upload-artifact@v4
+        if: steps.has.outputs.extension
         with:
-          name: signed-browser-node-extensions
-          path: browser/dist/signed/*
+          name: browser-extensions
+          path: dist/*
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: steps.has.outputs.extension
+        with:
+          name: browser-packages
+          path: browser/packages/*
+          if-no-files-found: error
+  release:
+    needs: [build, browser]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # The notes come from main's changelog (a tag older than it has none).
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tarball-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: browser-extensions
+          merge-multiple: true
+          path: dist
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          sha256sum --check SHA256SUMS
       - uses: actions/attest-build-provenance@v2
         with:
-          subject-path: browser/dist/signed/*
-      - name: Publish signed extension assets
-        env:
-          GH_TOKEN: ${{ github.token }}
+          subject-path: ${{ github.workspace }}/dist/*
+      - name: Prepare release notes
         run: |
-          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1
+          version="${TAG#v}"
+          awk -v heading="## [${version}]" '
+            index($0, heading) == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          test -s RELEASE_NOTES.md || { echo "::error::CHANGELOG.md has no section for $version"; exit 1; }
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          files: dist/*
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: false
+          make_latest: ${{ github.event_name == 'push' || inputs.latest }}
+  # The Nix package installs the checked-in signed packages: commit the ones
+  # signed for a pushed tag to main, unless main's extension moved on.
+  packages:
+    name: Commit signed browser packages
+    needs: [release]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: browser-packages
+          merge-multiple: true
+          path: browser/packages
+      - name: Commit and push
+        run: |
+          if git diff --quiet -- browser/packages
           then
-            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes
+            echo "Signed packages for $TAG are already on main."
+            exit 0
           fi
-          gh release upload "$GITHUB_REF_NAME" browser/dist/signed/* --repo "$GITHUB_REPOSITORY"
+          python3 browser/build.py
+          if ! python3 browser/verify.py --signed-directory browser/packages
+          then
+            echo "::error::main's extension source differs from $TAG; commit its signed packages by hand."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "release: package signed browser extension $TAG" -- browser/packages
+          git push origin HEAD:main
