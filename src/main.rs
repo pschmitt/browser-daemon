@@ -19,6 +19,7 @@ mod live_ws;
 mod mcp;
 mod mesh;
 mod names;
+mod notes;
 mod overview;
 mod page_input;
 mod pages;
@@ -829,6 +830,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(share_resource).post(share_resource),
         )
         .route("/api/shares", get(api_list_shares).post(api_create_share))
+        .route("/api/notes", get(notes::api_summaries))
+        .route(
+            "/api/notes/{kind}/{id}",
+            get(notes::api_list).post(notes::api_add),
+        )
+        .route(
+            "/api/notes/{kind}/{id}/{note}",
+            put(notes::api_edit).delete(notes::api_delete),
+        )
         .route("/api/shares/{id}", delete(api_delete_share))
         .route("/chromium", get(handle_chromium_ws))
         .route("/firefox", get(handle_firefox_ws))

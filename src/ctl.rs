@@ -164,6 +164,14 @@ pub enum SessionCmd {
         #[arg(long)]
         node: Option<String>,
     },
+    /// Add a note (with TEXT), or list the notes (without).
+    Note {
+        session: String,
+        /// The note; `-` reads it from stdin.
+        text: Option<String>,
+        #[arg(long)]
+        node: Option<String>,
+    },
     /// Stop sharing a session: its public link stops working at once.
     Unshare {
         session: String,
@@ -340,6 +348,14 @@ pub enum ProfileCmd {
     /// Show one profile.
     Show {
         profile: String,
+        #[arg(long)]
+        node: Option<String>,
+    },
+    /// Add a note (with TEXT), or list the notes (without).
+    Note {
+        profile: String,
+        /// The note; `-` reads it from stdin.
+        text: Option<String>,
         #[arg(long)]
         node: Option<String>,
     },
@@ -553,6 +569,12 @@ pub enum RecordingCmd {
         /// The link stops working after this long (`30m`, `12h`, `7d`, or `never`).
         #[arg(long, value_parser = parse_expiry, default_value = "1h")]
         expires: u64,
+    },
+    /// Add a note (with TEXT), or list the notes (without).
+    Note {
+        recording: String,
+        /// The note; `-` reads it from stdin.
+        text: Option<String>,
     },
     /// Stop sharing a recording: its public link stops working at once.
     Unshare { recording: String },
@@ -1248,6 +1270,21 @@ pub async fn session(args: SessionArgs) -> R<()> {
             )
             .await?;
         }
+        SessionCmd::Note {
+            session,
+            text,
+            node,
+        } => {
+            let s = c.session(&session, node.as_deref())?;
+            note(
+                &c,
+                &s.node_name,
+                "sessions",
+                &s.session.id.to_string(),
+                text,
+            )
+            .await?;
+        }
         SessionCmd::Unshare { session, node } => {
             let s = c.session(&session, node.as_deref())?;
             unshare(&c, &s.node_name, s.share.as_ref()).await?;
@@ -1528,6 +1565,18 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
                 ],
                 &rows,
             );
+        }
+        ProfileCmd::Note {
+            profile,
+            text,
+            node,
+        } => {
+            let p = c.profile(&profile, node.as_deref())?;
+            let key = p
+                .profile
+                .id
+                .map_or_else(|| p.profile.name.clone(), |id| id.to_string());
+            note(&c, &p.node_name, "profiles", &key, text).await?;
         }
         ProfileCmd::Show { profile, node } => {
             let p = c.profile(&profile, node.as_deref())?;
@@ -1983,6 +2032,17 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
             )
             .await?;
         }
+        RecordingCmd::Note { recording, text } => {
+            let r = c.recording(&recording)?;
+            note(
+                &c,
+                &r.node_name,
+                "recordings",
+                &r.recording.id.to_string(),
+                text,
+            )
+            .await?;
+        }
         RecordingCmd::Unshare { recording } => {
             let r = c.recording(&recording)?;
             unshare(&c, &r.node_name, r.share.as_ref()).await?;
@@ -2237,6 +2297,39 @@ async fn share(
         .unwrap_or_default()
         .to_string();
     c.say(v, url);
+    Ok(())
+}
+
+/// Add a note to a session, profile or recording, or list its notes.
+async fn note(c: &Client, node: &str, kind: &str, key: &str, text: Option<String>) -> R<()> {
+    let path = c.api(node, &format!("/notes/{kind}/{}", enc(key)));
+    let Some(mut text) = text else {
+        let v = c.call(c.req(Method::GET, &path)).await?;
+        if c.json {
+            c.print_json(&v);
+            return Ok(());
+        }
+        let notes = v.as_array().cloned().unwrap_or_default();
+        if notes.is_empty() {
+            println!("no notes");
+        }
+        for n in notes {
+            println!(
+                "{}  {}\n{}\n",
+                short(n["id"].as_str().unwrap_or_default()),
+                ago(n["created_at"].as_u64().unwrap_or_default()),
+                n["text"].as_str().unwrap_or_default()
+            );
+        }
+        return Ok(());
+    };
+    if text == "-" {
+        text = std::io::read_to_string(std::io::stdin())?;
+    }
+    let v = c
+        .call(c.req(Method::POST, &path).json(&json!({ "text": text })))
+        .await?;
+    done(c, v, "noted");
     Ok(())
 }
 

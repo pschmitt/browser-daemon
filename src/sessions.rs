@@ -530,10 +530,11 @@ impl AppState {
         // Live views of the session end with it.
         self.viewers.close_session(*id);
         self.thumbnails.forget(*id);
-        // A public link to it ends with it.
+        // A public link to it ends with it, and so do its notes.
         self.shares
             .remove_target(shares::ShareKind::Session, *id)
             .await;
+        notes::forget_session(self, *id).await;
         let mut terminated = false;
         if let Some(session) = removed {
             // Out of the session before the slow part (a profile's browser gets up to
@@ -822,6 +823,10 @@ pub(crate) async fn api_get_session(
         .find(|s| s.kind == shares::ShareKind::Session && s.target == id)
     {
         session_json["share"] = serde_json::to_value(state.share_view(share)).unwrap_or_default();
+    }
+
+    if let Some(sum) = notes::session_summary(&state, id).await {
+        session_json["notes"] = serde_json::to_value(sum).unwrap_or_default();
     }
 
     Ok(Json(serde_json::json!({

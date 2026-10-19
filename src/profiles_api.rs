@@ -916,7 +916,8 @@ pub(crate) async fn api_clear_profile(
     };
     let mut entries = fs::read_dir(&profile.dir).await.map_err(io_err)?;
     while let Some(entry) = entries.next_entry().await.map_err(io_err)? {
-        if entry.file_name() == profiles::META_FILE {
+        // Its description and notes are not browser data.
+        if entry.file_name() == profiles::META_FILE || entry.file_name() == notes::FILE {
             continue;
         }
         let path = entry.path();

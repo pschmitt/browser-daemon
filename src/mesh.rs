@@ -32,6 +32,9 @@ pub struct MeshSession {
     pub node_name: String,
     pub node_url: String,
     pub is_local: bool,
+    /// Its notes: how many, and the latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<notes::NotesSummary>,
     /// Its public link, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<ShareView>,
@@ -44,6 +47,9 @@ pub struct MeshProfile {
     pub node_name: String,
     pub node_url: String,
     pub is_local: bool,
+    /// Its notes: how many, and the latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<notes::NotesSummary>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -62,6 +68,9 @@ pub struct MeshRecording {
     pub node_name: String,
     pub node_url: String,
     pub is_local: bool,
+    /// Its notes: how many, and the latest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<notes::NotesSummary>,
     /// Its public link, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<ShareView>,
@@ -143,6 +152,7 @@ pub(crate) struct PeerReport {
     pub(crate) targets: Vec<DevToolsTarget>,
     pub(crate) recordings: Vec<RecordingMeta>,
     pub(crate) shares: Vec<ShareView>,
+    pub(crate) notes: HashMap<String, notes::NotesSummary>,
     pub(crate) max_storage_bytes: u64,
 }
 
@@ -189,6 +199,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         targets: Vec::new(),
         recordings: Vec::new(),
         shares: Vec::new(),
+        notes: HashMap::new(),
         max_storage_bytes: 0,
     };
 
@@ -210,12 +221,13 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
     }
 
     // The rest at once: a slow peer costs one wait, not four.
-    let (sessions, profiles, targets, recordings, shares) = tokio::join!(
+    let (sessions, profiles, targets, recordings, shares, notes) = tokio::join!(
         peer_poll::<Vec<SessionSummary>>(state, format!("{url}/api/sessions")),
         peer_poll::<Vec<ProfileInfo>>(state, format!("{url}/api/profiles")),
         peer_poll::<Vec<DevToolsTarget>>(state, format!("{url}/json/list")),
         peer_poll::<Vec<RecordingMeta>>(state, format!("{url}/api/recordings")),
         peer_poll::<Vec<ShareView>>(state, format!("{url}/api/shares")),
+        peer_poll::<HashMap<String, notes::NotesSummary>>(state, format!("{url}/api/notes")),
     );
 
     let (peer, name, max_storage_bytes) = match info {
@@ -274,6 +286,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         targets,
         recordings,
         shares,
+        notes,
         max_storage_bytes,
     }
 }
@@ -286,11 +299,12 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
 
     // This node and the peers at the same time.
     let local = async {
-        let (targets, profiles, recordings, shares) = tokio::join!(
+        let (targets, profiles, recordings, shares, notes) = tokio::join!(
             get_local_targets(state),
             get_local_profiles(state),
             recorder::list_recordings(&state.recorder_config),
             state.live_shares(),
+            notes::summaries(state),
         );
         // The tab counts come from the target list: no second round of requests.
         let sessions = snapshot_sessions(state).await;
@@ -305,15 +319,24 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                 s.summary(tabs, active.get(&s.id))
             })
             .collect();
-        (sessions, profiles, targets, recordings, shares)
+        (sessions, profiles, targets, recordings, shares, notes)
     };
     let remote = futures_util::future::join_all(
         peers
             .into_iter()
             .map(|(name, url)| fetch_peer(state, name, url)),
     );
-    let ((local_sessions, local_profiles, local_targets, local_recordings, local_shares), reports) =
-        tokio::join!(local, remote);
+    let (
+        (
+            local_sessions,
+            local_profiles,
+            local_targets,
+            local_recordings,
+            local_shares,
+            local_notes,
+        ),
+        reports,
+    ) = tokio::join!(local, remote);
 
     let local_storage_used_bytes: u64 = local_recordings.iter().map(|r| r.size_bytes).sum();
     let mut local_supported_engines = vec![BrowserEngine::Chromium];
@@ -345,6 +368,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
 
     let (node_name, node_url) = (local_node.name.clone(), local_node.url.clone());
     all_sessions.extend(local_sessions.into_iter().map(|session| MeshSession {
+        notes: local_notes.get(&format!("session/{}", session.id)).cloned(),
         share: share_of(&local_shares, ShareKind::Session, session.id),
         session,
         node_name: node_name.clone(),
@@ -352,6 +376,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         is_local: true,
     }));
     all_profiles.extend(local_profiles.into_iter().map(|profile| MeshProfile {
+        notes: profile_notes(&local_notes, &profile),
         profile,
         node_name: node_name.clone(),
         node_url: node_url.clone(),
@@ -363,12 +388,17 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         node_url: node_url.clone(),
         is_local: true,
     }));
-    all_recordings.extend(local_recordings.into_iter().map(|recording| MeshRecording {
-        share: share_of(&local_shares, ShareKind::Recording, recording.id),
-        recording,
-        node_name: node_name.clone(),
-        node_url: node_url.clone(),
-        is_local: true,
+    all_recordings.extend(local_recordings.into_iter().map(|recording| {
+        MeshRecording {
+            notes: local_notes
+                .get(&format!("recording/{}", recording.id))
+                .cloned(),
+            share: share_of(&local_shares, ShareKind::Recording, recording.id),
+            recording,
+            node_name: node_name.clone(),
+            node_url: node_url.clone(),
+            is_local: true,
+        }
     }));
 
     let mut total_capacity = local_node.max_sessions;
@@ -385,8 +415,9 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         }
         peer_states.push(report.state);
         let (node_name, node_url) = (report.name, report.url);
-        let shares = report.shares;
+        let (shares, notes) = (report.shares, report.notes);
         all_sessions.extend(report.sessions.into_iter().map(|session| MeshSession {
+            notes: notes.get(&format!("session/{}", session.id)).cloned(),
             share: share_of(&shares, ShareKind::Session, session.id),
             session,
             node_name: node_name.clone(),
@@ -394,6 +425,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
             is_local: false,
         }));
         all_profiles.extend(report.profiles.into_iter().map(|profile| MeshProfile {
+            notes: profile_notes(&notes, &profile),
             profile,
             node_name: node_name.clone(),
             node_url: node_url.clone(),
@@ -410,6 +442,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                 .recordings
                 .into_iter()
                 .map(|recording| MeshRecording {
+                    notes: notes.get(&format!("recording/{}", recording.id)).cloned(),
                     share: share_of(&shares, ShareKind::Recording, recording.id),
                     recording,
                     node_name: node_name.clone(),
@@ -442,6 +475,14 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         total_storage_bytes,
         max_storage_bytes,
     }
+}
+
+/// A profile's notes among a node's (they are keyed by its id).
+fn profile_notes(
+    notes: &HashMap<String, notes::NotesSummary>,
+    profile: &ProfileInfo,
+) -> Option<notes::NotesSummary> {
+    notes.get(&format!("profile/{}", profile.id?)).cloned()
 }
 
 /// The public link of a session or recording among a node's shares.

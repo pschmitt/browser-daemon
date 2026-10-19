@@ -242,6 +242,21 @@
   .pub-warn.watch { color: var(--pub); background: color-mix(in oklab, var(--pub) 12%, transparent); border-left-color: var(--pub); }
   .pub-warn[hidden] { display: none; }
   #vaultPop .pub-warn { margin: 2px 6px 6px; }
+  #notesDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(460px, calc(100vw - 32px)); }
+  #notesDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #notesDialog h2 { margin: 0 0 10px; font-size: 16px; }
+  .nt-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 45vh; overflow-y: auto; -webkit-user-select: text; user-select: text; }
+  .nt-list li { padding: 9px 11px; border-radius: 10px; background: var(--btn); border: 1px solid var(--line); }
+  .nt-list .t { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.45; }
+  .nt-list .f { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .nt-list .f span { flex: 1; }
+  .nt-list .f button { border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; padding: 2px 4px; border-radius: 6px; }
+  .nt-list .f button.armed { color: #fff; background: var(--bad); }
+  .nt-list .empty { color: var(--muted); font-size: 13px; background: none; border: 0; padding: 0; }
+  .nt-add textarea { width: 100%; min-height: 70px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-size: 14px; resize: vertical; -webkit-user-select: text; user-select: text; }
+  .nt-actions { flex-direction: row; justify-content: flex-end; margin-top: 10px; }
+  .nt-actions button { padding: 0 16px; }
+  .nt-actions .nt-go { background: var(--accent-btn); border-color: var(--accent-btn); color: #fff; }
   #lastTabDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(360px, calc(100vw - 32px)); }
   #lastTabDialog::backdrop { background: rgba(0, 0, 0, .5); }
   #lastTabDialog h2 { margin: 0 0 6px; font-size: 16px; }
@@ -461,6 +476,7 @@
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search<select id="smSearch" aria-label="Search engine"></select></label>
   <button class="sm-item" id="smDownloads" hidden><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span id="smDownloadsText">Downloads</span></button>
   <button class="sm-item" id="smShare" title="A link anyone can open to see this session, without signing in"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span id="smShareText">Share…</span></button>
+  <button class="sm-item" id="smNotes"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></svg><span id="smNotesText">Notes…</span></button>
  <button class="sm-item" id="smSave" hidden title="Keep this session's logins, cookies and storage as a new profile"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
   <hr>
@@ -577,6 +593,14 @@
     <button type="button" id="shClose">Close</button>
     <button type="button" class="sh-go" id="shGo">Create public link</button>
   </div>
+</dialog>
+<dialog id="notesDialog" aria-labelledby="notesTitle">
+  <h2 id="notesTitle">Notes</h2>
+  <ol class="nt-list" id="ntList"></ol>
+  <form id="ntForm" class="nt-add">
+    <textarea id="ntText" rows="3" maxlength="4000" placeholder="Add a note… (Ctrl+Enter)" aria-label="New note"></textarea>
+    <div class="ltd-actions nt-actions"><button type="button" id="ntClose">Close</button><button type="submit" class="nt-go">Add note</button></div>
+  </form>
 </dialog>
 <dialog id="passkeyDialog">
   <form method="dialog">
@@ -3511,6 +3535,64 @@ $("shStop").onclick = async () => {
 $("pubPill").onclick = (e) => { e.stopPropagation(); openShareDialog(); };
 $("smShare").onclick = openShareDialog;
 
+// Notes on this session (kept by its node, gone when the session ends).
+let ntNotes = [];
+const ntPath = () => `/api/notes/sessions/${encodeURIComponent(target.sessionId)}`;
+async function ntLoad() {
+  try {
+    const res = await fetch(ntPath(), { headers: authHeaders() });
+    ntNotes = res.ok ? await res.json() : [];
+  } catch { ntNotes = []; }
+  const fmt = (t) => new Date(t * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  $("ntList").innerHTML = ntNotes.length ? ntNotes.map((n) => `<li data-note="${esc(n.id)}"><div class="t">${esc(n.text)}</div><div class="f"><span>${esc(fmt(n.created_at))}${n.edited_at ? " · edited" : ""}</span><button type="button" data-del>Delete</button></div></li>`).join("")
+    : '<li class="empty">No notes yet.</li>';
+  $("ntList").scrollTop = $("ntList").scrollHeight;
+}
+$("smNotes").onclick = () => {
+  if (!target?.sessionId) return;
+  toggleSessMenu(false);
+  $("notesTitle").textContent = `Notes · ${sess?.name || sess?.profile || "Session"}`;
+  $("ntText").value = "";
+  $("notesDialog").showModal();
+  ntLoad();
+};
+$("ntClose").onclick = () => $("notesDialog").close();
+$("ntText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $("ntForm").requestSubmit(); } });
+$("ntForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $("ntText").value.trim();
+  if (!text) return;
+  try {
+    const res = await fetch(ntPath(), { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ text }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    $("ntText").value = "";
+    await ntLoad();
+    refreshSession();
+  } catch (err) {
+    toast(`Could not add the note: ${err.message}`, 5000);
+  }
+};
+// Two taps: the first arms the button.
+$("ntList").onclick = async (e) => {
+  const b = e.target.closest("[data-del]");
+  if (!b) return;
+  if (!b.classList.contains("armed")) {
+    b.classList.add("armed");
+    b.textContent = "Delete?";
+    setTimeout(() => { if (b.isConnected) { b.classList.remove("armed"); b.textContent = "Delete"; } }, 3000);
+    return;
+  }
+  const id = b.closest("[data-note]").dataset.note;
+  try {
+    const res = await fetch(`${ntPath()}/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders() });
+    if (!res.ok) throw new Error(res.statusText);
+    await ntLoad();
+    refreshSession();
+  } catch (err) {
+    toast(`Could not delete the note: ${err.message}`, 5000);
+  }
+};
+
 // A throwaway session becomes a profile: its data is kept, and the session continues
 // as a session of that profile (the browser restarts on the same pages).
 $("smSave").onclick = async () => {
@@ -4162,6 +4244,7 @@ function renderSession() {
   $("pubPill").hidden = !sess.share;
   renderWatchers();
   $("smShareText").textContent = sess.share ? "Public link…" : "Share…";
+  $("smNotesText").textContent = sess.notes?.count ? `Notes (${sess.notes.count})…` : "Notes…";
   if ($("shareDialog").open) renderShareDialog();
   // Which agent drives it, with its own mark.
   const driving = (sess.clients || []).filter((c) => c.agent);

@@ -328,6 +328,20 @@ button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .rec-state { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; color: var(--bad); background: var(--bad-soft); }
 .rec-state.paused { color: var(--muted); background: var(--hover); }
 .rec-state[hidden], #recordModal .sheet-foot [hidden], #recordSoundRow[hidden] { display: none; }
+.notes-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: min(50vh, 420px); overflow-y: auto; }
+.notes-list:empty { display: none; }
+.notes-list li { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--hover); border: 1px solid var(--line); }
+.notes-list .n-text { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.5; }
+.notes-list .n-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.notes-list .n-foot .btn { height: 24px; padding: 0 6px; }
+.notes-list .n-foot .grow { flex: 1; }
+.notes-list textarea { width: 100%; }
+.notes-empty { color: var(--muted); font-size: 13px; }
+.notes-add { display: flex; flex-direction: column; gap: 8px; }
+.notes-add textarea { resize: vertical; min-height: 70px; font: inherit; font-size: 13.5px; line-height: 1.5; }
+.notes-add-foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-size: 12px; }
+.note-badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border: 0; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; vertical-align: 1px; }
+.note-badge .i { width: 11px; height: 11px; }
 .idle-note { margin-left: 4px; padding: 0 6px; border-radius: 99px; font-size: 11.5px; font-weight: 700; }
 .idle-note[hidden] { display: none; }
 .idle-note.warn { color: var(--warn); background: var(--warn-soft); }
@@ -809,6 +823,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5"/></symbol>
   <symbol id="i-install" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
   <symbol id="i-unlink" viewBox="0 0 24 24"><path d="M17 13.5l3.5-3a5 5 0 0 0-7-7L11.8 5.2M7 10.5l-3.5 3a5 5 0 0 0 7 7l1.7-1.7M3 3l18 18"/></symbol>
@@ -1131,6 +1146,20 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <button type="button" class="btn" data-close>Close</button>
       <button type="button" class="btn" id="recordPause" hidden></button>
       <button type="button" class="btn primary" id="recordOk"><svg class="i sm"><use href="#i-rec"/></svg>Start recording</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Notes of a session, profile or recording -->
+<dialog class="modal" id="notesModal" aria-labelledby="notesTitle">
+  <div class="sheet" style="max-width:520px">
+    <div class="sheet-head"><h2 id="notesTitle">Notes</h2><button type="button" class="btn icon sm ghost" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <ol class="notes-list" id="notesList"></ol>
+      <form class="notes-add" id="notesForm">
+        <textarea class="input" id="notesText" rows="3" maxlength="4000" placeholder="Add a note… (Ctrl+Enter)" aria-label="New note"></textarea>
+        <div class="notes-add-foot"><span class="muted" id="notesHint"></span><button type="submit" class="btn primary sm" id="notesAdd"><svg class="i sm"><use href="#i-plus"/></svg>Add note</button></div>
+      </form>
     </div>
   </div>
 </dialog>
@@ -1950,7 +1979,7 @@ let sessQuery = '', agentsOnly = false;
 $('sessSearch').addEventListener('input', (e) => { sessQuery = e.target.value; renderSessions(); });
 const sessHaystack = (s) => [sessName(s), s.profile, s.node_name, s.engine, s.id,
   ...(s.clients || []).flatMap((c) => [c.agent_name, c.topic, c.conversation, c.cwd, c.machine, c.from]),
-  ...pagesOf(s).flatMap((t) => [t.title, t.url])].filter(Boolean).join(' ').toLowerCase();
+  ...pagesOf(s).flatMap((t) => [t.title, t.url]), s.notes?.last].filter(Boolean).join(' ').toLowerCase();
 function renderSessions() {
   const grid = $('sessionGrid');
   const all = ov.sessions.filter(inFilter);
@@ -2117,6 +2146,7 @@ function sessionCard(s) {
   // The rest: small icons with tooltips.
   const ind = (cls, ico, text, title, act = '') => `<span class="ind ${cls}"${act ? ` role="button" tabindex="0" data-act="${act}" data-key="${key}"` : ''} title="${esc(title)}" aria-label="${esc(title)}">${ico}${text ? `<span>${esc(text)}</span>` : ''}</span>`;
   const inds = [
+    s.notes && ind('accent', icon('note', 'sm'), String(s.notes.count), `${plural(s.notes.count, 'note')}, the latest:\n\n${s.notes.last || ''}`, 'notes-session'),
     !s.persistent && ind('', icon('clock', 'sm'), '', 'Ephemeral: stops when its last client disconnects'),
     s.adblock && ind('ok', icon('shield', 'sm'), '', 'Ads and trackers are blocked'),
     s.proxy && ind('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
@@ -2175,7 +2205,7 @@ function profileRow(p) {
   return `
   <div class="row" role="row" data-key="${key}">
     <div role="cell" class="main">${profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`}
-      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}</b><span>${status}${tabStrip(p)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
     <div role="cell" class="num c-size">${formatBytes(p.size_bytes)}</div>
     <div role="cell" class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
@@ -2190,7 +2220,7 @@ const isLive = (r) => r.status === 'recording' && byKey.sessions.has(`${r.node_n
 const visibleRecordings = () => [...byKey.recordings.values()].filter((r) => inFilter(r) && (r.frame_count > 0 || isLive(r)));
 // The search field: every word somewhere in the title, addresses, profile, node, id or start date.
 let recQuery = '';
-const recHaystack = (r) => [r.title, r.initial_url, r.final_url, r.profile, r.node_name, r.id, absTime(r.started_at_secs), r.audio && 'sound audio', r.merged_from?.length && 'merged', r.share && 'public shared'].filter(Boolean).join(' ').toLowerCase();
+const recHaystack = (r) => [r.title, r.initial_url, r.final_url, r.profile, r.node_name, r.id, absTime(r.started_at_secs), r.audio && 'sound audio', r.merged_from?.length && 'merged', r.share && 'public shared', r.notes?.last].filter(Boolean).join(' ').toLowerCase();
 const REC_PAGE = 50;
 let recLimit = REC_PAGE;
 const listedRecordings = () => {
@@ -2271,7 +2301,7 @@ function recordingRow(r) {
     <div role="cell"><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div role="cell"><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
     <div role="cell" class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
-      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}</b><span>${esc(sub)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}${noteBadge('recording', key, r.notes)}</b><span>${esc(sub)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(r.node_name)}</div>
     <div role="cell" class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
     <div role="cell" class="num c-dur">${formatUptime(r.duration_seconds)}</div>
@@ -2384,11 +2414,15 @@ const ACT = {
       { label: 'Session' },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
       { icon: 'clock', label: 'Auto-stop when idle', meta: idleLabel(s.idle_timeout_seconds), run: () => setIdleTimeout(s) },
+      { icon: 'note', label: 'Notes…', meta: s.notes ? String(s.notes.count) : '', run: () => openNotes('session', s) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
       '-',
       { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
     ]);
   },
+  'notes-session': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) openNotes('session', s); },
+  'notes-profile': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) openNotes('profile', p); },
+  'notes-recording': (el) => { const r = byKey.recordings.get(el.dataset.key); if (r) openNotes('recording', r); },
   'rec-dialog': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) openRecordModal(s); },
   // A node's chip: show only its sessions (again: all), or its card on the Nodes tab.
   'node-menu': (el) => {
@@ -2413,6 +2447,7 @@ const ACT = {
         : { icon: 'play', label: `Launch in ${p.engine === 'firefox' ? 'Firefox' : 'Chromium'}`, run: () => launchProfile(p) },
       !p.session && p.tabs?.length && { icon: 'play', label: 'Launch without the default tabs', run: () => launchProfile(p, { tabs: false }) },
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
+      { icon: 'note', label: 'Notes…', meta: p.notes ? String(p.notes.count) : '', run: () => openNotes('profile', p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
       { icon: 'image', label: 'Set picture…', run: () => pickProfileIcon(p) },
       p.icon_rev && { icon: 'trash', label: 'Remove picture', run: () => act('Removing the picture', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}/icon`)), 'Picture removed') },
@@ -2445,6 +2480,7 @@ const ACT = {
     openMenu(el, [
       { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
       { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
+      { icon: 'note', label: 'Notes…', meta: r.notes ? String(r.notes.count) : '', run: () => openNotes('recording', r) },
       { icon: r.share ? 'link' : 'globe', label: r.share ? 'Public link…' : 'Share…', run: () => openShare('recording', r) },
       r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
@@ -3152,6 +3188,107 @@ async function stopSharing(item) {
   if ($('shareModal').open) { shareCtx = null; closeModal('shareModal'); }
   refreshData(true);
 }
+
+/* ================================================================ notes */
+// Notes on a session, profile or recording: kept by its node, newest last.
+const noteBadge = (kind, key, notes) => (notes ? `<button class="note-badge" data-act="notes-${kind}" data-key="${key}" title="${esc(`${plural(notes.count, 'note')}, the latest:\n\n${notes.last || ''}`)}" aria-label="${esc(plural(notes.count, 'note'))}">${icon('note', 'sm')}${notes.count}</button>` : '');
+let notesCtx = null;   // { kind, key }
+const notesItem = () => notesCtx && ({ session: byKey.sessions, profile: byKey.profiles, recording: byKey.recordings })[notesCtx.kind].get(notesCtx.key);
+function notesPath(kind, item) {
+  const id = kind === 'profile' ? (item.id || item.key) : item.id;
+  return api(item.node_name, `/notes/${kind}s/${enc(id)}`);
+}
+const notesLabel = (kind, item) => (kind === 'session' ? sessName(item) : kind === 'profile' ? item.display : recordingTitle(item));
+async function openNotes(kind, item) {
+  notesCtx = { kind, key: kind === 'session' ? keyOf.session(item) : kind === 'profile' ? keyOf.profile(item) : keyOf.recording(item) };
+  $('notesTitle').textContent = `Notes · ${notesLabel(kind, item)}`;
+  $('notesText').value = '';
+  $('notesHint').textContent = kind === 'session' ? 'Session notes end with the session.' : kind === 'profile' ? 'Kept with the profile (also when moved or cleared).' : 'Kept with the recording.';
+  $('notesList').innerHTML = '<li class="notes-empty">Loading…</li>';
+  openModal('notesModal');
+  setTimeout(() => $('notesText').focus(), 40);
+  await loadNotes();
+}
+let notesShown = [];
+async function loadNotes() {
+  const item = notesItem();
+  if (!item) return;
+  try {
+    notesShown = await request('GET', notesPath(notesCtx.kind, item));
+  } catch (e) {
+    $('notesList').innerHTML = `<li class="notes-empty">Could not load the notes: ${esc(e.message)}</li>`;
+    return;
+  }
+  renderNotes();
+}
+function renderNotes() {
+  $('notesList').innerHTML = notesShown.length ? notesShown.map((n) => `<li data-note="${esc(n.id)}">
+      <div class="n-text">${esc(n.text)}</div>
+      <div class="n-foot"><span title="${esc(absTime(n.created_at))}">${esc(relTime(n.created_at))}</span>${n.edited_at ? `<span title="${esc(absTime(n.edited_at))}">· edited</span>` : ''}<span class="grow"></span>
+        <button type="button" class="btn ghost sm" data-note-edit title="Edit">${icon('edit', 'sm')}</button>
+        <button type="button" class="btn ghost sm" data-note-del title="Delete">${icon('trash', 'sm')}</button></div>
+    </li>`).join('') : '<li class="notes-empty">No notes yet.</li>';
+  const list = $('notesList');
+  list.scrollTop = list.scrollHeight;
+}
+async function notesChanged() {
+  await loadNotes();
+  refreshData(true);
+}
+$('notesForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const item = notesItem(), text = $('notesText').value.trim();
+  if (!item || !text) return;
+  $('notesAdd').disabled = true;
+  try {
+    await request('POST', notesPath(notesCtx.kind, item), { text });
+    $('notesText').value = '';
+    await notesChanged();
+  } catch (err) {
+    showToast('Could not add the note', 'danger', 6000, null, err.message);
+  } finally {
+    $('notesAdd').disabled = false;
+    $('notesText').focus();
+  }
+});
+$('notesText').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('notesForm').requestSubmit(); }
+});
+$('notesList').addEventListener('click', async (e) => {
+  const li = e.target.closest('[data-note]');
+  const item = notesItem();
+  if (!li || !item) return;
+  const note = notesShown.find((n) => n.id === li.dataset.note);
+  const path = `${notesPath(notesCtx.kind, item)}/${enc(li.dataset.note)}`;
+  const del = e.target.closest('[data-note-del]');
+  if (del) {
+    // Two clicks: the first arms the button.
+    if (!del.classList.contains('armed')) {
+      del.classList.add('armed', 'danger');
+      del.innerHTML = `${icon('trash', 'sm')}Delete?`;
+      setTimeout(() => { if (del.isConnected) { del.classList.remove('armed', 'danger'); del.innerHTML = icon('trash', 'sm'); } }, 3000);
+      return;
+    }
+    try { await request('DELETE', path); await notesChanged(); } catch (err) { showToast('Could not delete the note', 'danger', 6000, null, err.message); }
+    return;
+  }
+  if (e.target.closest('[data-note-edit]') && note) {
+    li.innerHTML = `<textarea class="input" rows="3" maxlength="4000" aria-label="Edit the note">${esc(note.text)}</textarea>
+      <div class="n-foot"><span class="grow"></span><button type="button" class="btn sm" data-note-cancel>Cancel</button><button type="button" class="btn primary sm" data-note-save>Save</button></div>`;
+    const ta = li.querySelector('textarea');
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); li.querySelector('[data-note-save]').click(); } });
+    return;
+  }
+  if (e.target.closest('[data-note-cancel]')) { renderNotes(); return; }
+  if (e.target.closest('[data-note-save]')) {
+    const text = li.querySelector('textarea').value.trim();
+    if (!text) return;
+    try { await request('PUT', path, { text }); await notesChanged(); } catch (err) { showToast('Could not save the note', 'danger', 6000, null, err.message); }
+  }
+});
+$('notesModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) { notesCtx = null; closeModal('notesModal'); } });
 
 async function renameSession(s) {
   const v = await ask({ title: 'Rename session', text: 'Leave empty for a made-up name.', input: s.name || '', ok: 'Rename' });
