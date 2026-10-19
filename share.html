@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Shared browser</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='10' width='52' height='44' rx='8' fill='%235b6cff'/%3E%3Crect x='6' y='10' width='52' height='12' rx='6' fill='%233b47b8'/%3E%3Ccircle cx='32' cy='38' r='9' fill='%23fff'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f5f9; --raised: #ffffff; --fg: #181a22; --muted: #646a7a; --line: #dfe2ea;
+  --accent: #5b6cff; --live: #e5484d; --ok: #2f9e6a;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0f1015; --raised: #181a22; --fg: #eceef4; --muted: #9298a8; --line: #2a2d38;
+    --accent: #8290ff; --live: #ff6369; --ok: #4cc38a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1015; --raised: #181a22; --fg: #eceef4; --muted: #9298a8; --line: #2a2d38;
+  --accent: #8290ff; --live: #ff6369; --ok: #4cc38a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; min-height: 100dvh; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--raised); border-bottom: 1px solid var(--line); }
+.fav { width: 28px; height: 28px; flex: none; border-radius: 6px; display: grid; place-items: center; background: var(--bg); overflow: hidden; font-weight: 700; color: var(--muted); }
+.fav img { width: 20px; height: 20px; }
+.what { flex: 1; min-width: 0; }
+.what b { display: block; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.what span { display: block; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid var(--line); color: var(--muted); }
+.badge.live { color: var(--live); border-color: color-mix(in srgb, var(--live) 45%, transparent); }
+.badge.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
+.badge.ended { color: var(--muted); }
+.badge.ended::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+@keyframes pulse { 50% { opacity: .25; } }
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.stage { position: relative; flex: 1; min-height: 240px; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; }
+.stage canvas, .stage img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+.stage img[hidden], .stage canvas[hidden] { display: none; }
+.overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: #fff; background: rgba(0, 0, 0, .65); }
+.overlay[hidden] { display: none; }
+.overlay p { margin: 0; max-width: 420px; color: rgba(255, 255, 255, .8); }
+.overlay strong { font-size: 16px; }
+.spinner { width: 32px; height: 32px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .2); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.bar { width: min(320px, 80%); height: 5px; border-radius: 999px; background: rgba(255, 255, 255, .15); overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.big-play { position: absolute; width: 68px; height: 68px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .55); display: grid; place-items: center; cursor: pointer; transition: opacity .2s; }
+.big-play svg { width: 28px; height: 28px; fill: #fff; margin-left: 4px; }
+.big-play[hidden] { display: none; }
+.controls { padding: 6px 12px 10px; background: #111217; color: #fff; }
+.controls[hidden] { display: none; }
+.timeline { position: relative; height: 22px; }
+.buffered { position: absolute; left: 9px; right: 9px; top: 10px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .1); overflow: hidden; pointer-events: none; }
+.buffered > span { display: block; height: 100%; width: 0; background: rgba(255, 255, 255, .35); }
+.scrub { position: relative; width: 100%; height: 22px; margin: 0; accent-color: var(--accent); background: transparent; cursor: pointer; }
+.row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.row .grow { flex: 1; }
+.btn { height: 34px; min-width: 34px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: 700 12.5px var(--sans); cursor: pointer; }
+.btn:hover { background: rgba(255, 255, 255, .12); }
+.btn:disabled { opacity: .35; cursor: not-allowed; }
+.btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn.play svg { fill: currentColor; stroke: none; }
+.time { font: 600 12.5px var(--mono); margin-left: 6px; white-space: nowrap; }
+.volume { width: 84px; accent-color: var(--accent); }
+.badge.control { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.stage.controllable img { cursor: pointer; touch-action: none; }
+.typebar { display: flex; gap: 6px; padding: 8px 12px; background: var(--raised); border-top: 1px solid var(--line); flex-wrap: wrap; }
+.typebar[hidden] { display: none; }
+.typebar input { flex: 1; min-width: 140px; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: 14px var(--sans); }
+.typebar button { height: 36px; min-width: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: 600 13px var(--sans); cursor: pointer; }
+.typebar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.click-dot { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 2px solid var(--accent); pointer-events: none; animation: ping .5s ease-out forwards; }
+@keyframes ping { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; border-top: 1px solid var(--line); background: var(--raised); }
+.stage.full { position: fixed; inset: 0; z-index: 10; }
+@media (max-width: 600px) {
+  header { padding: 8px 12px; }
+  .volume { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="fav" id="fav">·</div>
+  <div class="what"><b id="title">Loading…</b><span id="site"></span></div>
+  <span class="badge" id="badge" hidden></span>
+</header>
+<main>
+  <div class="stage" id="stage">
+    <canvas id="canvas" hidden></canvas>
+    <img id="live" alt="Live view of the shared browser" hidden>
+    <button class="big-play" id="bigPlay" type="button" aria-label="Play" hidden><svg viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></svg></button>
+    <div class="overlay" id="overlay">
+      <div class="spinner" id="spinner"></div>
+      <strong id="overlayTitle">Loading…</strong>
+      <p id="overlayText"></p>
+      <div class="bar" id="loadBar" hidden><span></span></div>
+    </div>
+  </div>
+  <form class="typebar" id="typebar" hidden autocomplete="off">
+    <input id="typeText" placeholder="Type into the page…" aria-label="Text to type into the page" spellcheck="false">
+    <button type="submit" class="primary">Send</button>
+    <button type="button" data-key="Enter" title="Enter">⏎</button>
+    <button type="button" data-key="Backspace" title="Backspace">⌫</button>
+    <button type="button" data-key="Tab" title="Tab">Tab</button>
+    <button type="button" data-key="Escape" title="Escape">Esc</button>
+  </form>
+  <div class="controls" id="controls" hidden>
+    <div class="timeline">
+      <div class="buffered"><span id="buffered"></span></div>
+      <input class="scrub" id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Position">
+    </div>
+    <div class="row">
+      <button class="btn play" id="playBtn" type="button" aria-label="Play"></button>
+      <button class="btn" id="backBtn" type="button" aria-label="Back 5 seconds" title="Back 5 s (←)"><svg viewBox="0 0 24 24"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg></button>
+      <button class="btn" id="fwdBtn" type="button" aria-label="Forward 5 seconds" title="Forward 5 s (→)"><svg viewBox="0 0 24 24"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg></button>
+      <span class="time" id="time">0:00 / 0:00</span>
+      <span class="grow"></span>
+      <button class="btn" id="muteBtn" type="button" aria-label="Mute" title="Mute (m)" hidden></button>
+      <input class="volume" id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" hidden>
+      <button class="btn" id="speedBtn" type="button" title="Playback speed">1×</button>
+      <button class="btn" id="fullBtn" type="button" aria-label="Fullscreen" title="Fullscreen (f)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    </div>
+  </div>
+</main>
+<footer>
+  <span id="footNote">Shared publicly from a remote browser.</span>
+  <span id="expiry"></span>
+</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const base = location.pathname.replace(/\/+$/, "");
+const ICONS = {
+  play: '<svg viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>',
+  sound: '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/></svg>',
+  muted: '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9l5 6M22 9l-5 6"/></svg>',
+};
+
+function fmtTime(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
+}
+function fmtDate(secs) {
+  return new Date(secs * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+function hostOf(site) {
+  try { return new URL(site).host; } catch { return site || ""; }
+}
+function overlay(title, text, { spin = false, bar = null } = {}) {
+  $("overlay").hidden = false;
+  $("overlayTitle").textContent = title;
+  $("overlayText").textContent = text || "";
+  $("spinner").hidden = !spin;
+  $("loadBar").hidden = bar === null;
+  if (bar !== null) $("loadBar").firstElementChild.style.width = `${Math.round(bar * 100)}%`;
+}
+function gone() {
+  document.title = "Link not available";
+  $("title").textContent = "This link is not available";
+  $("site").textContent = "";
+  $("badge").hidden = true;
+  $("controls").hidden = true;
+  $("canvas").hidden = true;
+  $("live").hidden = true;
+  $("bigPlay").hidden = true;
+  overlay("This link is not available", "It was never valid, it expired, or its owner stopped sharing it.");
+}
+function setFav(src, letter) {
+  const fav = $("fav");
+  fav.textContent = "";
+  if (src) {
+    const img = new Image();
+    img.alt = "";
+    img.onerror = () => { fav.textContent = letter || "·"; };
+    img.src = src;
+    fav.append(img);
+  } else {
+    fav.textContent = letter || "·";
+  }
+}
+function showExpiry(expiresAt) {
+  $("expiry").textContent = expiresAt ? `Link expires ${fmtDate(expiresAt)}` : "";
+}
+
+/* ------------------------------------------------------------ recording */
+async function recording(info) {
+  const title = info.title || hostOf(info.site) || "Recording";
+  document.title = title;
+  $("title").textContent = title;
+  $("site").textContent = [hostOf(info.site), info.started_at ? fmtDate(info.started_at) : "", fmtTime(info.duration_ms)].filter(Boolean).join(" · ");
+  setFav(info.favicon ? `${base}/favicon` : null, (hostOf(info.site)[0] || "·").toUpperCase());
+  $("badge").hidden = false;
+  $("badge").textContent = "Recording";
+  $("footNote").textContent = "A recording of a remote browser, shared publicly.";
+  showExpiry(info.expires_at);
+
+  const canvas = $("canvas"), ctx = canvas.getContext("2d");
+  const frames = [];          // { t, data, title, url }
+  let total = info.duration_ms || 0;
+  let loaded = false, playing = false, clock = 0, lastTick = 0, speed = 1, drawn = -1;
+  const audio = info.audio ? new Audio(`${base}/audio`) : null;
+  if (audio) audio.preload = "auto";
+
+  overlay("Loading recording…", "", { spin: true, bar: 0 });
+  $("controls").hidden = false;
+  $("playBtn").innerHTML = ICONS.play;
+  if (audio) {
+    $("muteBtn").hidden = false;
+    $("volume").hidden = false;
+    $("muteBtn").innerHTML = ICONS.sound;
+  }
+
+  const lastLoadedT = () => (frames.length ? frames[frames.length - 1].t : 0);
+  function frameAt(t) {
+    let lo = 0, hi = frames.length - 1, hit = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (frames[mid].t <= t) { hit = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return hit < 0 ? 0 : hit;
+  }
+  const decoded = new Map();  // index -> Image, a few around the play head
+  function image(i) {
+    let img = decoded.get(i);
+    if (!img) {
+      img = new Image();
+      img.src = `data:image/jpeg;base64,${frames[i].data}`;
+      decoded.set(i, img);
+      if (decoded.size > 24) decoded.delete(decoded.keys().next().value);
+    }
+    return img;
+  }
+  function draw(force) {
+    if (!frames.length) return;
+    const i = frameAt(clock);
+    if (i === drawn && !force) return;
+    const img = image(i);
+    const paint = () => {
+      if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+      }
+      ctx.drawImage(img, 0, 0);
+      canvas.hidden = false;
+    };
+    if (img.complete && img.naturalWidth) paint(); else img.onload = paint;
+    drawn = i;
+    if (i + 1 < frames.length) image(i + 1);
+  }
+  function updateUi() {
+    $("time").textContent = `${fmtTime(clock)} / ${fmtTime(total)}`;
+    if (!scrubbing) $("scrub").value = total ? Math.round((clock / total) * 1000) : 0;
+    $("buffered").style.width = `${total ? Math.min(100, (lastLoadedT() / total) * 100) : 0}%`;
+    $("playBtn").innerHTML = playing ? ICONS.pause : ICONS.play;
+    $("playBtn").setAttribute("aria-label", playing ? "Pause" : "Play");
+    $("bigPlay").hidden = playing || !frames.length;
+  }
+  function seek(t) {
+    clock = Math.max(0, Math.min(total, t));
+    if (audio) { try { audio.currentTime = clock / 1000; } catch { /* not loaded yet */ } }
+    draw(true);
+    updateUi();
+  }
+  function play() {
+    if (!frames.length) return;
+    if (clock >= total) seek(0);
+    playing = true;
+    lastTick = performance.now();
+    if (audio) { audio.playbackRate = speed; audio.currentTime = clock / 1000; audio.play().catch(() => {}); }
+    updateUi();
+  }
+  function pause() {
+    playing = false;
+    if (audio) audio.pause();
+    updateUi();
+  }
+  function tick(now) {
+    if (playing) {
+      const buffering = !loaded && clock > lastLoadedT();
+      $("stage").classList.toggle("buffering", buffering);
+      if (!buffering) {
+        if (audio && !audio.paused && audio.currentTime > 0 && Math.abs(audio.currentTime * 1000 - clock) < 1500) {
+          clock = audio.currentTime * 1000;
+        } else {
+          clock += (now - lastTick) * speed;
+        }
+      }
+      if (clock >= total && loaded) { clock = total; pause(); }
+      draw(false);
+      updateUi();
+    }
+    lastTick = now;
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  let scrubbing = false;
+  $("scrub").addEventListener("input", () => { scrubbing = true; seek((Number($("scrub").value) / 1000) * total); });
+  $("scrub").addEventListener("change", () => { scrubbing = false; });
+  $("playBtn").onclick = () => (playing ? pause() : play());
+  $("bigPlay").onclick = play;
+  canvas.onclick = () => (playing ? pause() : play());
+  $("backBtn").onclick = () => seek(clock - 5000);
+  $("fwdBtn").onclick = () => seek(clock + 5000);
+  const speeds = [0.5, 1, 1.5, 2, 4];
+  $("speedBtn").onclick = () => {
+    speed = speeds[(speeds.indexOf(speed) + 1) % speeds.length];
+    $("speedBtn").textContent = `${speed}×`;
+    if (audio) audio.playbackRate = speed;
+  };
+  if (audio) {
+    const syncMute = () => { $("muteBtn").innerHTML = audio.muted || audio.volume === 0 ? ICONS.muted : ICONS.sound; };
+    $("muteBtn").onclick = () => { audio.muted = !audio.muted; syncMute(); };
+    $("volume").oninput = () => { audio.volume = Number($("volume").value); audio.muted = false; syncMute(); };
+  }
+  const full = () => {
+    const stage = $("stage");
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (stage.requestFullscreen) stage.requestFullscreen().catch(() => stage.classList.toggle("full"));
+    else stage.classList.toggle("full");
+  };
+  $("fullBtn").onclick = full;
+  document.addEventListener("keydown", (e) => {
+    if (e.target.closest("input, button") && e.key !== " ") return;
+    if (e.key === " " || e.key === "k") { e.preventDefault(); playing ? pause() : play(); }
+    else if (e.key === "ArrowLeft") seek(clock - 5000);
+    else if (e.key === "ArrowRight") seek(clock + 5000);
+    else if (e.key === "f") full();
+    else if (e.key === "m" && audio) $("muteBtn").click();
+    else if (e.key === "Escape") $("stage").classList.remove("full");
+  });
+
+  // The frames arrive as JSON lines; playback can start with the first ones.
+  const res = await fetch(`${base}/frames`);
+  if (!res.ok || !res.body) { gone(); return; }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let rest = "", received = 0;
+  const expected = info.size_bytes || 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value) {
+      received += value.length;
+      rest += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = rest.indexOf("\n")) >= 0) {
+        const line = rest.slice(0, nl);
+        rest = rest.slice(nl + 1);
+        if (!line) continue;
+        try {
+          const f = JSON.parse(line);
+          frames.push({ t: f.t, data: f.data, title: f.title, url: f.url });
+        } catch { /* a cut line */ }
+      }
+      if (frames.length && !$("overlay").hidden && frames.length >= 2) {
+        $("overlay").hidden = true;
+        seek(0);
+      } else if (!$("overlay").hidden) {
+        overlay("Loading recording…", "", { spin: true, bar: expected ? Math.min(1, received / expected) : null });
+      }
+      updateUi();
+    }
+    if (done) break;
+  }
+  loaded = true;
+  total = Math.max(total, lastLoadedT());
+  if (!frames.length) { overlay("This recording is empty", ""); return; }
+  $("overlay").hidden = true;
+  draw(true);
+  updateUi();
+}
+
+/* ------------------------------------------------------------ live session */
+// A random name for this page, so the owner sees how many watch.
+const viewerId = (() => {
+  try { return crypto.randomUUID(); } catch { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+})();
+const KEYS = ["Enter", "Backspace", "Tab", "Escape", "Delete", "ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "PageUp", "PageDown", "Home", "End"];
+
+async function session(info) {
+  const name = info.name || "Live browser";
+  document.title = `${name} (live)`;
+  $("title").textContent = name;
+  $("badge").hidden = false;
+  showExpiry(info.expires_at);
+  overlay("Connecting…", "", { spin: true });
+
+  const img = $("live");
+  let control = false, refreshNow = null;
+  function setControl(on) {
+    control = !!on;
+    $("badge").className = control ? "badge live control" : "badge live";
+    $("badge").textContent = control ? "Live · you can control" : "Live";
+    $("footNote").textContent = control
+      ? "A live remote browser, shared publicly. Click, scroll and type to use it."
+      : "A live view of a remote browser, shared publicly. You can watch, not control it.";
+    $("stage").classList.toggle("controllable", control);
+    $("typebar").hidden = !control;
+  }
+  setControl(info.control);
+
+  async function send(ev) {
+    if (!control) return;
+    try {
+      const res = await fetch(`${base}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ev) });
+      if (res.status === 403 || res.status === 404) setControl(false);
+    } catch { /* the next picture says whether it worked */ }
+    refreshNow?.();
+  }
+  const where = (e) => {
+    const r = img.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+  };
+  img.addEventListener("click", (e) => {
+    if (!control) return;
+    const p = where(e);
+    const dot = document.createElement("span");
+    dot.className = "click-dot";
+    const sr = $("stage").getBoundingClientRect();
+    dot.style.left = `${e.clientX - sr.left}px`;
+    dot.style.top = `${e.clientY - sr.top}px`;
+    $("stage").append(dot);
+    setTimeout(() => dot.remove(), 600);
+    send({ type: "click", ...p });
+  });
+  let wheel = null;
+  img.addEventListener("wheel", (e) => {
+    if (!control) return;
+    e.preventDefault();
+    const r = img.getBoundingClientRect();
+    const scale = (img.naturalWidth || r.width) / r.width;
+    if (!wheel) {
+      wheel = { ...where(e), dx: 0, dy: 0 };
+      setTimeout(() => { const w = wheel; wheel = null; send({ type: "scroll", ...w }); }, 120);
+    }
+    wheel.dx += e.deltaX * scale;
+    wheel.dy += e.deltaY * scale;
+  }, { passive: false });
+  // Touch: a drag scrolls, a tap clicks (the click event).
+  let touch = null;
+  img.addEventListener("touchstart", (e) => { if (control && e.touches.length === 1) touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, start: where(e.touches[0]) }; }, { passive: true });
+  img.addEventListener("touchmove", (e) => { if (control && touch) e.preventDefault(); }, { passive: false });
+  img.addEventListener("touchend", (e) => {
+    if (!control || !touch) return;
+    const t = e.changedTouches[0], dx = touch.x - t.clientX, dy = touch.y - t.clientY;
+    if (Math.hypot(dx, dy) > 12) {
+      const r = img.getBoundingClientRect(), scale = (img.naturalWidth || r.width) / r.width;
+      send({ type: "scroll", ...touch.start, dx: dx * scale, dy: dy * scale });
+    }
+    touch = null;
+  });
+  // A keyboard types into the page, unless the typing field has focus.
+  let buffer = "", flushTimer = 0;
+  const flush = () => { clearTimeout(flushTimer); if (buffer) { const text = buffer; buffer = ""; send({ type: "text", text }); } };
+  document.addEventListener("keydown", (e) => {
+    if (!control || e.target.closest("input, button") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (KEYS.includes(e.key)) { e.preventDefault(); flush(); send({ type: "key", key: e.key }); }
+    else if (e.key.length === 1) { e.preventDefault(); buffer += e.key; clearTimeout(flushTimer); flushTimer = setTimeout(flush, 150); }
+  });
+  document.addEventListener("paste", (e) => {
+    if (!control || e.target.closest("input")) return;
+    const text = e.clipboardData?.getData("text");
+    if (text) { e.preventDefault(); flush(); send({ type: "text", text: text.slice(0, 2000) }); }
+  });
+  $("typebar").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = $("typeText").value;
+    if (text) send({ type: "text", text });
+    $("typeText").value = "";
+  });
+  $("typebar").addEventListener("click", (e) => {
+    const k = e.target.closest("[data-key]");
+    if (k) send({ type: "key", key: k.dataset.key });
+  });
+  // The owner may switch the link between watching and control.
+  setInterval(async () => {
+    try {
+      const r = await fetch(`${base}/info`, { cache: "no-store" });
+      if (r.ok) setControl((await r.json()).control);
+    } catch { /* next time */ }
+  }, 15000);
+
+  let lastUrl = null, failures = 0;
+  const decode = (v) => (v ? decodeURIComponent(v.replace(/\+/g, " ")) : "");
+  for (;;) {
+    if (document.hidden) { await new Promise((r) => document.addEventListener("visibilitychange", r, { once: true })); continue; }
+    const started = performance.now();
+    let res = null;
+    try { res = await fetch(`${base}/frame`, { cache: "no-store", headers: { "X-Share-Viewer": viewerId } }); } catch { res = null; }
+    if (res && res.status === 404) {
+      setControl(false);
+      $("badge").className = "badge ended";
+      $("badge").textContent = "Ended";
+      img.hidden = true;
+      overlay("This session has ended", "Or its owner stopped sharing it.");
+      return;
+    }
+    if (res && res.status === 200) {
+      failures = 0;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      await new Promise((r) => { img.onload = r; img.onerror = r; img.src = url; });
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      lastUrl = url;
+      img.hidden = false;
+      $("overlay").hidden = true;
+      const site = decode(res.headers.get("x-page-url"));
+      const title = decode(res.headers.get("x-page-title"));
+      $("site").textContent = [title, hostOf(site)].filter(Boolean).join(" · ");
+      setFav(null, (hostOf(site)[0] || "·").toUpperCase());
+    } else if (res && res.status === 204) {
+      overlay("Waiting for the first picture…", "", { spin: true });
+    } else if (++failures > 3) {
+      overlay("Connection lost", "Retrying…", { spin: true });
+    }
+    // Faster while someone controls it; an input asks for the next picture now.
+    const period = control ? 600 : 1000;
+    const wait = failures > 3 ? 4000 : Math.max(150, period - (performance.now() - started));
+    await new Promise((r) => { const t = setTimeout(r, wait); refreshNow = () => { clearTimeout(t); setTimeout(r, 120); }; });
+    refreshNow = null;
+  }
+}
+
+(async () => {
+  let res;
+  try { res = await fetch(`${base}/info`, { cache: "no-store" }); } catch { res = null; }
+  if (!res || !res.ok) {
+    if (res && res.status >= 500) overlay("Not reachable right now", "The browser holding this link is not reachable. Try again later.");
+    else gone();
+    return;
+  }
+  const info = await res.json();
+  if (info.kind === "recording") recording(info);
+  else if (info.kind === "session") session(info);
+  else gone();
+})();
+</script>
+</body>
+</html>

@@ -27,6 +27,8 @@
   --ok-soft: rgba(16, 185, 129, .14); --warn: #f59e0b; --warn-soft: rgba(245, 158, 11, .14);
   --bad: #f43f5e; --bad-soft: rgba(244, 63, 94, .14);
   --chromium: #60a5fa; --firefox: #ff7a3d;
+  /* What anyone with a link can see. */
+  --public: #f472b6;
   --shadow: 0 10px 30px rgba(0, 0, 0, .35), 0 2px 6px rgba(0, 0, 0, .25);
   --radius: 14px; --radius-sm: 9px;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
@@ -36,14 +38,14 @@
     --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
     --faint: #656b82;
     --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
-    --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c;
+    --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c; --public: #be185d;
   }
 }
 :root[data-theme="light"] {
   --surface: #ffffff; --raised: #ffffff; --hover: #eef0f7; --line: #e3e6ef; --line-strong: #d3d7e4;
   --faint: #656b82;
   --accent-soft: rgba(91, 75, 214, .12); --shadow: 0 10px 30px rgba(20, 23, 37, .12), 0 2px 6px rgba(20, 23, 37, .08);
-  --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c;
+  --warn: #b45309; --bad: #d4213f; --chromium: #2563eb; --firefox: #c2410c; --public: #be185d;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
@@ -142,6 +144,23 @@ header.top {
 
 /* ------------------------------------------------------------ layout */
 main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-inset-right)) 60px max(20px, env(safe-area-inset-left)); }
+.chip.public, .fact.public { background: color-mix(in oklab, var(--public) 16%, transparent); color: var(--public); gap: 4px; }
+.chip.public { cursor: pointer; border: 0; font: inherit; font-size: 11.5px; font-weight: 700; }
+.chip.public .i { width: 12px; height: 12px; }
+.scard.public { box-shadow: inset 3px 0 0 var(--public); }
+.public-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; padding: 8px 8px 8px 13px; border-radius: var(--radius-sm); background: color-mix(in oklab, var(--public) 12%, transparent); color: var(--public); border: 1px solid color-mix(in oklab, var(--public) 40%, transparent); font-size: 13px; font-weight: 600; }
+.public-banner[hidden] { display: none; }
+.public-banner .i { width: 16px; height: 16px; flex: none; }
+.public-banner span { flex: 1; min-width: 0; }
+.share-link { display: flex; gap: 8px; }
+.share-link .input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; }
+.share-warn { padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in oklab, var(--public) 10%, transparent); color: var(--fg); font-size: 13px; line-height: 1.5; border-left: 3px solid var(--public); }
+.share-meta { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.public-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.public-list li { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.public-list .t { flex: 1; min-width: 0; }
+.public-list .t b { display: block; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.public-list .t span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .offline-banner { margin: 0 0 14px; padding: 9px 13px; border-radius: var(--radius-sm); background: var(--warn-soft); color: var(--warn); border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent); font-size: 13px; font-weight: 600; }
 .offline-banner[hidden] { display: none; }
 main.stale .stats, main.stale .view { opacity: .55; filter: grayscale(.4); transition: opacity .3s; }
@@ -698,6 +717,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5"/></symbol>
   <symbol id="i-install" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
+  <symbol id="i-unlink" viewBox="0 0 24 24"><path d="M17 13.5l3.5-3a5 5 0 0 0-7-7L11.8 5.2M7 10.5l-3.5 3a5 5 0 0 0 7 7l1.7-1.7M3 3l18 18"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
   <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
@@ -722,6 +744,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 
 <main>
   <div class="offline-banner" id="offlineBanner" role="status" hidden></div>
+  <div class="public-banner" id="publicBanner" role="status" hidden></div>
   <section class="stats">
     <div class="stat nav" role="button" tabindex="0" data-act="view" data-view="sessions" title="Show sessions">
       <div class="stat-label"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="live-dot" id="liveDot" title="Live updates"></span></div>
@@ -956,6 +979,52 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-body"><div id="askText" class="muted" style="font-size:13.5px"></div><input class="input" id="askInput" autocomplete="off" spellcheck="false"></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="askOk">OK</button></div>
   </form>
+</dialog>
+
+<!-- Public link of a session or recording -->
+<dialog class="modal" id="shareModal" aria-labelledby="shareTitle">
+  <form class="sheet" id="shareForm" style="max-width:520px">
+    <div class="sheet-head"><h2 id="shareTitle">Share publicly</h2></div>
+    <div class="sheet-body">
+      <div class="share-warn" id="shareWarn"></div>
+      <div class="field" id="shareLinkField" hidden>
+        <label for="shareLink">Public link</label>
+        <div class="share-link"><input class="input" id="shareLink" readonly spellcheck="false"><button type="button" class="btn" id="shareCopy"><svg class="i sm"><use href="#i-copy"/></svg>Copy</button><a class="btn" id="shareOpen" target="_blank" rel="noopener noreferrer"><svg class="i sm"><use href="#i-arrow"/></svg>Open</a></div>
+        <div class="share-meta" id="shareMeta"></div>
+      </div>
+      <div class="field" id="shareModeField">
+        <label for="shareMode">People with the link can</label>
+        <select class="input" id="shareMode">
+          <option value="view">Watch only</option>
+          <option value="control">Watch and control (click, scroll, type)</option>
+        </select>
+        <div class="muted" id="shareModeNote" style="font-size:12.5px" hidden></div>
+      </div>
+      <div class="field">
+        <label for="shareExpiry" id="shareExpiryLabel">Link expires</label>
+        <select class="input" id="shareExpiry">
+          <option value="0">Never</option>
+          <option value="3600">In 1 hour</option>
+          <option value="86400">In 1 day</option>
+          <option value="604800">In 7 days</option>
+          <option value="2592000">In 30 days</option>
+        </select>
+      </div>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn danger-ghost" id="shareStop" hidden><svg class="i sm"><use href="#i-unlink"/></svg>Stop sharing</button><span style="flex:1"></span><button type="button" class="btn" data-close>Close</button><button type="submit" class="btn primary" id="shareOk">Create public link</button></div>
+  </form>
+</dialog>
+
+<!-- Everything shared publicly -->
+<dialog class="modal" id="publicModal" aria-labelledby="publicTitle">
+  <div class="sheet" style="max-width:600px">
+    <div class="sheet-head"><h2 id="publicTitle">Public links</h2></div>
+    <div class="sheet-body">
+      <div class="muted" style="font-size:13.5px">Anyone with one of these links sees what it shows, without signing in. Stop sharing to make a link stop working at once.</div>
+      <ul class="public-list" id="publicList"></ul>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Close</button></div>
+  </div>
 </dialog>
 
 <!-- Merge recordings -->
@@ -1629,6 +1698,7 @@ function render() {
     recIcons.delete(key);
   }
   renderHeader();
+  renderPublic();
   updateFavicon(ov.sessions.length);
   renderStats();
   renderSessions();
@@ -1854,6 +1924,7 @@ function sessionCard(s) {
     s.is_recording && (s.recording_paused
       ? fact('', icon('pause', 'sm'), 'REC paused', 'Recording paused')
       : fact('bad', '<span class="rec-dot" aria-hidden="true"></span>', 'REC', 'Recording this session')),
+    s.share && `<span class="fact clickable public" role="button" tabindex="0" data-act="share-session" data-key="${key}" title="${esc(`Public: anyone with the link can ${s.share.control ? 'watch and control' : 'watch'} this session${s.share.expires_at ? ` (until ${absTime(s.share.expires_at)})` : ''}${s.share.watching ? `; ${s.share.watching} watching now` : ''}. Click for the link.`)}">${icon('globe', 'sm')}${s.share.control ? 'Public · control' : 'Public'}${s.share.watching ? ` · ${icon('eye', 'sm')}${s.share.watching}` : ''}</span>`,
     s.adblock && fact('ok', icon('shield', 'sm'), 'Ad blocking', 'Ads and trackers are blocked'),
     s.proxy && fact('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
     others.length && clientsFact('', icon('users', 'sm'), others.length === 1 ? '1 client' : `${others.length} clients`,
@@ -1861,7 +1932,7 @@ function sessionCard(s) {
     !clients.length && n && fact('', icon('users', 'sm'), n === 1 ? '1 client' : `${n} clients`, `${n} automation client${n === 1 ? '' : 's'} attached`),
   ].filter(Boolean).join('') + '<span data-idle hidden></span>';
   return `
-  <article class="scard${lead ? ' driven' : ''}" data-key="${key}">
+  <article class="scard${lead ? ' driven' : ''}${s.share ? ' public' : ''}" data-key="${key}">
     <div class="scard-head">
       ${sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`}
       <div style="min-width:0;flex:1">
@@ -1922,7 +1993,7 @@ const isLive = (r) => r.status === 'recording' && byKey.sessions.has(`${r.node_n
 const visibleRecordings = () => [...byKey.recordings.values()].filter((r) => inFilter(r) && (r.frame_count > 0 || isLive(r)));
 // The search field: every word somewhere in the title, addresses, profile, node, id or start date.
 let recQuery = '';
-const recHaystack = (r) => [r.title, r.initial_url, r.final_url, r.profile, r.node_name, r.id, absTime(r.started_at_secs), r.audio && 'sound audio', r.merged_from?.length && 'merged'].filter(Boolean).join(' ').toLowerCase();
+const recHaystack = (r) => [r.title, r.initial_url, r.final_url, r.profile, r.node_name, r.id, absTime(r.started_at_secs), r.audio && 'sound audio', r.merged_from?.length && 'merged', r.share && 'public shared'].filter(Boolean).join(' ').toLowerCase();
 const REC_PAGE = 50;
 let recLimit = REC_PAGE;
 const listedRecordings = () => {
@@ -2003,7 +2074,7 @@ function recordingRow(r) {
     <div role="cell"><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div role="cell"><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
     <div role="cell" class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
-      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}</b><span>${esc(sub)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}</b><span>${esc(sub)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(r.node_name)}</div>
     <div role="cell" class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
     <div role="cell" class="num c-dur">${formatUptime(r.duration_seconds)}</div>
@@ -2071,6 +2142,7 @@ const ACT = {
   'app-menu': (el) => openMenu(el, [
     { icon: 'plug', label: 'Connect & API', run: openConnect },
     { icon: 'handoff', label: 'Live view', run: () => { location.href = '/handoff/'; } },
+    { icon: 'globe', label: 'Public links…', meta: `${publicItems().length || ''}`, run: openPublicLinks },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
     { icon: 'broom', label: 'Clean up recordings…', run: () => vacuum() },
     { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], run: () => openMenu(el, [
@@ -2114,6 +2186,9 @@ const ACT = {
         ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
       ]) },
       '-',
+      { icon: s.share ? 'link' : 'globe', label: s.share ? 'Public link…' : 'Share publicly…', run: () => openShare('session', s) },
+      s.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(s) },
+      '-',
       { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
       { icon: 'copy', label: 'Copy WebSocket URL', run: () => copyText(wsUrl) },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
@@ -2123,6 +2198,9 @@ const ACT = {
       { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
     ]);
   },
+  'share-session': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) openShare('session', s); },
+  'share-recording': (el) => { const r = byKey.recordings.get(el.dataset.key); if (r) openShare('recording', r); },
+  'public-links': () => openPublicLinks(),
   'new-tab': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) newTab(s); },
   'launch-profile': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) launchProfile(p); },
   'profile-menu': (el) => {
@@ -2166,6 +2244,8 @@ const ACT = {
     openMenu(el, [
       { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
       { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
+      { icon: r.share ? 'link' : 'globe', label: r.share ? 'Public link…' : 'Share publicly…', run: () => openShare('recording', r) },
+      r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: r.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
       r.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
@@ -2628,6 +2708,147 @@ function clientInfo(c) {
 
 // Sessions are named at creation (or get a made-up name like "quiet-otter").
 const sessName = (s) => s.name || s.profile || 'Throwaway session';
+/* ================================================================ public links */
+// A session or recording with its public link (`share`, from its node), as the
+// share dialog and the list of public links handle it.
+const shareKindOf = (item) => (item.session_id !== undefined && item.frame_count !== undefined ? 'recording' : 'session');
+const shareLabel = (kind, item) => (kind === 'session' ? sessName(item) : recordingTitle(item));
+function publicItems() {
+  if (!ov) return [];
+  return [
+    ...ov.sessions.filter((s) => s.share).map((s) => ({ kind: 'session', item: s })),
+    ...(ov.recordings || []).filter((r) => r.share).map((r) => ({ kind: 'recording', item: r })),
+  ];
+}
+// Always on screen while anything is public, so nothing stays shared by accident.
+function renderPublic() {
+  const items = publicItems();
+  const banner = $('publicBanner');
+  banner.hidden = !items.length;
+  if (!items.length) { banner.innerHTML = ''; if ($('publicModal').open) renderPublicList(); return; }
+  const sessions = items.filter((x) => x.kind === 'session').length, recs = items.length - sessions;
+  const what = [sessions && plural(sessions, 'live session'), recs && plural(recs, 'recording')].filter(Boolean).join(' and ');
+  const html = `${icon('globe')}<span>${esc(what)} ${items.length === 1 ? 'is' : 'are'} shared publicly: anyone with the link can see ${items.length === 1 ? 'it' : 'them'}.</span><button class="btn sm" data-act="public-links">Manage</button>`;
+  if (banner.innerHTML !== html) banner.innerHTML = html;
+  if ($('publicModal').open) renderPublicList();
+}
+function renderPublicList() {
+  const items = publicItems();
+  $('publicList').innerHTML = items.length ? items.map(({ kind, item }) => {
+    const sh = item.share;
+    const meta = [kind === 'session' ? (sh.control ? 'Live session, can be controlled' : 'Live session, watch only') : 'Recording', item.node_name, sh.watching && `${sh.watching} watching now`, plural(sh.views || 0, 'view'), sh.expires_at ? `expires ${absTime(sh.expires_at)}` : 'never expires'].filter(Boolean).join(' · ');
+    return `<li><span style="color:var(--public)">${icon(kind === 'session' ? 'layers' : 'film')}</span><div class="t"><b>${esc(shareLabel(kind, item))}</b><span>${esc(meta)}</span></div>
+      <button class="btn sm icon" data-public-copy="${esc(sh.url)}" title="Copy the link" aria-label="Copy the link">${icon('copy', 'sm')}</button>
+      <button class="btn sm" data-public-open="${esc(kind)}|${esc(kind === 'session' ? keyOf.session(item) : keyOf.recording(item))}">Details</button>
+      <button class="btn sm danger-ghost" data-public-stop="${esc(kind)}|${esc(kind === 'session' ? keyOf.session(item) : keyOf.recording(item))}">${icon('unlink', 'sm')}Stop</button></li>`;
+  }).join('') : '<li class="muted">Nothing is shared publicly.</li>';
+}
+function openPublicLinks() {
+  renderPublicList();
+  openModal('publicModal');
+}
+$('publicList').addEventListener('click', (e) => {
+  const copy = e.target.closest('[data-public-copy]');
+  if (copy) { copyText(copy.dataset.publicCopy, copy); return; }
+  const ref = e.target.closest('[data-public-open], [data-public-stop]');
+  if (!ref) return;
+  const [kind, key] = (ref.dataset.publicOpen || ref.dataset.publicStop).split(/\|(.*)/s);
+  const item = (kind === 'session' ? byKey.sessions : byKey.recordings).get(key);
+  if (!item) return;
+  if (ref.dataset.publicOpen) { closeModal('publicModal'); openShare(kind, item); } else stopSharing(item);
+});
+$('publicModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeModal('publicModal'); });
+
+let shareCtx = null;   // { kind, key }: what the share dialog shows
+function shareItem() {
+  if (!shareCtx) return null;
+  return (shareCtx.kind === 'session' ? byKey.sessions : byKey.recordings).get(shareCtx.key) || null;
+}
+function openShare(kind, item) {
+  shareCtx = { kind, key: kind === 'session' ? keyOf.session(item) : keyOf.recording(item) };
+  fillShare(item);
+  openModal('shareModal');
+}
+function fillShare(item) {
+  const { kind } = shareCtx;
+  const sh = item.share;
+  $('shareTitle').textContent = `${sh ? 'Public link' : 'Share publicly'}: ${shareLabel(kind, item)}`;
+  const firefox = kind === 'session' && item.engine === 'firefox';
+  $('shareModeField').hidden = kind !== 'session';
+  $('shareMode').value = sh?.control ? 'control' : 'view';
+  $('shareMode').querySelector('[value="control"]').disabled = firefox;
+  $('shareModeNote').hidden = !firefox;
+  $('shareModeNote').textContent = firefox ? 'Control through a public link works for Chromium sessions only.' : '';
+  syncShareWarn(kind);
+  fillShareRest(item);
+}
+function syncShareWarn(kind) {
+  const control = $('shareMode').value === 'control';
+  $('shareWarn').innerHTML = kind === 'session'
+    ? (control
+      ? `<b>Anyone with the link can watch and control this session</b>, without signing in: they click, scroll and type in the tab in front, as you, with its logins and cookies. They get no address bar and no shortcuts, but they can follow any link and submit any form. The link stops working when the session ends.`
+      : `<b>Anyone with the link can watch this session live</b>, without signing in: about a picture a second of the tab in front, including whatever it shows (mail, accounts, passwords typed in plain text fields). They cannot control it. The link stops working when the session ends.`)
+    : `<b>Anyone with the link can play this recording</b>, without signing in, with its sound. Addresses are shown by their site only, but the pictures show everything that was on screen. Sharing also keeps the recording, so the cleanup does not break the link.`;
+}
+function fillShareRest(item) {
+  const sh = item.share;
+  $('shareLinkField').hidden = !sh;
+  $('shareStop').hidden = !sh;
+  if (sh) {
+    $('shareLink').value = sh.url;
+    $('shareOpen').href = sh.url;
+    $('shareMeta').innerHTML = [
+      `<span>Shared ${esc(relTime(sh.created_at))}</span>`,
+      `<span>${esc(plural(sh.views || 0, 'view'))}${sh.last_viewed_at ? `, last ${esc(relTime(sh.last_viewed_at))}` : ''}</span>`,
+      sh.watching ? `<span style="color:var(--public)">${esc(plural(sh.watching, 'person', 'people'))} watching now</span>` : '',
+      `<span>${sh.expires_at ? `Expires ${esc(absTime(sh.expires_at))}` : 'Never expires'}</span>`,
+    ].join('');
+  }
+  $('shareExpiryLabel').textContent = 'Link expires';
+  // An existing link keeps its expiry unless another is picked.
+  const sel = $('shareExpiry');
+  sel.querySelector('[value="keep"]')?.remove();
+  if (sh) sel.insertAdjacentHTML('afterbegin', `<option value="keep">As now (${esc(sh.expires_at ? absTime(sh.expires_at) : 'never')})</option>`);
+  sel.value = sh ? 'keep' : '0';
+  $('shareOk').textContent = sh ? 'Update link' : 'Create public link';
+}
+$('shareMode').addEventListener('change', () => { if (shareCtx) syncShareWarn(shareCtx.kind); });
+$('shareCopy').addEventListener('click', () => copyText($('shareLink').value, $('shareCopy')));
+$('shareLink').addEventListener('focus', () => $('shareLink').select());
+$('shareForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const item = shareItem();
+  if (!item) { closeModal('shareModal'); return; }
+  const choice = $('shareExpiry').value;
+  const secs = choice === 'keep'
+    ? (item.share?.expires_at ? Math.max(1, item.share.expires_at - Math.floor(Date.now() / 1000)) : null)
+    : Number(choice) || null;
+  const wasShared = !!item.share;
+  const created = await act(item.share ? 'Updating the link' : 'Creating a public link',
+    () => request('POST', api(item.node_name, '/shares'), { kind: shareCtx.kind, id: item.id, expires_in_secs: secs, ...(shareCtx.kind === 'session' ? { control: $('shareMode').value === 'control' } : {}) }),
+    item.share ? 'Link updated' : 'Shared publicly');
+  if (!created) return;
+  // Show the link right away; the overview catches up.
+  item.share = created;
+  fillShare(item);
+  if (!wasShared) copyText(created.url);
+  refreshData(true);
+});
+$('shareStop').addEventListener('click', () => { const item = shareItem(); if (item) stopSharing(item); });
+$('shareModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) { shareCtx = null; closeModal('shareModal'); } });
+async function stopSharing(item) {
+  const sh = item.share;
+  if (!sh) return;
+  const kind = shareKindOf(item);
+  const ok = await ask({ title: 'Stop sharing?', text: `The public link to “${shareLabel(kind, item)}” stops working at once. Sharing it again makes a new link.`, ok: 'Stop sharing', danger: true });
+  if (!ok) return;
+  const done = await act('Stopping the public link', () => request('DELETE', api(item.node_name, `/shares/${enc(sh.id)}`)), 'No longer shared');
+  if (!done) return;
+  item.share = undefined;
+  if ($('shareModal').open) { shareCtx = null; closeModal('shareModal'); }
+  refreshData(true);
+}
+
 async function renameSession(s) {
   const v = await ask({ title: 'Rename session', text: 'Leave empty for a made-up name.', input: s.name || '', ok: 'Rename' });
   if (v === null || v === undefined) return;

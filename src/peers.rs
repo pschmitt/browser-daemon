@@ -179,6 +179,8 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("DELETE", ["sessions", _, "downloads", _]) => (false, Short),
         ("GET", ["recordings", _, "favicon"]) => (false, Short),
         ("POST", ["recordings", _, "keep"]) => (false, Short),
+        ("GET" | "POST", ["shares"]) => (false, Short),
+        ("DELETE", ["shares", _]) => (false, Short),
         ("PUT", ["json", "new"]) => (true, Short),
         ("PUT", ["json", "close" | "activate", _]) => (true, Short),
         _ => return None,

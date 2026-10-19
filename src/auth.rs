@@ -225,6 +225,10 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     if method == Method::POST && path == "/api/agent-topic" {
         return true;
     }
+    // A controlling viewer's input; the handler checks the link allows it.
+    if method == Method::POST && is_share(path) && path.ends_with("/input") {
+        return true;
+    }
     if method != Method::GET && method != Method::HEAD {
         return false;
     }
@@ -248,6 +252,23 @@ pub fn is_public(method: &Method, path: &str) -> bool {
             | "/icon-maskable-512.png"
             | "/download-worker.js"
     ) || path.starts_with("/assets/")
+        || is_share(path)
+}
+
+/// A public link's page or what it loads: `/share/<node>/<token>[/<what>]`. The
+/// handlers check the token; nothing else answers below `/share/`.
+pub fn is_share(path: &str) -> bool {
+    path.strip_prefix("/share/").is_some_and(|rest| {
+        let parts: Vec<&str> = rest.split('/').collect();
+        (2..=3).contains(&parts.len())
+            && parts.iter().all(|p| {
+                !p.is_empty()
+                    && p.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+                    && *p != "."
+                    && *p != ".."
+            })
+    })
 }
 
 /// Routes that move the vault's secrets or hand the cluster secret to a third
@@ -666,6 +687,57 @@ mod tests {
         post.method = Method::POST;
         assert_eq!(decide(&a, &post), Err(StatusCode::UNAUTHORIZED));
         assert_eq!(decide(&a, &req("/json")), Err(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn share_links_need_no_sign_in_but_nothing_else_does() {
+        let a = auth(Some("s3cret"));
+        let token = "A".repeat(86);
+        for path in [
+            format!("/share/fnuc/{token}"),
+            format!("/share/rofl-13/{token}/frames"),
+            format!("/share/fnuc/{token}/info"),
+        ] {
+            assert_eq!(decide(&a, &req(&path)), Ok(Credential::Open), "{path}");
+            // A click from another site opens the page ...
+            let mut nav = req(&path);
+            nav.site = Some("cross-site");
+            nav.mode = Some("navigate");
+            assert!(decide(&a, &nav).is_ok(), "{path}");
+            // ... but another site cannot embed or fetch it.
+            let mut sub = req(&path);
+            sub.site = Some("cross-site");
+            sub.mode = Some("no-cors");
+            assert_eq!(decide(&a, &sub), Err(StatusCode::FORBIDDEN), "{path}");
+            let mut post = req(&path);
+            post.method = Method::POST;
+            assert_eq!(decide(&a, &post), Err(StatusCode::UNAUTHORIZED), "{path}");
+            let input = format!("/share/fnuc/{token}/input");
+            let mut post = req(&input);
+            post.method = Method::POST;
+            assert_eq!(decide(&a, &post), Ok(Credential::Open));
+            // Not from another site.
+            post.site = Some("cross-site");
+            post.mode = Some("cors");
+            assert_eq!(decide(&a, &post), Err(StatusCode::FORBIDDEN));
+        }
+        for path in [
+            "/share/",
+            "/share/fnuc",
+            "/share/fnuc/",
+            "/share/fnuc/x/frames/more",
+            "/share/fnuc/../api/sessions",
+            "/share/fnuc/x/..",
+            "/share//x",
+            "/api/shares",
+        ] {
+            assert!(!is_share(path), "{path}");
+            assert_eq!(
+                decide(&a, &req(path)),
+                Err(StatusCode::UNAUTHORIZED),
+                "{path}"
+            );
+        }
     }
 
     #[test]

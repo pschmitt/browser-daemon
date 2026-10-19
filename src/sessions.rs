@@ -528,6 +528,10 @@ impl AppState {
         // Live views of the session end with it.
         self.viewers.close_session(*id);
         self.thumbnails.forget(*id);
+        // A public link to it ends with it.
+        self.shares
+            .remove_target(shares::ShareKind::Session, *id)
+            .await;
         let mut terminated = false;
         if let Some(session) = removed {
             // Out of the session before the slow part (a profile's browser gets up to
@@ -807,9 +811,19 @@ pub(crate) async fn api_get_session(
     let targets = session_targets(&state, &session).await;
     let tabs = targets.iter().filter(|t| t.target_type == "page").count();
     let summary = session.summary(tabs, rec.as_ref());
+    // With its public link, for the live view.
+    let mut session_json = serde_json::to_value(&summary).unwrap_or_default();
+    if let Some(share) = state
+        .shares
+        .all()
+        .into_iter()
+        .find(|s| s.kind == shares::ShareKind::Session && s.target == id)
+    {
+        session_json["share"] = serde_json::to_value(state.share_view(share)).unwrap_or_default();
+    }
 
     Ok(Json(serde_json::json!({
-        "session": summary,
+        "session": session_json,
         "targets": targets,
     })))
 }

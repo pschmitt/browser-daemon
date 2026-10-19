@@ -58,6 +58,9 @@
   .agent-chip svg { width: 14px; height: 14px; flex: none; }
   .agent-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .agent-chip[hidden] { display: none; }
+  .watch-chip { padding: 0 9px; font-variant-numeric: tabular-nums; }
+  .watch-chip svg { fill: none; stroke: currentColor; stroke-width: 2; }
+  .watch-chip.public { color: #f472b6; border-color: color-mix(in oklab, #f472b6 45%, transparent); }
   .tab-strip-drawer { height: 30px; padding: 0 10px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; flex: none; margin-bottom: 3px; margin-left: auto; }
   .tab-strip-drawer:hover { background: var(--btn); color: var(--fg); }
   .tab-strip-drawer svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -103,6 +106,9 @@
     border: 1px solid color-mix(in oklab, var(--bad) 45%, transparent); background: color-mix(in oklab, var(--bad) 14%, transparent);
     color: var(--bad); font: 700 11.5px system-ui, sans-serif; letter-spacing: .04em; cursor: pointer; font-variant-numeric: tabular-nums; }
   .rec-pill[hidden] { display: none; }
+  /* Shared publicly: anyone with the link watches. */
+  .pub-pill { --pub: #f472b6; border-color: color-mix(in oklab, var(--pub) 45%, transparent); background: color-mix(in oklab, var(--pub) 14%, transparent); color: var(--pub); }
+  .pub-pill svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
   .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); animation: pulse 1.4s infinite; }
   .rec-pill.paused { color: var(--muted); border-color: var(--line); background: var(--btn); }
   .rec-pill.paused .rec-dot { background: var(--muted); animation: none; border-radius: 1px; width: 7px; box-shadow: none; }
@@ -353,6 +359,7 @@
   <button class="ib chev" id="dashMore" aria-label="Other sessions" title="Other sessions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
   <button class="prof-chip" id="profChip" hidden title="Profile of this session"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span id="profChipText"></span></button>
   <button class="agent-chip" id="agentChip" hidden title="An agent drives this session"></button>
+  <button class="agent-chip watch-chip" id="watchChip" hidden></button>
   <div id="tabsScroll"></div>
   <button class="tab-strip-add" id="tabAddBtn" title="New Tab" aria-label="New Tab">
     <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -375,6 +382,7 @@
     <div id="urlSuggest" role="listbox" hidden></div>
   </form>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
+  <button class="rec-pill pub-pill" id="pubPill" hidden title="Public: anyone with the link can watch this session. Click to copy the link"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>PUBLIC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
   <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="menu" aria-expanded="false"><img class="rbw-ic" alt="" src="data:image/png;base64,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"><span class="vault-count" id="vaultCount" hidden></span></button>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
@@ -407,6 +415,9 @@
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search<select id="smSearch" aria-label="Search engine"></select></label>
   <button class="sm-item" id="smDownloads" hidden><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span id="smDownloadsText">Downloads</span></button>
+  <button class="sm-item" id="smShare" title="A link anyone can open to watch this session (view only, no sign-in)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span id="smShareText">Share publicly…</span></button>
+  <button class="sm-item" id="smShareMode" hidden role="menuitemcheckbox" aria-checked="false"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-6 1.5L10 20z"/></svg>Public link can control</button>
+  <button class="sm-item" id="smUnshare" hidden><svg viewBox="0 0 24 24"><path d="M17 13.5l3.5-3a5 5 0 0 0-7-7L11.8 5.2M7 10.5l-3.5 3a5 5 0 0 0 7 7l1.7-1.7M3 3l18 18"/></svg>Stop sharing</button>
  <button class="sm-item" id="smSave" hidden title="Keep this session's logins, cookies and storage as a new profile"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
   <hr>
@@ -3287,6 +3298,69 @@ $("pmRename").onclick = async () => {
 };
 $("pmSave").onclick = () => { showProfMenu(false); $("smSave").click(); };
 
+// A public link to this session: anyone who has it watches (pictures of the front
+// tab, no control), until the session ends or it is unshared.
+async function copyPublicLink(url) {
+  try {
+    await navigator.clipboard.writeText(url);
+    toast("Public link copied", 2000);
+  } catch {
+    window.prompt("Public link", url);
+  }
+}
+$("pubPill").onclick = (e) => { e.stopPropagation(); if (sess?.share) copyPublicLink(sess.share.url); };
+$("smShare").onclick = async () => {
+  if (!sess || !target?.sessionId) return;
+  toggleSessMenu(false);
+  if (sess.share) { copyPublicLink(sess.share.url); return; }
+  if (!window.confirm("Anyone with the link will be able to watch this session live (without control), including whatever the tab shows, until the session ends or you stop sharing. Create a public link?")) return;
+  try {
+    const res = await fetch("/api/shares", {
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ kind: "session", id: target.sessionId }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    sess.share = body;
+    renderSession();
+    copyPublicLink(body.url);
+  } catch (err) {
+    toast(`Could not share: ${err.message}`, 5000);
+  }
+};
+$("smShareMode").onclick = async () => {
+  if (!sess?.share) return;
+  const control = !sess.share.control;
+  toggleSessMenu(false);
+  if (control && !window.confirm("Anyone with the public link will be able to click, scroll and type in this session, as you. Allow control?")) return;
+  try {
+    const res = await fetch("/api/shares", {
+      method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ kind: "session", id: target.sessionId, control, expires_in_secs: sess.share.expires_at ? Math.max(1, sess.share.expires_at - Math.floor(Date.now() / 1000)) : null }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || res.statusText);
+    sess.share = body;
+    renderSession();
+    toast(control ? "The public link can control now" : "The public link is view only now", 2500);
+  } catch (err) {
+    toast(`Could not change the link: ${err.message}`, 5000);
+  }
+};
+$("smUnshare").onclick = async () => {
+  if (!sess?.share) return;
+  toggleSessMenu(false);
+  if (!window.confirm("Stop sharing? The public link stops working at once.")) return;
+  try {
+    const res = await fetch(`/api/shares/${encodeURIComponent(sess.share.id)}`, { method: "DELETE", headers: authHeaders() });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    sess.share = undefined;
+    renderSession();
+    toast("No longer shared", 2000);
+  } catch (err) {
+    toast(`Could not stop sharing: ${err.message}`, 5000);
+  }
+};
+
 // A throwaway session becomes a profile: its data is kept, and the session continues
 // as a session of that profile (the browser restarts on the same pages).
 $("smSave").onclick = async () => {
@@ -3631,6 +3705,7 @@ function connectViewers() {
     try { m = JSON.parse(e.data); } catch { return; }
     if (m.download) { downloadEvent(m.download); return; }
     viewers.count = m.viewers || 1;
+    renderWatchers();
     viewers.native = m.native;
     viewers.forced = !!m.forced;
     viewers.heard = true;
@@ -3877,6 +3952,28 @@ $("smStream").onchange = () => {
   if (canVideo()) startVideo(); else stopVideo(true);
 };
 
+// Who else is on this session: other live views, people on its public link and
+// automation clients (an agent has its own chip).
+function renderWatchers() {
+  const chip = $("watchChip");
+  const views = Math.max(0, (viewers.count || 1) - 1);
+  const pub = sess?.share?.watching || 0;
+  const clients = (sess?.clients || []).filter((c) => !c.agent).length;
+  const total = views + pub + clients;
+  chip.hidden = !total;
+  if (!total) return;
+  const parts = [
+    views && `${views} other live view${views === 1 ? "" : "s"}`,
+    pub && `${pub} on the public link${sess.share.control ? " (can control)" : ""}`,
+    clients && `${clients} automation client${clients === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  chip.classList.toggle("public", pub > 0);
+  chip.innerHTML = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>${total}</span>`;
+  chip.title = `Besides you: ${parts.join(", ")}`;
+  chip.setAttribute("aria-label", chip.title);
+}
+$("watchChip").onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
+
 function renderSession() {
   if (!sess) return;
   E.sessBtn.hidden = false;
@@ -3894,6 +3991,13 @@ function renderSession() {
   $("profChipText").textContent = [sess.profile, sess.name].filter(Boolean).join(" · ") || "Throwaway";
   E.profChip.title = (sess.name ? `Session ${sess.name}. ` : "") + (sess.profile ? `Profile ${sess.profile}: its logins and cookies are kept` : "Throwaway session: nothing is kept. Click to save it as a profile");
   $("smSave").hidden = !!sess.profile;
+  $("pubPill").hidden = !sess.share;
+  renderWatchers();
+  $("smUnshare").hidden = !sess.share;
+  $("smShareMode").hidden = !sess.share || (sess.engine || "chromium") !== "chromium";
+  $("smShareMode").setAttribute("aria-checked", String(!!sess.share?.control));
+  $("smShareMode").innerHTML = `<svg viewBox="0 0 24 24"><path d="${sess.share?.control ? "M4 12l5 5L20 6" : "M4 4h16v16H4z"}"/></svg>Public link can control`;
+  $("smShareText").textContent = sess.share ? "Copy public link" : "Share publicly…";
   // Which agent drives it, with its own mark.
   const driving = (sess.clients || []).filter((c) => c.agent);
   E.agentChip.hidden = !driving.length;

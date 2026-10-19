@@ -44,6 +44,7 @@ mod session_actions;
 mod sessions;
 mod settings;
 mod settings_api;
+mod shares;
 mod state;
 mod thumbnail;
 mod tui;
@@ -93,6 +94,7 @@ use crate::recordings_api::*;
 use crate::session_actions::*;
 use crate::sessions::*;
 use crate::settings_api::*;
+use crate::shares::*;
 use crate::state::*;
 
 /// Git commit this build comes from, passed in by the Nix build.
@@ -173,6 +175,11 @@ pub struct Args {
 
     #[arg(long)]
     pub public_url: Option<String>,
+
+    /// Base URL of public share links (`<URL>/share/...`), e.g. the reverse proxy
+    /// that serves `/share/` without a login; the public URL when absent.
+    #[arg(long)]
+    pub share_url: Option<String>,
 
     #[arg(long = "peer")]
     pub peers: Vec<String>,
@@ -596,6 +603,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Arc::new(settings::Store::load(&settings_path));
     let history = Arc::new(history::History::new(config.state_dir().join("history")));
     let thumbnails = Arc::new(thumbnail::Thumbnails::default());
+    let shares = Arc::new(shares::Store::load(&config.state_dir().join("shares.json")));
+    let share_url = args.share_url.clone().unwrap_or_else(|| public_url.clone());
     let hosts = auth::HostPolicy::new(&public_url, &args.allowed_hosts, args.bind.port());
     // The browsers must not reach the daemon (or its mesh) through their relay.
     relay::deny_hosts(hosts.names());
@@ -615,6 +624,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build()?,
         node_name,
         public_url,
+        share_url,
+        shares,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),
         auth,
@@ -811,6 +822,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/json/activate/{id}", put(json_activate))
         .route("/handoff/", get(handoff_page))
         .route("/handoff", get(|| async { Redirect::to("/handoff/") }))
+        // Public links (see shares.rs): no sign-in, and nothing else of the node.
+        .route("/share/{node}/{token}", get(share_page))
+        .route(
+            "/share/{node}/{token}/{what}",
+            get(share_resource).post(share_resource),
+        )
+        .route("/api/shares", get(api_list_shares).post(api_create_share))
+        .route("/api/shares/{id}", delete(api_delete_share))
         .route("/chromium", get(handle_chromium_ws))
         .route("/firefox", get(handle_firefox_ws))
         .route("/devtools/page/{page_id}", get(handle_page_ws))

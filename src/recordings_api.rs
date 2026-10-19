@@ -173,6 +173,10 @@ pub(crate) async fn api_delete_recording(
         ));
     }
     if recorder::delete_recording(&state.recorder_config, id).await {
+        state
+            .shares
+            .remove_target(shares::ShareKind::Recording, id)
+            .await;
         Ok(Json(serde_json::json!({ "status": "deleted", "id": id })))
     } else {
         Err((

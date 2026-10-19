@@ -9,7 +9,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use clap::{Args, Subcommand};
 use reqwest::Method;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
+use crate::shares::{ShareKind, ShareView};
 use crate::{MeshOverview, MeshProfile, MeshRecording, MeshSession};
 
 type R<T> = Result<T, Box<dyn std::error::Error>>;
@@ -142,6 +144,29 @@ pub enum SessionCmd {
     Record {
         session: String,
         action: RecordAction,
+        #[arg(long)]
+        node: Option<String>,
+    },
+    /// Share a session publicly: anyone with the printed link watches its front tab
+    /// (view only, no sign-in) until it stops or is unshared.
+    Share {
+        session: String,
+        /// The link stops working after this long (`30m`, `12h`, `7d`); never by default.
+        #[arg(long, value_parser = parse_expiry)]
+        expires: Option<u64>,
+        /// Whoever has the link may also control the session (click, scroll, type),
+        /// not only watch it (Chromium only).
+        #[arg(long, conflicts_with = "view_only")]
+        control: bool,
+        /// Only watching (the default for a new link; turns control off).
+        #[arg(long)]
+        view_only: bool,
+        #[arg(long)]
+        node: Option<String>,
+    },
+    /// Stop sharing a session: its public link stops working at once.
+    Unshare {
+        session: String,
         #[arg(long)]
         node: Option<String>,
     },
@@ -521,6 +546,16 @@ pub enum RecordingCmd {
         #[arg(required = true)]
         recordings: Vec<String>,
     },
+    /// Share a recording publicly: anyone with the printed link can play it, without
+    /// signing in. A shared recording is also kept.
+    Share {
+        recording: String,
+        /// The link stops working after this long (`30m`, `12h`, `7d`); never by default.
+        #[arg(long, value_parser = parse_expiry)]
+        expires: Option<u64>,
+    },
+    /// Stop sharing a recording: its public link stops working at once.
+    Unshare { recording: String },
     /// Delete recordings.
     #[command(visible_alias = "rm")]
     Delete {
@@ -1193,6 +1228,29 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 sessions.len()
             );
             tally.finish("stopped")?;
+        }
+        SessionCmd::Share {
+            session,
+            expires,
+            control,
+            view_only,
+            node,
+        } => {
+            let s = c.session(&session, node.as_deref())?;
+            let mode = (control || view_only).then_some(control);
+            share(
+                &c,
+                &s.node_name,
+                ShareKind::Session,
+                s.session.id,
+                expires,
+                mode,
+            )
+            .await?;
+        }
+        SessionCmd::Unshare { session, node } => {
+            let s = c.session(&session, node.as_deref())?;
+            unshare(&c, &s.node_name, s.share.as_ref()).await?;
         }
         SessionCmd::Rename {
             session,
@@ -1913,6 +1971,22 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
         RecordingCmd::Show { recording } => {
             c.print_json(&serde_json::to_value(c.recording(&recording)?)?);
         }
+        RecordingCmd::Share { recording, expires } => {
+            let r = c.recording(&recording)?;
+            share(
+                &c,
+                &r.node_name,
+                ShareKind::Recording,
+                r.recording.id,
+                expires,
+                None,
+            )
+            .await?;
+        }
+        RecordingCmd::Unshare { recording } => {
+            let r = c.recording(&recording)?;
+            unshare(&c, &r.node_name, r.share.as_ref()).await?;
+        }
         RecordingCmd::Keep { recordings } => keep_recordings(&c, &recordings, true).await?,
         RecordingCmd::Unkeep { recordings } => keep_recordings(&c, &recordings, false).await?,
         RecordingCmd::Delete { recordings, yes } => {
@@ -2111,6 +2185,66 @@ async fn export_to(c: &Client, path: &str, file: &std::path::Path, force: bool) 
         json!({ "file": file, "bytes": size }),
         format!("{} ({})", file.display(), bytes(size)),
     );
+    Ok(())
+}
+
+/// `30m`, `12h`, `7d`, `2w` (or plain seconds) as seconds.
+fn parse_expiry(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (n, unit) = s.split_at(split);
+    let n: u64 = n
+        .parse()
+        .map_err(|_| format!("'{s}' is not a duration like 30m, 12h or 7d"))?;
+    let mult = match unit {
+        "" | "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86_400,
+        "w" => 7 * 86_400,
+        _ => return Err(format!("unknown unit in '{s}' (s, m, h, d or w)")),
+    };
+    match n.checked_mul(mult) {
+        Some(0) | None => Err(format!("'{s}' is not a usable duration")),
+        Some(secs) => Ok(secs),
+    }
+}
+
+/// Share a recording or session publicly; prints the link.
+async fn share(
+    c: &Client,
+    node: &str,
+    kind: ShareKind,
+    id: Uuid,
+    expires: Option<u64>,
+    control: Option<bool>,
+) -> R<()> {
+    let path = c.api(node, "/shares");
+    let v = c
+        .call(c.req(Method::POST, &path).json(&json!({
+            "kind": kind,
+            "id": id,
+            "expires_in_secs": expires,
+            "control": control,
+        })))
+        .await?;
+    let url = v
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    c.say(v, url);
+    Ok(())
+}
+
+/// Remove a public link.
+async fn unshare(c: &Client, node: &str, share: Option<&ShareView>) -> R<()> {
+    let Some(share) = share else {
+        return fail(3, "It is not shared");
+    };
+    let path = c.api(node, &format!("/shares/{}", share.share.id));
+    let v = c.call(c.req(Method::DELETE, &path)).await?;
+    done(c, v, "unshared");
     Ok(())
 }
 

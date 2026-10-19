@@ -169,6 +169,18 @@ in
       description = "Public or mesh base URL of this node.";
     };
 
+    shareUrl = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "https://browser.example.org";
+      description = ''
+        Base URL of public share links (`<shareUrl>/share/<node>/<token>`):
+        the name the public reaches the mesh by. Serve its `/share/` path
+        without a login in the reverse proxy; the daemon checks the token.
+        `publicUrl` when null.
+      '';
+    };
+
     peers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -541,6 +553,10 @@ in
             ++ lib.optionals (cfg.publicUrl != null) [
               "--public-url"
               cfg.publicUrl
+            ]
+            ++ lib.optionals (cfg.shareUrl != null) [
+              "--share-url"
+              cfg.shareUrl
             ]
             ++ lib.concatMap (p: [
               "--peer"

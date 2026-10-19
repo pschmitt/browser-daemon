@@ -51,6 +51,23 @@ impl Thumbnails {
 
 /// A JPEG of the tab in front of the Chromium listening on `port`.
 pub async fn chromium(http: &reqwest::Client, port: u16) -> Option<Vec<u8>> {
+    capture(http, port, WIDTH, 60).await.map(|c| c.jpeg)
+}
+
+/// A picture of a tab, with the page it shows.
+pub struct Capture {
+    pub jpeg: Vec<u8>,
+    pub url: Option<String>,
+    pub title: Option<String>,
+}
+
+/// The tab in front of the Chromium listening on `port`, at most `width` wide.
+pub async fn capture(
+    http: &reqwest::Client,
+    port: u16,
+    width: f64,
+    quality: u8,
+) -> Option<Capture> {
     use base64::Engine as _;
     let targets: Vec<serde_json::Value> = http
         .get(format!("http://127.0.0.1:{port}/json/list"))
@@ -63,6 +80,8 @@ pub async fn chromium(http: &reqwest::Client, port: u16) -> Option<Vec<u8>> {
         .ok()?;
     let page = crate::recorder::pick_visible(crate::recorder::page_candidates(targets)).await?;
     let ws_url = page.get("webSocketDebuggerUrl")?.as_str()?.to_string();
+    let text = |key: &str| page.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    let (url, title) = (text("url"), text("title"));
     let shot = async {
         let (mut ws, _) = tokio_tungstenite::connect_async(&ws_url).await.ok()?;
         let mut next = 0u64;
@@ -84,12 +103,12 @@ pub async fn chromium(http: &reqwest::Client, port: u16) -> Option<Vec<u8>> {
         if w < 1.0 || h < 1.0 {
             return None;
         }
-        let scale = (WIDTH / w).min(1.0);
+        let scale = (width / w).min(1.0);
         let (id, cmd) = ask(
             "Page.captureScreenshot",
             serde_json::json!({
                 "format": "jpeg",
-                "quality": 60,
+                "quality": quality,
                 "optimizeForSpeed": true,
                 "clip": { "x": 0, "y": 0, "width": w, "height": h, "scale": scale },
             }),
@@ -101,10 +120,11 @@ pub async fn chromium(http: &reqwest::Client, port: u16) -> Option<Vec<u8>> {
             .decode(data.get("data")?.as_str()?)
             .ok()
     };
-    tokio::time::timeout(Duration::from_secs(8), shot)
+    let jpeg = tokio::time::timeout(Duration::from_secs(8), shot)
         .await
         .ok()
-        .flatten()
+        .flatten()?;
+    Some(Capture { jpeg, url, title })
 }
 
 /// The `result` of the reply to command `id`.

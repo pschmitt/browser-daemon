@@ -205,6 +205,10 @@ pub struct AppState {
     pub peer_client: reqwest::Client,
     pub node_name: String,
     pub public_url: String,
+    /// Base URL of public share links.
+    pub share_url: String,
+    /// Public links to recordings and sessions (see shares.rs).
+    pub shares: Arc<shares::Store>,
     pub peers: Arc<RwLock<HashMap<String, String>>>,
     pub start_time: Instant,
     pub cluster_secret: Option<String>,
