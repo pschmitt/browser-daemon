@@ -8,7 +8,7 @@
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         window.removeEventListener('message', receive);
-        reject(new Error('Extension not available on this dashboard. Open Browser Daemon Node, enter this daemon URL and click Enable dashboard pairing once, then try again.'));
+        reject(new Error('No extension found. In Browser Daemon Node, choose this daemon and click “Pair from the dashboard” once.'));
       }, 5000);
       function receive(event) {
         if (event.source !== window || event.origin !== location.origin ||
@@ -35,7 +35,7 @@
         return (await response.json()).nodes.map(node => ({...node, daemon: base === '/api' ? '' : decodeURIComponent(base.slice('/api/peers/'.length))}));
       }));
       window.dispatchEvent(new CustomEvent('browser-daemon-extension-nodes', {detail: reports.flatMap(r => r.status === 'fulfilled' ? r.value : [])}));
-    } catch { status.textContent = 'Browser status is unavailable. Retrying…'; }
+    } catch { /* Retried on the next round. */ }
     finally { refreshing = false; }
   }
   window.addEventListener('browser-daemon-refresh-extensions', refreshBrowsers);
@@ -43,21 +43,21 @@
   setInterval(refreshBrowsers, 5000);
   button.addEventListener('click', async () => {
     button.disabled = true;
-    status.textContent = 'Looking for the browser extension…';
+    status.textContent = 'Looking for the extension…';
     try {
       const browser = await extension('discover');
       if (browser.connected) {
-        status.textContent = 'This browser is already connected and listed in Nodes. Choose shared tabs in the extension.';
+        status.textContent = 'Already paired: pick tabs to share in the extension.';
         return;
       }
       const response = await fetch('/api/extension/pair', {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',
         headers: {'Content-Type': 'application/json'}, body: JSON.stringify({origin: browser.origin, remember: document.getElementById('rememberBrowser')?.checked === true}),
       });
-      if (!response.ok) throw new Error(`Pairing request failed (${response.status}). Sign in to this HTTPS dashboard and try again.`);
+      if (!response.ok) throw new Error(`Pairing failed (${response.status}). Sign in to this dashboard and try again.`);
       const pair = await response.json();
       await extension('approve', {code: pair.code, remember: pair.remember});
-      status.textContent = 'Approve the connection in the extension tab that just opened, then select the tabs to share.';
+      status.textContent = 'Approve the connection in the extension tab that just opened.';
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   });

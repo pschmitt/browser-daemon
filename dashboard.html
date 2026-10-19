@@ -607,9 +607,20 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .endpoint { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .endpoint .lbl { font-size: 12px; font-weight: 700; color: var(--muted); width: 110px; flex: none; }
 .endpoint code { flex: 1; min-width: 0; font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.node-pairing { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:14px; }
 .nodes-list { display: flex; flex-direction: column; gap: 10px; }
-.add-peer { margin-top: 18px; max-width: 640px; }
+.add-node { margin-top: 22px; }
+.add-node h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
+.add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.add-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 12px; background: var(--surface); border: 1px dashed var(--line-strong); }
+.add-card .add-head { display: flex; align-items: center; gap: 12px; }
+.add-card .add-icon { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); flex: none; }
+.add-card h3 { margin: 0; font-size: 15px; }
+.add-card p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+.add-card .add-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.add-card .add-row .input { flex: 1; min-width: 0; }
+.add-card .add-check { font-size: 13px; color: var(--muted); gap: 8px; }
+.add-card .add-status { font-size: 13px; min-height: 0; margin: 0; }
+.add-card .add-status:empty { display: none; }
 .node-card { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
 .node-head { display: flex; align-items: center; gap: 12px; }
 .node-settings { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
@@ -912,13 +923,24 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view nodes" id="view-nodes" hidden>
-    <div class="node-pairing"><button id="pairBrowser" class="btn" type="button"><svg class="i sm"><use href="#i-plus"/></svg>Pair browser extension</button>
-      <label class="hint"><input id="rememberBrowser" type="checkbox"> Reconnect after restart · no key expiry</label>
-      <span id="pairBrowserStatus" class="hint" role="status"></span></div>
     <div id="nodesList" class="nodes-list"></div>
-    <form id="addPeerForm" class="field add-peer"><label for="peerUrl">Add a peer</label>
-      <div style="display:flex;gap:8px"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.rofl-13.example.net"><button class="btn primary" type="submit"><svg class="i"><use href="#i-plus"/></svg>Add</button></div>
-    </form>
+    <section class="add-node" aria-labelledby="addNodeTitle">
+      <h2 id="addNodeTitle">Add a node</h2>
+      <div class="add-grid">
+        <div class="add-card">
+          <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-globe"/></svg></span>
+            <div><h3>This browser</h3><p>Share your own tabs through the extension.</p></div></div>
+          <div class="add-row"><button id="pairBrowser" class="btn primary" type="button"><svg class="i sm"><use href="#i-link"/></svg>Pair browser</button>
+            <label class="switch add-check"><input id="rememberBrowser" type="checkbox" checked><span class="track"></span>Stay paired after restarts</label></div>
+          <p id="pairBrowserStatus" class="add-status" role="status"></p>
+        </div>
+        <form id="addPeerForm" class="add-card">
+          <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-server"/></svg></span>
+            <div><h3>Another daemon</h3><p>Join a browser-daemon host to this mesh.</p></div></div>
+          <div class="add-row"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.host.example" aria-label="Daemon URL"><button class="btn primary" type="submit"><svg class="i sm"><use href="#i-plus"/></svg>Add</button></div>
+        </form>
+      </div>
+    </section>
   </section>
 </main>
 
@@ -1422,7 +1444,12 @@ function nodeBase(node) {
 }
 function handoffUrl(node, { page, session } = {}) {
   const browser = extensionNodeOf(node);
-  if (browser) return '/handoff/?' + new URLSearchParams({browser: browser.id, daemon: browser.daemon || '', ...(page ? {page} : {})});
+  // The live view's socket is served by the daemon the browser is connected to.
+  if (browser) {
+    const base = isLocal(browser.daemon) ? '' : nodeBase(browser.daemon);
+    const qs = new URLSearchParams({browser: browser.id, ...(base || isLocal(browser.daemon) ? {} : {daemon: browser.daemon}), ...(page ? {page} : {})});
+    return `${base}/handoff/?${qs}`;
+  }
   const qs = page ? `?page=${enc(page)}` : session ? `?session=${enc(session)}` : '';
   return `${nodeBase(node)}/handoff/${qs}`;
 }

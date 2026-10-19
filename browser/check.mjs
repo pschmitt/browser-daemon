@@ -45,10 +45,11 @@ function harness(firefox = false) {
   }
   const api = {
     runtime: {id: 'test', getURL: s => `chrome-extension://test/${s}`, onMessage: event('message')},
-    tabs: {get: async id => { if (!tabs.has(id)) throw Error('No tab'); return tabs.get(id); }, query: async () => [...tabs.values()], onRemoved: event('removed'), onUpdated: event('updated'),
-      update: async (...args) => { calls.push(['update', ...args]); }, remove: async id => tabs.delete(id)},
+    tabs: {get: async id => { if (!tabs.has(id)) throw Error('No tab'); return tabs.get(id); }, query: async () => [...tabs.values()], onRemoved: event('removed'), onUpdated: event('updated'), onCreated: event('created'),
+      update: async (...args) => { calls.push(['update', ...args]); }, remove: async id => tabs.delete(id),
+      captureTab: async () => { calls.push(['capture']); return 'data:image/jpeg;base64,/9jframe'; }},
     debugger: {attach: async target => { calls.push(['attach', target]); }, detach: async target => { calls.push(['detach', target]); },
-      sendCommand: async (...args) => { calls.push(['cdp', ...args]); return {data: 'image'}; }, onDetach: event('detach')},
+      sendCommand: async (...args) => { calls.push(['cdp', ...args]); return {data: 'image'}; }, onDetach: event('detach'), onEvent: event('cdpEvent')},
     alarms: {clear: async () => false, create: async () => {}, onAlarm: event('alarm')},
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
     storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true}), remove: async () => {}},
@@ -84,9 +85,10 @@ test('only extension UI may grant tabs; private and daemon tabs are excluded', a
   for (const tab of [2, 3]) assert.ok((await h.message({type: 'share', tabs: [tab], control: true})).error);
   const state = await h.message({type: 'state'});
   assert.deepEqual(Array.from(state.tabs, t => t.id), [1, 4]);
-  const stored = h.calls.filter(c => c[0] === 'store');
+  const stored = h.calls.filter(c => c[0] === 'store' && 'server' in c[1]);
   assert.equal(stored.length, 1);
   assert.deepEqual(Object.keys(stored[0][1]).sort(), ['name', 'server']);
+  assert.ok(stored.every(([, data]) => !JSON.stringify(data).includes('aaaa')));
   assert.ok(!h.sockets[0].url.href?.includes('aaaa'));
 });
 test('unshared and view-only tabs reject control locally even if the daemon asks', async () => {
@@ -94,32 +96,99 @@ test('unshared and view-only tabs reject control locally even if the daemon asks
   await h.message({type: 'share', tabs: [1], control: false});
   for (const tab of [1, 4]) s.receive({type: 'command', id: `request-${tab}`, tab, action: 'type', params: {text: 'no'}});
   await h.flush();
-  assert.equal(h.calls.filter(c => ['attach', 'cdp', 'script'].includes(c[0])).length, 0);
+  // Sharing attaches the debugger for page events; nothing else may reach the tab.
+  assert.equal(h.calls.filter(c => c[0] === 'script' || c[0] === 'cdp' && c[2] !== 'Page.enable').length, 0);
   assert.equal(s.sent.filter(c => c.type === 'result' && c.error).length, 2);
   s.receive({type: 'command', id: 'screen', tab: 1, action: 'screenshot', params: {method: 'Runtime.evaluate'}});
   await h.flush();
   assert.ok(h.calls.some(c => c[0] === 'cdp' && c[2] === 'Page.captureScreenshot'));
   assert.ok(!h.calls.some(c => c[2] === 'Runtime.evaluate'));
 });
-test('navigation, debugger Cancel and Stop revoke locally without waiting for the daemon', async () => {
+test('sharing follows the tab across sites and pauses on daemon pages', async () => {
   const h = harness(); const s = await h.pair();
   await h.message({type: 'share', tabs: [1], control: true});
-  h.listeners.updated(1, {status: 'loading'}); await h.flush();
-  s.receive({type: 'command', id: 'after-nav', tab: 1, action: 'cdp', params: {method: 'Runtime.evaluate'}});
-  await h.flush(); assert.ok(s.sent.find(c => c.id === 'after-nav').error);
+  const go = url => { h.tabs.get(1).url = url; h.listeners.updated(1, {url}, h.tabs.get(1)); };
+  go('https://elsewhere.example/'); await h.flush();
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Runtime.evaluate', params: {expression: '1'}});
+  await h.flush();
+  assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 1).result);
+  go('https://daemon.example/'); await h.flush();
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 2, method: 'Page.captureScreenshot', params: {}});
+  await h.flush();
+  assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 2).error);
+  h.listeners.cdpEvent({tabId: 1}, 'Page.screencastFrame', {data: 'dashboard'});
+  assert.ok(!s.sent.some(c => c.type === 'cdp_event'));
+  // Page events reveal the navigation before any frame of the new page.
+  h.listeners.cdpEvent({tabId: 1}, 'Page.frameNavigated', {frame: {id: 'main', url: 'https://one.example/'}});
+  h.listeners.cdpEvent({tabId: 1}, 'Page.screencastFrame', {data: 'page'});
+  assert.equal(s.sent.filter(c => c.type === 'cdp_event' && c.method === 'Page.screencastFrame').length, 1);
+});
+test('the live view relay enforces view-only grants locally', async () => {
+  const h = harness(); const s = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: false});
+  for (const [id, method, params] of [[1, 'Input.dispatchMouseEvent', {type: 'mousePressed', x: 1, y: 1}], [2, 'Page.navigate', {url: 'https://x.example/'}], [3, 'Target.createTarget', {}], [4, 'Page.startScreencast', {}]]) {
+    s.receive({type: 'cdp', channel: 'view', tab: id === 4 ? 1 : 1, id, method, params});
+  }
+  s.receive({type: 'cdp', channel: 'view', tab: 4, id: 5, method: 'Page.startScreencast', params: {}});
+  await h.flush();
+  const result = id => s.sent.find(c => c.type === 'cdp_result' && c.id === id);
+  for (const id of [1, 2, 3, 5]) assert.ok(result(id).error, `request ${id} must fail`);
+  assert.ok(result(4).result);
+  assert.ok(!h.calls.some(c => c[0] === 'cdp' && ['Input.dispatchMouseEvent', 'Page.navigate', 'Target.createTarget'].includes(c[2])));
+});
+test('debugger Cancel and Stop revoke locally; other detaches do not', async () => {
+  const h = harness(); const s = await h.pair();
   await h.message({type: 'share', tabs: [1], control: true});
-  h.listeners.detach({tabId: 1}); await h.flush();
+  h.listeners.detach({tabId: 1}, 'target_closed'); await h.flush();
+  assert.equal((await h.message({type: 'state'})).tabs[0].shared, true);
+  h.listeners.detach({tabId: 1}, 'canceled_by_user'); await h.flush();
   assert.equal((await h.message({type: 'state'})).tabs[0].shared, false);
   await h.message({type: 'share', tabs: [1], control: true});
   await h.message({type: 'stop'});
   assert.equal((await h.message({type: 'state'})).registration, null);
   assert.equal(s.readyState, 3);
 });
+test('new tabs join sharing while connected, with the last control choice', async () => {
+  const h = harness(); await h.pair();
+  await h.message({type: 'share', tabs: [1], control: true});
+  h.tabs.set(5, {id: 5, title: 'New', url: 'https://five.example/', incognito: false});
+  h.listeners.created(h.tabs.get(5));
+  h.tabs.set(6, {id: 6, title: 'Private', url: 'https://six.example/', incognito: true});
+  h.listeners.created(h.tabs.get(6));
+  const tabs = (await h.message({type: 'state'})).tabs;
+  const added = tabs.find(t => t.id === 5);
+  assert.equal(added.shared, true);
+  assert.equal(added.control, true);
+  assert.ok(!tabs.some(t => t.id === 6));
+  await h.message({type: 'autoShare', enabled: false});
+  h.tabs.set(7, {id: 7, title: 'Later', url: 'https://seven.example/', incognito: false});
+  h.listeners.created(h.tabs.get(7));
+  assert.equal((await h.message({type: 'state'})).tabs.find(t => t.id === 7).shared, false);
+});
 test('a stale popup cannot share a replacement URL under its previous label', async () => {
   const h = harness(); await h.pair();
   const response = await h.message({type: 'share', tabs: [1], urls: {1: 'https://previous.example/'}, control: true});
   assert.ok(response.error);
   assert.equal((await h.message({type: 'state'})).tabs[0].shared, false);
+});
+test('Firefox emulates the live view: pushed frames, flow control and input', async () => {
+  const h = harness(true); const s = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: true});
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Page.startScreencast', params: {}});
+  await h.flush(); await h.flush();
+  const frame = s.sent.find(c => c.type === 'cdp_event' && c.method === 'Page.screencastFrame');
+  assert.equal(frame.channel, 'view');
+  assert.equal(frame.params.data, '/9jframe');
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 2, method: 'Input.insertText', params: {text: 'hi'}});
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 3, method: 'Target.createTarget', params: {}});
+  await h.flush();
+  assert.ok(h.calls.some(c => c[0] === 'script' && c[1].args[0] === 'type' && c[1].args[1].text === 'hi'));
+  assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 3).error);
+  s.receive({type: 'cdp_close', channel: 'view'});
+  const captures = h.calls.filter(c => c[0] === 'capture').length;
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 4, method: 'Page.screencastFrameAck', params: {sessionId: 1}});
+  await h.flush();
+  assert.equal(h.calls.filter(c => c[0] === 'capture').length, captures);
 });
 test('Firefox detection does not depend on optional capture permissions', async () => {
   const h = harness(true);

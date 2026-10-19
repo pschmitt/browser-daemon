@@ -3,55 +3,77 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Browser node</title><link rel="stylesheet" href="popup.css">
 <body>
-<header><img src="icon.png" alt="" width="36" height="36"><div><h1>Browser node</h1><p id="status" role="status">Disconnected</p></div><button id="stop" class="danger">Stop sharing</button></header>
-<p><button id="openSettings" type="button">Open setup in a tab</button> <a id="dashboard" hidden target="_blank" rel="noreferrer">View in daemon</a></p>
-<p id="error" role="alert" hidden></p>
-<section><p id="diagnosticStatus" role="status"></p><details><summary>Connection history</summary><ol id="connectionHistory"></ol></details></section>
-<section id="companion" hidden><h2>Firefox native control</h2>
-  <p>For trusted pointer and keyboard input, install the companion with <code>python3 browser/install.py</code> and restart Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette</code>. This enables a powerful local automation interface; keep it on loopback.</p>
-  <button id="native" type="button">Enable installed companion</button><p id="nativeStatus" role="status"></p>
+<header>
+  <img src="icon.png" alt="" width="40" height="40">
+  <div class="who"><h1 id="title">Browser node</h1><p id="subtitle"></p></div>
+  <span id="pill" class="pill">Offline</span>
+</header>
+<p id="error" class="banner bad" role="alert" hidden></p>
+
+<section id="approval" class="card accent" hidden>
+  <h2>Connect to the dashboard?</h2>
+  <p id="approvalServer" class="muted"></p>
+  <label class="field">Name this browser<input id="approvalName" maxlength="80" placeholder="My laptop"></label>
+  <label class="row"><span><b>Reconnect automatically</b><small>Also after a browser restart</small></span><input id="approvalRemember" type="checkbox" class="switch"></label>
+  <div class="actions"><button id="rejectPairing" type="button">Decline</button><button id="approvePairing" type="button" class="primary">Connect</button></div>
 </section>
-<section><details id="allowlistPanel"><summary>Allowed daemon URLs</summary>
-  <p id="allowlistStatus"></p><label>Exact daemon origins, one per line<textarea id="daemonAllowlist" rows="5" spellcheck="false"></textarea></label>
-  <button id="saveDaemonAllowlist" type="button">Save allowlist</button>
-</details></section>
-<section id="remembered" hidden><p id="rememberedStatus"></p>
-  <button id="resumeRemembered" type="button">Reconnect remembered browser</button>
-  <button id="forgetRemembered" class="danger" type="button">Forget browser</button>
-</section>
-<section id="approval" hidden>
-  <h2>Approve dashboard pairing</h2><p id="approvalServer"></p>
-  <p>This connects this browser only. You choose shared tabs and control permissions afterward.</p>
-  <button id="approvePairing" type="button">Approve connection</button>
-  <button id="rejectPairing" type="button">Decline</button>
-</section>
-<section id="setup">
-  <h2>Pair this browser</h2>
-  <p>On a trusted machine, run this command with your daemon URL and cluster secret file. The code is single use and expires in five minutes.</p>
-  <code id="pairCommand"></code>
-  <p class="hint">Extension origin: <span id="origin"></span></p>
-  <form id="connect">
-    <label>Daemon URL<input id="server" type="url" placeholder="https://browser.example.org" required></label>
-    <label>Browser name<input id="name" maxlength="80" placeholder="My laptop" required></label>
-    <button id="enableDashboard" type="button">Enable dashboard pairing</button>
-    <p class="hint">Grant access to your daemon once, then use its Pair browser extension button.</p>
-    <label class="check"><input id="rememberKey" type="checkbox">Remember this browser and reconnect after restart (no key expiry)</label>
-    <label>Pairing code<input id="code" type="password" autocomplete="off" spellcheck="false" required pattern="[a-f0-9]{64}"></label>
-    <p class="hint">URL and name are saved as you type. The code draft stays in browser memory for up to five minutes.</p>
-    <button type="submit">Connect temporarily</button>
-  </form>
-</section>
-<section id="connected" hidden>
-  <p id="expires"></p>
-  <p>Select the tabs to share. New tabs and private windows are excluded. Navigation ends a tab's grant; share it again to continue.</p>
-  <form id="sharing">
-    <div id="tabs"></div>
-    <label class="check"><input id="control" type="checkbox">Allow remote control of selected tabs</label>
-    <p class="hint">Control lets trusted daemon clients act as you on these sites, including reading page data and using signed-in accounts. Chromium also permits page JavaScript through CDP. View only shares screenshots and page content.</p>
-    <p id="browserNote" class="hint"></p>
-    <button type="submit">Apply</button><p id="sharingFeedback" role="status"></p>
-  </form>
-</section>
-<footer>Tab sharing ends on disconnect, expiry or browser restart. A remembered browser reconnects with no tabs shared. Shortcut: Ctrl+Shift+Period.</footer>
+
+<main id="connected" hidden>
+  <div class="card">
+    <label class="row"><span><b>Remote control</b><small>Viewers can click, type and navigate</small></span><input id="control" type="checkbox" class="switch danger"></label>
+    <label class="row"><span><b>Share new tabs</b><small>Tabs you open join automatically</small></span><input id="autoShare" type="checkbox" class="switch"></label>
+  </div>
+  <div class="list-head"><h2>Tabs <span id="sharedCount" class="count"></span></h2><button id="shareAll" type="button" class="link">Share all</button></div>
+  <ul id="tabs" class="tabs"></ul>
+  <p id="noTabs" class="muted center" hidden>No web pages open.</p>
+  <div class="actions"><a id="dashboard" class="button" target="_blank" rel="noreferrer">Open dashboard</a><button id="stop" type="button" class="danger">Disconnect</button></div>
+</main>
+
+<main id="setup" hidden>
+  <section id="remembered" class="card" hidden>
+    <p id="rememberedStatus"></p>
+    <div class="actions"><button id="resumeRemembered" type="button" class="primary">Reconnect</button></div>
+  </section>
+  <section class="card">
+    <h2>Connect this browser</h2>
+    <label class="field">Daemon<select id="serverChoice"></select><input id="server" type="url" placeholder="https://browser.example.org"></label>
+    <label class="field">Browser name<input id="name" maxlength="80" placeholder="My laptop"></label>
+    <button id="enableDashboard" type="button" class="primary wide">Pair from the dashboard</button>
+    <p class="muted small">Opens the dashboard. Click <b>Pair browser</b> there, then approve here.</p>
+  </section>
+  <details class="card">
+    <summary>Pair with a code instead</summary>
+    <form id="connect">
+      <label class="field">Pairing code<input id="code" type="password" autocomplete="off" spellcheck="false" required pattern="[a-f0-9]{64}"></label>
+      <label class="row"><span><b>Reconnect automatically</b><small>Also after a browser restart</small></span><input id="rememberKey" type="checkbox" class="switch"></label>
+      <button type="submit" class="primary wide">Connect</button>
+      <p class="muted small">From a trusted machine:</p><code id="pairCommand"></code>
+    </form>
+  </details>
+</main>
+
+<details id="advanced" class="card">
+  <summary>Advanced</summary>
+  <section id="companion" hidden>
+    <h3>Firefox companion</h3>
+    <p class="muted small">Trusted mouse and keyboard input. Install with <code>python3 browser/install.py</code>, then start Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette</code>.</p>
+    <button id="native" type="button">Enable companion</button> <span id="nativeStatus" class="muted small"></span>
+  </section>
+  <section>
+    <h3>Allowed daemons</h3>
+    <p id="allowlistStatus" class="muted small"></p>
+    <textarea id="daemonAllowlist" rows="4" spellcheck="false" aria-label="Allowed daemon origins, one per line"></textarea>
+    <button id="saveDaemonAllowlist" type="button">Save</button>
+  </section>
+  <section>
+    <h3>Connection</h3>
+    <p id="diagnosticStatus" class="muted small"></p>
+    <ol id="connectionHistory" class="history"></ol>
+    <p class="muted small">Extension origin: <span id="origin"></span></p>
+    <button id="forgetRemembered" type="button" class="danger" hidden>Forget this browser</button>
+    <button id="openSettings" type="button">Open in a tab</button>
+  </section>
+  <p class="muted small">Stop everything: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>.</kbd></p>
+</details>
 <script src="policy.js"></script><script src="popup.js"></script>
 </body></html>

@@ -14,7 +14,6 @@
 <link rel="alternate icon" type="image/x-icon" href="/handoff/favicon.ico">
 <link rel="stylesheet" href="/assets/common.css">
 <script src="/assets/common.js"></script>
-<script src="/assets/extension.js"></script>
 <style>
 [hidden] { display: none !important; }
   :root { --bar: #11141c; --line: #262b38; --bad: #e11d48; --btn: #1b2030; --pub: #f472b6; --warn-fg: #f59e0b; }
@@ -840,15 +839,33 @@ const PASSKEY_HOOK = `(() => {
 })()`;
 
 class CdpDriver {
-  constructor(url, h) {
-    this.h = h;
+  // shared: someone's own browser tab, relayed by its extension. Its window, user
+  // agent and pages belong to that person: no resizing, emulation or hooks.
+  constructor(url, h, { shared = false } = {}) {
+    this.h = h; this.shared = shared;
     this.cdp = new Cdp(url, { event: (m, p) => this.onEvent(m, p), close: () => h.close(this) });
     this.ready = this.cdp.ready;
   }
   isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
-  close() { clearInterval(this.passkeyBeat); fileAsk?.finish(null); this.cdp.close(); }
+  close() { clearInterval(this.passkeyBeat); clearInterval(this.frameWatch); fileAsk?.finish(null); this.cdp.close(); }
+  // A shared tab behind another tab of its window gets no screencast frames:
+  // show screenshots instead until it is painted again.
+  watchFrames() {
+    this.frameWatch = setInterval(async () => {
+      if (!this.isOpen()) { clearInterval(this.frameWatch); return; }
+      if (document.hidden || this.video || performance.now() - (this.lastFrameAt || 0) < 1500 || this.polling) return;
+      this.polling = true;
+      const m = await this.cdp.call("Page.getLayoutMetrics").catch(() => null);
+      const r = await this.cdp.call("Page.captureScreenshot", { format: "jpeg", quality: 65 }).catch(() => null);
+      this.polling = false;
+      const v = m?.cssVisualViewport;
+      const meta = v ? { deviceWidth: v.clientWidth, deviceHeight: v.clientHeight, pageScaleFactor: 1, offsetTop: 0 } : this.lastMeta;
+      if (r?.data && meta && performance.now() - (this.lastFrameAt || 0) >= 1500) await this.h.frame(r.data, meta, "image/jpeg");
+    }, 1000);
+  }
   async start() {
     await this.cdp.call("Page.enable");
+    if (this.shared) { this.watchFrames(); return; }
     // Chromium only paints (and screencasts) the tab in front of its window.
     await this.cdp.call("Page.bringToFront").catch(() => {});
     // Toolbar height, measured before any emulation: where the page starts on the
@@ -916,6 +933,7 @@ class CdpDriver {
   // captures as is (letterboxed, small). Back to its own size otherwise.
   // The window is shared by the session's tabs (drivers), so its state is kept per session.
   async fitWindow(w, h) {
+    if (this.shared) return;
     const r = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
     if (!r?.windowId) return;
     if (winFit.session !== target?.sessionId) Object.assign(winFit, { session: target?.sessionId, own: null, fitted: false });
@@ -929,6 +947,7 @@ class CdpDriver {
   // Phone: the page sees Android Chrome (same version; user agent and client hints),
   // so sites serve their mobile version. Undone when leaving Phone.
   async setMobileIdentity(on) {
+    if (this.shared) return;
     if (!on) {
       if (!this.desktopUa) return;
       await this.cdp.call("Emulation.setUserAgentOverride", this.desktopUa).catch(() => {});
@@ -953,12 +972,14 @@ class CdpDriver {
   }
   // Back to the size the browser was launched with, if it isn't already.
   async restoreWindow([width, height]) {
+    if (this.shared) return;
     const r = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
     if (!r?.windowId || (r.bounds.width === width && r.bounds.height === height)) return;
     winFit.fitted = false;
     await this.cdp.call("Browser.setWindowBounds", { windowId: r.windowId, bounds: { left: 0, top: 0, width, height } }).catch(() => {});
   }
   async unfitWindow() {
+    if (this.shared) return;
     if (!winFit.fitted || winFit.session !== target?.sessionId) return;
     const r = await this.cdp.call("Browser.getWindowForTarget").catch(() => null);
     if (!r?.windowId) return;
@@ -972,7 +993,7 @@ class CdpDriver {
     if (fitWindow) await this.fitWindow(w, h); else if (!passive || this.emulating) await this.unfitWindow();
     // Native and Phone: the screen's density (up to 2x), sharpened by screenshots.
     // Window: capped (4K JPEG encoding on CPU is slow, and so is the wire).
-    const fit = mode === "phone" || mode === "native";
+    const fit = !this.shared && (mode === "phone" || mode === "native");
     const scale = Math.min(dpr, fit ? 2 : 1.25);
     // Native: always, and lossless (JPEG smears small and colored text even at 1x).
     // Phone: only when the screen is denser than the stream, as JPEG (mobile data).
@@ -986,7 +1007,7 @@ class CdpDriver {
       await this.setMobileIdentity(phone);
       await this.cdp.call("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: scale, mobile: phone, screenWidth: w, screenHeight: h });
       await this.cdp.call("Emulation.setTouchEmulationEnabled", phone ? { enabled: true, maxTouchPoints: 5 } : { enabled: false }).catch(() => {});
-    } else if (!passive || this.emulating) {
+    } else if (!this.shared && (!passive || this.emulating)) {
       this.emulating = false;
       await this.setMobileIdentity(false);
       await this.cdp.call("Emulation.clearDeviceMetricsOverride").catch(() => {});
@@ -1021,7 +1042,8 @@ class CdpDriver {
       if (this.drawing) (this.deferredAcks ||= []).push(ack);
       else ack();
       this.drawing = (this.drawing || 0) + 1;
-      h.frame(p.data, p.metadata).finally(() => {
+      this.lastFrameAt = performance.now(); this.lastMeta = p.metadata;
+      h.frame(p.data, p.metadata, p.format === "png" ? "image/png" : undefined).finally(() => {
         if (--this.drawing === 0 && this.deferredAcks?.length) this.deferredAcks.splice(0).forEach((a) => a());
       });
       this.scheduleSharp(p.metadata);
@@ -1433,8 +1455,7 @@ async function fetchTargets() {
     sharedBrowser = result.nodes.find(n => n.id === sharedBrowserId);
     if (!sharedBrowser || sharedBrowser.online === false) throw new Error("This browser is offline. Reconnect it from the extension.");
     const pages = sharedBrowser.tabs.map(t => ({...t, id: String(t.id), type: "page", sessionId: sharedBrowser.id, engine: sharedBrowser.browser}));
-    if (drv instanceof ExtensionDriver) {
-      drv.node = sharedBrowser;
+    if (drv?.shared) {
       const current = pages.find(p => p.id === pageId);
       if (!current) { drv.close(); handlers.gone("Sharing ended for this tab. Share it again in the browser extension, or choose another tab."); }
       renderSharedSession();
@@ -1630,6 +1651,18 @@ function connect(opts) {
 }
 async function doConnect({ quiet = false } = {}) {
   if (connecting) return;
+  // A shared browser's live view runs on the daemon it is connected to.
+  if (sharedDaemon) {
+    const peers = await getJson("/api/peers").catch(() => null);
+    const url = peers?.peers?.find((p) => p.name === sharedDaemon)?.url;
+    if (url && /^https?:\/\//i.test(url)) {
+      const next = new URL("/handoff/", url);
+      next.searchParams.set("browser", sharedBrowserId);
+      if (pageId) next.searchParams.set("page", pageId);
+      location.replace(next.toString());
+      return;
+    }
+  }
   connecting = true;
   // Detach the old driver first: its close event must not look like the session ending.
   const old = drv;
@@ -1667,7 +1700,7 @@ async function doConnect({ quiet = false } = {}) {
     const scheme = testHost || location.protocol === "https:" ? "wss://" : "ws://";
     const host = testHost || location.host;
     drv = sharedBrowserId
-      ? new ExtensionDriver(sharedBrowser, pageId, sharedDaemon, handlers, {headers: () => authHeaders(), error: text => toast(text, 4000)})
+      ? new CdpDriver(`${scheme}${host}/api/extension/nodes/${encodeURIComponent(sharedBrowserId)}/tabs/${encodeURIComponent(pageId)}/cdp`, handlers, { shared: true })
       : target.engine === "firefox"
       ? new BidiDriver(`${scheme}${host}/firefox?session_id=${encodeURIComponent(target.sessionId)}&observer=true`, pageId, handlers)
       : new CdpDriver(`${scheme}${host}/devtools/page/${encodeURIComponent(pageId)}?observer=true`, handlers);

@@ -10,6 +10,14 @@ globalThis.NodePolicy = (() => {
     'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
     'Page.getFrameTree', 'Page.getLayoutMetrics', 'Page.captureScreenshot',
   ]);
+  // The live view's protocol: frames and page state for every viewer, and the
+  // page's own input, navigation and dialogs only under a control grant.
+  const viewing = new Set([
+    'Page.enable', 'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck',
+    'Page.captureScreenshot', 'Page.getLayoutMetrics', 'Page.getNavigationHistory', 'Page.getFrameTree',
+    'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
+  ]);
+  const steering = new Set(['Page.reload', 'Page.navigateToHistoryEntry', 'Page.handleJavaScriptDialog']);
   function webURL(value) {
     try {
       const u = new URL(value);
@@ -45,5 +53,15 @@ globalThis.NodePolicy = (() => {
     if (command.action === 'cdp') return methods.has(command.params.method);
     return ['click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate'].includes(command.action);
   }
-  return {webURL, serverURL, daemonOrigins, approvedServer, allowed};
+  function relayAllowed(method, params, control) {
+    if (typeof method !== 'string' || !params || typeof params !== 'object' || Array.isArray(params) ||
+        JSON.stringify(params).length > 128 * 1024) return false;
+    if (viewing.has(method)) return true;
+    if (!control) return false;
+    if (method === 'Page.navigate') return webURL(params.url);
+    return steering.has(method) || methods.has(method);
+  }
+  // Events a view-only viewer may see: the page's frames and navigation state.
+  const viewEvent = method => method.startsWith('Page.') || method === 'Inspector.detached';
+  return {webURL, serverURL, daemonOrigins, approvedServer, allowed, relayAllowed, viewEvent};
 })();

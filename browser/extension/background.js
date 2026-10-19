@@ -7,6 +7,18 @@ let socket = null;
 let registration = null;
 let shared = new Map();
 const attached = new Set();
+const attaching = new Map();
+// Live views (daemon relay channels) per tab, and Firefox's emulated screencasts.
+const channels = new Map();
+const casts = new Map();
+// New tabs join sharing while connected; they inherit the last applied control choice.
+let sharing = {autoShare: true, control: false};
+const sharingReady = api.storage.local.get(['autoShare', 'shareControl']).then(saved => {
+  sharing = {autoShare: saved.autoShare !== false, control: saved.shareControl === true};
+});
+// Every allowed daemon origin, so no shared tab can ever show a daemon page.
+let daemons = new Set();
+let policyCache = null;
 let heartbeat = null;
 let expiryTimer = null;
 let lastAnswer = 0;
@@ -99,8 +111,14 @@ async function daemonPolicy() {
   if (local.managedAllowlistSeen) throw new Error('Managed daemon allowlist was removed. Connections are blocked until policy is restored.');
   return {managed: false, origins: NodePolicy.daemonOrigins(local.daemonAllowlist || [])};
 }
+// Read once per change, not per request: live views send many small messages.
+function cachedPolicy() {
+  policyCache ||= daemonPolicy().then(policy => { daemons = new Set(policy.origins); return policy; },
+    error => { policyCache = null; throw error; });
+  return policyCache;
+}
 async function requireDaemon(server) {
-  const policy = await daemonPolicy();
+  const policy = await cachedPolicy();
   return NodePolicy.approvedServer(server, policy.origins);
 }
 
@@ -168,7 +186,7 @@ async function enableNative() {
 async function syncNativeGrants() {
   if (!nativeReady) return;
   try {
-    await nativeRequest({type: 'grants', grants: [...shared].map(([tab, grant]) => ({
+    await nativeRequest({type: 'grants', grants: [...shared].filter(([, grant]) => grant.origin).map(([tab, grant]) => ({
       tab, origin: grant.origin, control: grant.control, expires_at: registration.expires_at || Math.floor(Date.now() / 1000) + 300,
     }))});
   } catch {
@@ -179,14 +197,19 @@ async function syncNativeGrants() {
 
 function publishSafely() { void publish().catch(() => stop('Could not update shared tabs')); }
 
+let published = [];
+// The number of shared tabs: red when any may be controlled, green when view only.
 async function badge() {
-  const control = [...shared.values()].some(g => g.control);
-  await api.action.setBadgeText({text: registration ? (control ? 'CTRL' : 'VIEW') : ''});
-  await api.action.setBadgeBackgroundColor({color: control ? '#c73545' : '#23745d'});
-  await api.action.setTitle({title: registration ? `Browser node: ${shared.size} shared tabs (${control ? 'control allowed' : 'view only'})` : 'Browser node: disconnected'});
+  const count = registration ? published.length : 0;
+  const control = published.some(t => t.control);
+  await api.action.setBadgeText({text: registration ? String(count) : ''});
+  await api.action.setBadgeBackgroundColor({color: !count ? '#6b7280' : control ? '#c73545' : '#23745d'});
+  await api.action.setTitle({title: !registration ? 'Browser node: disconnected'
+    : `Browser node: ${count} shared tab${count === 1 ? '' : 's'}${count ? (control ? ', remote control allowed' : ', view only') : ''}`});
 }
 
 async function detach(tab) {
+  for (const [channel, owner] of channels) if (owner === tab) { channels.delete(channel); stopCast(channel); }
   if (!attached.delete(tab)) return;
   try { await api.debugger.detach({tabId: tab}); } catch { /* Already closed/detached. */ }
 }
@@ -204,6 +227,9 @@ async function stop(reason = 'Disconnected', retry = false) {
   clearInterval(heartbeat);
   clearTimeout(expiryTimer);
   shared.clear();
+  published = [];
+  for (const channel of casts.keys()) stopCast(channel);
+  channels.clear();
   disconnectNative();
   if (old) old.close();
   await clearedAlarm;
@@ -231,29 +257,32 @@ async function publish() {
   for (const [id, grant] of shared) {
     try {
       const tab = await api.tabs.get(id);
-      if (!safeTab(tab) || new URL(tab.url).origin !== grant.origin) {
-        shared.delete(id);
-        await detach(id);
-        continue;
-      }
+      // Sharing belongs to the tab and follows it across sites. While it shows a
+      // page that must never be shared (a daemon, loopback, browser pages) it is
+      // paused: unlisted, and nothing is read from it or sent to it.
+      grant.paused = !safeTab(tab);
+      if (grant.paused) continue;
+      grant.origin = new URL(tab.url).origin;
       if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), control: grant.control});
     } catch { shared.delete(id); await detach(id); }
   }
   if (generation !== currentGeneration) return;
   await syncNativeGrants();
   if (generation !== currentGeneration) return;
+  published = tabs;
   send({type: 'tabs', tabs, native_control: nativeReady});
   await badge();
 }
 
-function safeTab(tab) {
-  if (tab.incognito || !NodePolicy.webURL(tab.url)) return false;
-  // A controller must never read its own pairing UI, the dashboard's credential,
+function safeURL(url) {
+  if (!NodePolicy.webURL(url)) return false;
+  // A controller must never read its own pairing UI, a dashboard's credential,
   // or a code printed in a localhost daemon page.
-  const u = new URL(tab.url);
+  const u = new URL(url);
   return !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) &&
-    (!registration || u.origin !== registration.server);
+    !daemons.has(u.origin) && (!registration || u.origin !== registration.server);
 }
+function safeTab(tab) { return !tab.incognito && safeURL(tab.url); }
 
 async function grantFor(command) {
   if (registration) await requireDaemon(registration.server);
@@ -261,18 +290,29 @@ async function grantFor(command) {
   if (!registration || (registration.expires_at !== 0 && Date.now() >= registration.expires_at * 1000) ||
       !grant || !NodePolicy.allowed(command, grant.control)) throw new Error('Tab grant does not permit this action.');
   const tab = await api.tabs.get(command.tab);
-  if (!safeTab(tab) || new URL(tab.url).origin !== grant.origin || shared.get(command.tab) !== grant) {
-    throw new Error('Tab changed site or sharing ended.');
-  }
+  if (!safeTab(tab) || shared.get(command.tab) !== grant) throw new Error('Tab is paused or sharing ended.');
+  grant.origin = new URL(tab.url).origin;
   return grant;
 }
 
-async function cdp(tab, method, params = {}) {
-  if (!attached.has(tab)) {
-    await api.debugger.attach({tabId: tab}, '1.3');
-    attached.add(tab);
-    if (!shared.has(tab) || !registration) { await detach(tab); throw new Error('Sharing ended.'); }
+// One attachment per tab, shared by concurrent requests so input keeps its order.
+function attach(tab) {
+  if (attached.has(tab)) return Promise.resolve();
+  if (!attaching.has(tab)) {
+    attaching.set(tab, (async () => {
+      try {
+        await api.debugger.attach({tabId: tab}, '1.3');
+        attached.add(tab);
+        if (!shared.has(tab) || !registration) { await detach(tab); throw new Error('Sharing ended.'); }
+        // Page events tell navigations apart before any frame of the new page.
+        await api.debugger.sendCommand({tabId: tab}, 'Page.enable', {});
+      } finally { attaching.delete(tab); }
+    })());
   }
+  return attaching.get(tab);
+}
+async function cdp(tab, method, params = {}) {
+  if (!attached.has(tab)) await attach(tab);
   return api.debugger.sendCommand({tabId: tab}, method, params);
 }
 
@@ -340,8 +380,6 @@ async function execute(command) {
   if (action === 'snapshot') {
     if (chromium) return cdp(tab, 'Accessibility.getFullAXTree');
   } else if (action === 'navigate') {
-    // Changing origin revokes the grant via onUpdated; it is not inherited by
-    // the destination. The local user can share that destination again.
     await api.tabs.update(tab, {url: params.url});
     return {ok: true};
   } else if (action === 'reload') { await api.tabs.reload(tab); return {ok: true}; }
@@ -372,6 +410,151 @@ async function execute(command) {
     }
   }
   return (await api.scripting.executeScript({target: {tabId: tab}, func: pageAction, args: [action, params, grant.origin]}))[0]?.result;
+}
+
+// The live view's CDP socket, relayed by the daemon. Chromium answers from the
+// tab's debugger; Firefox emulates the subset the view uses (see `shim`).
+async function relayCdp(message, connection, currentGeneration) {
+  const {channel, tab, id, method} = message;
+  const params = message.params || {};
+  const reply = value => {
+    if (socket === connection && currentGeneration === generation) connection.send(JSON.stringify({type: 'cdp_result', channel, id, ...value}));
+  };
+  try {
+    const grant = shared.get(tab);
+    if (typeof channel !== 'string' || !registration || !grant || grant.paused ||
+        !NodePolicy.relayAllowed(method, params, grant.control)) throw new Error('Not permitted for this shared tab.');
+    channels.set(channel, tab);
+    const result = chromium ? await cdp(tab, method, params) : await shim(tab, channel, method, params);
+    // Never return data after local unsharing, pausing or replacement of a grant.
+    if (shared.get(tab) !== grant || grant.paused) throw new Error('Sharing ended.');
+    reply({result: result ?? {}});
+  } catch (error) {
+    // Browser/CDP errors can embed page content, input text or script source.
+    reply({error: {message: error instanceof ShimError ? error.message : 'Action failed, or the tab is no longer shared.'}});
+  }
+}
+function closeChannel(channel) {
+  const tab = channels.get(channel);
+  channels.delete(channel);
+  stopCast(channel);
+  // Stop encoding frames nobody watches.
+  if (chromium && attached.has(tab) && ![...channels.values()].includes(tab)) {
+    api.debugger.sendCommand({tabId: tab}, 'Page.stopScreencast', {}).catch(() => {});
+  }
+}
+function sendEvent(tab, method, params, channel) {
+  if (shared.get(tab)?.paused === false) send({type: 'cdp_event', tab, method, params, ...(channel ? {channel} : {})});
+}
+
+class ShimError extends Error {}
+// Firefox has no tab debugger for extensions. Frames are captured on change and
+// pushed like a screencast (two in flight at most); input goes through the
+// companion's trusted input when it runs, else DOM actions.
+async function shim(tab, channel, method, params) {
+  const run = (action, extra = {}) => execute({tab, action, params: extra});
+  const modifiers = params.modifiers || 0;
+  const mods = {alt: !!(modifiers & 1), ctrl: !!(modifiers & 2), meta: !!(modifiers & 4), shift: !!(modifiers & 8)};
+  switch (method) {
+    case 'Page.enable': case 'Page.getFrameTree': return {};
+    case 'Page.startScreencast': startCast(tab, channel); return {};
+    case 'Page.stopScreencast': stopCast(channel); return {};
+    case 'Page.screencastFrameAck': { const cast = casts.get(channel); if (cast) { cast.inflight = Math.max(0, cast.inflight - 1); pump(channel); } return {}; }
+    case 'Page.captureScreenshot': return {data: (await capture(tab)).data};
+    case 'Page.getLayoutMetrics': {
+      const t = await api.tabs.get(tab);
+      const viewport = {clientWidth: t.width, clientHeight: t.height, pageX: 0, pageY: 0, offsetX: 0, offsetY: 0, scale: 1, zoom: 1};
+      return {cssVisualViewport: viewport, cssLayoutViewport: {clientWidth: t.width, clientHeight: t.height, pageX: 0, pageY: 0}};
+    }
+    // Extensions cannot read session history: the view gets a back and a forward entry.
+    case 'Page.getNavigationHistory': {
+      const t = await api.tabs.get(tab);
+      return {currentIndex: 1, entries: [{id: -1, url: ''}, {id: 0, url: t.url}, {id: 1, url: ''}]};
+    }
+    case 'Page.navigateToHistoryEntry': return run(params.entryId < 0 ? 'back' : 'forward');
+    case 'Page.navigate': return run('navigate', {url: params.url});
+    case 'Page.reload': return run('reload');
+    case 'Input.insertText': touchCast(tab); return run('type', {text: params.text});
+    case 'Input.dispatchKeyEvent':
+      if (params.type === 'keyUp' || params.type === 'char') return {};
+      touchCast(tab); return run('key', {key: params.key, modifiers: mods});
+    case 'Input.dispatchMouseEvent': return pointer(tab, params, run);
+    case 'Input.dispatchTouchEvent': {
+      const point = params.touchPoints?.[0];
+      if (params.type === 'touchStart' && point) return pointer(tab, {type: 'mousePressed', x: point.x, y: point.y, button: 'left'}, run);
+      if (params.type === 'touchMove' && point) return pointer(tab, {type: 'mouseMoved', x: point.x, y: point.y, button: 'left'}, run);
+      if (params.type === 'touchEnd') { const last = pointers.get(tab); return last ? pointer(tab, {type: 'mouseReleased', x: last.x, y: last.y, button: 'left'}, run) : {}; }
+      return {};
+    }
+    case 'Runtime.evaluate': {
+      if (!nativeReady) throw new ShimError('Evaluation in Firefox requires the companion.');
+      return {result: {value: await run('evaluate', {script: `return (${params.expression});`, args: []})}};
+    }
+    default: throw new ShimError(`${method} is not available in Firefox.`);
+  }
+}
+// A press, its drag path and the release become one trusted pointer action.
+const pointers = new Map();
+async function pointer(tab, params, run) {
+  const button = ['left', 'middle', 'right'].indexOf(params.button);
+  if (params.type === 'mouseWheel') { touchCast(tab); return run('scroll', {x: params.deltaX || 0, y: params.deltaY || 0}); }
+  if (params.type === 'mousePressed') { pointers.set(tab, {x: params.x, y: params.y, button: Math.max(0, button), path: []}); return {}; }
+  const down = pointers.get(tab);
+  if (!down) return {};
+  if (params.type === 'mouseMoved') {
+    down.path.push({x: params.x, y: params.y});
+    if (down.path.length > 127) down.path.splice(1, 1);
+    Object.assign(down, {lastX: params.x, lastY: params.y});
+    return {};
+  }
+  if (params.type !== 'mouseReleased') return {};
+  pointers.delete(tab);
+  touchCast(tab);
+  return run('click', {x: down.x, y: down.y, button: down.button, path: [...down.path, {x: params.x, y: params.y}]});
+}
+async function capture(tab) {
+  if (nativeReady) {
+    const r = await execute({tab, action: 'screenshot', params: {}});
+    return {data: r.data, format: r.format || 'png'};
+  }
+  const data = await api.tabs.captureTab(tab, {format: 'jpeg', quality: 65});
+  return {data: data.split(',')[1], format: 'jpeg'};
+}
+function startCast(tab, channel) {
+  stopCast(channel);
+  casts.set(channel, {tab, inflight: 0, last: '', seq: 0, timer: null, busy: false});
+  pump(channel);
+}
+function stopCast(channel) {
+  const cast = casts.get(channel);
+  if (cast) { clearTimeout(cast.timer); casts.delete(channel); }
+}
+// Input and page loads make the next frames come quickly; an idle page is checked slowly.
+function touchCast(tab) {
+  for (const [channel, cast] of casts) if (cast.tab === tab) { cast.hot = Date.now(); clearTimeout(cast.timer); cast.timer = setTimeout(() => pump(channel), 60); }
+}
+async function pump(channel) {
+  const cast = casts.get(channel);
+  if (!cast || cast.busy || cast.inflight >= 2) return;
+  clearTimeout(cast.timer);
+  cast.busy = true;
+  try {
+    const grant = shared.get(cast.tab);
+    if (grant && !grant.paused) {
+      const t = await api.tabs.get(cast.tab);
+      const frame = await capture(cast.tab);
+      // Unchanged pictures are not sent: an idle page costs no bandwidth.
+      if (casts.get(channel) === cast && frame.data !== cast.last) {
+        cast.last = frame.data;
+        cast.inflight++;
+        sendEvent(cast.tab, 'Page.screencastFrame', {data: frame.data, sessionId: ++cast.seq,
+          metadata: {deviceWidth: t.width, deviceHeight: t.height, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0, timestamp: Date.now() / 1000}}, channel);
+      }
+    }
+  } catch { /* The next round tries again; a revoked grant ends the cast. */ }
+  finally { cast.busy = false; }
+  if (casts.get(channel) !== cast) return;
+  cast.timer = setTimeout(() => pump(channel), Date.now() - (cast.hot || 0) < 2000 ? 120 : 500);
 }
 
 async function handleCommand(command, connection, currentGeneration) {
@@ -457,6 +640,8 @@ async function connect({server, code = '', key = '', name, remember = false}) {
       await stop('Browser authorization was revoked — pair again to reconnect');
     } else if (message.type === 'heartbeat') lastAnswer = Date.now();
     else if (message.type === 'command' && registration) void handleCommand(message, connection, myGeneration);
+    else if (message.type === 'cdp' && registration) void relayCdp(message, connection, myGeneration);
+    else if (message.type === 'cdp_close') closeChannel(message.channel);
     else void stop('Invalid daemon message');
   };
   connection.onclose = event => { clearTimeout(timeout); if (socket === connection) void stop(registration
@@ -534,10 +719,14 @@ async function localMessage(message, sender) {
   if (message.type === 'state') {
     let allowlist;
     try { allowlist = await daemonPolicy(); } catch (error) { allowlist = {managed: true, origins: [], error: error.message}; }
-    const tabs = (await api.tabs.query({})).filter(safeTab).map(t => ({id: t.id, title: t.title || '', url: t.url, control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
+    await sharingReady;
+    try { await cachedPolicy(); } catch { /* Shown through `allowlist` below. */ }
+    const tabs = (await api.tabs.query({})).filter(safeTab).map(t => ({id: t.id, title: t.title || '', url: t.url, active: t.active,
+      icon: /^(https:|data:image\/)/.test(t.favIconUrl || '') ? t.favIconUrl : '',
+      control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
     const {dashboardPairing} = await api.storage.session.get('dashboardPairing');
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
-    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), chromium, nativeReady};
+    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), sharing, chromium, nativeReady};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -567,11 +756,21 @@ async function localMessage(message, sender) {
       const tab = await api.tabs.get(id);
       if (!safeTab(tab)) throw new Error('This tab cannot be shared.');
       if (message.urls?.[id] !== tab.url) throw new Error('Tab changed since it was displayed. Reopen the popup and select it again.');
-      next.set(id, {origin: new URL(tab.url).origin, control: message.control === true});
+      // An unchanged tab keeps its grant object, so its live views stay open.
+      const previous = shared.get(id);
+      next.set(id, previous?.control === (message.control === true) ? previous : {origin: new URL(tab.url).origin, control: message.control === true, paused: false});
     }
     shared = next;
+    sharing.control = message.control === true;
+    await api.storage.local.set({shareControl: sharing.control});
+    if (chromium) for (const id of shared.keys()) void attach(id).catch(() => {});
     await Promise.all([...attached].filter(id => !shared.has(id)).map(detach));
     await publish();
+    return {ok: true};
+  }
+  if (message.type === 'autoShare') {
+    sharing.autoShare = message.enabled === true;
+    await api.storage.local.set({autoShare: sharing.autoShare});
     return {ok: true};
   }
   throw new Error('Unknown action.');
@@ -585,20 +784,45 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 api.tabs.onRemoved.addListener(id => { shared.delete(id); void detach(id); publishSafely(); });
-api.tabs.onUpdated.addListener((id, change) => {
-  if (shared.has(id) && (change.url || change.status === 'loading')) {
-    // Drop immediately on navigation: no old document's control or response can
-    // bleed into the new one, including same-origin navigations.
-    shared.delete(id);
-    void detach(id);
-    publishSafely();
+let publishTimer = null;
+function publishSoon() { clearTimeout(publishTimer); publishTimer = setTimeout(publishSafely, 150); }
+api.tabs.onUpdated.addListener((id, change, tab) => {
+  const grant = shared.get(id);
+  if (!grant) return;
+  if (change.url) {
+    // Sharing follows the tab. A page that must not be shared pauses it at once,
+    // before anything of that page is captured or relayed.
+    grant.paused = !safeTab({incognito: tab?.incognito, url: change.url});
+    if (!grant.paused) grant.origin = new URL(change.url).origin;
+    if (!chromium) sendEvent(id, 'Page.frameNavigated', {frame: {id: String(id), url: change.url}});
   }
+  if (!chromium && change.status === 'loading') { sendEvent(id, 'Page.frameStartedLoading', {frameId: String(id)}); touchCast(id); }
+  if (!chromium && change.status === 'complete') { sendEvent(id, 'Page.loadEventFired', {timestamp: Date.now() / 1000}); touchCast(id); }
+  if (change.url || change.title || change.status === 'complete') publishSoon();
 });
-if (chromium) api.debugger.onDetach.addListener(source => {
-  // Clicking the browser's "Cancel debugging" bar revokes sharing, and is never
-  // silently undone by the next remote request.
+api.tabs.onCreated.addListener(tab => {
+  if (!registration || !sharing.autoShare || tab.incognito) return;
+  // Paused until it shows a shareable page; then listed like any other shared tab.
+  shared.set(tab.id, {origin: null, control: sharing.control, paused: true});
+  publishSoon();
+});
+if (chromium) api.debugger.onEvent.addListener((source, method, params) => {
+  const grant = shared.get(source.tabId);
+  if (!grant || !registration) return;
+  if (method === 'Page.frameNavigated' && !params.frame.parentId) {
+    grant.paused = !safeURL(params.frame.url);
+    if (!grant.paused) grant.origin = new URL(params.frame.url).origin;
+    publishSoon();
+  }
+  sendEvent(source.tabId, method, params);
+});
+if (chromium) api.debugger.onDetach.addListener((source, reason) => {
   attached.delete(source.tabId);
-  shared.delete(source.tabId);
+  // Clicking the browser's "Cancel debugging" bar revokes sharing, and is never
+  // silently undone by the next remote request. Other detaches (a browser page,
+  // a crash) only end the attachment; the next request attaches again.
+  if (reason === 'canceled_by_user') shared.delete(source.tabId);
+  for (const [channel, tab] of channels) if (tab === source.tabId) channels.delete(channel);
   publishSafely();
 });
 api.permissions.onAdded.addListener(() => { void historyReady.then(async () => { await connectPrepared(); await installDashboardBridge(); }).catch(() => stop('Could not start connection after permission grant')); });
@@ -618,6 +842,7 @@ void historyReady.then(() => restoreRemembered());
 
 api.storage.onChanged.addListener((changes, area) => {
   if (area !== 'managed' && !(area === 'local' && changes.daemonAllowlist)) return;
+  policyCache = null;
   void (async () => {
     const server = registration?.server || pendingConnection?.server || (socket && new URL(socket.url).origin.replace(/^ws/, 'http'));
     if (server) {

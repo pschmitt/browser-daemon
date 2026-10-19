@@ -8,7 +8,7 @@ companion.
 
 The build and release layout follows the rbw fork: shared Manifest V3 source,
 engine-specific manifests, a Python build without npm dependencies, the version
-from `browser/version.json`, and AMO/CRX signing in CI.
+from the daemon's `Cargo.toml` (one version for both), and AMO/CRX signing in CI.
 
 ## Allowed daemon URLs
 
@@ -28,11 +28,11 @@ in the extension's own setup page. No origins are trusted by default.
 
 ## Pair from the dashboard
 
-Enter the daemon URL in the extension and click **Enable dashboard pairing**
-once to grant access to that site. Then click **Pair browser extension** on the
-signed-in HTTPS dashboard. An extension tab opens for your local approval;
-choose a browser name and click **Approve connection**, then select tabs and
-click **Apply**. No terminal command or code copying is needed.
+Pick the daemon in the extension and click **Pair from the dashboard** once to
+grant access to that site. Then click **Pair browser** under **Nodes → Add a
+node** on the signed-in HTTPS dashboard. An extension tab opens for your local
+approval; name the browser and click **Connect**, then switch on the tabs to
+share. No terminal command or code copying is needed.
 
 Only the configured daemon gets a small content-script pairing bridge. It
 accepts discovery and pairing requests from its top-level dashboard pages,
@@ -89,19 +89,29 @@ memory-only connection with no time limit uses `--lifetime-secs 0` instead.
    do not paste it into an agent conversation. It is single use and expires
    after five minutes. `--lifetime-secs` sets the registration lifetime
    (default 3600, minimum 60, maximum 28800 seconds).
-4. Enter the daemon URL and a browser name, then connect. Select tabs and click
-   **Apply**. **Allow remote control** is off by default.
+4. Enter the daemon URL and a browser name, then connect. Switch on the tabs to
+   share; changes apply at once. **Remote control** is off by default.
 5. The browser appears alongside regular nodes in **Nodes**. Its shared tabs
-   form one session in **Sessions**, with the same screenshot preview and tab
-   strip as a managed browser. **Take over** opens the regular `/handoff/` view;
-   view-only grants use the same canvas with input disabled. Shared browsers keep
-   their owner's window size. Node actions disconnect the browser or revoke its
-   remembered key. Old `/extension/` links redirect to these views.
+   form one session in **Sessions**, with the same preview and tab strip as a
+   managed browser. **Take over** opens the regular `/handoff/` view, which
+   speaks CDP to the tab over the daemon's relay socket
+   (`/api/extension/nodes/<id>/tabs/<tab>/cdp`): a pushed screencast and input
+   that does not wait for answers, as for managed browsers. Chromium answers from
+   the tab's debugger; Firefox emulates the subset the view uses (frames captured
+   on change, input through the companion or DOM actions). View-only grants get
+   frames and page state only. Shared browsers keep their owner's window size,
+   user agent and pages: the view neither resizes nor injects anything. Node
+   actions disconnect the browser or revoke its remembered key. Old
+   `/extension/` links redirect to these views.
 
 No tabs are shared merely by connecting. Private tabs, browser/extension pages,
-the connected daemon's own pages, and localhost pages cannot be selected. Tab
-navigation, including reload and SPA URL changes, ends that tab's grant; select
-it again to continue. New tabs are not automatically shared.
+any allowed daemon's pages, and localhost pages are never shared. Sharing
+belongs to the tab and follows it across navigations and sites. While a shared
+tab shows a page that must never be shared, it is paused: unlisted, its live
+views closed, nothing read from it or sent to it, until it shows a shareable
+page again. **Share new tabs** (on by default) shares tabs you open while
+connected, with the current **Remote control** choice. The toolbar badge counts
+shared tabs: red while any may be controlled, green when all are view only.
 
 **Stop sharing**, **Ctrl+Shift+Period**, expiry, socket loss, browser restart,
 remote disconnect, and Chromium's **Cancel debugging** bar all revoke access.
@@ -211,9 +221,10 @@ pairing**. Pair directly with the hosting daemon using the dashboard or its clus
   It is appropriate only for daemon clients you trust with those accounts.
   Arbitrary content evaluation can act with that site's authority, including
   requests and same-origin windows reachable by the page.
-- Browser-wide CDP domains, target attachment, cookie/storage APIs, file-system
-  upload commands, and persistent injected scripts are blocked. Browser chrome,
-  private windows, unshared/new tabs, desktop control, native file pickers and
+- Browser-wide CDP domains, target attachment, cookie/storage APIs, emulation,
+  file-system upload commands, and persistent injected scripts are blocked, in
+  the daemon and again in the extension. Browser chrome,
+  private windows, unshared tabs, desktop control, native file pickers and
   browser permission dialogs are outside the grant. Native automation is
   currently Linux-only.
 - Limits: 32 extension sockets (including pending handshakes), 128 shared tabs,

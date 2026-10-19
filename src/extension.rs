@@ -25,6 +25,9 @@ const MAX_NODES: usize = 32;
 const MAX_TABS: usize = 128;
 const MAX_PENDING: usize = 32;
 const MAX_FRAME: usize = 8 * 1024 * 1024;
+// Live views send every input event; the socket applies backpressure beyond this.
+const MAX_OUTBOUND: usize = 256;
+const MAX_CHANNELS: usize = 16;
 
 pub struct Broker {
     pairs: Mutex<HashMap<[u8; 32], Pair>>,
@@ -120,7 +123,25 @@ struct Node {
     deadline: Option<Instant>,
     outbound: mpsc::Sender<Value>,
     pending: Mutex<HashMap<Uuid, oneshot::Sender<Value>>>,
+    // Live views of shared tabs (see `cdp`). Dropping one closes its socket.
+    channels: Mutex<HashMap<Uuid, Channel>>,
     stop: tokio::sync::Notify,
+}
+
+struct Channel {
+    tab: u32,
+    tx: mpsc::Sender<String>,
+}
+
+impl Node {
+    fn end(&self) {
+        self.pending.lock().unwrap().clear();
+        self.channels.lock().unwrap().clear();
+    }
+    fn control(&self, tab: u32) -> Option<bool> {
+        let info = self.info.lock().unwrap();
+        info.tabs.iter().find(|t| t.id == tab).map(|t| t.control)
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -280,7 +301,7 @@ pub async fn revoke(
     })?;
     if let Some(node) = state.extensions.nodes.lock().unwrap().remove(&id) {
         node.stop.notify_one();
-        node.pending.lock().unwrap().clear();
+        node.end();
     }
     Ok(Json(json!({"ok": true})))
 }
@@ -346,6 +367,42 @@ pub fn cdp_allowed(method: &str) -> bool {
             | "Page.getLayoutMetrics"
             | "Page.captureScreenshot"
     )
+}
+
+/// The live view's protocol: frames and page state for every viewer, and the
+/// page's own input, navigation and dialogs only under a control grant.
+pub fn relay_allowed(method: &str, params: &Value, control: bool) -> bool {
+    if !params.is_object() || params.to_string().len() > 128 * 1024 {
+        return false;
+    }
+    if matches!(
+        method,
+        "Page.enable"
+            | "Page.startScreencast"
+            | "Page.stopScreencast"
+            | "Page.screencastFrameAck"
+            | "Page.captureScreenshot"
+            | "Page.getLayoutMetrics"
+            | "Page.getNavigationHistory"
+            | "Page.getFrameTree"
+            | "Accessibility.getFullAXTree"
+            | "Accessibility.getPartialAXTree"
+    ) {
+        return true;
+    }
+    if !control {
+        return false;
+    }
+    match method {
+        "Page.navigate" => params["url"].as_str().is_some_and(web_url),
+        "Page.reload" | "Page.navigateToHistoryEntry" | "Page.handleJavaScriptDialog" => true,
+        _ => cdp_allowed(method),
+    }
+}
+
+/// Events a view-only viewer may see: the page's frames and navigation state.
+fn view_event(method: &str) -> bool {
+    method.starts_with("Page.") || method == "Inspector.detached"
 }
 
 fn web_url(s: &str) -> bool {
@@ -582,7 +639,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
     } else {
         auth::now() + lifetime.as_secs()
     };
-    let (outbound, mut commands) = mpsc::channel(MAX_PENDING);
+    let (outbound, mut commands) = mpsc::channel(MAX_OUTBOUND);
     let node = Arc::new(Node {
         info: Mutex::new(NodeInfo {
             id,
@@ -597,11 +654,12 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
         deadline: (!lifetime.is_zero()).then(|| Instant::now() + lifetime),
         outbound,
         pending: Mutex::default(),
+        channels: Mutex::default(),
         stop: tokio::sync::Notify::new(),
     });
     if let Some(previous) = broker.nodes.lock().unwrap().insert(id, node.clone()) {
         previous.stop.notify_one();
-        previous.pending.lock().unwrap().clear();
+        previous.end();
     }
     // All exits, including a task cancellation, remove the registration.
     struct Registration(Arc<Broker>, Uuid, Arc<Node>);
@@ -610,7 +668,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
             let mut nodes = self.0.nodes.lock().unwrap();
             if nodes.get(&self.1).is_some_and(|n| Arc::ptr_eq(n, &self.2)) {
                 if let Some(n) = nodes.remove(&self.1) {
-                    n.pending.lock().unwrap().clear();
+                    n.end();
                 }
             }
         }
@@ -646,9 +704,28 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 let tabs: Vec<Tab> = serde_json::from_value(value["tabs"].clone()).map_err(|_| ())?;
                                 if tabs.len() > MAX_TABS || tabs.iter().any(|t| !web_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024)
                                     || tabs.iter().map(|t| t.id).collect::<std::collections::HashSet<_>>().len() != tabs.len() { return Err(()); }
+                                node.channels.lock().unwrap().retain(|_, c| tabs.iter().any(|t| t.id == c.tab));
                                 let mut info = node.info.lock().unwrap();
                                 info.tabs = tabs;
                                 info.native_control = value["native_control"].as_bool().unwrap_or(false);
+                            }
+                            Some("cdp_result") => {
+                                let channel = value["channel"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or(())?;
+                                let reply = match value["error"]["message"].as_str() {
+                                    Some(error) => json!({"id": value["id"], "error": {"message": error}}),
+                                    None => json!({"id": value["id"], "result": value["result"]}),
+                                };
+                                deliver(&node, |id, _| *id == channel, &reply.to_string());
+                            }
+                            Some("cdp_event") => {
+                                let tab = value["tab"].as_u64().and_then(|t| u32::try_from(t).ok()).ok_or(())?;
+                                let method = value["method"].as_str().ok_or(())?;
+                                // Only shared tabs, and only page state for view-only grants.
+                                let Some(control) = node.control(tab) else { continue };
+                                if !control && !view_event(method) { continue; }
+                                let only = value["channel"].as_str().and_then(|s| Uuid::parse_str(s).ok());
+                                let event = json!({"method": method, "params": value["params"]}).to_string();
+                                deliver(&node, |id, c| c.tab == tab && only.is_none_or(|o| o == *id), &event);
                             }
                             Some("result") => {
                                 let request = value["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or(())?;
@@ -668,6 +745,103 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
         }
     }
     Ok(())
+}
+
+/// A view that cannot keep up is closed rather than silently missing frames:
+/// the screencast waits for acknowledgements and would otherwise stall.
+fn deliver(node: &Node, mut to: impl FnMut(&Uuid, &Channel) -> bool, text: &str) {
+    node.channels
+        .lock()
+        .unwrap()
+        .retain(|id, c| !to(id, c) || c.tx.try_send(text.to_string()).is_ok());
+}
+
+/// The handoff view's protocol socket for one shared tab. It speaks CDP; the
+/// extension answers from the tab's debugger (Chromium) or emulates the subset
+/// the view needs (Firefox). Methods are checked here and again in the browser.
+pub async fn cdp(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, tab)): Path<(Uuid, u32)>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    state.check_auth(&headers)?;
+    let node = state
+        .extensions
+        .nodes
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Browser disconnected"))?;
+    if node.deadline.is_some_and(|d| d <= Instant::now()) {
+        return Err(failure(StatusCode::GONE, "Browser grant expired"));
+    }
+    if node.control(tab).is_none() {
+        return Err(failure(StatusCode::FORBIDDEN, "Tab is not shared"));
+    }
+    if node.channels.lock().unwrap().len() >= MAX_CHANNELS {
+        return Err(failure(StatusCode::TOO_MANY_REQUESTS, "Too many viewers"));
+    }
+    Ok(ws
+        .max_message_size(MAX_FRAME)
+        .max_frame_size(MAX_FRAME)
+        .on_upgrade(move |mut ws| async move {
+            relay(&node, tab, &mut ws).await;
+            let _ = ws.close().await;
+        }))
+}
+
+async fn relay(node: &Arc<Node>, tab: u32, ws: &mut WebSocket) {
+    let channel = Uuid::new_v4();
+    let (tx, mut rx) = mpsc::channel::<String>(256);
+    node.channels
+        .lock()
+        .unwrap()
+        .insert(channel, Channel { tab, tx });
+    struct Open(Arc<Node>, Uuid, u32);
+    impl Drop for Open {
+        fn drop(&mut self) {
+            self.0.channels.lock().unwrap().remove(&self.1);
+            let _ = self
+                .0
+                .outbound
+                .try_send(json!({"type": "cdp_close", "channel": self.1, "tab": self.2}));
+        }
+    }
+    let _open = Open(node.clone(), channel, tab);
+    loop {
+        tokio::select! {
+            out = rx.recv() => {
+                let Some(text) = out else { break };
+                if ws.send(Message::Text(text.into())).await.is_err() { break; }
+            }
+            incoming = ws.recv() => {
+                let text = match incoming {
+                    Some(Ok(Message::Text(text))) => text,
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                    _ => break,
+                };
+                let Ok(request) = serde_json::from_str::<Value>(&text) else { break };
+                let id = request["id"].clone();
+                let method = request["method"].as_str().unwrap_or_default();
+                let params = if request["params"].is_null() { json!({}) } else { request["params"].clone() };
+                if !id.is_u64() { break; }
+                if node.deadline.is_some_and(|d| d <= Instant::now()) { break; }
+                let Some(control) = node.control(tab) else { break };
+                if !relay_allowed(method, &params, control) {
+                    let reply = json!({"id": id, "error": {"message": "Not permitted for this shared tab"}});
+                    if ws.send(Message::Text(reply.to_string().into())).await.is_err() { break; }
+                    continue;
+                }
+                let forward = json!({"type": "cdp", "channel": channel, "tab": tab, "id": id, "method": method, "params": params});
+                match tokio::time::timeout(Duration::from_secs(5), node.outbound.send(forward)).await {
+                    Ok(Ok(())) => {}
+                    _ => break,
+                }
+            }
+        }
+    }
 }
 
 pub async fn page(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, ApiError> {
@@ -820,6 +994,61 @@ mod tests {
         .await
         .unwrap();
         server.abort();
+    }
+
+    #[test]
+    fn live_views_see_frames_and_steer_only_under_control() {
+        let none = json!({});
+        for method in [
+            "Page.startScreencast",
+            "Page.screencastFrameAck",
+            "Page.getNavigationHistory",
+        ] {
+            assert!(relay_allowed(method, &none, false), "{method}");
+        }
+        for method in [
+            "Input.dispatchMouseEvent",
+            "Runtime.evaluate",
+            "Page.reload",
+            "Page.handleJavaScriptDialog",
+        ] {
+            assert!(!relay_allowed(method, &none, false), "{method}");
+            assert!(relay_allowed(method, &none, true), "{method}");
+        }
+        for method in [
+            "Target.createTarget",
+            "Browser.close",
+            "Network.getAllCookies",
+            "Storage.getCookies",
+            "Emulation.setDeviceMetricsOverride",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "DOM.setFileInputFiles",
+            "Input.dispatchDragEvent",
+        ] {
+            assert!(!relay_allowed(method, &none, true), "{method}");
+        }
+        assert!(relay_allowed(
+            "Page.navigate",
+            &json!({"url": "https://example.org/"}),
+            true
+        ));
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "chrome://settings",
+        ] {
+            assert!(
+                !relay_allowed("Page.navigate", &json!({"url": url}), true),
+                "{url}"
+            );
+        }
+        assert!(!relay_allowed(
+            "Page.navigate",
+            &json!({"url": "https://example.org/"}),
+            false
+        ));
+        assert!(!relay_allowed("Page.enable", &json!([]), true));
+        assert!(view_event("Page.screencastFrame") && !view_event("Runtime.consoleAPICalled"));
     }
 
     #[test]

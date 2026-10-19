@@ -21,21 +21,23 @@ async function freePort() {
 }
 class CDP {
   constructor(socket) {
-    this.socket = socket; this.id = 0; this.pending = new Map();
+    this.socket = socket; this.id = 0; this.pending = new Map(); this.events = [];
     socket.addEventListener('message', event => {
-      const message = JSON.parse(event.data); const p = this.pending.get(message.id);
+      const message = JSON.parse(event.data);
+      if (message.method) { this.events.push(message); return; }
+      const p = this.pending.get(message.id);
       if (p) { this.pending.delete(message.id); clearTimeout(p.timer); message.error ? p.reject(new Error('CDP rejected an integration operation')) : p.resolve(message.result); }
     });
   }
-  static async open(url) {
-    const socket = new WebSocket(url);
+  static async open(url, options) {
+    const socket = new WebSocket(url, options);
     await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, {once: true}); socket.addEventListener('error', reject, {once: true}); });
     return new CDP(socket);
   }
   call(method, params = {}) {
     const id = ++this.id;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('CDP check timed out')); }, 15000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP check timed out: ${method}`)); }, 15000);
       this.pending.set(id, {resolve, reject, timer}); this.socket.send(JSON.stringify({id, method, params}));
     });
   }
@@ -104,12 +106,49 @@ try {
   assert.equal((await command('type', {text: 'hello'})).status, 200);
   result = await command('cdp', {method: 'Runtime.evaluate', params: {expression: 'document.querySelector("input").value', returnByValue: true}});
   assert.equal(result.value.result.result.value, 'hello');
-  await command('navigate', {url: `${pageURL}next`});
+  // The live view: the regular CDP driver over the daemon's relay socket.
+  const liveURL = id => `ws://127.0.0.1:${daemonPort}/api/extension/nodes/${browserId}/tabs/${id}/cdp`;
+  const live = await CDP.open(liveURL(tab.id), {headers: {'X-Browser-Cluster-Secret': secret}}); sockets.push(live.socket);
+  await live.call('Page.enable');
+  await live.call('Page.startScreencast', {format: 'jpeg', quality: 60, maxWidth: 800, maxHeight: 600});
+  const frame = await until(() => live.events.find(e => e.method === 'Page.screencastFrame'));
+  assert.ok(frame.params.data.startsWith('/9j'));
+  await live.call('Page.screencastFrameAck', {sessionId: frame.params.sessionId});
+  const box = await live.call('Runtime.evaluate', {expression: 'JSON.stringify(document.querySelector("button").getBoundingClientRect())', returnByValue: true});
+  const {x, y, width, height} = JSON.parse(box.result.value);
+  for (const type of ['mousePressed', 'mouseReleased']) await live.call('Input.dispatchMouseEvent', {type, x: x + width / 2, y: y + height / 2, button: 'left', clickCount: 1});
+  assert.equal((await live.call('Runtime.evaluate', {expression: 'window.trusted', returnByValue: true})).result.value, true);
+  await assert.rejects(live.call('Target.createTarget', {url: 'about:blank'}));
+  await assert.rejects(live.call('Page.navigate', {url: 'file:///etc/passwd'}));
+  // Control follows the tab across navigations; the view keeps working.
+  await live.call('Page.navigate', {url: `${pageURL}next`});
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs[0]?.url === `${pageURL}next`);
+  assert.equal((await live.call('Runtime.evaluate', {expression: 'location.pathname', returnByValue: true})).result.value, '/next');
+  assert.equal((await command('screenshot')).status, 200);
+  // A daemon page pauses sharing: the tab is unlisted and its views close.
+  await command('navigate', {url: `${base}/`});
   await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs.length === 0);
+  await until(() => live.socket.readyState === WebSocket.CLOSED);
   assert.equal((await command('screenshot')).status, 403);
+  // Back on a shareable page (navigated locally), sharing resumes by itself.
+  const paused = (await targets()).find(t => t.type === 'page' && t.url.startsWith(base));
+  const local = await CDP.open(paused.webSocketDebuggerUrl); sockets.push(local.socket);
+  await local.call('Page.navigate', {url: pageURL});
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs[0]?.url === pageURL);
+  // View only: frames, never input.
+  await message({type: 'share', tabs: [tab.id], urls: {[tab.id]: pageURL}, control: false});
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs[0]?.control === false);
+  const viewer = await CDP.open(liveURL(tab.id), {headers: {'X-Browser-Cluster-Secret': secret}}); sockets.push(viewer.socket);
+  await viewer.call('Page.enable');
+  await assert.rejects(viewer.call('Input.insertText', {text: 'refuse'}));
+  await assert.rejects(viewer.call('Runtime.evaluate', {expression: '1'}));
+  // New tabs join automatically with the last control choice.
+  const opened = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent(`${pageURL}new`)}`, {method: 'PUT'}).then(r => r.json());
+  await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs.some(t => t.url === `${pageURL}new` && t.control === false));
+  await fetch(`http://127.0.0.1:${chromePort}/json/close/${opened.id}`, {method: 'PUT'});
   await api(`/api/extension/nodes/${browserId}`, 'DELETE');
   await until(async () => (await message({type: 'state'})).registration === null);
-  console.log('Chromium: extension pairing, screenshot, remote typing, view-only enforcement, unshared-tab rejection, protocol limits, navigation revocation and disconnect passed');
+  console.log('Chromium: pairing, screenshots, typing, live CDP relay (screencast, trusted clicks, protocol limits), control across navigation, pausing on daemon pages, view-only enforcement, automatic sharing of new tabs and disconnect passed');
 } finally {
   for (const socket of sockets) socket.close();
   for (const child of children) child.kill('SIGTERM');
