@@ -1,0 +1,103 @@
+// The live view of a shared browser without tabs: it shows the first tab as soon
+// as one is shared, without a click. Real Chromium and daemon, isolated profiles.
+// Node 22+ provides fetch and WebSocket; no npm dependencies are needed.
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {createServer as httpServer} from 'node:http';
+import {createServer as tcpServer} from 'node:net';
+import {tmpdir} from 'node:os';
+import {join, resolve} from 'node:path';
+import {randomBytes} from 'node:crypto';
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(fn) {
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) { try { const value = await fn(); if (value) return value; } catch {} await sleep(100); }
+  throw new Error('Browser integration check timed out');
+}
+async function freePort() {
+  const s = tcpServer(); await new Promise(resolve => s.listen(0, '127.0.0.1', resolve));
+  const port = s.address().port; await new Promise(resolve => s.close(resolve)); return port;
+}
+class CDP {
+  constructor(socket) {
+    this.socket = socket; this.id = 0; this.pending = new Map(); this.events = [];
+    socket.addEventListener('message', event => {
+      const message = JSON.parse(event.data);
+      if (message.method) {
+        this.events.push(message);
+        // Like the live view: acknowledge frames so the screencast keeps going.
+        if (this.autoAck && message.method === 'Page.screencastFrame') this.call('Page.screencastFrameAck', {sessionId: message.params.sessionId}).catch(() => {});
+        return;
+      }
+      const p = this.pending.get(message.id);
+      if (p) { this.pending.delete(message.id); clearTimeout(p.timer); message.error ? p.reject(new Error(`CDP rejected ${p.method}: ${message.error.message || message.error}`)) : p.resolve(message.result); }
+    });
+  }
+  static async open(url, options) {
+    const socket = new WebSocket(url, options);
+    await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, {once: true}); socket.addEventListener('error', reject, {once: true}); });
+    return new CDP(socket);
+  }
+  call(method, params = {}) {
+    const id = ++this.id;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`CDP check timed out: ${method}`)); }, 15000);
+      this.pending.set(id, {resolve, reject, timer, method}); this.socket.send(JSON.stringify({id, method, params}));
+    });
+  }
+  async evaluate(expression) {
+    const value = await this.call('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
+    if (value.exceptionDetails) throw new Error('Extension integration script failed');
+    return value.result.value;
+  }
+}
+
+
+const directory = await mkdtemp(join(tmpdir(), 'browser-node-notab-'));
+const children = [];
+try {
+  const daemonPort = await freePort(); const chromePort = await freePort();
+  const secret = randomBytes(32).toString('hex');
+  const secretFile = join(directory, 'test-secret');
+  await writeFile(secretFile, secret, {mode: 0o600});
+  const base = `http://127.0.0.1:${daemonPort}`;
+  const launch = (program, args) => { const child = spawn(program, args, {stdio: 'ignore'}); children.push(child); return child; };
+  launch(resolve('target/debug/browser-daemon'), ['run', '--bind', `127.0.0.1:${daemonPort}`, '--public-url', base, '--profile-dir', join(directory, 'daemon/profiles'), '--recordings-dir', join(directory, 'daemon/recordings'), '--cluster-secret-file', secretFile, '--record-sessions', 'false']);
+  await until(async () => (await fetch(`${base}/health`)).ok);
+  const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); res.end('<!doctype html><title>Later tab</title><h1>Later</h1>'); });
+  await new Promise(r => pageServer.listen(0, '127.0.0.2', r));
+  const pageURL = `http://127.0.0.2:${pageServer.address().port}/`;
+  launch('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
+  const targets = () => fetch(`http://127.0.0.1:${chromePort}/json/list`).then(r => r.json());
+  const worker = await until(async () => (await targets()).find(t => t.type === 'service_worker' && t.url.endsWith('/background.js')));
+  const origin = worker.url.replace(/\/background.js$/, '');
+  const open = async url => { const t = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent(url)}`, {method: 'PUT'}).then(r => r.json()); return CDP.open(t.webSocketDebuggerUrl); };
+  const popup = await open(`${origin}/popup.html`);
+  await until(() => popup.evaluate(`document.readyState === 'complete' && !!globalThis.chrome?.runtime?.sendMessage`));
+  const message = v => popup.evaluate(`chrome.runtime.sendMessage(${JSON.stringify(v)})`);
+  await until(async () => Array.isArray((await message({type: 'state'}))?.tabs));
+  await message({type: 'setDaemonAllowlist', origins: [base]});
+  await message({type: 'shareAll', enabled: false});
+  const pairing = await (await fetch(`${base}/api/extension/pair`, {method: 'POST', headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json'}, body: JSON.stringify({origin})})).json();
+  await message({type: 'connect', server: base, code: pairing.code, name: 'notab'});
+  const state = await until(async () => { const s = await message({type: 'state'}); return s.registration && s; });
+  const view = await open('about:blank');
+  await view.call('Network.enable');
+  await view.call('Network.setExtraHTTPHeaders', {headers: {'X-Browser-Cluster-Secret': secret}});
+  await view.call('Page.navigate', {url: `${base}/handoff/?browser=${state.registration.id}`});
+  await sleep(3000);
+  assert.match(await view.evaluate(`document.getElementById('msg').textContent`), /No shared tabs/);
+  const tab = state.tabs.find(t => t.url === pageURL);
+  await message({type: 'share', tabs: [tab.id], urls: {[tab.id]: pageURL}, control: true});
+  await until(async () => (await view.evaluate(`!document.getElementById('overlay').classList.contains('show')`)));
+  assert.equal(await view.evaluate(`new URLSearchParams(location.search).get('page')`), String(tab.id));
+  console.log('Handoff: a shared browser without tabs shows its first shared tab by itself passed');
+} finally {
+  for (const c of children) c.kill('SIGTERM');
+  await sleep(1000);
+  await rm(directory, {recursive: true, force: true});
+}
+// Open protocol sockets would keep Node waiting; reached only on success.
+process.exit(0);

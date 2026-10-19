@@ -1461,11 +1461,19 @@ async function fetchTargets() {
     sharedBrowser = result.nodes.find(n => n.id === sharedBrowserId);
     if (!sharedBrowser || sharedBrowser.online === false) throw new Error("This browser is offline. Reconnect it from the extension.");
     const pages = sharedBrowser.tabs.map(t => ({...t, id: String(t.id), type: "page", sessionId: sharedBrowser.id, engine: sharedBrowser.browser}));
-    if (drv?.shared) {
-      const current = pages.find(p => p.id === pageId);
-      if (!current) { drv.close(); handlers.gone("Sharing ended for this tab. Share it again in the browser extension, or choose another tab."); }
-      renderSharedSession();
+    // No live tab (none shared yet, or the shown one went away): follow the
+    // shared tab in front, once there is one.
+    const next = pages.find(p => p.active) || pages[0];
+    if (!pages.some(p => p.id === pageId)) {
+      if (next && !connecting) setTimeout(() => {
+        if (pages.some(p => p.id === pageId)) return;
+        drv?.close(); drv = null;
+        const url = new URL(location.href); url.searchParams.set("page", next.id); history.replaceState(history.state, "", url.toString());
+        switchTab(next.id, { push: false });
+      }, 0);
+      else if (!next && drv?.shared) { drv.close(); handlers.gone("Nothing is shared anymore. Share a tab in the browser extension, or open one with +."); }
     }
+    if (drv?.shared) renderSharedSession();
     return pages;
   }
   const list = await getJson("/json/list");
@@ -1685,7 +1693,16 @@ async function doConnect({ quiet = false } = {}) {
       return;
     }
     if (!target && sharedBrowserId) {
-      setState("bad", "This tab is no longer shared. Choose another tab or approve it again in the browser extension.");
+      const next = targets.find((t) => t.active) || targets[0];
+      if (next) {
+        pageId = next.id;
+        const u = new URL(location.href); u.searchParams.set("page", pageId); history.replaceState(history.state, "", u.toString());
+        connecting = false;
+        return doConnect({ quiet });
+      }
+      renderSharedSession();
+      setState("bad", sharedBrowser?.can_open ? "Nothing is shared yet. Open a tab with + above, or share one in the browser extension."
+        : "No shared tabs. Switch tabs on in the browser extension to share them.");
       loadTabs(); return;
     }
     if (!target) {
@@ -2760,7 +2777,8 @@ async function loadTabs() {
   } catch { /* ignore */ }
 }
 // Titles and the speaker on tabs playing sound stay current between page events.
-setInterval(() => { if (document.visibilityState === "visible" && target) loadTabs(); }, 2500);
+// A shared browser is also watched before it has a tab: its first one is shown as it appears.
+setInterval(() => { if (document.visibilityState === "visible" && (target || sharedBrowserId)) loadTabs(); }, 2500);
 
 function renderTabStrip(pages) {
   if (!E.tabsScroll) return;

@@ -136,6 +136,8 @@ jobs:
           python3 browser/build.py
       - name: Chromium extension round trip
         run: nix develop -c node browser/smoke_chromium.mjs
+      - name: Live view of a shared browser without tabs
+        run: nix develop -c node browser/smoke_handoff.mjs
       - name: Firefox companion with real trusted input
         run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
       - name: Firefox extension and native messaging round trip
