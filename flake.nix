@@ -4,6 +4,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # Builds the dependencies in their own derivation, so CI caches and hosts
+    # reuse them instead of recompiling every crate on each change.
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -11,6 +14,7 @@
       self,
       nixpkgs,
       flake-utils,
+      crane,
     }:
     let
       # Uncommitted builds report "<sha>-dirty".
@@ -20,7 +24,10 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          browser-daemon = pkgs.callPackage ./nix/package.nix { inherit rev; };
+          browser-daemon = pkgs.callPackage ./nix/package.nix {
+            inherit rev;
+            craneLib = crane.mkLib pkgs;
+          };
           browser = import ./nix/browser.nix { inherit pkgs; };
           adblock = pkgs.callPackage ./nix/adblock.nix { };
         in
@@ -71,7 +78,10 @@
     eachSystem
     // {
       overlays.default = _final: prev: {
-        browser-daemon = prev.callPackage ./nix/package.nix { inherit rev; };
+        browser-daemon = prev.callPackage ./nix/package.nix {
+          inherit rev;
+          craneLib = crane.mkLib prev;
+        };
       };
 
       # The flake's own package is the default, so the module needs no overlay

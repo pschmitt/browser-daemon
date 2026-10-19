@@ -1,50 +1,18 @@
-name: ci
-
-permissions:
-  contents: read
-
+name: release
 on:
   push:
-    branches: [main]
     tags: ['v*']
-  pull_request:
-
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
+  # Same signing model as rbw: AMO unlisted XPI and Chromium CRX3, reusing the
+  # checked-in signed packages when they match the tag's source. AMO signs a
+  # version once; reuse this job's artifacts if a later publish step fails.
   browser:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Build both browser packages
-        run: python3 browser/build.py
-      - name: Check JavaScript and permission boundaries
-        run: |
-          node --check browser/extension/background.js
-          node --check browser/extension/popup.js
-          node --check assets/extension.js
-          node --test browser/check.mjs
-          python3 browser/check_companion.py
-      - name: Verify checked-in signed packages
-        run: python3 browser/verify.py --signed-directory browser/packages
-      - name: Lint Firefox extension
-        run: npx --yes web-ext@8 lint --source-dir browser/dist/firefox --warnings-as-errors
-      - name: Preserve installable development packages
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-node-extensions
-          path: browser/dist/*.zip
-          if-no-files-found: error
-
-  # Same signing model as rbw: AMO unlisted XPI and Chromium CRX3. A tag
-  # signs only after every check on that exact source has passed. AMO signs
-  # a version once; reuse this job's artifacts if a later publish step fails.
-  browser-release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [rust, nix, browser]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -115,38 +83,3 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes
           fi
           gh release upload "$GITHUB_REF_NAME" browser/dist/signed/* --repo "$GITHUB_REPOSITORY"
-
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v30
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Format
-        run: nix develop -c cargo fmt --all --check
-      - name: Clippy
-        run: nix develop -c cargo clippy --all-targets -- -D warnings
-      - name: Test
-        run: nix develop -c cargo test
-      - name: Build integration binary and extension packages
-        run: |
-          nix develop -c cargo build
-          python3 browser/build.py
-      - name: Chromium extension round trip
-        run: nix develop -c node browser/smoke_chromium.mjs
-      - name: Live view of a shared browser without tabs
-        run: nix develop -c node browser/smoke_handoff.mjs
-      - name: Firefox companion with real trusted input
-        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
-      - name: Firefox extension and native messaging round trip
-        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py
-
-  nix:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v30
-      - name: Flake check (builds the package, checks Nix formatting)
-        run: nix flake check

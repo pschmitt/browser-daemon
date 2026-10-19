@@ -1,0 +1,81 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+env:
+  RUST_BACKTRACE: 1
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build both browser packages
+        run: python3 browser/build.py
+      - name: Check JavaScript and permission boundaries
+        run: |
+          for script in browser/extension/*.js assets/extension.js
+          do
+            node --check "$script"
+          done
+          node --test browser/check.mjs
+          python3 browser/check_companion.py
+      - name: Verify checked-in signed packages
+        run: python3 browser/verify.py --signed-directory browser/packages
+      - name: Lint Firefox extension
+        run: npx --yes web-ext@8 lint --source-dir browser/dist/firefox --warnings-as-errors
+  # Real browsers against the real daemon: the extension, its live views and the
+  # Firefox companion. Browsers come from nixpkgs (cached store), the daemon from cargo.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-browsers-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-browsers-${{ runner.os }}-
+          gc-max-store-size-linux: 4G
+      - name: Build the daemon and the extension packages
+        run: |
+          cargo build --locked
+          python3 browser/build.py
+      - name: Chromium extension round trip
+        run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_chromium.mjs
+      - name: Live views of a shared browser
+        run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_handoff.mjs
+      - name: Firefox companion with real trusted input
+        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
+      - name: Firefox extension and native messaging round trip
+        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py

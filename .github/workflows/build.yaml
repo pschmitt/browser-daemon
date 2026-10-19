@@ -1,0 +1,53 @@
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+env:
+  RUST_BACKTRACE: 1
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  # Unsigned packages for temporary loading (Firefox about:debugging, Chromium
+  # "Load unpacked" after unzipping). Releases ship the checked-in signed ones.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned browser packages
+        run: python3 browser/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-node-extensions
+          path: browser/dist/*.zip
+          if-no-files-found: error
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: browser-daemon-x86_64-linux-debug
+          path: target/debug/browser-daemon
+          if-no-files-found: error
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v23
+      # Keep the Nix store between runs; with crane, the dependencies are a
+      # separate derivation that only changes with Cargo.lock or the toolchain.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 4G
+      # Builds the package (which runs the unit tests) and checks the Nix formatting.
+      - run: nix flake check --print-build-logs
