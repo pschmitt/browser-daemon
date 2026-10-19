@@ -37,6 +37,7 @@ def main():
             "incognito": "not_allowed",
         }
         if target == "chromium":
+            manifest["storage"] = {"managed_schema": "managed-schema.json"}
             manifest["minimum_chrome_version"] = "116"
             # Chrome excludes debugger from optional permissions. Installation
             # permits the API; actual tab/control grants remain explicit.

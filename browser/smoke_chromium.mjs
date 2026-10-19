@@ -82,6 +82,7 @@ try {
   // Wait for that page and its background receiver before sending the code.
   await until(() => popup.evaluate(`location.href === ${JSON.stringify(`${origin}/popup.html`)} && document.readyState === 'complete' && typeof globalThis.chrome?.runtime?.sendMessage === 'function'`));
   await until(async () => Array.isArray((await message({type: 'state'}))?.tabs));
+  assert.ok(!(await message({type: 'setDaemonAllowlist', origins: [base]})).error);
   const pairing = await api('/api/extension/pair', 'POST', {origin});
   assert.equal(pairing.status, 200);
   assert.ok(!(await message({type: 'connect', server: base, code: pairing.value.code, name: 'Chromium integration'})).error);

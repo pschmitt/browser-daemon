@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "allowedDaemonOrigins": {
+      "title": "Allowed browser daemon origins",
+      "description": "Exact HTTPS origins this extension may pair or reconnect with; an empty list denies all daemons.",
+      "type": "array",
+      "maxItems": 128,
+      "items": {"type": "string"}
+    }
+  }
+}

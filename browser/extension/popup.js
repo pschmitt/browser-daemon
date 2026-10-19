@@ -47,6 +47,11 @@ function showError(error) { $('error').textContent = error.message; $('error').h
 async function refresh() {
   await draftReady;
   state = await message({type: 'state'});
+  $('allowlistStatus').textContent = state.allowlist.error || (state.allowlist.managed ? 'Managed by your system configuration. Only these exact origins are trusted.' : 'Only these exact origins are trusted. Add your daemon here before pairing.');
+  $('daemonAllowlist').readOnly = state.allowlist.managed;
+  $('saveDaemonAllowlist').hidden = state.allowlist.managed;
+  if (!initialized || state.allowlist.managed) $('daemonAllowlist').value = state.allowlist.origins.join('\n');
+  if (!state.allowlist.origins.length) $('allowlistPanel').open = true;
   $('remembered').hidden = !state.rememberedBrowser;
   if (state.rememberedBrowser) $('rememberedStatus').textContent = `${state.rememberedBrowser.name} is remembered. ${state.rememberedBrowser.paused ? 'Automatic reconnect is paused.' : 'Reconnects automatically after a browser restart; tab sharing requires your approval.'}`;
   $('resumeRemembered').hidden = !!state.registration;
@@ -114,7 +119,7 @@ $('connect').addEventListener('submit', async event => {
   if (connecting) return;
   connecting = true; $('error').hidden = true;
   try {
-    const server = NodePolicy.serverURL($('server').value);
+    const server = NodePolicy.approvedServer($('server').value, state?.allowlist.origins || []);
     const prepared = message({type: 'prepareConnect', server, code: $('code').value.trim(), name: $('name').value, remember: $('rememberKey').checked});
     const permission = api.permissions.request({origins: [permissionPattern(server)]});
     await prepared;
@@ -164,7 +169,7 @@ setInterval(() => void refresh().catch(showError), 1500);
 $('enableDashboard').addEventListener('click', async () => {
   $('error').hidden = true;
   try {
-    const server = NodePolicy.serverURL($('server').value);
+    const server = NodePolicy.approvedServer($('server').value, state?.allowlist.origins || []);
     const configured = message({type: 'configureDashboard', server, name: $('name').value});
     const permission = api.permissions.request({origins: [permissionPattern(server)]});
     await configured;
@@ -191,4 +196,13 @@ $('resumeRemembered').addEventListener('click', async () => {
 $('forgetRemembered').addEventListener('click', async () => {
   try { await message({type: 'forgetRemembered'}); await refresh(); }
   catch (error) { showError(error); }
+});
+
+$('saveDaemonAllowlist').addEventListener('click', async () => {
+  try {
+    const origins = $('daemonAllowlist').value.split('\n').map(v => v.trim()).filter(Boolean);
+    await message({type: 'setDaemonAllowlist', origins});
+    await refresh();
+    $('allowlistStatus').textContent = 'Allowlist saved.';
+  } catch (error) { showError(error); }
 });

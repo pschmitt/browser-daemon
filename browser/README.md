@@ -10,6 +10,22 @@ The build and release layout follows the rbw fork: shared Manifest V3 source,
 engine-specific manifests, a Python build without npm dependencies, the version
 from `browser/version.json`, and AMO/CRX signing in CI.
 
+## Allowed daemon URLs
+
+The extension refuses every daemon until its exact origin appears on an
+explicit allowlist. HTTPS is required except for explicitly listed loopback
+development origins. Wildcards, credentials, paths, queries and fragments are
+not accepted. The allowlist is checked before pairing, dashboard integration,
+registration, automatic reconnect and tab commands. Removing an active daemon
+from policy ends its connection and sharing.
+
+Administrators set `allowedDaemonOrigins` in `storage.managed`: Chromium uses
+the bundled managed-storage schema; Firefox uses a managed-storage manifest.
+Managed policy is read-only in the popup. Once managed policy has been seen,
+missing or broken policy blocks connections rather than falling back to local
+settings. Unmanaged installations can explicitly edit **Allowed daemon URLs**
+in the extension's own setup page. No origins are trusted by default.
+
 ## Pair from the dashboard
 
 Enter the daemon URL in the extension and click **Enable dashboard pairing**

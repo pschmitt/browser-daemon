@@ -1,4 +1,4 @@
-/* No content scripts, page message bridge, native host, or remote-loaded code. */
+/* Local extension code only; dashboard bridge requires explicit daemon approval. */
 if (typeof importScripts === 'function') importScripts('policy.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
@@ -51,7 +51,7 @@ async function installDashboardBridge() {
   const {server} = await api.storage.local.get('server');
   if (!server) return;
   let base;
-  try { base = NodePolicy.serverURL(server); } catch { return; }
+  try { base = await requireDaemon(server); } catch { return; }
   if (!(await api.permissions.contains({origins: [permissionPattern(base)]}))) return;
   const matches = [permissionPattern(base).replace('/*', '/'), permissionPattern(base).replace('/*', '/extension/*')];
   const registered = await api.scripting.getRegisteredContentScripts({ids: ['daemon-pairing']});
@@ -73,6 +73,7 @@ async function dashboardMessage(message, sender) {
       !server || url.origin !== NodePolicy.serverURL(server) || !['/', '/extension/'].includes(url.pathname)) {
     throw new Error('Dashboard pairing is available only on the configured daemon.');
   }
+  await requireDaemon(server);
   if (!(await api.permissions.contains({origins: [permissionPattern(server)]}))) throw new Error('Daemon site access was removed. Enable dashboard pairing again.');
   if (message.action === 'discover') return {origin: api.runtime.getURL('').replace(/\/$/, ''), connected: !!registration, browser: chromium ? 'Chromium' : 'Firefox'};
   if (message.action !== 'approve' || !/^[a-f0-9]{64}$/.test(message.code)) throw new Error('Invalid pairing request.');
@@ -83,6 +84,24 @@ async function dashboardMessage(message, sender) {
   await api.tabs.create({url: api.runtime.getURL('popup.html')});
   record('Dashboard requested pairing — waiting for your approval in the extension');
   return {pending: true};
+}
+
+async function daemonPolicy() {
+  const local = await api.storage.local.get(['daemonAllowlist', 'managedAllowlistSeen']);
+  let managed = {};
+  try { managed = await api.storage.managed.get('allowedDaemonOrigins'); } catch {
+    if (local.managedAllowlistSeen) throw new Error('Managed daemon allowlist is unavailable. Connections are blocked until policy is restored.');
+  }
+  if (Object.hasOwn(managed, 'allowedDaemonOrigins')) {
+    if (!local.managedAllowlistSeen) await api.storage.local.set({managedAllowlistSeen: true});
+    return {managed: true, origins: NodePolicy.daemonOrigins(managed.allowedDaemonOrigins)};
+  }
+  if (local.managedAllowlistSeen) throw new Error('Managed daemon allowlist was removed. Connections are blocked until policy is restored.');
+  return {managed: false, origins: NodePolicy.daemonOrigins(local.daemonAllowlist || [])};
+}
+async function requireDaemon(server) {
+  const policy = await daemonPolicy();
+  return NodePolicy.approvedServer(server, policy.origins);
 }
 
 function nativeRequest(message) {
@@ -205,6 +224,9 @@ function send(value) {
 
 async function publish() {
   const currentGeneration = generation;
+  if (!registration) return;
+  await requireDaemon(registration.server);
+  if (generation !== currentGeneration) return;
   const tabs = [];
   for (const [id, grant] of shared) {
     try {
@@ -234,6 +256,7 @@ function safeTab(tab) {
 }
 
 async function grantFor(command) {
+  if (registration) await requireDaemon(registration.server);
   const grant = shared.get(command.tab);
   if (!registration || (registration.expires_at !== 0 && Date.now() >= registration.expires_at * 1000) ||
       !grant || !NodePolicy.allowed(command, grant.control)) throw new Error('Tab grant does not permit this action.');
@@ -375,7 +398,7 @@ async function handleCommand(command, connection, currentGeneration) {
 
 async function connect({server, code = '', key = '', name, remember = false}) {
   if ((!/^[a-f0-9]{64}$/.test(code) && !/^[a-f0-9]{64}$/.test(key)) || code && key || !name?.trim() || name.length > 80) throw new Error('Enter a pairing code and browser name.');
-  server = NodePolicy.serverURL(server);
+  server = await requireDaemon(server);
   if (code) {
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
     if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
@@ -389,7 +412,10 @@ async function connect({server, code = '', key = '', name, remember = false}) {
   const connection = new WebSocket(url);
   socket = connection;
   const timeout = setTimeout(() => { if (socket === connection && !registration) void stop('Pairing timed out', true); }, 10000);
-  connection.onopen = () => {
+  connection.onopen = async () => {
+    try { await requireDaemon(server); }
+    catch { if (socket === connection) await stop('Daemon is no longer on the allowlist'); return; }
+    if (socket !== connection) return;
     status = 'Socket connected — checking pairing code';
     record(status);
     connection.send(JSON.stringify({code, key, remember, name: name.trim(), browser: chromium ? 'chromium' : 'firefox'}));
@@ -448,6 +474,7 @@ async function restoreRemembered(force = false) {
   try {
     const {rememberedNode: saved} = await api.storage.local.get('rememberedNode');
     if (!saved || saved.paused && !force) return;
+    await requireDaemon(saved.server);
     if (saved.origin !== api.runtime.getURL('').replace(/\/$/, '') ||
         !(await api.permissions.contains({origins: [permissionPattern(saved.server)]}))) {
       status = 'Remembered browser needs daemon site permission — open setup';
@@ -466,7 +493,7 @@ async function localMessage(message, sender) {
       sender.url !== api.runtime.getURL('popup.html')) throw new Error('Extension UI only.');
   await historyReady;
   if (message.type === 'configureDashboard') {
-    const server = NodePolicy.serverURL(message.server);
+    const server = await requireDaemon(message.server);
     await api.storage.local.set({server, name: message.name || ''});
     await installDashboardBridge();
     return {ok: true};
@@ -486,7 +513,7 @@ async function localMessage(message, sender) {
     return {ok: true};
   }
   if (message.type === 'prepareConnect') {
-    const server = NodePolicy.serverURL(message.server);
+    const server = await requireDaemon(message.server);
     if (!/^[a-f0-9]{64}$/.test(message.code) || !message.name?.trim() || message.name.length > 80) throw new Error('Enter a 64-character pairing code and browser name.');
     await api.storage.local.set({server, name: message.name});
     await stop('Waiting for daemon site permission');
@@ -496,11 +523,21 @@ async function localMessage(message, sender) {
     return {ok: true};
   }
   if (message.type === 'finishConnect') { await connectPrepared(); return {ok: true}; }
+  if (message.type === 'setDaemonAllowlist') {
+    const current = await daemonPolicy();
+    if (current.managed) throw new Error('The daemon allowlist is managed by your administrator.');
+    const origins = NodePolicy.daemonOrigins(message.origins);
+    await api.storage.local.set({daemonAllowlist: origins});
+    if (registration && !origins.includes(registration.server)) await stop('Daemon was removed from the allowlist');
+    return {ok: true};
+  }
   if (message.type === 'state') {
+    let allowlist;
+    try { allowlist = await daemonPolicy(); } catch (error) { allowlist = {managed: true, origins: [], error: error.message}; }
     const tabs = (await api.tabs.query({})).filter(safeTab).map(t => ({id: t.id, title: t.title || '', url: t.url, control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
     const {dashboardPairing} = await api.storage.session.get('dashboardPairing');
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
-    return {rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), chromium, nativeReady};
+    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), chromium, nativeReady};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -578,3 +615,15 @@ void historyReady.then(installDashboardBridge).catch(() => record('Dashboard int
 
 api.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'node-reconnect') void historyReady.then(() => restoreRemembered()); });
 void historyReady.then(() => restoreRemembered());
+
+api.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'managed' && !(area === 'local' && changes.daemonAllowlist)) return;
+  void (async () => {
+    const server = registration?.server || pendingConnection?.server || (socket && new URL(socket.url).origin.replace(/^ws/, 'http'));
+    if (server) {
+      try { await requireDaemon(server); }
+      catch { await stop('Daemon is no longer on the allowlist'); }
+    }
+    await installDashboardBridge();
+  })().catch(() => stop('Daemon allowlist could not be loaded'));
+});

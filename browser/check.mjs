@@ -51,8 +51,9 @@ function harness(firefox = false) {
       sendCommand: async (...args) => { calls.push(['cdp', ...args]); return {data: 'image'}; }, onDetach: event('detach')},
     alarms: {clear: async () => false, create: async () => {}, onAlarm: event('alarm')},
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setTitle: async () => {}},
-    storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({}), remove: async () => {}},
-      session: {get: async () => ({}), set: async () => {}, remove: async () => {}}},
+    storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true}), remove: async () => {}},
+      session: {get: async () => ({}), set: async () => {}, remove: async () => {}},
+      managed: {get: async () => ({allowedDaemonOrigins: ['https://daemon.example']})}, onChanged: event('storage')},
     scripting: {executeScript: async args => { calls.push(['script', args]); return [{result: 'snapshot'}]; }},
     permissions: {contains: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
   };

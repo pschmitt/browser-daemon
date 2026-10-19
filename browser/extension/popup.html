@@ -11,6 +11,10 @@
   <p>For trusted pointer and keyboard input, install the companion with <code>python3 browser/install.py</code> and restart Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette</code>. This enables a powerful local automation interface; keep it on loopback.</p>
   <button id="native" type="button">Enable installed companion</button><p id="nativeStatus" role="status"></p>
 </section>
+<section><details id="allowlistPanel"><summary>Allowed daemon URLs</summary>
+  <p id="allowlistStatus"></p><label>Exact daemon origins, one per line<textarea id="daemonAllowlist" rows="5" spellcheck="false"></textarea></label>
+  <button id="saveDaemonAllowlist" type="button">Save allowlist</button>
+</details></section>
 <section id="remembered" hidden><p id="rememberedStatus"></p>
   <button id="resumeRemembered" type="button">Reconnect remembered browser</button>
   <button id="forgetRemembered" class="danger" type="button">Forget browser</button>
