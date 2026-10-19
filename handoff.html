@@ -1701,7 +1701,7 @@ async function doConnect({ quiet = false } = {}) {
         return doConnect({ quiet });
       }
       renderSharedSession();
-      setState("bad", sharedBrowser?.can_open ? "Nothing is shared yet. Open a tab with + above, or share one in the browser extension."
+      setState("bad", sharedBrowser?.can_open ? "Nothing is shared yet. Type an address above to open a tab, or share one in the browser extension."
         : "No shared tabs. Switch tabs on in the browser extension to share them.");
       loadTabs(); return;
     }
@@ -2545,6 +2545,14 @@ E.urlBar.onsubmit = async (e) => {
 
   // Typed right after "New tab": wait for the switch, or this would go to the old tab.
   await busy;
+  // A shared browser: a new tab (after +, or with no live tab yet) is opened by
+  // the browser itself, then shown here.
+  const liveShared = sharedBrowser?.tabs.some((t) => String(t.id) === String(pageId));
+  if (sharedBrowserId && (sharedNewTab || !drv || !liveShared)) {
+    sharedNewTab = false;
+    await openSharedTabAt(dest);
+    return;
+  }
   if (drv) {
     try {
       await drv.navigate(dest);
@@ -2648,12 +2656,18 @@ async function openNewTab() {
   }
 }
 
-// A shared browser opens the tab itself (next to this one, shared with control):
-// it needs an address, since a blank tab is never shared.
-async function openSharedTab() {
-  let url = (prompt("Open a new tab at:", "https://") || "").trim();
-  if (!url || url === "https://") return;
-  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+// A shared browser opens the tab itself (next to this one, shared with control).
+// A blank tab is never shared, so + asks for the address in the address bar.
+let sharedNewTab = false;
+function openSharedTab() {
+  sharedNewTab = true;
+  E.urlInput.readOnly = false;
+  $("urlGo").disabled = false;
+  E.urlInput.value = "";
+  E.urlInput.placeholder = "Address for the new tab…";
+  E.urlInput.focus();
+}
+async function openSharedTabAt(url) {
   try {
     const res = await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {
       method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
@@ -4519,7 +4533,11 @@ function renderSharedSession() {
     : (paused ? btn("resume-record", "play", "", "Resume recording") : btn("pause-record", "pause", "", "Pause recording")) + btn("stop-record", "stop", "rec", "Stop recording"));
   if ($('smRec')._html !== recHtml) { $('smRec').innerHTML = recHtml; $('smRec')._html = recHtml; }
   for (const id of ['back', 'fwd', 'reload', 'smFwd', 'smReload', 'kbbtn', 'smKeyboard', 'urlGo', 'smCapture']) { const el = $(id); if (el) el.disabled = !control; }
-  E.urlInput.readOnly = !control;
+  // No live tab yet: the address bar opens the first one, where that is allowed.
+  const typing = control || ((!tab || sharedNewTab) && sharedBrowser.can_open);
+  E.urlInput.readOnly = !typing;
+  $('urlGo').disabled = !typing;
+  if (!tab && sharedBrowser.can_open && document.activeElement !== E.urlInput) E.urlInput.placeholder = "Type an address to open a tab…";
   E.view.setAttribute('aria-label', control ? 'Remote shared tab; click and type to control' : 'Shared tab; view only');
   if (!stopArmed) $('smStopText').textContent = sharedBrowser.remembered ? 'Forget browser and revoke key' : 'Disconnect browser';
   $('smStop').title = sharedBrowser.remembered ? 'Revoke its remembered key and stop sharing. Your browser and tabs stay open.' : 'Stop sharing. Your browser and tabs stay open.';
@@ -4641,7 +4659,7 @@ async function boot() {
       }
       if (!pageId) {
         renderSharedSession();
-        setState('bad', sharedBrowser?.can_open ? 'Nothing is shared yet. Open a tab with + above, or share one in the browser extension.'
+        setState('bad', sharedBrowser?.can_open ? 'Nothing is shared yet. Type an address above to open a tab, or share one in the browser extension.'
           : 'No shared tabs. Switch tabs on in the browser extension to share them.');
         return;
       }

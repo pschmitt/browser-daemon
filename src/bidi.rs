@@ -161,7 +161,7 @@ impl BidiHub {
 
     pub async fn connect(port: u16) -> Result<Arc<Self>, BoxError> {
         let url = format!("ws://127.0.0.1:{}/session", port);
-        let (ws, _) = tokio_tungstenite::connect_async(&url).await?;
+        let (ws, _) = tokio_tungstenite::connect_async_with_config(&url, None, true).await?;
         let (mut write, mut read) = ws.split();
 
         let new_cmd = json!({

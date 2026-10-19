@@ -1030,6 +1030,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tokio::spawn(shutdown_on_signal(state));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
+    // Live views send many small messages (input, acknowledgements): with Nagle's
+    // algorithm each waits for the previous one's ACK, ~40 ms per round.
+    use axum::serve::ListenerExt;
+    let listener = listener.tap_io(|tcp| {
+        let _ = tcp.set_nodelay(true);
+    });
     axum::serve(listener, app).await?;
 
     Ok(())

@@ -11,6 +11,16 @@ const attaching = new Map();
 // Live views (daemon relay channels) per tab, and Firefox's emulated screencasts.
 const channels = new Map();
 const casts = new Map();
+// Chromium screencasts, per tab: frames are acknowledged here at once, so the
+// browser never waits for a viewer's round trip; viewers get at most
+// CAST_WINDOW in flight (enough for ~50 fps at 80 ms) and, while they are
+// behind, only the newest frame.
+const CAST_WINDOW = 4;
+const screencasts = new Map();
+function castState(tab) {
+  if (!screencasts.has(tab)) screencasts.set(tab, {inflight: 0, pending: null});
+  return screencasts.get(tab);
+}
 // By default every tab is shared (all: true), with the remote control choice.
 // Without that, chosen tabs are, and new ones join if autoShare.
 let sharing = {all: true, autoShare: true, control: false};
@@ -475,6 +485,15 @@ async function relayCdp(message, connection, currentGeneration) {
     if (typeof channel !== 'string' || !registration || !grant || grant.paused ||
         !NodePolicy.relayAllowed(method, params, grant.control)) throw new Error('Not permitted for this shared tab.');
     channels.set(channel, tab);
+    if (chromium && method === 'Page.screencastFrameAck') {
+      // The browser had its acknowledgement already: this one frees a slot.
+      const cast = castState(tab);
+      cast.inflight = Math.max(0, cast.inflight - 1);
+      if (cast.pending) { const frame = cast.pending; cast.pending = null; cast.inflight++; sendEvent(tab, 'Page.screencastFrame', frame); }
+      reply({result: {}});
+      return;
+    }
+    if (chromium && (method === 'Page.startScreencast' || method === 'Page.stopScreencast')) screencasts.delete(tab);
     const result = chromium ? await cdp(tab, method, params) : await shim(tab, channel, method, params);
     // Never return data after local unsharing, pausing or replacement of a grant.
     if (shared.get(tab) !== grant || grant.paused) throw new Error('Sharing ended.');
@@ -488,6 +507,7 @@ function closeChannel(channel) {
   const tab = channels.get(channel);
   channels.delete(channel);
   stopCast(channel);
+  screencasts.delete(tab);
   // Stop encoding frames nobody watches.
   if (chromium && attached.has(tab) && ![...channels.values()].includes(tab)) {
     api.debugger.sendCommand({tabId: tab}, 'Page.stopScreencast', {}).catch(() => {});
@@ -901,6 +921,12 @@ if (chromium) api.debugger.onEvent.addListener((source, method, params) => {
     grant.paused = !safeURL(params.frame.url);
     if (!grant.paused) grant.origin = new URL(params.frame.url).origin;
     publishSoon();
+  }
+  if (method === 'Page.screencastFrame') {
+    api.debugger.sendCommand({tabId: source.tabId}, 'Page.screencastFrameAck', {sessionId: params.sessionId}).catch(() => {});
+    const cast = castState(source.tabId);
+    if (cast.inflight >= CAST_WINDOW) { cast.pending = params; return; }
+    cast.inflight++;
   }
   sendEvent(source.tabId, method, params);
 });

@@ -107,7 +107,16 @@ try {
   const hidden = Date.now() - started;
   assert.ok(shown < 1500 && hidden < 1500, `tab strip took ${shown} / ${hidden} ms`);
   await fetch(`http://127.0.0.1:${chromePort}/json/close/${second.id}`, {method: 'PUT'});
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms passed`);
+  // Nothing shared, but tabs may be opened: the address bar opens the first one.
+  await message({type: 'share', tabs: [], urls: {}, control: false});
+  await message({type: 'setControl', control: true});
+  await until(async () => (await view.evaluate(`!document.getElementById('urlInput').readOnly && document.getElementById('overlay').classList.contains('show')`)));
+  await view.evaluate(`(() => { const i = document.getElementById('urlInput'); i.value = ${JSON.stringify(`${pageURL}typed`)}; document.getElementById('urlBar').requestSubmit(); })()`);
+  await until(async () => (await view.evaluate(`!document.getElementById('overlay').classList.contains('show') && new URLSearchParams(location.search).get('page')`)));
+  const typed = (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}typed`);
+  assert.ok(typed?.shared && typed.control, 'typed address opened a shared, controllable tab');
+  assert.equal(await view.evaluate(`new URLSearchParams(location.search).get('page')`), String(typed.id));
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

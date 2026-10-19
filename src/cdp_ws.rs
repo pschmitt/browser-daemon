@@ -156,7 +156,7 @@ pub(crate) async fn handle_chromium_ws(
             recs.get(&session.id).map(|h| h.frame_tx.clone())
         };
 
-        match tokio_tungstenite::connect_async(&backend_ws_url).await {
+        match tokio_tungstenite::connect_async_with_config(&backend_ws_url, None, true).await {
             Ok((server_ws, _)) => {
                 let activity = Some((session.activity.clone(), false));
                 let sd = state
@@ -295,7 +295,7 @@ pub(crate) async fn handle_page_ws(
     }
     let backend_url = format!("ws://127.0.0.1:{}/devtools/page/{}", port, page_id);
     ws.on_upgrade(move |socket| async move {
-        match tokio_tungstenite::connect_async(&backend_url).await {
+        match tokio_tungstenite::connect_async_with_config(&backend_url, None, true).await {
             Ok((server_ws, _)) => {
                 let activity = Some((activity, observer));
                 bridge_websockets(
