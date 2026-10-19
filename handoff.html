@@ -878,9 +878,10 @@ class CdpDriver {
   }
   async start() {
     await this.cdp.call("Page.enable");
-    if (this.shared) { this.watchFrames(); return; }
     // Chromium only paints (and screencasts) the tab in front of its window.
+    // A shared browser brings it forward only if its user lets views follow.
     await this.cdp.call("Page.bringToFront").catch(() => {});
+    if (this.shared) { this.watchFrames(); return; }
     // Toolbar height, measured before any emulation: where the page starts on the
     // display (for the H.264 stream's capture region).
     this.chromeH = await this.evaluate("outerWidth === innerWidth ? outerHeight - innerHeight : null").catch(() => null);

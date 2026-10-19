@@ -569,6 +569,7 @@ dialog.modal::backdrop { background: transparent; }
 .seg button.on { border-color: var(--accent); color: var(--fg); background: var(--accent-soft); }
 .seg button .dot { color: var(--node, var(--muted)); }
 .seg button.off { opacity: .5; }
+#newSessionForm:not(.to-browser) .browser-only, #newSessionForm.to-browser .managed-only { display: none !important; }
 .seg.small button { height: 30px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
 .switch { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 2px 0; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
@@ -958,23 +959,25 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-body">
       <div class="field"><span class="field-label">Start page</span><input class="input" id="sessionUrl" type="text" inputmode="url" placeholder="Optional: an address, or words to search for" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
       <div class="field"><span class="field-label">Node</span><div class="seg" id="sessionNodes"></div></div>
-      <div class="field"><span class="field-label">Engine</span>
+      <span class="hint browser-only" id="sessionBrowserHint"></span>
+      <div class="field managed-only"><span class="field-label">Engine</span>
         <div class="seg" id="sessionEngines">
           <button type="button" data-engine="chromium" class="on"><svg class="i" style="color:var(--chromium)"><use href="#i-chromium"/></svg>Chromium</button>
           <button type="button" data-engine="firefox"><svg class="i" style="color:var(--firefox)"><use href="#i-firefox"/></svg>Firefox</button>
         </div>
         <span class="hint" id="engineHint"></span>
       </div>
-      <div class="field">
+      <div class="field managed-only">
         <span class="field-label" id="sessionProfileLabel">Profile</span>
         <div class="pgrid" id="sessionProfileGrid" role="radiogroup" aria-labelledby="sessionProfileLabel"></div>
         <select class="input" id="sessionProfiles" aria-labelledby="sessionProfileLabel" hidden></select>
         <input class="input" id="sessionProfileName" placeholder="Profile name, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
         <span class="hint" id="sessionProfileHint"></span>
       </div>
-      <label class="switch" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
+      <label class="switch managed-only" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
       <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Take over right away</b><span>Open the live view as soon as it is up</span></span></label>
-      <details class="adv">
+      <label class="switch managed-only"><input type="checkbox" id="sessionPublic"><span class="track"></span><span class="txt"><b>Public link</b><span>Anyone with the link can watch, without signing in (1 hour; change it in the next step)</span></span></label>
+      <details class="adv managed-only">
         <summary><svg class="i sm"><use href="#i-more"/></svg>Advanced<span class="adv-sum" id="advSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
         <div class="adv-body">
           <div class="adv-group">Session</div>
@@ -2388,6 +2391,7 @@ function renderViewActions(recordings = listedRecordings()) {
   const allSelected = keys.length > 0 && visibleSelected.length === keys.length;
   const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
   const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected${hidden > 0 ? ` (${hidden} more hidden by the search)` : ''}</span>` : ''}
+    ${selected.length ? '' : `<button class="btn sm" data-act="vacuum" title="Apply the retention policy now: removes old recordings that are not kept">${icon('broom', 'sm')}<span class="lbl">Clean up</span></button>`}
     <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
     ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button>${selected.length > 1 ? `<button class="btn sm" data-act="merge-selected-recordings" title="Merge the selected recordings into one, in an order you pick">${icon('layers', 'sm')}<span class="lbl">Merge ${selected.length}</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
   if (actions.innerHTML !== html) actions.innerHTML = html;
@@ -2474,10 +2478,8 @@ const ACT = {
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
   'app-menu': (el) => openMenu(el, [
     { icon: 'plug', label: 'Connect & API', run: openConnect },
-    { icon: 'handoff', label: 'Live view', run: () => { location.href = '/handoff/'; } },
     { icon: 'globe', label: 'Public links…', meta: `${publicItems().length || ''}`, run: openPublicLinks },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
-    { icon: 'broom', label: 'Clean up recordings…', run: () => vacuum() },
     { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], run: () => openMenu(el, [
       { label: 'Theme' },
       ...Object.entries(THEMES).map(([id, name]) => ({ label: name, on: id === theme(), run: () => setTheme(id) })),
@@ -2651,13 +2653,17 @@ function fallbackCopy(text, done) {
 /* ---------------------------------------------------------------- sessions */
 let sessionNode = null, sessionEngine = 'chromium';
 
-function nodePills(container, selected, onPick, { onlineOnly = false, exclude = null } = {}) {
+function nodePills(container, selected, onPick, { onlineOnly = false, exclude = null, browsers = false } = {}) {
   const list = nodes.filter((n) => n.name !== exclude);
   container.innerHTML = list.map((n) => {
     const off = n.status !== 'online';
     return `<button type="button" data-node="${esc(n.name)}" aria-pressed="${n.name === selected}" class="${n.name === selected ? 'on' : ''} ${off ? 'off' : ''}" style="--node:${nodeColor(n.name)}" ${off && onlineOnly ? 'disabled' : ''}>
       <span class="dot"></span>${esc(n.name)}${n.isLocal ? ' <span class="muted" style="font-weight:500">· local</span>' : ''}</button>`;
-  }).join('');
+  }).join('') + (browsers ? extensionBrowserNodes.filter((n) => n.online !== false).map((n) => {
+    const key = extensionNodeKey(n);
+    return `<button type="button" data-node="${esc(key)}" aria-pressed="${key === selected}" class="${key === selected ? 'on' : ''}" style="--node:${nodeColor(key)}" title="Your browser, through the extension: opens a tab there">
+      ${icon(n.browser === 'firefox' ? 'firefox' : 'chromium', 'sm')}${esc(n.name)}</button>`;
+  }).join('') : '');
   container.onclick = (e) => {
     const b = e.target.closest('button[data-node]');
     if (!b || b.disabled) return;
@@ -2666,8 +2672,27 @@ function nodePills(container, selected, onPick, { onlineOnly = false, exclude = 
   };
 }
 
+// A connected browser (extension) has no sessions to start: the dialog only opens a tab in it.
+function syncBrowserTarget() {
+  const browser = extensionNodeOf(sessionNode);
+  $('newSessionForm').classList.toggle('to-browser', !!browser);
+  if (!browser) return false;
+  const opener = browserOpener(browser);
+  $('sessionBrowserHint').textContent = opener == null
+    ? `Opening tabs needs Remote control, and Share all tabs or Share new tabs, in ${browser.name}'s extension.`
+    : `Opens a tab in ${browser.name} (${browser.browser === 'firefox' ? 'Firefox' : 'Chromium'}), shared with control like the tab you take over.`;
+  $('sessionBrowserHint').style.color = opener == null ? 'var(--bad)' : '';
+  $('sessionUrl').required = true;
+  $('sessionSubmit').disabled = opener == null;
+  $('sessionSubmitText').textContent = 'Open tab';
+  return true;
+}
+// The tab to open from: 0 (the browser's own new tab) when new tabs are shared, else next to a controlled tab.
+const browserOpener = (b) => (b.can_open ? 0 : b.tabs.find((t) => t.control)?.id ?? null);
 function setEngine(engine) {
   sessionEngine = engine;
+  $('sessionUrl').required = false;
+  if (syncBrowserTarget()) return;
   document.querySelectorAll('#sessionEngines button').forEach((b) => b.classList.toggle('on', b.dataset.engine === engine));
   const node = nodes.find((n) => n.name === sessionNode);
   const supported = !node?.supported_engines?.length || node.supported_engines.includes(engine);
@@ -2689,8 +2714,8 @@ $('sessionAdblock').addEventListener('change', () => { adblockTouched = true; })
 const engineDefaults = (node, engine) => nodes.find((n) => n.name === node)?.settings?.engines?.[engine] || {};
 
 function openNewSession(prefill = {}) {
-  sessionNode = prefill.node || (filter !== 'all' && !extensionNodeOf(filter) ? filter : localName());
-  nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true });
+  sessionNode = prefill.node || (filter !== 'all' && extensionNodeOf(filter)?.online !== false ? filter : localName());
+  nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true, browsers: true });
   sessionProfile = prefill.profile ? { node: sessionNode, name: prefill.profile } : null;
   sessionProxy = null;
   sessionScheme = null;
@@ -2700,6 +2725,7 @@ function openNewSession(prefill = {}) {
   $('sessionProfileName').value = '';
   $('sessionName').value = '';
   $('sessionUrl').value = prefill.url || '';
+  $('sessionPublic').checked = false;
   setEngine(prefill.engine || 'chromium');
   openModal('newSessionModal');
   setTimeout(() => $('sessionProfileGrid').querySelector('.pcard[aria-checked="true"]')?.focus(), 40);
@@ -2759,6 +2785,7 @@ function renderProfilePicker() {
   $('sessionProfileHint').style.color = remote && (picked.session || clash?.session) ? 'var(--bad)' : '';
   $('sessionSubmit').disabled = !!(remote && (picked.session || clash?.session)) || $('sessionSubmit').dataset.unsupported === '1';
   $('sessionSubmitText').textContent = remote ? 'Copy & launch' : 'Launch';
+  syncBrowserTarget();
 }
 // The profiles as cards (the hidden select above holds the choice and the events).
 function renderProfileGrid(here, elsewhere) {
@@ -2890,6 +2917,8 @@ $('sizePresets').addEventListener('click', (e) => {
 
 $('newSessionForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const browser = extensionNodeOf(sessionNode);
+  if (browser) { openBrowserTab(browser); return; }
   if (sessionProfile?.new && !$('sessionProfileName').value.trim()) { $('sessionProfileName').focus(); return; }
   const btn = $('sessionSubmit');
   btn.disabled = true;
@@ -2944,9 +2973,23 @@ $('newSessionForm').addEventListener('submit', async (e) => {
       tab = await request('PUT', jsonNewUrl(node, `url=${enc(start)}&session_id=${enc(s.id)}`))
         .catch((err) => { showToast('Could not open the start page', 'danger', 6000, null, err.message); return null; });
     }
+    let shared = null;
+    if ($('sessionPublic').checked) {
+      t.update(null, 'Creating the public link…');
+      shared = await request('POST', api(node, '/shares'), { kind: 'session', id: s.id, expires_in_secs: 3600, control: false })
+        .catch((err) => { showToast('Could not create the public link', 'danger', 6000, null, err.message); return null; });
+    }
     closeModal('newSessionModal');
     const url = handoffUrl(node, tab?.id ? { page: tab.id } : { session: s.id });
     t.done('Session started', `${payload.profile || 'Throwaway'} on ${node}`, { text: 'Take over', url });
+    if (shared) {
+      // The link first (copy, QR, expiry, control); taking over stays one click away.
+      copyText(shared.url);
+      await refreshData(true);
+      const item = byKey.sessions.get(`${node}|${s.id}`);
+      if (item) { item.share ||= shared; openShare('session', item); }
+      return;
+    }
     refreshData();
     if ($('sessionHandoff').checked) setTimeout(() => { location.href = url; }, 300);
   } catch (err) {
@@ -2955,6 +2998,26 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     btn.disabled = false;
   }
 });
+
+async function openBrowserTab(browser) {
+  const target = toTarget($('sessionUrl').value);
+  if (!target) { $('sessionUrl').focus(); return; }
+  const btn = $('sessionSubmit');
+  btn.disabled = true;
+  try {
+    const res = await request('POST', extensionApi(browser, '/command'), { tab: browserOpener(browser) ?? 0, action: 'open', params: { url: target } });
+    const id = res?.result?.tab;
+    if (!id) throw new Error(res?.error || 'The browser did not open the tab');
+    closeModal('newSessionModal');
+    const url = handoffUrl(extensionNodeKey(browser), { page: id });
+    showToast('Tab opened', 'success', 5000, null, `In ${browser.name}`);
+    if ($('sessionHandoff').checked) setTimeout(() => { location.href = url; }, 300);
+  } catch (err) {
+    showToast('Could not open the tab', 'danger', 6000, null, err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
 
 // Every session in view (all nodes, or the one the Nodes tab filters on).
 async function stopAllSessions() {
@@ -3995,7 +4058,7 @@ function extensionNodeCard(n) {
         <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
         <div class="bars"><span><b>${online ? 1 : 0}</b> session${online ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Key expiry disabled' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span>${!online && n.forget_at ? (() => {
           const days = Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400));
-          return `<span class="chip warn" title="Offline browsers are forgotten (key revoked) after a while; reconnecting resets it. Forgotten ${esc(absTime(n.forget_at))}.">${icon('clock', 'sm')}${days ? `Forgotten in ${days} day${days === 1 ? '' : 's'}` : 'Forgotten today'}</span>`;
+          return `<span class="chip warn" title="Offline browsers are forgotten (key revoked) after a while; reconnecting resets it. Expires ${esc(absTime(n.forget_at))}.">${icon('clock', 'sm')}${days ? `Expires in ${days}d` : 'Expires today'}</span>`;
         })() : ''}</div>
       </div>
       <div style="display:flex;gap:6px;flex:none">

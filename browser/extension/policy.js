@@ -13,7 +13,7 @@ globalThis.NodePolicy = (() => {
   // The live view's protocol: frames and page state for every viewer, and the
   // page's own input, navigation and dialogs only under a control grant.
   const viewing = new Set([
-    'Page.enable', 'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck',
+    'Page.enable', 'Page.bringToFront', 'Page.startScreencast', 'Page.stopScreencast', 'Page.screencastFrameAck',
     'Page.captureScreenshot', 'Page.getLayoutMetrics', 'Page.getNavigationHistory', 'Page.getFrameTree',
     'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
   ]);

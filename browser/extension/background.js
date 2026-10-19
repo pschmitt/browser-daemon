@@ -23,9 +23,10 @@ function castState(tab) {
 }
 // By default every tab is shared (all: true), with the remote control choice.
 // Without that, chosen tabs are, and new ones join if autoShare.
-let sharing = {all: true, autoShare: true, control: false};
-const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl']).then(saved => {
-  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true};
+// follow: the tab a live view switches to comes to the front here as well.
+let sharing = {all: true, autoShare: true, control: false, follow: true};
+const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView']).then(saved => {
+  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView !== false};
 });
 // Controllers may open tabs where those are shared with control.
 const canOpen = () => sharing.control && (sharing.all || sharing.autoShare);
@@ -493,6 +494,12 @@ async function relayCdp(message, connection, currentGeneration) {
       reply({result: {}});
       return;
     }
+    if (method === 'Page.bringToFront') {
+      // Only the tab in front of its window is painted, so following also keeps frames coming.
+      if (sharing.follow) await api.tabs.update(tab, {active: true});
+      reply({result: {}});
+      return;
+    }
     if (chromium && (method === 'Page.startScreencast' || method === 'Page.stopScreencast')) screencasts.delete(tab);
     const result = chromium ? await cdp(tab, method, params) : await shim(tab, channel, method, params);
     // Never return data after local unsharing, pausing or replacement of a grant.
@@ -864,6 +871,11 @@ async function localMessage(message, sender) {
     sharing.autoShare = message.enabled === true;
     await api.storage.local.set({autoShare: sharing.autoShare});
     publishSoon();
+    return {ok: true};
+  }
+  if (message.type === 'follow') {
+    sharing.follow = message.enabled === true;
+    await api.storage.local.set({followView: sharing.follow});
     return {ok: true};
   }
   if (message.type === 'shareAll') {

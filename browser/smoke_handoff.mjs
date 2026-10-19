@@ -132,7 +132,22 @@ try {
   await view.evaluate(`(() => { const s = document.getElementById('smQuality'); s.value = '30'; s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); })()`);
   await until(async () => (await view.evaluate(`drv.castParams.quality`)) === 30);
   assert.equal(await view.evaluate(`localStorage.getItem('bd-jpeg-quality')`), '30');
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames passed`);
+  // The browser follows the view: switching to a tab brings it to the front there.
+  await view.evaluate(`switchTab(${JSON.stringify(String(typed.id))})`);
+  await until(() => popup.evaluate(`chrome.tabs.get(${typed.id}).then(t => t.active)`));
+  // The dashboard's New browser session dialog opens a tab in a connected browser.
+  const dash = await open('about:blank');
+  await dash.call('Network.enable');
+  await dash.call('Network.setExtraHTTPHeaders', {headers: {'X-Browser-Cluster-Secret': secret}});
+  await dash.call('Page.navigate', {url: `${base}/`});
+  await until(() => dash.evaluate(`typeof extensionBrowserNodes !== 'undefined' && extensionBrowserNodes.length > 0 && !!ov`));
+  await dash.evaluate(`openNewSession()`);
+  await dash.evaluate(`document.querySelector('#sessionNodes button[data-node^="browser:"]').click()`);
+  assert.equal(await dash.evaluate(`[document.getElementById('newSessionForm').classList.contains('to-browser'), document.getElementById('sessionSubmitText').textContent, document.getElementById('sessionSubmit').disabled].join()`), 'true,Open tab,false');
+  await dash.evaluate(`(() => { document.getElementById('sessionUrl').value = ${JSON.stringify(`${pageURL}dash`)}; document.getElementById('sessionHandoff').checked = false; document.getElementById('newSessionForm').requestSubmit(); })()`);
+  const fromDash = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}dash`));
+  assert.ok(fromDash.shared && fromDash.control, 'the dashboard opened a shared, controllable tab');
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; the browser follows the view; the dashboard opens tabs in it passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

@@ -464,6 +464,7 @@ pub fn relay_allowed(method: &str, params: &Value, control: bool) -> bool {
     if matches!(
         method,
         "Page.enable"
+            | "Page.bringToFront"
             | "Page.startScreencast"
             | "Page.stopScreencast"
             | "Page.screencastFrameAck"

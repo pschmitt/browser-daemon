@@ -142,6 +142,7 @@ async function refresh() {
     if (document.activeElement !== $('control')) $('control').checked = state.sharing.control;
     if (document.activeElement !== $('autoShare')) $('autoShare').checked = state.sharing.autoShare;
     if (document.activeElement !== $('shareAll')) $('shareAll').checked = state.sharing.all;
+    if (document.activeElement !== $('follow')) $('follow').checked = state.sharing.follow;
     $('autoShareRow').hidden = state.sharing.all;
     $('serverHost').textContent = new URL(reg.server).host;
     $('serverHost').title = reg.server;
@@ -214,6 +215,11 @@ $('autoShare').addEventListener('click', () => {
   void (enabled ? capturePermission() : Promise.resolve())
     .then(() => message({type: 'autoShare', enabled}))
     .then(refresh, error => { $('autoShare').checked = !enabled; showError(error); });
+});
+
+$('follow').addEventListener('click', () => {
+  const enabled = $('follow').checked;
+  void message({type: 'follow', enabled}).then(refresh, error => { $('follow').checked = !enabled; showError(error); });
 });
 
 $('connect').addEventListener('submit', async event => {

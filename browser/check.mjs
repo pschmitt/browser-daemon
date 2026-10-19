@@ -196,6 +196,21 @@ test('a stale popup cannot share a replacement URL under its previous label', as
   assert.ok(response.error);
   assert.equal((await h.message({type: 'state'})).tabs[0].shared, false);
 });
+test('a live view brings its tab to the front unless following is off', async () => {
+  const h = harness(); const s = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: false});
+  assert.equal((await h.message({type: 'state'})).sharing.follow, true);
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Page.bringToFront', params: {}});
+  await h.flush();
+  assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 1).result);
+  assert.ok(h.calls.some(c => c[0] === 'update' && c[1] === 1 && c[2].active === true));
+  await h.message({type: 'follow', enabled: false});
+  const before = h.calls.filter(c => c[0] === 'update').length;
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 2, method: 'Page.bringToFront', params: {}});
+  await h.flush();
+  assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 2).result);
+  assert.equal(h.calls.filter(c => c[0] === 'update').length, before);
+});
 test('Firefox emulates the live view: pushed frames, flow control and input', async () => {
   const h = harness(true); const s = await h.pair();
   await h.message({type: 'share', tabs: [1], control: true});
