@@ -106,6 +106,11 @@
     border: 1px solid color-mix(in oklab, var(--bad) 45%, transparent); background: color-mix(in oklab, var(--bad) 14%, transparent);
     color: var(--bad); font: 700 11.5px system-ui, sans-serif; letter-spacing: .04em; cursor: pointer; font-variant-numeric: tabular-nums; }
   .rec-pill[hidden] { display: none; }
+  /* Recording: a dot on the session menu button. */
+  #sessBtn { position: relative; }
+  #sessBtn.rec::after { content: ""; position: absolute; top: 7px; right: 7px; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--bad); box-shadow: 0 0 0 2px var(--bar); animation: pulse 1.4s infinite; }
+  #sessBtn.rec.paused::after { background: var(--muted); animation: none; }
   /* Shared publicly: anyone with the link watches. */
   .pub-pill { border-color: color-mix(in oklab, var(--pub) 45%, transparent); background: color-mix(in oklab, var(--pub) 14%, transparent); color: var(--pub); }
   .pub-pill svg, .note-pill svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
@@ -278,7 +283,7 @@
     #fwd, #reload { display: none; }
     .sm-narrow { display: flex; }
     .rec-pill { padding: 0; width: 28px; justify-content: center; margin: 0 2px; }
-    #recPillText { display: none; }
+    .rec-pill > span:not(.rec-dot) { display: none; }
   }
   #sessMenu hr, #profMenu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
   .sm-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 2px; font-weight: 700; font-size: 14px; }
@@ -442,12 +447,11 @@
     <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
     <div id="urlSuggest" role="listbox" hidden></div>
   </form>
-  <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
   <button class="rec-pill note-pill" id="notePill" hidden title="Notes on this session"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></svg><span id="notePillText"></span></button>
   <button class="rec-pill pub-pill" id="pubPill" hidden title="Shared publicly: manage the link"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>PUBLIC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
   <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="menu" aria-expanded="false"><img class="rbw-ic" alt="" src="data:image/png;base64,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"><span class="vault-count" id="vaultCount" hidden></span></button>
-  <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu" hidden><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
+  <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
 </div>
 <div id="sessPop" role="menu" hidden></div>
 <div id="vaultPop" role="menu" hidden></div>
@@ -646,7 +650,7 @@ const E = {
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
   audioBtn: $("audioBtn"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), kbbtn: $("kbbtn"),
-  sessBtn: $("sessBtn"), sessMenu: $("sessMenu"), recPill: $("recPill")
+  sessBtn: $("sessBtn"), sessMenu: $("sessMenu")
 };
 const ctx = E.view.getContext("2d", { alpha: false, desynchronized: true }) || E.view.getContext("2d");
 
@@ -4231,9 +4235,10 @@ function renderSession() {
   if (!sess) return;
   E.sessBtn.hidden = false;
   const rec = sess.is_recording, paused = rec && sess.recording_paused;
-  E.recPill.hidden = !rec;
-  E.recPill.classList.toggle("paused", paused);
-  $("recPillText").textContent = paused ? "PAUSED" : "REC";
+  // Recording shows on the menu button (its controls are in the menu).
+  E.sessBtn.classList.toggle("rec", !!rec);
+  E.sessBtn.classList.toggle("paused", !!paused);
+  E.sessBtn.title = rec ? (paused ? "Session: recording paused" : "Session: recording") : "Session: recording, stop";
   $("smEngine").textContent = sess.engine || "chromium";
   $("smDevtools").hidden = (sess.engine || "chromium") !== "chromium";
   $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
@@ -4332,9 +4337,8 @@ function disarmStop() {
 }
 
 E.sessBtn.onclick = (e) => { e.stopPropagation(); toggleSessMenu(); };
-E.recPill.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
 document.addEventListener("pointerdown", (e) => {
-  if (!E.sessMenu.hidden && !e.target.closest("#sessMenu, #sessBtn, #recPill")) toggleSessMenu(false);
+  if (!E.sessMenu.hidden && !e.target.closest("#sessMenu, #sessBtn")) toggleSessMenu(false);
 });
 $("smFwd").onclick = () => { toggleSessMenu(false); E.fwd.click(); };
 $("smReload").onclick = () => { toggleSessMenu(false); E.reload.click(); };
