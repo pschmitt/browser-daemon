@@ -3445,8 +3445,9 @@ function renderShareDialog() {
   const exp = $("shExp");
   if (document.activeElement !== exp && !shBusy) {
     exp.querySelector('[value="keep"]')?.remove();
-    if (sh) exp.insertAdjacentHTML("afterbegin", `<option value="keep">${sh.expires_at ? `Expires ${esc(fmtWhen(sh.expires_at))}` : "Never expires"}</option>`);
-    exp.value = sh ? "keep" : "0";
+    // A link that never expires shows "Never"; one with an expiry keeps it unless another is picked.
+    if (sh?.expires_at) exp.insertAdjacentHTML("afterbegin", `<option value="keep">Until ${esc(fmtWhen(sh.expires_at))} (unchanged)</option>`);
+    exp.value = !sh ? "3600" : sh.expires_at ? "keep" : "0";
   }
   $("shMeta").hidden = !sh;
   if (sh) {

@@ -151,9 +151,9 @@ pub enum SessionCmd {
     /// (view only, no sign-in) until it stops or is unshared.
     Share {
         session: String,
-        /// The link stops working after this long (`30m`, `12h`, `7d`); never by default.
-        #[arg(long, value_parser = parse_expiry)]
-        expires: Option<u64>,
+        /// The link stops working after this long (`30m`, `12h`, `7d`, or `never`).
+        #[arg(long, value_parser = parse_expiry, default_value = "1h")]
+        expires: u64,
         /// Whoever has the link may also control the session (click, scroll, type),
         /// not only watch it (Chromium only).
         #[arg(long, conflicts_with = "view_only")]
@@ -550,9 +550,9 @@ pub enum RecordingCmd {
     /// signing in. A shared recording is also kept.
     Share {
         recording: String,
-        /// The link stops working after this long (`30m`, `12h`, `7d`); never by default.
-        #[arg(long, value_parser = parse_expiry)]
-        expires: Option<u64>,
+        /// The link stops working after this long (`30m`, `12h`, `7d`, or `never`).
+        #[arg(long, value_parser = parse_expiry, default_value = "1h")]
+        expires: u64,
     },
     /// Stop sharing a recording: its public link stops working at once.
     Unshare { recording: String },
@@ -2188,9 +2188,12 @@ async fn export_to(c: &Client, path: &str, file: &std::path::Path, force: bool) 
     Ok(())
 }
 
-/// `30m`, `12h`, `7d`, `2w` (or plain seconds) as seconds.
+/// `30m`, `12h`, `7d`, `2w` (or plain seconds) as seconds; `never` is 0.
 fn parse_expiry(s: &str) -> Result<u64, String> {
     let s = s.trim();
+    if s.eq_ignore_ascii_case("never") {
+        return Ok(0);
+    }
     let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
     let (n, unit) = s.split_at(split);
     let n: u64 = n
@@ -2216,7 +2219,7 @@ async fn share(
     node: &str,
     kind: ShareKind,
     id: Uuid,
-    expires: Option<u64>,
+    expires: u64,
     control: Option<bool>,
 ) -> R<()> {
     let path = c.api(node, "/shares");
@@ -2224,7 +2227,7 @@ async fn share(
         .call(c.req(Method::POST, &path).json(&json!({
             "kind": kind,
             "id": id,
-            "expires_in_secs": expires,
+            "expires_in_secs": (expires > 0).then_some(expires),
             "control": control,
         })))
         .await?;
@@ -2430,6 +2433,17 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn link_expiry_durations() {
+        assert_eq!(parse_expiry("1h"), Ok(3600));
+        assert_eq!(parse_expiry("30m"), Ok(1800));
+        assert_eq!(parse_expiry("7d"), Ok(7 * 86_400));
+        assert_eq!(parse_expiry("never"), Ok(0));
+        assert!(parse_expiry("0").is_err());
+        assert!(parse_expiry("1y").is_err());
+        assert!(parse_expiry("soon").is_err());
+    }
     use clap::CommandFactory;
 
     #[test]

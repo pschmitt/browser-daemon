@@ -2834,8 +2834,9 @@ function fillShare(item, fresh = false) {
   const sel = $('shareExpiry');
   if (fresh || (!shareBusy && document.activeElement !== sel)) {
     sel.querySelector('[value="keep"]')?.remove();
-    if (sh) sel.insertAdjacentHTML('afterbegin', `<option value="keep">${esc(sh.expires_at ? `Expires ${absTime(sh.expires_at)}` : 'Never expires')}</option>`);
-    sel.value = sh ? 'keep' : '0';
+    // A link that never expires shows "Never"; one with an expiry keeps it unless another is picked.
+    if (sh?.expires_at) sel.insertAdjacentHTML('afterbegin', `<option value="keep">Until ${esc(absTime(sh.expires_at))} (unchanged)</option>`);
+    sel.value = !sh ? '3600' : sh.expires_at ? 'keep' : '0';
   }
   $('shareMeta').hidden = !sh;
   if (sh) {
