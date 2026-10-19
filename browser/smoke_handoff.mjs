@@ -66,7 +66,7 @@ try {
   const launch = (program, args) => { const child = spawn(program, args, {stdio: 'ignore'}); children.push(child); return child; };
   launch(resolve('target/debug/browser-daemon'), ['run', '--bind', `127.0.0.1:${daemonPort}`, '--public-url', base, '--profile-dir', join(directory, 'daemon/profiles'), '--recordings-dir', join(directory, 'daemon/recordings'), '--cluster-secret-file', secretFile, '--record-sessions', 'false']);
   await until(async () => (await fetch(`${base}/health`)).ok);
-  const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); res.end('<!doctype html><title>Later tab</title><h1>Later</h1>'); });
+  const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); res.end('<!doctype html><title>Later tab</title><h1>Later</h1><p id=c></p><script>let n=0;(function f(){document.getElementById("c").textContent=n++;requestAnimationFrame(f)})()</script>'); });
   await new Promise(r => pageServer.listen(0, '127.0.0.2', r));
   const pageURL = `http://127.0.0.2:${pageServer.address().port}/`;
   launch('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
@@ -116,7 +116,23 @@ try {
   const typed = (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}typed`);
   assert.ok(typed?.shared && typed.control, 'typed address opened a shared, controllable tab');
   assert.equal(await view.evaluate(`new URLSearchParams(location.search).get('page')`), String(typed.id));
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab passed`);
+  // + works as in a regular session: a "New Tab" placeholder and the focused
+  // address bar; the submitted address becomes the real tab.
+  await view.evaluate(`document.getElementById('tabAddBtn').click()`);
+  assert.equal(await view.evaluate(`[!!document.querySelector('.tab-strip-item.pending'), document.activeElement?.id].join()`), 'true,urlInput');
+  await view.evaluate(`(() => { document.getElementById('urlInput').value = ${JSON.stringify(`${pageURL}plus`)}; document.getElementById('urlBar').requestSubmit(); })()`);
+  const plus = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}plus`));
+  await until(async () => (await view.evaluate(`new URLSearchParams(location.search).get('page') === ${JSON.stringify(String(plus.id))} && !document.querySelector('.tab-strip-item.pending')`)));
+  // The view streams a screencast (not the screenshot fallback): frames keep coming.
+  await until(async () => (await view.evaluate(`!!drv?.castParams`)));
+  const seen = await view.evaluate(`drv.lastFrameAt || 0`);
+  await sleep(400);
+  assert.ok((await view.evaluate(`drv.lastFrameAt || 0`)) > seen, 'screencast frames arrive');
+  // The picture quality slider restarts the screencast at the chosen quality.
+  await view.evaluate(`(() => { const s = document.getElementById('smQuality'); s.value = '30'; s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); })()`);
+  await until(async () => (await view.evaluate(`drv.castParams.quality`)) === 30);
+  assert.equal(await view.evaluate(`localStorage.getItem('bd-jpeg-quality')`), '30');
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

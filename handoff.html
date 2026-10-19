@@ -318,6 +318,9 @@
     color: var(--fg); font: 500 13.5px system-ui, sans-serif; text-decoration: none; cursor: pointer; text-align: left; }
   .sm-item:hover { background: var(--btn); }
   .sm-search { white-space: nowrap; }
+  .sm-search input[type=range] { margin-left: auto; width: 45%; accent-color: var(--accent-btn); }
+  .sm-search output { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted, inherit); }
+  .tab-strip-item.pending .tab-strip-title { font-style: italic; }
   .sm-search select { margin-left: auto; min-width: 0; max-width: 55%; padding: 4px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--btn); color: inherit; font: inherit; }
   .sm-item:disabled { opacity: .4; }
   .sm-navrow { gap: 4px; }
@@ -499,6 +502,7 @@
   <button class="sm-item" id="touchesBtn" role="menuitemcheckbox" aria-checked="false" title="Mark where you tap and click, as on a phone's screen recording"></button>
   <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
   <label class="sm-item sm-search" id="smStreamRow" hidden><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/></svg>Picture<select id="smStream" aria-label="Picture"><option value="video">Video (H.264)</option><option value="jpeg">Images (JPEG)</option></select></label>
+  <label class="sm-item sm-search" id="smQualityRow" title="JPEG quality of the picture: lower is faster on slow links. Auto: 65 (80 in Native)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15l3-3 3 3 2-2 2 2"/></svg>Quality<input type="range" id="smQuality" min="15" max="100" step="5" aria-label="Picture quality"><output id="smQualityVal"></output></label>
   <div class="sm-label">Browser</div>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search<select id="smSearch" aria-label="Search engine"></select></label>
@@ -670,6 +674,8 @@ const sharedDaemon = params.get("daemon") || "";
 let sharedBrowser = null;
 const sharedBase = sharedDaemon ? `/api/peers/${encodeURIComponent(sharedDaemon)}` : "/api";
 let pageId = params.get("page");
+// A new tab of a shared browser is being typed in the address bar (see openSharedTab).
+let sharedNewTab = false;
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const E = {
   smSearch: $("smSearch"),
@@ -838,6 +844,13 @@ const PASSKEY_HOOK = `(() => {
   };
 })()`;
 
+// JPEG quality of the picture, chosen here per viewer (null: automatic).
+// 100 on the slider means automatic; 15 to 95 a fixed quality.
+let jpegQuality = (() => {
+  try { const v = Number(localStorage.getItem("bd-jpeg-quality")); return v >= 15 && v <= 95 ? v : null; } catch { return null; }
+})();
+const castQuality = (mode) => jpegQuality ?? (mode === "native" ? 80 : 65);
+
 class CdpDriver {
   // shared: someone's own browser tab, relayed by its extension. Its window, user
   // agent and pages belong to that person: no resizing, emulation or hooks.
@@ -856,7 +869,7 @@ class CdpDriver {
       if (document.hidden || this.video || performance.now() - (this.lastFrameAt || 0) < 1500 || this.polling) return;
       this.polling = true;
       const m = await this.cdp.call("Page.getLayoutMetrics").catch(() => null);
-      const r = await this.cdp.call("Page.captureScreenshot", { format: "jpeg", quality: 65 }).catch(() => null);
+      const r = await this.cdp.call("Page.captureScreenshot", { format: "jpeg", quality: castQuality() }).catch(() => null);
       this.polling = false;
       const v = m?.cssVisualViewport;
       const meta = v ? { deviceWidth: v.clientWidth, deviceHeight: v.clientHeight, pageScaleFactor: 1, offsetTop: 0 } : this.lastMeta;
@@ -1016,7 +1029,7 @@ class CdpDriver {
     await this.cdp.call("Page.stopScreencast").catch(() => {});
     if (this.video) return;   // the H.264 stream shows the page
     this.castParams = {
-      format: "jpeg", quality: mode === "native" ? 80 : 65, everyNthFrame: 1,
+      format: "jpeg", quality: castQuality(mode), everyNthFrame: 1,
       maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
     };
     await this.cdp.call("Page.startScreencast", this.castParams);
@@ -1280,7 +1293,7 @@ class BidiDriver {
   }
   // passive: the size belongs to someone else (see the CDP driver); only undo our own.
   async applyMetrics({ w, h, dpr, mode, passive = false }) {
-    this.quality = mode === "native" ? 0.85 : 0.65;
+    this.quality = jpegQuality ? jpegQuality / 100 : mode === "native" ? 0.85 : 0.65;
     const fit = mode !== "window";
     if (fit || !passive || this.emulating) {
       this.emulating = fit;
@@ -1779,7 +1792,14 @@ let applied = null, metricsYielding = false;
 // This view itself runs on a phone (touch, small screen): Phone then uses its real size.
 const onPhone = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 600;
 async function applyMetrics({ ifDrifted = false } = {}) {
-  if (!drv || sharedBrowserId) return;
+  if (!drv) return;
+  // A shared browser keeps its owner's window: only the screencast follows this
+  // view's size (no emulation, no window fitting).
+  if (sharedBrowserId) {
+    const s = E.stage.getBoundingClientRect();
+    await drv.applyMetrics({ w: Math.max(200, Math.floor(s.width)), h: Math.max(200, Math.floor(s.height)), dpr: devicePixelRatio || 1, mode: "window", fitWindow: false, passive: true });
+    return;
+  }
   const r = E.stage.getBoundingClientRect();
   let w = Math.max(200, Math.floor(r.width)), h = Math.max(200, Math.floor(r.height));
   const dpr = devicePixelRatio || 1;
@@ -2478,6 +2498,7 @@ E.urlInput.onfocus = () => {
 };
 
 function dismissUrlBar() {
+  if (sharedNewTab) { sharedNewTab = false; E.urlInput.placeholder = ""; renderTabStrip(lastStripPages); renderSharedSession(); }
   suggestHide();
   E.bar.classList.remove("url-focused");
   E.urlInput.value = currentUrl || "";
@@ -2550,7 +2571,9 @@ E.urlBar.onsubmit = async (e) => {
   const liveShared = sharedBrowser?.tabs.some((t) => String(t.id) === String(pageId));
   if (sharedBrowserId && (sharedNewTab || !drv || !liveShared)) {
     sharedNewTab = false;
+    E.urlInput.placeholder = "";
     await openSharedTabAt(dest);
+    renderTabStrip(lastStripPages);
     return;
   }
   if (drv) {
@@ -2658,9 +2681,9 @@ async function openNewTab() {
 
 // A shared browser opens the tab itself (next to this one, shared with control).
 // A blank tab is never shared, so + asks for the address in the address bar.
-let sharedNewTab = false;
 function openSharedTab() {
   sharedNewTab = true;
+  renderTabStrip(lastStripPages);
   E.urlInput.readOnly = false;
   $("urlGo").disabled = false;
   E.urlInput.value = "";
@@ -2805,11 +2828,14 @@ if (sharedBrowserId) (async () => {
 // A shared browser is also watched before it has a tab: its first one is shown as it appears.
 setInterval(() => { if (document.visibilityState === "visible" && (target || sharedBrowserId)) loadTabs(); }, 2500);
 
+let lastStripPages = [];
 function renderTabStrip(pages) {
   if (!E.tabsScroll) return;
+  lastStripPages = pages;
   E.tabsScroll.innerHTML = "";
   for (const p of pages) {
-    const isCurrent = p.id === pageId;
+    // A new tab being typed (shared browser) is the current one meanwhile.
+    const isCurrent = p.id === pageId && !sharedNewTab;
     const item = document.createElement("a");
     item.className = "tab-strip-item" + (isCurrent ? " active" : "");
     const itemUrl = new URL(location.href);
@@ -2850,6 +2876,24 @@ function renderTabStrip(pages) {
     item.appendChild(closeBtn);
 
     E.tabsScroll.appendChild(item);
+  }
+  // The tab being opened in a shared browser: shown until its address is
+  // submitted (then the real tab replaces it) or the address bar is dismissed.
+  if (sharedNewTab) {
+    const item = document.createElement("span");
+    item.className = "tab-strip-item active pending";
+    const title = document.createElement("span");
+    title.className = "tab-strip-title";
+    title.textContent = "New Tab";
+    const close = document.createElement("button");
+    close.className = "tab-strip-close";
+    close.textContent = "✕";
+    close.title = "Cancel";
+    close.setAttribute("aria-label", "Cancel new tab");
+    close.onclick = (e) => { e.preventDefault(); e.stopPropagation(); dismissUrlBar(); };
+    item.append(title, close);
+    E.tabsScroll.appendChild(item);
+    item.scrollIntoView({ inline: "nearest", block: "nearest" });
   }
 }
 
@@ -3438,6 +3482,19 @@ async function sessionApi(method, path) {
   const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}${path}`, { method, headers: authHeaders() });
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   return res.json().catch(() => ({}));
+}
+
+{
+  const slider = $("smQuality"), out = $("smQualityVal");
+  const show = () => { out.textContent = jpegQuality ? String(jpegQuality) : "Auto"; };
+  slider.value = String(jpegQuality ?? 100); show();
+  slider.oninput = () => { const v = Number(slider.value); jpegQuality = v >= 100 ? null : v; show(); };
+  // Applied on release: the picture restarts at the new quality.
+  slider.onchange = () => {
+    try { jpegQuality ? localStorage.setItem("bd-jpeg-quality", String(jpegQuality)) : localStorage.removeItem("bd-jpeg-quality"); } catch { /* per session then */ }
+    if (drv?.lastMetrics && drv.applyMetrics) drv.applyMetrics(drv.lastMetrics).catch(() => {});
+    else applyMetrics().catch(() => {});
+  };
 }
 
 // The node's proxies, for the session menu (not reachable through the public view).

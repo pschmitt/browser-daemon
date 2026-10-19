@@ -527,10 +527,10 @@ async function shim(tab, channel, method, params) {
   const mods = {alt: !!(modifiers & 1), ctrl: !!(modifiers & 2), meta: !!(modifiers & 4), shift: !!(modifiers & 8)};
   switch (method) {
     case 'Page.enable': case 'Page.getFrameTree': return {};
-    case 'Page.startScreencast': startCast(tab, channel); return {};
+    case 'Page.startScreencast': startCast(tab, channel, params.quality); return {};
     case 'Page.stopScreencast': stopCast(channel); return {};
     case 'Page.screencastFrameAck': { const cast = casts.get(channel); if (cast) { cast.inflight = Math.max(0, cast.inflight - 1); pump(channel); } return {}; }
-    case 'Page.captureScreenshot': return {data: (await capture(tab)).data};
+    case 'Page.captureScreenshot': return {data: (await capture(tab, params.quality)).data};
     case 'Page.getLayoutMetrics': {
       const t = await api.tabs.get(tab);
       const viewport = {clientWidth: t.width, clientHeight: t.height, pageX: 0, pageY: 0, offsetX: 0, offsetY: 0, scale: 1, zoom: 1};
@@ -584,9 +584,11 @@ async function pointer(tab, params, run) {
 }
 // The browser's own capture: a JPEG at CSS pixels, quick and small. The
 // companion's PNG screenshot only without access to the tab's site.
-async function capture(tab) {
+async function capture(tab, quality) {
+  // The quality the view asks for (its picture-quality setting), else 65.
+  quality = Number.isInteger(quality) && quality >= 10 && quality <= 100 ? quality : 65;
   try {
-    const data = await api.tabs.captureTab(tab, {format: 'jpeg', quality: 65, scale: 1});
+    const data = await api.tabs.captureTab(tab, {format: 'jpeg', quality, scale: 1});
     return {data: data.split(',')[1], format: 'jpeg'};
   } catch (error) {
     if (!nativeReady) throw error;
@@ -594,9 +596,9 @@ async function capture(tab) {
     return {data: r.data, format: r.format || 'png'};
   }
 }
-function startCast(tab, channel) {
+function startCast(tab, channel, quality) {
   stopCast(channel);
-  casts.set(channel, {tab, inflight: 0, last: '', seq: 0, timer: null, busy: false});
+  casts.set(channel, {tab, quality, inflight: 0, last: '', seq: 0, timer: null, busy: false});
   pump(channel);
 }
 function stopCast(channel) {
@@ -616,7 +618,7 @@ async function pump(channel) {
     const grant = shared.get(cast.tab);
     if (grant && !grant.paused) {
       const t = await api.tabs.get(cast.tab);
-      const frame = await capture(cast.tab);
+      const frame = await capture(cast.tab, cast.quality);
       // Unchanged pictures are not sent: an idle page costs no bandwidth.
       if (casts.get(channel) === cast && frame.data !== cast.last) {
         cast.last = frame.data;
