@@ -343,6 +343,9 @@
   #ripple { position: absolute; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; pointer-events: none; opacity: 0;
     background: color-mix(in oklab, var(--accent) 45%, transparent); border: 2px solid var(--accent); }
   #ripple.go { animation: ripple .45s ease-out; }
+  #zoomReset { position: absolute; top: 8px; right: 8px; z-index: 4; font: 600 12px/1 system-ui, sans-serif; padding: 7px 10px; border-radius: 999px;
+    border: 1px solid var(--line); background: color-mix(in oklab, var(--bar) 85%, transparent); color: var(--fg); cursor: pointer; backdrop-filter: blur(6px); }
+  #view.zoomed { transform-origin: 0 0; }
   #touchDot { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; pointer-events: none; z-index: 3;
     background: rgba(255, 255, 255, .28); border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); }
   @keyframes ripple { from { opacity: .9; transform: scale(.4); } to { opacity: 0; transform: scale(1.5); } }
@@ -543,6 +546,7 @@
   <canvas id="view" tabindex="-1"></canvas>
   <div id="ripple"></div>
   <div id="touchDot" hidden></div>
+  <button id="zoomReset" type="button" hidden title="Back to the whole page">100%</button>
   <div id="switching" hidden><div class="spin"></div><span id="switchingText">Loading tab…</span></div>
   <div id="overlay">
     <div class="spin" id="spin"></div>
@@ -1790,6 +1794,8 @@ function sessionLayout() {
 // scrollbars; pinch zoom (scale above 1) doesn't change the size on screen.
 const VIEW_SIZE = "(() => { const s = Math.min(visualViewport.scale, 1); return [Math.round(innerWidth * s), Math.round(innerHeight * s)]; })()";
 let applied = null, metricsYielding = false;
+// This view's own magnification (pinch, Ctrl+wheel): see applyZoom().
+const zoom = { z: 1, x: 0, y: 0 };
 // This view itself runs on a phone (touch, small screen): Phone then uses its real size.
 const onPhone = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) < 600;
 async function applyMetrics({ ifDrifted = false } = {}) {
@@ -1797,8 +1803,8 @@ async function applyMetrics({ ifDrifted = false } = {}) {
   // A shared browser keeps its owner's window: only the screencast follows this
   // view's size (no emulation, no window fitting).
   if (sharedBrowserId) {
-    const s = E.stage.getBoundingClientRect();
-    await drv.applyMetrics({ w: Math.max(200, Math.floor(s.width)), h: Math.max(200, Math.floor(s.height)), dpr: devicePixelRatio || 1, mode: "window", fitWindow: false, passive: true });
+    const s = E.stage.getBoundingClientRect(), z = zoom.z;
+    await drv.applyMetrics({ w: Math.max(200, Math.floor(s.width * z)), h: Math.max(200, Math.floor(s.height * z)), dpr: devicePixelRatio || 1, mode: "window", fitWindow: false, passive: true });
     return;
   }
   const r = E.stage.getBoundingClientRect();
@@ -2234,8 +2240,67 @@ E.view.addEventListener("wheel", (e) => {
   let dx = e.deltaX, dy = e.deltaY;
   if (e.deltaMode === 1) { dx *= 33; dy *= 33; }
   else if (e.deltaMode === 2) { dx *= 100; dy *= 100; }
+  // Ctrl+wheel (and a touchpad pinch) zooms this view, like two fingers on a phone.
+  if (e.ctrlKey) { zoomAt(e.clientX, e.clientY, zoom.z * Math.exp(-dy * 0.01)); return; }
   queueWheel(p.x, p.y, dx * p.scale, dy * p.scale);
 }, { passive: false });
+
+/* ---------------------------------------------------------------- zoom: two fingers zoom and pan this view
+   Only the picture here is magnified (the remote page keeps its size: a shared browser
+   can't be resized); toPage() reads the transformed box, so input still lands right. */
+const fingers = new Map();
+let pinch = null, zoomSharpen = 0;
+function applyZoom() {
+  const on = zoom.z > 1.01;
+  if (!on) Object.assign(zoom, { z: 1, x: 0, y: 0 });
+  E.view.classList.toggle("zoomed", on);
+  E.view.style.transform = on ? `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.z})` : "";
+  $("zoomReset").hidden = !on;
+  $("zoomReset").textContent = `${Math.round(zoom.z * 100)}%`;
+  // Sharper frames for the magnified picture, once the fingers rest.
+  clearTimeout(zoomSharpen);
+  zoomSharpen = setTimeout(() => { if (sharedBrowserId) applyMetrics(); }, 400);
+}
+// Keep the page point under (cx, cy) in place while the scale changes to z.
+function zoomAt(cx, cy, z, from = zoom, to = { x: cx, y: cy }) {
+  const r = E.stage.getBoundingClientRect();
+  z = Math.min(5, Math.max(1, z));
+  const qx = (cx - r.left - from.x) / from.z, qy = (cy - r.top - from.y) / from.z;
+  // Never leave empty space at the edges: the picture always covers the stage.
+  zoom.x = Math.min(0, Math.max(r.width * (1 - z), to.x - r.left - qx * z));
+  zoom.y = Math.min(0, Math.max(r.height * (1 - z), to.y - r.top - qy * z));
+  zoom.z = z;
+  applyZoom();
+}
+$("zoomReset").onclick = () => { zoom.z = 1; applyZoom(); };
+E.view.addEventListener("pointerdown", (e) => {
+  if (e.pointerType !== "touch") return;
+  fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (fingers.size !== 2) return;
+  E.view.setPointerCapture(e.pointerId);
+  // The first finger's tap, scroll or hold is called off: these two zoom.
+  if (touch?.raw && drv) drv.touch("touchCancel");
+  if (touch?.drag && drv) drv.mouseUp(Math.round(touch.drag.x), Math.round(touch.drag.y), 1, 0);
+  clearTimeout(touch?.holdTimer);
+  touch = null; pendingWheel = null;
+  const [a, b] = [...fingers.values()];
+  pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, from: { ...zoom } };
+});
+E.view.addEventListener("pointermove", (e) => {
+  if (!fingers.has(e.pointerId)) return;
+  fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!pinch || fingers.size !== 2) return;
+  const [a, b] = [...fingers.values()];
+  const d = Math.hypot(a.x - b.x, a.y - b.y);
+  zoomAt(pinch.mid.x, pinch.mid.y, pinch.from.z * d / pinch.d, pinch.from, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+});
+for (const type of ["pointerup", "pointercancel"]) {
+  E.view.addEventListener(type, (e) => {
+    fingers.delete(e.pointerId);
+    if (fingers.size < 2) pinch = null;
+  });
+}
+addEventListener("resize", () => { if (zoom.z > 1) zoomAt(0, 0, zoom.z); });
 E.view.addEventListener("contextmenu", (e) => e.preventDefault());
 
 function tapFeedback(x, y) {

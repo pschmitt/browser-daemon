@@ -49,7 +49,7 @@ class CDP {
   }
   async evaluate(expression) {
     const value = await this.call('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
-    if (value.exceptionDetails) throw new Error('Extension integration script failed');
+    if (value.exceptionDetails) throw new Error(`Integration script failed: ${value.exceptionDetails.exception?.description || value.exceptionDetails.text}`);
     return value.result.value;
   }
 }
@@ -132,6 +132,14 @@ try {
   await view.evaluate(`(() => { const s = document.getElementById('smQuality'); s.value = '30'; s.dispatchEvent(new Event('input')); s.dispatchEvent(new Event('change')); })()`);
   await until(async () => (await view.evaluate(`drv.castParams.quality`)) === 30);
   assert.equal(await view.evaluate(`localStorage.getItem('bd-jpeg-quality')`), '30');
+  // Zoom (pinch, Ctrl+wheel): the point under the fingers stays put, input still maps
+  // to the same page point, and frames get sharper for the magnified picture.
+  const castWidth = await view.evaluate(`drv.castParams.maxWidth`);
+  const mapped = await view.evaluate(`(() => { const r = E.stage.getBoundingClientRect(), c = {clientX: r.left + r.width / 3, clientY: r.top + r.height / 3}; const a = toPage(c); zoomAt(c.clientX, c.clientY, 2); const b = toPage(c); return [a.x, a.y, b.x, b.y, document.getElementById('zoomReset').hidden]; })()`);
+  assert.ok(Math.abs(mapped[0] - mapped[2]) < 1 && Math.abs(mapped[1] - mapped[3]) < 1 && mapped[4] === false, `zoom keeps the point: ${mapped}`);
+  await until(async () => (await view.evaluate(`drv.castParams.maxWidth`)) > castWidth);
+  await view.evaluate(`document.getElementById('zoomReset').click()`);
+  assert.equal(await view.evaluate(`E.view.style.transform`), '');
   // The browser follows the view: switching to a tab brings it to the front there.
   await view.evaluate(`switchTab(${JSON.stringify(String(typed.id))})`);
   await until(() => popup.evaluate(`chrome.tabs.get(${typed.id}).then(t => t.active)`));
@@ -147,7 +155,7 @@ try {
   await dash.evaluate(`(() => { document.getElementById('sessionUrl').value = ${JSON.stringify(`${pageURL}dash`)}; document.getElementById('sessionHandoff').checked = false; document.getElementById('newSessionForm').requestSubmit(); })()`);
   const fromDash = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}dash`));
   assert.ok(fromDash.shared && fromDash.control, 'the dashboard opened a shared, controllable tab');
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; the browser follows the view; the dashboard opens tabs in it passed`);
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);
