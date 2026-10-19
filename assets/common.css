@@ -34,3 +34,13 @@
 .md pre code { padding: 0; background: none; }
 .md blockquote { padding: 2px 0 2px 10px; border-left: 3px solid color-mix(in oklab, var(--fg) 25%, transparent); color: var(--muted); }
 .md hr { border: 0; border-top: 1px solid color-mix(in oklab, var(--fg) 15%, transparent); margin: 10px 0; }
+/* A link laid out to be read (urlHtml in common.js). */
+.u-site { font-weight: 700; color: var(--fg); }
+.u-path { color: var(--fg); }
+.u-token { color: var(--muted); }
+/* A picture shown large (zoomImage in common.js). */
+.zoom-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: rgba(0, 0, 0, .85); cursor: zoom-out; animation: zoom-in .15s ease-out; }
+.zoom-overlay img { width: min(82vmin, 560px); height: min(82vmin, 560px); background: #fff; padding: 18px; border-radius: 18px; box-sizing: border-box; }
+.zoom-overlay span { color: rgba(255, 255, 255, .7); font: 13px system-ui, sans-serif; }
+@keyframes zoom-in { from { opacity: 0; transform: scale(.96); } }

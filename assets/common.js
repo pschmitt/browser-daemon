@@ -223,3 +223,28 @@ function markdown(src) {
   }
   return out.join('');
 }
+
+// A link laid out to be read: its site, its path and (muted) its last part, the
+// long token of a public link. It wraps anywhere rather than being cut off.
+function urlHtml(url) {
+  let u;
+  try { u = new URL(url); } catch { return escapeHtml(url); }
+  const parts = u.pathname.split('/');
+  const last = parts.pop();
+  return `<span class="u-site">${escapeHtml(u.origin)}</span><span class="u-path">${escapeHtml(parts.join('/') + '/')}</span><span class="u-token">${escapeHtml(last + u.search + u.hash)}</span>`;
+}
+
+// A picture (a QR code) large over everything; a click or Esc closes it. Placed in
+// the open dialog, if any, since a modal dialog is above the rest of the page.
+function zoomImage(src, alt) {
+  const box = document.createElement('div');
+  box.className = 'zoom-overlay';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', alt);
+  box.innerHTML = `<img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"><span>Click or press Esc to close</span>`;
+  const close = () => { box.remove(); removeEventListener('keydown', onKey, true); };
+  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+  box.addEventListener('click', close);
+  addEventListener('keydown', onKey, true);
+  (document.querySelector('dialog[open]') || document.body).append(box);
+}

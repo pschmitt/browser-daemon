@@ -213,17 +213,19 @@
   #shareDialog .sh-state { font: 700 11.5px system-ui, sans-serif; padding: 3px 9px; border-radius: 999px; color: var(--pub); background: color-mix(in oklab, var(--pub) 16%, transparent); }
   #shareDialog .sh-state[hidden] { display: none; }
   #shareDialog .sh-lead { margin: 4px 18px 14px; color: var(--muted); font-size: 13.5px; }
-  #shareDialog .sh-link { display: flex; gap: 6px; margin: 0 18px 12px; padding: 5px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--pub) 45%, var(--line)); background: var(--btn); }
+  #shareDialog .sh-link { display: flex; align-items: flex-start; gap: 6px; margin: 0 18px 12px; padding: 5px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--pub) 45%, var(--line)); background: var(--btn); }
   #shareDialog .sh-link[hidden] { display: none; }
   #shareDialog .sh-qr { display: flex; align-items: center; gap: 14px; margin: 0 18px 12px; }
   #shareDialog .sh-qr[hidden] { display: none; }
-  #shareDialog .sh-qr img { width: 112px; height: 112px; flex: none; border-radius: 8px; background: #fff; padding: 4px; }
+  #shareDialog .sh-qr-btn { flex: none; padding: 0; border: 0; background: none; border-radius: 8px; cursor: zoom-in; }
+  #shareDialog .sh-qr-btn:hover img { box-shadow: 0 0 0 2px var(--pub); }
+  #shareDialog .sh-qr img { width: 112px; height: 112px; display: block; border-radius: 8px; background: #fff; padding: 4px; }
+  #shareDialog .sh-url { flex: 1; min-width: 0; align-self: center; padding: 5px 7px; border-radius: 8px; font: 12.5px/1.55 ui-monospace, Menlo, monospace;
+    word-break: break-all; text-decoration: none; -webkit-user-select: text; user-select: text; }
+  #shareDialog .sh-url:hover { background: color-mix(in oklab, var(--pub) 10%, transparent); text-decoration: underline; text-decoration-color: var(--pub); text-underline-offset: 3px; }
   #shareDialog .sh-qr span { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
   #shareDialog .sh-qr b { display: block; color: var(--fg); font-size: 13.5px; }
-  #shareDialog .sh-link input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: 12.5px ui-monospace, Menlo, monospace; padding: 0 6px; outline: none; -webkit-user-select: text; user-select: text; }
-  #shareDialog .sh-link button, #shareDialog .sh-link a { height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--pub); color: #fff; font: 700 13px system-ui, sans-serif; cursor: pointer; display: inline-flex; align-items: center; }
-  #shareDialog .sh-link a { padding: 0 9px; background: transparent; color: var(--fg); }
-  #shareDialog .sh-link a svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; }
+  #shareDialog .sh-link button { flex: none; height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--pub); color: #fff; font: 700 13px system-ui, sans-serif; cursor: pointer; display: inline-flex; align-items: center; }
   #shareDialog .sh-link button.done { background: #10b981; }
   #shareDialog .sh-row { display: flex; align-items: center; gap: 12px; margin: 0 18px; padding: 11px 0; border-top: 1px solid var(--line); cursor: pointer; position: relative; }
   #shareDialog .sh-t { flex: 1; min-width: 0; }
@@ -592,13 +594,12 @@
   </div>
   <p class="sh-lead" id="shLead"></p>
   <div class="sh-link" id="shLinkRow" hidden>
-    <input id="shUrl" readonly spellcheck="false" aria-label="Public link">
+    <a id="shUrl" class="sh-url" target="_blank" rel="noopener noreferrer" title="Open the link in a new tab"></a>
     <button type="button" id="shCopy">Copy</button>
-    <a id="shOpen" target="_blank" rel="noopener noreferrer" title="Open the link" aria-label="Open the link"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
   </div>
   <div class="sh-qr" id="shQrRow" hidden>
-    <img id="shQr" width="112" height="112" alt="QR code of the public link">
-    <span><b>Scan to open</b>The link as a QR code, for a phone or a projector.</span>
+    <button type="button" class="sh-qr-btn" id="shQrBtn" title="Show it large"><img id="shQr" width="112" height="112" alt="QR code of the public link"></button>
+    <span><b>Scan to open</b>The link as a QR code, for a phone or a projector. Tap it to show it large.</span>
   </div>
   <label class="sh-row">
     <span class="sh-t"><b>Allow control</b><small id="shCtlNote"></small></span>
@@ -3456,8 +3457,7 @@ async function copyPublicLink(url, btn) {
       setTimeout(() => { btn.classList.remove("done"); btn.textContent = "Copy"; }, 1400);
     } else toast("Public link copied", 2000);
   } catch {
-    $("shUrl").select();
-    toast("Select the link and copy it", 2500);
+    toast("Could not copy: long-press the link to copy it", 3000);
   }
 }
 function openShareDialog() {
@@ -3467,7 +3467,6 @@ function openShareDialog() {
   renderShareDialog();
   const dlg = $("shareDialog");
   if (!dlg.open) dlg.showModal();
-  if (sess.share) setTimeout(() => $("shUrl").select(), 30);
 }
 // Also called on every session refresh while it is open (watchers, expiry).
 function renderShareDialog() {
@@ -3490,17 +3489,16 @@ function renderShareDialog() {
   $("shCtlNote").textContent = firefox ? "Works for Chromium sessions only." : "Visitors can click, scroll and type in the page, as you.";
   $("shWarn").hidden = !ctl.checked;
   $("shLinkRow").hidden = !sh;
-  if (sh && $("shUrl").value !== sh.url) $("shUrl").value = sh.url;
+  if (sh && $("shUrl").getAttribute("href") !== sh.url) { $("shUrl").href = sh.url; $("shUrl").innerHTML = urlHtml(sh.url); }
   $("shQrRow").hidden = !sh;
   const qr = sh ? `/api/qr?text=${encodeURIComponent(sh.url)}` : "";
   if (sh && $("shQr").getAttribute("src") !== qr) $("shQr").src = qr;
-  $("shOpen").href = sh?.url || "#";
   // The expiry: as it is now, or a new one counted from now.
   const exp = $("shExp");
   if (document.activeElement !== exp && !shBusy) {
     exp.querySelector('[value="keep"]')?.remove();
     // A link that never expires shows "Never"; one with an expiry keeps it unless another is picked.
-    if (sh?.expires_at) exp.insertAdjacentHTML("afterbegin", `<option value="keep">Until ${esc(fmtWhen(sh.expires_at))} (unchanged)</option>`);
+    if (sh?.expires_at) exp.insertAdjacentHTML("afterbegin", `<option value="keep">As now · ${esc(new Date(sh.expires_at * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }))}</option>`);
     exp.value = !sh ? "3600" : sh.expires_at ? "keep" : "0";
   }
   $("shMeta").hidden = !sh;
@@ -3541,8 +3539,8 @@ $("shCtl").onchange = () => {
   if (sess?.share) saveShare();
 };
 $("shExp").onchange = () => { if (sess?.share) saveShare(); };
-$("shCopy").onclick = () => copyPublicLink($("shUrl").value, $("shCopy"));
-$("shUrl").onfocus = () => $("shUrl").select();
+$("shCopy").onclick = () => copyPublicLink($("shUrl").getAttribute("href"), $("shCopy"));
+$("shQrBtn").onclick = () => zoomImage($("shQr").src, "QR code of the public link");
 $("shGo").onclick = () => { if (sess?.share) $("shareDialog").close(); else saveShare(); };
 $("shClose").onclick = () => $("shareDialog").close();
 // Two taps: the first arms the button, the second stops sharing.

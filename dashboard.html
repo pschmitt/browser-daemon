@@ -162,14 +162,17 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-
 .share-state { flex: none; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; color: var(--public); background: color-mix(in oklab, var(--public) 15%, transparent); }
 .share-state[hidden] { display: none; }
 .share-lead { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
-.share-linkbox { display: flex; align-items: center; gap: 6px; padding: 5px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--public) 45%, var(--line)); background: var(--hover); }
+.share-linkbox { display: flex; align-items: flex-start; gap: 6px; padding: 5px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--public) 45%, var(--line)); background: var(--hover); }
 .share-linkbox[hidden] { display: none; }
 .share-qr { display: flex; align-items: center; gap: 14px; }
 .share-qr[hidden] { display: none; }
-.share-qr img { width: 112px; height: 112px; flex: none; border-radius: 8px; background: #fff; padding: 4px; }
+.share-url { flex: 1; min-width: 0; align-self: center; padding: 5px 7px; border-radius: 8px; font: 12.5px/1.55 var(--mono); word-break: break-all; text-decoration: none; }
+.share-url:hover, .share-url:focus-visible { background: color-mix(in oklab, var(--public) 10%, transparent); text-decoration: underline; text-decoration-color: var(--public); text-underline-offset: 3px; }
+.share-qr-btn { flex: none; padding: 0; border: 0; background: none; border-radius: 8px; cursor: zoom-in; }
+.share-qr-btn:hover img { box-shadow: 0 0 0 2px var(--public); }
+.share-qr img { width: 112px; height: 112px; display: block; flex: none; border-radius: 8px; background: #fff; padding: 4px; }
 .share-qr span { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
 .share-qr b { display: block; color: var(--fg); font-size: 13.5px; }
-.share-linkbox input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: 12.5px var(--mono); padding: 0 6px; outline: none; }
 .share-copy { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--public); color: #fff; font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
 .share-copy.done { background: var(--ok, #10b981); }
 .share-rows { display: flex; flex-direction: column; }
@@ -1116,13 +1119,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-body">
       <p class="share-lead" id="shareLead"></p>
       <div class="share-linkbox" id="shareLinkField" hidden>
-        <input id="shareLink" readonly spellcheck="false" aria-label="Public link">
+        <a id="shareLink" class="share-url" target="_blank" rel="noopener noreferrer" title="Open the link in a new tab"></a>
         <button type="button" class="share-copy" id="shareCopy"><svg class="i sm"><use href="#i-copy"/></svg><span>Copy</span></button>
-        <a class="btn icon sm ghost" id="shareOpen" target="_blank" rel="noopener noreferrer" title="Open the link" aria-label="Open the link"><svg class="i sm"><use href="#i-arrow"/></svg></a>
       </div>
       <div class="share-qr" id="shareQrRow" hidden>
-        <img id="shareQr" width="112" height="112" alt="QR code of the public link">
-        <span><b>Scan to open</b>The link as a QR code, for a phone or a projector.</span>
+        <button type="button" class="share-qr-btn" id="shareQrBtn" title="Show it large"><img id="shareQr" width="112" height="112" alt="QR code of the public link"></button>
+        <span><b>Scan to open</b>The link as a QR code, for a phone or a projector. Click it to show it large.</span>
       </div>
       <div class="share-rows">
         <label class="share-row" id="shareModeField">
@@ -3097,7 +3099,6 @@ function openShare(kind, item) {
   shareStopArmed = 0;
   fillShare(item, true);
   openModal('shareModal');
-  if (item.share) setTimeout(() => $('shareLink').select(), 40);
 }
 // Also on every overview while it is open: watchers, views, expiry.
 function fillShare(item, fresh = false) {
@@ -3121,16 +3122,15 @@ function fillShare(item, fresh = false) {
   $('shareModeNote').textContent = firefox ? 'Works for Chromium sessions only.' : 'Visitors can click, scroll and type in the page, as you.';
   syncShareWarn(kind);
   $('shareLinkField').hidden = !sh;
-  if (sh && $('shareLink').value !== sh.url) $('shareLink').value = sh.url;
+  if (sh && $('shareLink').getAttribute('href') !== sh.url) { $('shareLink').href = sh.url; $('shareLink').innerHTML = urlHtml(sh.url); }
   $('shareQrRow').hidden = !sh;
   const qr = sh ? `/api/qr?text=${encodeURIComponent(sh.url)}` : '';
   if (sh && $('shareQr').getAttribute('src') !== qr) $('shareQr').src = qr;
-  $('shareOpen').href = sh?.url || '#';
   const sel = $('shareExpiry');
   if (fresh || (!shareBusy && document.activeElement !== sel)) {
     sel.querySelector('[value="keep"]')?.remove();
     // A link that never expires shows "Never"; one with an expiry keeps it unless another is picked.
-    if (sh?.expires_at) sel.insertAdjacentHTML('afterbegin', `<option value="keep">Until ${esc(absTime(sh.expires_at))} (unchanged)</option>`);
+    if (sh?.expires_at) sel.insertAdjacentHTML('afterbegin', `<option value="keep">As now · ${esc(new Date(sh.expires_at * 1000).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }))}</option>`);
     sel.value = !sh ? '3600' : sh.expires_at ? 'keep' : '0';
   }
   $('shareMeta').hidden = !sh;
@@ -3187,13 +3187,13 @@ $('shareControl').addEventListener('change', () => {
 });
 $('shareExpiry').addEventListener('change', () => { if (shareItem()?.share) saveShare(); });
 $('shareCopy').addEventListener('click', () => {
-  copyText($('shareLink').value);
+  copyText($('shareLink').getAttribute('href'));
   const b = $('shareCopy');
   b.classList.add('done');
   b.querySelector('span').textContent = 'Copied';
   setTimeout(() => { b.classList.remove('done'); b.querySelector('span').textContent = 'Copy'; }, 1400);
 });
-$('shareLink').addEventListener('focus', () => $('shareLink').select());
+$('shareQrBtn').addEventListener('click', () => zoomImage($('shareQr').src, 'QR code of the public link'));
 $('shareOk').addEventListener('click', () => { if (shareItem()?.share) { shareCtx = null; closeModal('shareModal'); } else saveShare(); });
 // Two clicks: the first arms the button, the second stops sharing.
 $('shareStop').addEventListener('click', async () => {
