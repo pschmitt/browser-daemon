@@ -290,9 +290,17 @@
   #smTitle { cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sm-engine { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; background: var(--btn); color: var(--muted); }
   .sm-status { padding: 0 10px 8px; font-size: 12px; color: var(--muted); }
-  .sm-rec { display: flex; gap: 6px; padding: 2px 4px; }
-  .sm-rec button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 40px; white-space: nowrap; min-width: 0; border-radius: 10px;
-    border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 600 13px system-ui, sans-serif; cursor: pointer; }
+  .sm-rec { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 6px; }
+  .sm-rec-gap { flex: 1; }
+  /* The recording's state, as the bar's REC pill used to show it. */
+  .sm-rec-pill { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 999px;
+    border: 1px solid color-mix(in oklab, var(--bad) 45%, transparent); background: color-mix(in oklab, var(--bad) 14%, transparent);
+    color: var(--bad); font: 700 11.5px system-ui, sans-serif; letter-spacing: .04em; }
+  .sm-rec-pill.paused, .sm-rec-pill.idle { color: var(--muted); border-color: var(--line); background: var(--btn); }
+  .sm-rec-pill.paused .rec-dot { background: var(--muted); animation: none; border-radius: 1px; width: 7px; }
+  .sm-rec-pill.idle .rec-dot { background: transparent; border: 2px solid var(--muted); width: 9px; height: 9px; box-sizing: border-box; animation: none; }
+  .sm-rec button { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--btn); color: var(--fg); cursor: pointer; padding: 0; }
   .sm-rec button:hover { border-color: var(--muted); }
   .sm-rec button.rec { color: var(--bad); }
   .sm-rec svg, .sm-item svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -4270,7 +4278,6 @@ function renderSession() {
   $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => [agentShort(c) || c.from, c.topic].filter(Boolean).join(": ")).join(", ")} · ` : "")
     + (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
     + ` · Up ${formatUptime(Math.floor(sess.uptime_seconds || 0))} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
-    + (rec ? (paused ? " · recording paused" : " · recording") : "")
     + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : "");
   if (document.activeElement !== $("smProxy")) $("smProxy").value = sess.proxy || "none";
   E.audioBtn.hidden = !sess.audio;
@@ -4282,14 +4289,19 @@ function renderSession() {
   if (layoutMode !== "window" && ((sess.client_count || 0) > 0) !== metricsYielding) applyMetrics();
   $("smStreamRow").hidden = !sess.video || !window.VideoDecoder;
   if (canVideo() && !video.ws) startVideo();
-  const btn = (act, icon, label, cls = "", title = "") => `<button data-rec="${act}" class="${cls}"${title ? ` title="${title}"` : ""}>${ICON[icon]}${label}</button>`;
+  // The recording at a glance (the old REC pill), its controls as icons beside it.
+  const btn = (act, icon, cls, title) => `<button data-rec="${act}" class="${cls}" title="${title}" aria-label="${title}">${ICON[icon]}</button>`;
   // With session audio: whether a new recording takes the sound (remembered here).
   const sound = recSound();
-  const html = !rec ? btn("record", "rec", "Start recording", "rec")
-      + (sess.audio ? btn("sound", sound ? "sound" : "mute", sound ? "With sound" : "Silent", "", sound ? "The recording takes the session's sound: tap to record without" : "The recording is silent: tap to record the sound too") : "")
-    : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec")
+  const pill = !rec ? '<span class="sm-rec-pill idle" title="Not recording"><span class="rec-dot"></span>REC</span>'
+    : `<span class="sm-rec-pill${paused ? " paused" : ""}" title="${paused ? "Recording paused" : "Recording"}"><span class="rec-dot"></span>${paused ? "PAUSED" : "REC"}</span>`;
+  const html = pill + '<span class="sm-rec-gap"></span>' + (!rec
+    ? btn("record", "rec", "rec", sound || !sess.audio ? "Start recording" : "Start recording (silent)")
+      + (sess.audio ? btn("sound", sound ? "sound" : "mute", "", sound ? "The recording will take the session's sound: tap for a silent one" : "The recording will be silent: tap to take the sound too") : "")
+    : (paused ? btn("resume-record", "play", "", "Resume recording") : btn("pause-record", "pause", "", "Pause recording"))
+      + btn("stop-record", "stop", "rec", "Stop recording")
       // While recording, the sound switches at once (off: silent from here).
-      + (sess.audio ? btn("record-audio", sess.recording_audio ? "sound" : "mute", sess.recording_audio ? "Sound" : "Silent", "", sess.recording_audio ? "Recording the sound: tap to mute the recording" : "The recording is silent: tap to record the sound") : "");
+      + (sess.audio ? btn("record-audio", sess.recording_audio ? "sound" : "mute", "", sess.recording_audio ? "Recording the sound: tap to mute the recording" : "The recording is silent: tap to record the sound") : ""));
   const box = $("smRec");
   if (box._html !== html) { box.innerHTML = html; box._html = html; }
 }
