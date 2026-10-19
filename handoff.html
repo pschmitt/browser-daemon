@@ -215,6 +215,11 @@
   #shareDialog .sh-lead { margin: 4px 18px 14px; color: var(--muted); font-size: 13.5px; }
   #shareDialog .sh-link { display: flex; gap: 6px; margin: 0 18px 12px; padding: 5px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--pub) 45%, var(--line)); background: var(--btn); }
   #shareDialog .sh-link[hidden] { display: none; }
+  #shareDialog .sh-qr { display: flex; align-items: center; gap: 14px; margin: 0 18px 12px; }
+  #shareDialog .sh-qr[hidden] { display: none; }
+  #shareDialog .sh-qr img { width: 112px; height: 112px; flex: none; border-radius: 8px; background: #fff; padding: 4px; }
+  #shareDialog .sh-qr span { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+  #shareDialog .sh-qr b { display: block; color: var(--fg); font-size: 13.5px; }
   #shareDialog .sh-link input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: 12.5px ui-monospace, Menlo, monospace; padding: 0 6px; outline: none; -webkit-user-select: text; user-select: text; }
   #shareDialog .sh-link button, #shareDialog .sh-link a { height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--pub); color: #fff; font: 700 13px system-ui, sans-serif; cursor: pointer; display: inline-flex; align-items: center; }
   #shareDialog .sh-link a { padding: 0 9px; background: transparent; color: var(--fg); }
@@ -590,6 +595,10 @@
     <input id="shUrl" readonly spellcheck="false" aria-label="Public link">
     <button type="button" id="shCopy">Copy</button>
     <a id="shOpen" target="_blank" rel="noopener noreferrer" title="Open the link" aria-label="Open the link"><svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+  </div>
+  <div class="sh-qr" id="shQrRow" hidden>
+    <img id="shQr" width="112" height="112" alt="QR code of the public link">
+    <span><b>Scan to open</b>The link as a QR code, for a phone or a projector.</span>
   </div>
   <label class="sh-row">
     <span class="sh-t"><b>Allow control</b><small id="shCtlNote"></small></span>
@@ -3482,6 +3491,9 @@ function renderShareDialog() {
   $("shWarn").hidden = !ctl.checked;
   $("shLinkRow").hidden = !sh;
   if (sh && $("shUrl").value !== sh.url) $("shUrl").value = sh.url;
+  $("shQrRow").hidden = !sh;
+  const qr = sh ? `/api/qr?text=${encodeURIComponent(sh.url)}` : "";
+  if (sh && $("shQr").getAttribute("src") !== qr) $("shQr").src = qr;
   $("shOpen").href = sh?.url || "#";
   // The expiry: as it is now, or a new one counted from now.
   const exp = $("shExp");

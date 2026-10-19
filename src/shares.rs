@@ -454,6 +454,58 @@ pub(crate) async fn api_delete_share(
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct QrParams {
+    pub(crate) text: String,
+}
+
+/// The longest text a QR code is made of (a share link is far shorter).
+const MAX_QR_TEXT: usize = 1024;
+
+/// A QR code of `text` as SVG (`GET /api/qr?text=...`), black on white, for
+/// public links to be opened on a phone.
+pub(crate) async fn api_qr(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<QrParams>,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    if params.text.is_empty() || params.text.len() > MAX_QR_TEXT {
+        return api_error(StatusCode::BAD_REQUEST, "Nothing, or too much, to encode")
+            .into_response();
+    }
+    match qr_svg(&params.text) {
+        Some(svg) => (
+            [
+                (header::CONTENT_TYPE, "image/svg+xml"),
+                (header::CACHE_CONTROL, "private, max-age=3600"),
+                (
+                    header::CONTENT_SECURITY_POLICY,
+                    "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+                ),
+            ],
+            svg,
+        )
+            .into_response(),
+        None => api_error(StatusCode::BAD_REQUEST, "Could not encode that").into_response(),
+    }
+}
+
+fn qr_svg(text: &str) -> Option<String> {
+    use qrcode::render::svg;
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    Some(
+        code.render::<svg::Color<'_>>()
+            .min_dimensions(256, 256)
+            .dark_color(svg::Color("#000000"))
+            .light_color(svg::Color("#ffffff"))
+            .quiet_zone(true)
+            .build(),
+    )
+}
+
 // ------------------------------------------------------------- public routes
 
 fn not_found() -> Response {
@@ -1117,6 +1169,18 @@ mod tests {
         assert!(!KEYS
             .iter()
             .any(|(k, _)| k.contains("Control") || k.starts_with('F')));
+    }
+
+    #[test]
+    fn links_become_qr_codes() {
+        let svg = qr_svg(&format!(
+            "https://browser.example.org/share/fnuc/{}",
+            "A".repeat(86)
+        ))
+        .unwrap();
+        assert!(svg.starts_with("<?xml") || svg.starts_with("<svg"));
+        assert!(svg.contains("<svg") && svg.contains("#000000"));
+        assert!(qr_svg(&"x".repeat(5000)).is_none());
     }
 
     #[test]

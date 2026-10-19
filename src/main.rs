@@ -846,6 +846,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(share_resource).post(share_resource),
         )
         .route("/api/shares", get(api_list_shares).post(api_create_share))
+        .route("/api/qr", get(api_qr))
         .route("/api/notes", get(notes::api_summaries))
         .route(
             "/api/notes/{kind}/{id}",

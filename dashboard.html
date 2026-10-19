@@ -164,6 +164,11 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-
 .share-lead { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
 .share-linkbox { display: flex; align-items: center; gap: 6px; padding: 5px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--public) 45%, var(--line)); background: var(--hover); }
 .share-linkbox[hidden] { display: none; }
+.share-qr { display: flex; align-items: center; gap: 14px; }
+.share-qr[hidden] { display: none; }
+.share-qr img { width: 112px; height: 112px; flex: none; border-radius: 8px; background: #fff; padding: 4px; }
+.share-qr span { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.share-qr b { display: block; color: var(--fg); font-size: 13.5px; }
 .share-linkbox input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: 12.5px var(--mono); padding: 0 6px; outline: none; }
 .share-copy { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--public); color: #fff; font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
 .share-copy.done { background: var(--ok, #10b981); }
@@ -1110,6 +1115,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         <input id="shareLink" readonly spellcheck="false" aria-label="Public link">
         <button type="button" class="share-copy" id="shareCopy"><svg class="i sm"><use href="#i-copy"/></svg><span>Copy</span></button>
         <a class="btn icon sm ghost" id="shareOpen" target="_blank" rel="noopener noreferrer" title="Open the link" aria-label="Open the link"><svg class="i sm"><use href="#i-arrow"/></svg></a>
+      </div>
+      <div class="share-qr" id="shareQrRow" hidden>
+        <img id="shareQr" width="112" height="112" alt="QR code of the public link">
+        <span><b>Scan to open</b>The link as a QR code, for a phone or a projector.</span>
       </div>
       <div class="share-rows">
         <label class="share-row" id="shareModeField">
@@ -3098,6 +3107,9 @@ function fillShare(item, fresh = false) {
   syncShareWarn(kind);
   $('shareLinkField').hidden = !sh;
   if (sh && $('shareLink').value !== sh.url) $('shareLink').value = sh.url;
+  $('shareQrRow').hidden = !sh;
+  const qr = sh ? `/api/qr?text=${encodeURIComponent(sh.url)}` : '';
+  if (sh && $('shareQr').getAttribute('src') !== qr) $('shareQr').src = qr;
   $('shareOpen').href = sh?.url || '#';
   const sel = $('shareExpiry');
   if (fresh || (!shareBusy && document.activeElement !== sel)) {
