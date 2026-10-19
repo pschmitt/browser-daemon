@@ -1049,6 +1049,23 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </div>
 </dialog>
 
+<!-- Start a recording (sessions with sound) -->
+<dialog class="modal" id="recordModal" aria-labelledby="recordTitle">
+  <div class="sheet" style="max-width:400px">
+    <div class="sheet-head"><h2 id="recordTitle">Start recording</h2></div>
+    <div class="sheet-body">
+      <div class="muted" style="font-size:13.5px">Records <b id="recordWhat"></b> until you stop it; it shows up under Recordings.</div>
+      <div class="share-rows">
+        <label class="share-row">
+          <span class="t"><b>Record sound</b><small>The session's audio, played in step with the pictures.</small></span>
+          <input type="checkbox" role="switch" id="recordSound"><span class="share-switch" aria-hidden="true"></span>
+        </label>
+      </div>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="recordOk"><svg class="i sm"><use href="#i-rec"/></svg>Start recording</button></div>
+  </div>
+</dialog>
+
 <!-- Everything shared publicly -->
 <dialog class="modal" id="publicModal" aria-labelledby="publicTitle">
   <div class="sheet" style="max-width:600px">
@@ -2199,10 +2216,10 @@ const ACT = {
   },
   'session-menu': (el) => {
     const s = byKey.sessions.get(el.dataset.key); if (!s) return;
-    const wsUrl = `${nodeBase(s.node_name).replace(/^http/, 'ws')}/${s.engine === 'firefox' ? 'firefox' : 'chromium'}?session_id=${s.id}`;
     const rec = [
-      { icon: s.is_recording ? 'stop' : 'rec', label: s.is_recording ? 'Stop recording' : !s.audio ? 'Start recording' : s.record_audio ? 'Start recording (with sound)' : 'Start recording (silent)', run: () => toggleRecording(s) },
-      !s.is_recording && s.audio && { icon: 'rec', label: s.record_audio ? 'Start recording without sound' : 'Start recording with sound', run: () => toggleRecording(s, !s.record_audio) },
+      s.is_recording
+        ? { icon: 'stop', label: 'Stop recording', run: () => toggleRecording(s) }
+        : { icon: 'rec', label: s.audio ? 'Start recording…' : 'Start recording', run: () => (s.audio ? openRecordModal(s) : toggleRecording(s)) },
       s.is_recording && (s.recording_paused
         ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
         : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
@@ -2224,7 +2241,6 @@ const ACT = {
       s.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(s) },
       '-',
       { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
-      { icon: 'copy', label: 'Copy WebSocket URL', run: () => copyText(wsUrl) },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
       !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
@@ -2664,6 +2680,22 @@ async function stopSession(s) {
 
 // audio: whether the recording takes the sound (default: the session's, from its
 // profile or node).
+// Starting a recording of a session with sound: one dialog, the sound a switch
+// (the session's default first).
+let recordFor = null;
+function openRecordModal(s) {
+  recordFor = keyOf.session(s);
+  $('recordWhat').textContent = sessName(s);
+  $('recordSound').checked = !!s.record_audio;
+  openModal('recordModal');
+  setTimeout(() => $('recordOk').focus(), 40);
+}
+$('recordOk').addEventListener('click', () => {
+  const s = byKey.sessions.get(recordFor);
+  closeModal('recordModal');
+  if (s && !s.is_recording) toggleRecording(s, $('recordSound').checked);
+});
+$('recordModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeModal('recordModal'); });
 function toggleRecording(s, audio) {
   const path = `/sessions/${enc(s.id)}/${s.is_recording ? 'stop-record' : 'record'}${!s.is_recording && audio !== undefined ? `?audio=${audio}` : ''}`;
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),
@@ -3000,9 +3032,11 @@ function highlightJson(json) {
   return out + esc(json.slice(last));
 }
 
+// The CDP / BiDi endpoint of a session, for automation clients.
+const sessionWsUrl = (s) => `${nodeBase(s.node_name).replace(/^http/, 'ws')}/${s.engine === 'firefox' ? 'firefox' : 'chromium'}?session_id=${s.id}`;
 function showSessionDetails(s) {
   showDetails(sessName(s), [
-    ['Name', esc(sessName(s))], ['Session', `<span class="mono">${esc(s.id)}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
+    ['Name', esc(sessName(s))], ['Session', `<span class="mono">${esc(s.id)}</span>`], ['WebSocket URL', `<span class="mono">${esc(sessionWsUrl(s))}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
     ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Persistent: runs until stopped' : 'Ephemeral: ends with its last client'],
     ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Screen', { native: 'Native', phone: 'Phone' }[s.screen] || 'Window'], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', (s.clients || []).length ? (s.clients || []).map((c) => esc(clientInfo(c)).replace(/\n/g, '<br>')).join('<br><br>') : esc(s.client_count)], ['Tabs', esc(s.tabs_count)], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
   ], s);
