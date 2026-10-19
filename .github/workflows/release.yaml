@@ -76,7 +76,10 @@ jobs:
           tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
             --owner=0 --group=0 --numeric-owner -cf - "$pkg" |
             gzip -n -9 > "$pkg.tar.gz"
-          tar -tzf "$pkg.tar.gz" | grep -Fqx "$pkg/browser-daemon"
+          gzip -t "$pkg.tar.gz"
+          # Listed to a file: grep -q quitting early would break tar's pipe (pipefail).
+          tar -tzf "$pkg.tar.gz" > "$pkg.contents"
+          grep -Fqx "$pkg/browser-daemon" "$pkg.contents"
       - uses: actions/upload-artifact@v4
         with:
           name: tarball-${{ matrix.target }}
