@@ -288,7 +288,8 @@
   #sessMenu hr, #profMenu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
   .sm-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 2px; font-weight: 700; font-size: 14px; }
   #smTitle { cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sm-engine { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; background: var(--btn); color: var(--muted); }
+  .sm-engine { flex: none; width: 22px; height: 22px; display: grid; place-items: center; }
+  .sm-engine svg, #sessPop .sp-eng svg { width: 18px; height: 18px; }
   .sm-status { padding: 0 10px 8px; font-size: 12px; color: var(--muted); }
   .sm-rec { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 6px; }
   .sm-rec-gap { flex: 1; }
@@ -428,6 +429,11 @@
 </style>
 </head>
 <body>
+<!-- The browser engines' icons (as in the dashboard). -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-chromium" viewBox="0 0 24 24"><image width="24" height="24" href="data:image/png;base64,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"/></symbol>
+  <symbol id="i-firefox" viewBox="0 0 24 24"><image width="24" height="24" href="data:image/png;base64,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"/></symbol>
+</svg>
 <div id="tabStrip">
   <a href="/" class="ib" id="dash" aria-label="Dashboard" title="Return to Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></a>
   <button class="ib chev" id="dashMore" aria-label="Other sessions" title="Other sessions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
@@ -3324,7 +3330,7 @@ function showProfMenu(open = $("profMenu").hidden) {
   $("pmProfile").hidden = !named;
   $("pmThrowaway").hidden = named;
   $("pmEdit").hidden = true;
-  $("pmEngine").textContent = sess?.engine || "chromium";
+  setEngineIcon($("pmEngine"), sess?.engine);
   $("pmTitle").textContent = named ? sess.profile : "Throwaway session";
   $("pmNote").textContent = named
     ? "Its logins, cookies and storage are kept between sessions."
@@ -3998,7 +4004,7 @@ async function openSessPop() {
       const base = x.node_name === local ? "" : (x.node_url || "").replace(/\/$/, "");
       const href = `${base}/handoff/?session=${encodeURIComponent(x.id)}`;
       const eng = x.engine === "firefox" ? "firefox" : "chromium";
-      return `<a href="${esc(href)}" role="menuitem" aria-label="${esc((x.name || x.profile || "Throwaway") + ", " + x.node_name + ", " + (eng === "firefox" ? "Firefox" : "Chromium"))}"><span class="sp-eng ${eng}" aria-hidden="true">${eng === "firefox" ? "FF" : "CR"}</span>`
+      return `<a href="${esc(href)}" role="menuitem" aria-label="${esc((x.name || x.profile || "Throwaway") + ", " + x.node_name + ", " + (eng === "firefox" ? "Firefox" : "Chromium"))}"><span class="sp-eng ${eng}" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-${eng}"/></svg></span>`
         + `<span class="sp-t"><b>${x.audible ? speakerIcon().outerHTML : ""}${esc(x.name || x.profile || "Throwaway")}</b><span>${esc(x.node_name)} · ${x.name ? esc(x.profile || "Throwaway") + " · " : ""}${formatUptime(Math.floor(x.uptime_seconds || 0))}${tab ? " · " + esc(tab.title || tab.url) : ""}</span></span></a>`;
     }).join("") : '<div class="sp-empty">No other sessions are running.</div>') + '<hr><a href="/" role="menuitem"><span class="sp-eng" aria-hidden="true">⌂</span><span class="sp-t"><b>Dashboard</b></span></a>';
   } catch (err) {
@@ -4239,6 +4245,16 @@ function renderWatchers() {
 }
 $("watchChip").onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
 
+// The engine as its icon, named in the tooltip.
+function setEngineIcon(el, engine) {
+  const eng = engine === "firefox" ? "firefox" : "chromium";
+  if (el.dataset.engine === eng) return;
+  el.dataset.engine = eng;
+  el.innerHTML = `<svg viewBox="0 0 24 24"><use href="#i-${eng}"/></svg>`;
+  el.title = eng === "firefox" ? "Firefox (WebDriver BiDi)" : "Chromium (CDP)";
+  el.setAttribute("aria-label", el.title);
+}
+
 function renderSession() {
   if (!sess) return;
   E.sessBtn.hidden = false;
@@ -4247,7 +4263,7 @@ function renderSession() {
   E.sessBtn.classList.toggle("rec", !!rec);
   E.sessBtn.classList.toggle("paused", !!paused);
   E.sessBtn.title = rec ? (paused ? "Session: recording paused" : "Session: recording") : "Session: recording, stop";
-  $("smEngine").textContent = sess.engine || "chromium";
+  setEngineIcon($("smEngine"), sess.engine);
   $("smDevtools").hidden = (sess.engine || "chromium") !== "chromium";
   $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
   // The profile (or "Throwaway") in the tab bar; the latter offers to keep the data.
