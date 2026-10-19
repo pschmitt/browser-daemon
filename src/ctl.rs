@@ -666,6 +666,71 @@ pub enum NodeCmd {
 
 // -------------------------------------------------------------------- client
 
+#[derive(Args, Debug)]
+pub struct ExtensionArgs {
+    #[command(flatten)]
+    pub conn: Conn,
+    #[command(subcommand)]
+    pub cmd: ExtensionCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ExtensionCmd {
+    /// Make a single-use pairing code for the exact origin shown in the popup.
+    Pair {
+        #[arg(long)]
+        origin: String,
+        /// Seconds the browser may remain connected (60–28800).
+        #[arg(long, default_value_t = 3600)]
+        lifetime_secs: u64,
+    },
+    /// List connected browsers and explicitly shared tabs on this daemon.
+    List,
+    /// End a browser's grant now.
+    Revoke { id: Uuid },
+    /// Act on one shared tab. JSON params may be supplied on stdin with `-`.
+    Command {
+        id: Uuid,
+        tab: u32,
+        action: String,
+        #[arg(default_value = "{}")]
+        params: String,
+    },
+}
+
+pub async fn extension(args: ExtensionArgs) -> R<()> {
+    let c = Client::connect(&args.conn).await?;
+    let req = match args.cmd {
+        ExtensionCmd::Pair {
+            origin,
+            lifetime_secs,
+        } => c
+            .req(Method::POST, "/api/extension/pair")
+            .json(&json!({"origin": origin, "lifetime_secs": lifetime_secs})),
+        ExtensionCmd::List => c.req(Method::GET, "/api/extension/nodes"),
+        ExtensionCmd::Revoke { id } => c.req(Method::DELETE, &format!("/api/extension/nodes/{id}")),
+        ExtensionCmd::Command {
+            id,
+            tab,
+            action,
+            params,
+        } => {
+            let params = if params == "-" {
+                let mut input = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+                input
+            } else {
+                params
+            };
+            let params: Value = serde_json::from_str(&params)?;
+            c.req(Method::POST, &format!("/api/extension/nodes/{id}/command"))
+                .json(&json!({"tab": tab, "action": action, "params": params}))
+        }
+    };
+    c.print_json(&c.call(req).await?);
+    Ok(())
+}
+
 struct Client {
     http: reqwest::Client,
     base: String,

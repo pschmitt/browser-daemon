@@ -246,6 +246,8 @@ pub struct AppState {
     pub overview: Arc<OverviewHub>,
     /// What the sessions' pages downloaded (see downloads.rs).
     pub downloads: Arc<downloads::Downloads>,
+    /// Untrusted, temporary browser registrations (not cluster peers).
+    pub extensions: Arc<extension::Broker>,
 }
 
 /// How long a profile directory's size is taken as it was.

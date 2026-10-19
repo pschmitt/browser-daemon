@@ -21,12 +21,14 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           browser-daemon = pkgs.callPackage ./nix/package.nix { inherit rev; };
+          browser = import ./nix/browser.nix { inherit pkgs; };
           adblock = pkgs.callPackage ./nix/adblock.nix { };
         in
         {
           packages = {
             default = browser-daemon;
             inherit browser-daemon;
+            inherit (browser) firefox-addon chromium-addon browser-native-host;
             inherit (adblock) ublock-origin-lite ublock-origin-xpi;
           };
 

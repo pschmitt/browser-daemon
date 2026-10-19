@@ -17,3 +17,19 @@ fmt:
 
 test:
   cargo test
+
+# Packages are generated from the same source/version, as in rbw's extension.
+browser-build:
+  python3 browser/build.py
+
+browser-check:
+  node --check browser/extension/background.js
+  node --check browser/extension/popup.js
+  node --check assets/extension.js
+  node --test browser/check.mjs
+  python3 browser/check_companion.py
+
+browser-smoke:
+  node browser/smoke_chromium.mjs
+  python3 browser/smoke_firefox.py
+  python3 browser/smoke_firefox_roundtrip.py

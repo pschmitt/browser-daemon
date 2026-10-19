@@ -3,3 +3,5 @@ result
 result-*
 *.log
 .direnv
+/browser/dist/
+/browser/__pycache__/

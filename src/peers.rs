@@ -152,6 +152,9 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         return None;
     }
     let (devtools, wait) = match (method.as_str(), segments.as_slice()) {
+        ("GET", ["extension", "nodes"]) => (false, Short),
+        ("DELETE", ["extension", "nodes", _]) => (false, Short),
+        ("POST", ["extension", "nodes", _, "command"]) => (false, Short),
         ("POST", ["sessions"]) => (false, Short),
         ("DELETE", ["sessions", _]) => (false, Short),
         ("GET", ["sessions", _, "screenshot"]) => (false, Short),
@@ -550,6 +553,13 @@ mod tests {
         );
         assert!(target(Method::GET, "sessions/abc/downloads").is_some());
         assert!(target(Method::DELETE, "sessions/abc/downloads/g1").is_some());
+        assert!(target(Method::GET, "extension/nodes").is_some());
+        assert!(target(Method::POST, "extension/nodes/abc/command").is_some());
+        assert!(target(Method::DELETE, "extension/nodes/abc").is_some());
+        // A viewer token must never be promoted to a pairing credential by
+        // the forwarding node's cluster-secret header.
+        assert!(target(Method::POST, "extension/pair").is_none());
+        assert!(target(Method::GET, "extension/connect").is_none());
         assert!(target(Method::PUT, "json/new").unwrap().devtools);
         assert!(target(Method::PUT, "json/close/ABC").unwrap().devtools);
         // The method matters.

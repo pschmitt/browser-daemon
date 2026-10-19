@@ -11,6 +11,7 @@ mod clients;
 mod ctl;
 mod display;
 mod downloads;
+mod extension;
 mod favicon;
 mod history;
 mod idle;
@@ -343,6 +344,8 @@ pub enum Command {
     /// The mesh's nodes: list, show, add, remove.
     #[command(visible_alias = "nodes")]
     Node(ctl::NodeArgs),
+    /// Pair, list, control or disconnect temporary browser extensions.
+    Extension(ctl::ExtensionArgs),
     /// Terminal UI for the mesh: sessions, profiles, recordings and nodes.
     Tui(ctl::Conn),
     /// MCP server for AI agents: one browser tool set for every node and profile.
@@ -407,6 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Profile(a) => return ctl_exit(ctl::profile(a).await),
         Command::Recording(a) => return ctl_exit(ctl::recording(a).await),
         Command::Node(a) => return ctl_exit(ctl::node(a).await),
+        Command::Extension(a) => return ctl_exit(ctl::extension(a).await),
         // stdout carries the protocol: the log goes to stderr, unset.
         Command::Mcp(a) => return mcp::run(a).await,
         Command::Completions { shell } => {
@@ -648,6 +652,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dir_sizes: Arc::default(),
         overview: Arc::default(),
         downloads: Arc::default(),
+        extensions: Arc::new(extension::Broker::new()),
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -814,6 +819,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/assets/common.css", get(common_css))
         .route("/health", get(health_check))
         .route("/api/auth/token", get(api_auth_token))
+        .route("/extension/", get(extension::page))
+        .route("/assets/extension.js", get(extension::javascript))
+        .route("/assets/extension.css", get(extension::stylesheet))
+        .route("/api/extension/pair", post(extension::pair))
+        .route("/api/extension/connect", get(extension::connect))
+        .route("/api/extension/nodes", get(extension::list))
+        .route("/api/extension/nodes/{id}", delete(extension::revoke))
+        .route(
+            "/api/extension/nodes/{id}/command",
+            post(extension::command),
+        )
         .route("/json/version", get(json_version))
         .route("/json", get(json_list))
         .route("/json/list", get(json_list))

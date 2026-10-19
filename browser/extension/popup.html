@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Browser node</title><link rel="stylesheet" href="popup.css">
+<body>
+<header><img src="icon.png" alt="" width="36" height="36"><div><h1>Browser node</h1><p id="status" role="status">Disconnected</p></div><button id="stop" class="danger">Stop sharing</button></header>
+<p id="error" role="alert" hidden></p>
+<section id="companion" hidden><h2>Firefox native control</h2>
+  <p>For trusted pointer and keyboard input, install the companion with <code>python3 browser/install.py</code> and restart Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --marionette</code>. This enables a powerful local automation interface; keep it on loopback.</p>
+  <button id="native" type="button">Enable installed companion</button><p id="nativeStatus" role="status"></p>
+</section>
+<section id="setup">
+  <h2>Pair this browser</h2>
+  <p>On a trusted machine, run this command with your daemon URL and cluster secret file. The code is single use and expires in five minutes.</p>
+  <code id="pairCommand"></code>
+  <p class="hint">Extension origin: <span id="origin"></span></p>
+  <form id="connect">
+    <label>Daemon URL<input id="server" type="url" placeholder="https://browser.example.org" required></label>
+    <label>Browser name<input id="name" maxlength="80" placeholder="My laptop" required></label>
+    <label>Pairing code<input id="code" type="password" autocomplete="off" spellcheck="false" required pattern="[a-f0-9]{64}"></label>
+    <button type="submit">Connect temporarily</button>
+  </form>
+</section>
+<section id="connected" hidden>
+  <p id="expires"></p>
+  <p>Select the tabs to share. New tabs and private windows are excluded. Navigation ends a tab's grant; share it again to continue.</p>
+  <form id="sharing">
+    <div id="tabs"></div>
+    <label class="check"><input id="control" type="checkbox">Allow remote control of selected tabs</label>
+    <p class="hint">Control lets trusted daemon clients act as you on these sites, including reading page data and using signed-in accounts. Chromium also permits page JavaScript through CDP. View only shares screenshots and page content.</p>
+    <p id="browserNote" class="hint"></p>
+    <button type="submit">Apply tab sharing</button>
+  </form>
+</section>
+<footer>Sharing ends on disconnect, expiry or browser restart. Shortcut: Ctrl+Shift+Period.</footer>
+<script src="policy.js"></script><script src="popup.js"></script>
+</body></html>

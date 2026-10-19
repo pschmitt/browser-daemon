@@ -65,6 +65,8 @@ const INSTRUCTIONS: &str = "Browsers run on a mesh of nodes. Without a choice yo
 throwaway browser on the node with the most room. To work in a saved profile (its logins and \
 cookies persist, e.g. `work` for Outlook and OpsGenie) call browser_use with its name; \
 browser_status lists the profiles you may open and the nodes. Switching closes the current browser. \
+For the user's own running browsers, browser_shared_nodes lists temporary extension registrations \
+and browser_shared_command acts on their explicitly shared tabs; browser_use selects managed browsers. \
 Never type a password, token or TOTP code yourself: use browser_fill_secret when it is listed.";
 
 /// A node and profile the browser runs on.
@@ -107,6 +109,10 @@ fn cdp_endpoint(target: &Target, token: Option<&str>) -> String {
         format!("?{}", query.join("&"))
     };
     format!("{}/chromium{query}", target.ws_base)
+}
+
+fn url_component(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 /// A running Playwright MCP.
@@ -261,6 +267,24 @@ fn own_tools(secrets: &[String]) -> Vec<Value> {
             "annotations": { "title": "Use another browser", "readOnlyHint": false }
         }),
     ];
+    tools.push(json!({
+        "name": "browser_shared_nodes",
+        "description": "List temporary browsers registered through the Browser Daemon Node extension across the mesh. Only tabs explicitly shared by their owner appear. These are the user's real signed-in tabs. Use browser_shared_command to view or control them; browser_use still selects managed browsers.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "annotations": {"title": "Shared browsers", "readOnlyHint": true}
+    }));
+    tools.push(json!({
+        "name": "browser_shared_command",
+        "description": "View or control a tab from browser_shared_nodes. Screenshot/snapshot work with view permission; other actions need the owner's separate control grant. Navigation ends sharing, including reload. Actions: screenshot, snapshot, click {x,y} or {selector}, type {text,selector?}, key {key}, scroll {x,y}, navigate {url}, back, forward, reload, focus, close. Chromium also supports cdp {method,params} for allowed Runtime/DOM/Input/Accessibility methods. No browser-wide CDP. Firefox's optional native companion provides trusted input and evaluate {script,args?} (a script body executed in the content context); without it, input uses DOM actions. Do not type credentials here: arguments and results are logged. Access ends on local stop, navigation, expiry or disconnect.",
+        "inputSchema": {"type": "object", "properties": {
+            "daemon": {"type": "string", "description": "Hosting daemon from browser_shared_nodes; omit for the local daemon."},
+            "browser": {"type": "string", "description": "Temporary browser UUID."},
+            "tab": {"type": "integer", "minimum": 0},
+            "action": {"type": "string", "enum": ["screenshot", "snapshot", "click", "type", "key", "scroll", "navigate", "back", "forward", "reload", "focus", "close", "cdp", "evaluate"]},
+            "params": {"type": "object"}
+        }, "required": ["browser", "tab", "action"], "additionalProperties": false},
+        "annotations": {"title": "Shared browser action", "readOnlyHint": false}
+    }));
     if !secrets.is_empty() {
         tools.push(json!({
             "name": "browser_fill_secret",
@@ -413,6 +437,28 @@ impl State {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
         match name {
+            "browser_shared_nodes" => Ok(match self.shared_nodes().await {
+                Ok(value) => text_result(value.to_string(), false),
+                Err(error) => text_result(error, true),
+            }),
+            "browser_shared_command" => Ok(match self.shared_command(&args).await {
+                Ok(value) => {
+                    if let Some(data) = value["result"]["data"]
+                        .as_str()
+                        .filter(|_| args["action"] == "screenshot")
+                    {
+                        let mime = if value["result"]["format"] == "png" {
+                            "image/png"
+                        } else {
+                            "image/jpeg"
+                        };
+                        json!({"content": [{"type": "image", "mimeType": mime, "data": data}]})
+                    } else {
+                        text_result(value.to_string(), value["error"].is_string())
+                    }
+                }
+                Err(error) => text_result(error, true),
+            }),
             "browser_status" => Ok(match self.status().await {
                 Ok(text) => text_result(text, false),
                 Err(e) => text_result(e, true),
@@ -550,6 +596,89 @@ impl State {
     }
 
     // ------------------------------------------------------------------ mesh
+
+    async fn extension_request(&self, path: &str, body: Option<Value>) -> Result<Value, String> {
+        let mut req = if let Some(body) = body {
+            self.http.post(format!("{}{path}", self.base)).json(&body)
+        } else {
+            self.http.get(format!("{}{path}", self.base))
+        };
+        if let Some(ref secret) = self.secret {
+            req = req.header("X-Browser-Cluster-Secret", secret);
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|_| "Could not reach the hosting daemon".to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Shared browser request: HTTP {}",
+                response.status()
+            ));
+        }
+        response
+            .json()
+            .await
+            .map_err(|_| "Invalid shared browser response".to_string())
+    }
+
+    async fn shared_nodes(&self) -> Result<Value, String> {
+        let overview = self.overview().await?;
+        let mut daemons = vec![(overview.local_node.name.clone(), "/api".to_string())];
+        daemons.extend(
+            overview
+                .peers
+                .iter()
+                .filter(|p| p.status == "online")
+                .map(|p| {
+                    (
+                        p.name.clone(),
+                        format!("/api/peers/{}", url_component(&p.name)),
+                    )
+                }),
+        );
+        let reports = futures_util::future::join_all(daemons.into_iter().map(
+            |(daemon, prefix)| async move {
+                match self
+                    .extension_request(&format!("{prefix}/extension/nodes"), None)
+                    .await
+                {
+                    Ok(value) => json!({"daemon": daemon, "nodes": value["nodes"]}),
+                    Err(error) => json!({"daemon": daemon, "error": error}),
+                }
+            },
+        ))
+        .await;
+        Ok(json!({"daemons": reports}))
+    }
+
+    async fn shared_command(&self, args: &Value) -> Result<Value, String> {
+        let browser = args["browser"]
+            .as_str()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .ok_or("Expected a browser UUID")?;
+        let tab = args["tab"]
+            .as_u64()
+            .filter(|n| *n <= u32::MAX as u64)
+            .ok_or("Expected a tab ID")?;
+        let action = args["action"].as_str().ok_or("Expected an action")?;
+        let prefix = match args["daemon"].as_str().filter(|s| !s.is_empty()) {
+            Some(daemon) => {
+                let overview = self.overview().await?;
+                if overview.local_node.name == daemon {
+                    "/api".to_string()
+                } else if overview.peers.iter().any(|p| p.name == daemon) {
+                    format!("/api/peers/{}", url_component(daemon))
+                } else {
+                    return Err("Unknown hosting daemon".into());
+                }
+            }
+            None => "/api".to_string(),
+        };
+        self.extension_request(&format!("{prefix}/extension/nodes/{browser}/command"), Some(json!({
+            "tab": tab, "action": action, "params": args.get("params").cloned().unwrap_or(json!({})),
+        }))).await
+    }
 
     async fn overview(&self) -> Result<MeshOverview, String> {
         let mut req = self.http.get(format!("{}/api/mesh/overview", self.base));

@@ -26,6 +26,7 @@ rustPlatform.buildRustPackage {
         ../dashboard.png
         ../dashboard-profiles.png
         ../nix
+        ../browser
         ../flake.nix
         ../flake.lock
         ../justfile
@@ -64,7 +65,7 @@ rustPlatform.buildRustPackage {
     description = "Multi-tenant Chromium CDP daemon with virtual display isolation and mobile handoff";
     homepage = "https://github.com/pschmitt/browser-daemon";
     license = lib.licenses.gpl3Only;
-    maintainers = with lib.maintainers; [ pschmitt ];
+    maintainers = [ lib.maintainers.pschmitt ];
     platforms = lib.platforms.linux;
     mainProgram = "browser-daemon";
   };

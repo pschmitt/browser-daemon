@@ -151,6 +151,19 @@ impl Auth {
                 "Host not allowed (see --allowed-host)",
             ));
         }
+        // This single endpoint authenticates the first WebSocket message with
+        // a single-use code bound to this exact extension origin. It never
+        // accepts a cookie, viewer token or cluster secret as registration.
+        if req.method == Method::GET && req.path == "/api/extension/connect" {
+            return if req.origin.is_some_and(crate::extension::extension_origin) {
+                Ok(Credential::Open)
+            } else {
+                Err(Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "Extension origin required",
+                ))
+            };
+        }
         if let Some(origin) = req.origin {
             if !origin_matches_host(origin, req.host) && !self.hosts.allows_origin(origin) {
                 return Err(Refusal::new(StatusCode::FORBIDDEN, "Cross-origin request"));
@@ -274,6 +287,9 @@ pub fn is_share(path: &str) -> bool {
 /// Routes that move the vault's secrets or hand the cluster secret to a third
 /// party: a viewer's token (which a page in a session can obtain) is not enough.
 pub fn secret_only(method: &Method, path: &str) -> bool {
+    if method == Method::POST && path == "/api/extension/pair" {
+        return true;
+    }
     if path.starts_with("/api/passkey-helper/") {
         return true;
     }
@@ -745,6 +761,7 @@ mod tests {
         let a = auth(Some("s3cret"));
         let (t, _) = a.issue(1_000).unwrap();
         for (m, path) in [
+            (Method::POST, "/api/extension/pair"),
             (Method::GET, "/api/passkey-helper/next"),
             (
                 Method::POST,
@@ -767,6 +784,36 @@ mod tests {
         assert!(!secret_only(&Method::GET, "/api/peers"));
         assert!(!secret_only(&Method::DELETE, "/api/peers/rofl-13/sessions"));
         assert!(!secret_only(&Method::POST, "/api/peers/rofl-13/sessions"));
+    }
+
+    #[test]
+    fn extension_origin_exception_is_limited_to_the_upgrade_endpoint() {
+        let a = auth(Some("s3cret"));
+        let mut r = req("/api/extension/connect");
+        r.origin = Some("chrome-extension://abcdefghijklmnop");
+        r.site = Some("cross-site");
+        assert_eq!(decide(&a, &r), Ok(Credential::Open));
+        r.host = Some("rebound.evil");
+        assert_eq!(decide(&a, &r), Err(StatusCode::FORBIDDEN));
+        r.host = Some("browser.fnuc.test");
+        for path in [
+            "/api/extension/nodes",
+            "/api/extension/pair",
+            "/api/sessions",
+        ] {
+            r.path = path;
+            assert_eq!(decide(&a, &r), Err(StatusCode::FORBIDDEN));
+        }
+        r.path = "/api/extension/connect";
+        for origin in [
+            None,
+            Some("null"),
+            Some("https://evil.test"),
+            Some("chrome-extension://abc/path"),
+        ] {
+            r.origin = origin;
+            assert_eq!(decide(&a, &r), Err(StatusCode::FORBIDDEN));
+        }
     }
 
     #[test]

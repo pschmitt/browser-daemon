@@ -1,22 +1,145 @@
 name: ci
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
 
 jobs:
+  browser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build both browser packages
+        run: python3 browser/build.py
+      - name: Check JavaScript and permission boundaries
+        run: |
+          node --check browser/extension/background.js
+          node --check browser/extension/popup.js
+          node --check assets/extension.js
+          node --test browser/check.mjs
+          python3 browser/check_companion.py
+      - name: Verify checked-in signed packages
+        run: python3 browser/verify.py --signed-directory browser/packages
+      - name: Lint Firefox extension
+        run: npx --yes web-ext@8 lint --source-dir browser/dist/firefox --warnings-as-errors
+      - name: Preserve installable development packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-node-extensions
+          path: browser/dist/*.zip
+          if-no-files-found: error
+
+  # Same signing model as rbw: AMO unlisted XPI and Chromium CRX3. A tag
+  # signs only after every check on that exact source has passed. AMO signs
+  # a version once; reuse this job's artifacts if a later publish step fails.
+  browser-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [rust, nix, browser]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Match tag and package version
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('Cargo.toml').read_text())['package']['version']
+          assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Tag must match Cargo.toml'
+          PY
+      - name: Build extension packages
+        run: python3 browser/build.py
+      - name: Reuse signed packages matching this source
+        id: signed-packages
+        continue-on-error: true
+        run: |
+          python3 browser/verify.py --signed-directory browser/packages
+          mkdir -p browser/dist/signed
+          cp browser/packages/*.xpi browser/packages/*.crx browser/dist/signed/
+      - name: Sign Firefox with AMO
+        if: steps.signed-packages.outcome == 'failure'
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.BROWSER_NODE_AMO_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.BROWSER_NODE_AMO_API_SECRET }}
+        run: |
+          npm install --global web-ext@8
+          web-ext sign --channel=unlisted --source-dir=browser/dist/firefox --artifacts-dir=browser/dist/signed
+      - uses: browser-actions/setup-chrome@v2
+        if: steps.signed-packages.outcome == 'failure'
+      - name: Sign Chromium CRX3
+        if: steps.signed-packages.outcome == 'failure'
+        env:
+          CRX_PRIVATE_KEY: ${{ secrets.BROWSER_NODE_CHROMIUM_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          key_file="$RUNNER_TEMP/browser-node.pem"
+          trap 'rm -f "$key_file"' EXIT
+          umask 077
+          printf '%s' "$CRX_PRIVATE_KEY" > "$key_file"
+          google-chrome --headless --no-sandbox --disable-gpu \
+            --pack-extension="$GITHUB_WORKSPACE/browser/dist/chromium" \
+            --pack-extension-key="$key_file"
+          cp browser/dist/chromium.crx browser/dist/signed/browser-daemon-node-chromium.crx
+      - name: Verify signed packages match source
+        run: python3 browser/verify.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-browser-node-extensions
+          path: browser/dist/signed/*
+          if-no-files-found: error
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: browser/dist/signed/*
+      - name: Publish signed extension assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1
+          then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" browser/dist/signed/* --repo "$GITHUB_REPOSITORY"
+
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v30
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Format
         run: nix develop -c cargo fmt --all --check
       - name: Clippy
         run: nix develop -c cargo clippy --all-targets -- -D warnings
       - name: Test
         run: nix develop -c cargo test
+      - name: Build integration binary and extension packages
+        run: |
+          nix develop -c cargo build
+          python3 browser/build.py
+      - name: Chromium extension round trip
+        run: nix develop -c node browser/smoke_chromium.mjs
+      - name: Firefox companion with real trusted input
+        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
+      - name: Firefox extension and native messaging round trip
+        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py
 
   nix:
     runs-on: ubuntu-latest

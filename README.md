@@ -41,6 +41,14 @@
 
 ![Profiles with free-text names and per-profile proxies](dashboard-profiles.png)
 
+## Share an existing desktop browser
+
+The [Browser Daemon Node extension](browser/README.md) registers a running
+Chromium or Firefox browser temporarily, with selected-tab sharing and a separate
+remote-control grant. It includes a live browser page, CLI/MCP tools, and an
+optional Linux Firefox companion for trusted input. Build development packages
+with `python3 browser/build.py`; see its README for pairing and signed releases.
+
 ## NixOS Module
 
 Add the flake input:
