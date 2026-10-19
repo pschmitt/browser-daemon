@@ -1016,7 +1016,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <div class="sheet share-sheet" style="max-width:480px">
     <div class="share-head">
       <span class="share-icon" aria-hidden="true"><svg class="i"><use href="#i-globe"/></svg></span>
-      <div class="share-titles"><h2 id="shareTitle">Share publicly</h2><span id="shareWhat"></span></div>
+      <div class="share-titles"><h2 id="shareTitle">Share</h2><span id="shareWhat"></span></div>
       <span class="share-state" id="shareState" hidden></span>
     </div>
     <div class="sheet-body">
@@ -2220,7 +2220,7 @@ const ACT = {
         ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
       ]) },
       '-',
-      { icon: s.share ? 'link' : 'globe', label: s.share ? 'Public link…' : 'Share publicly…', run: () => openShare('session', s) },
+      { icon: s.share ? 'link' : 'globe', label: s.share ? 'Public link…' : 'Share…', run: () => openShare('session', s) },
       s.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(s) },
       '-',
       { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
@@ -2278,7 +2278,7 @@ const ACT = {
     openMenu(el, [
       { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
       { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
-      { icon: r.share ? 'link' : 'globe', label: r.share ? 'Public link…' : 'Share publicly…', run: () => openShare('recording', r) },
+      { icon: r.share ? 'link' : 'globe', label: r.share ? 'Public link…' : 'Share…', run: () => openShare('recording', r) },
       r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: r.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
@@ -2813,7 +2813,7 @@ function fillShare(item, fresh = false) {
   const sh = item.share;
   const firefox = kind === 'session' && item.engine === 'firefox';
   $('shareModal').classList.toggle('shared', !!sh);
-  $('shareTitle').textContent = sh ? 'Shared publicly' : 'Share publicly';
+  $('shareTitle').textContent = sh ? 'Shared publicly' : 'Share';
   $('shareWhat').textContent = `${kind === 'session' ? 'Session' : 'Recording'} · ${shareLabel(kind, item)}`;
   $('shareState').hidden = !sh;
   if (sh) $('shareState').textContent = sh.watching ? `● ${plural(sh.watching, 'person', 'people')} watching` : kind === 'session' ? '● Live' : '● Public';

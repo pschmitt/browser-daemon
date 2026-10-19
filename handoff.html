@@ -195,7 +195,7 @@
   @keyframes pk-spin { to { transform: rotate(360deg); } }
   #passkeyDialog .pk-info.locked { color: #f59e0b; background: rgba(245, 158, 11, .14); }
   #passkeyDialog .pk-info.bad { color: var(--bad); background: color-mix(in oklab, var(--bad) 14%, transparent); }
-  /* Share publicly: one dialog makes and manages the link. */
+  /* Share: one dialog makes and manages the link. */
   #shareDialog { border: 1px solid var(--line); border-radius: 18px; background: var(--bar); color: var(--fg); padding: 0; width: min(440px, calc(100vw - 24px));
     box-shadow: 0 24px 60px rgba(0, 0, 0, .45); overflow: hidden; }
   #shareDialog::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(3px); }
@@ -462,7 +462,7 @@
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search<select id="smSearch" aria-label="Search engine"></select></label>
   <button class="sm-item" id="smDownloads" hidden><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span id="smDownloadsText">Downloads</span></button>
-  <button class="sm-item" id="smShare" title="A link anyone can open to see this session, without signing in"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span id="smShareText">Share publicly…</span></button>
+  <button class="sm-item" id="smShare" title="A link anyone can open to see this session, without signing in"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span id="smShareText">Share…</span></button>
  <button class="sm-item" id="smSave" hidden title="Keep this session's logins, cookies and storage as a new profile"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
   <hr>
@@ -548,7 +548,7 @@
 <dialog id="shareDialog" aria-labelledby="shTitle">
   <div class="sh-head">
     <span class="sh-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
-    <h2 id="shTitle">Share publicly</h2>
+    <h2 id="shTitle">Share</h2>
     <span class="sh-state" id="shState" hidden></span>
   </div>
   <p class="sh-lead" id="shLead"></p>
@@ -3424,7 +3424,7 @@ function renderShareDialog() {
   const sh = sess?.share;
   const firefox = (sess?.engine || "chromium") !== "chromium";
   dlg.classList.toggle("shared", !!sh);
-  $("shTitle").textContent = sh ? "Shared publicly" : "Share publicly";
+  $("shTitle").textContent = sh ? "Shared publicly" : "Share";
   $("shState").hidden = !sh;
   if (sh) {
     $("shState").textContent = sh.watching ? `● ${sh.watching} watching` : "● Live";
@@ -4162,7 +4162,7 @@ function renderSession() {
   $("smSave").hidden = !!sess.profile;
   $("pubPill").hidden = !sess.share;
   renderWatchers();
-  $("smShareText").textContent = sess.share ? "Public link…" : "Share publicly…";
+  $("smShareText").textContent = sess.share ? "Public link…" : "Share…";
   if ($("shareDialog").open) renderShareDialog();
   // Which agent drives it, with its own mark.
   const driving = (sess.clients || []).filter((c) => c.agent);
