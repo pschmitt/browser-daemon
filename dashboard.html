@@ -152,10 +152,40 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-
 .public-banner[hidden] { display: none; }
 .public-banner .i { width: 16px; height: 16px; flex: none; }
 .public-banner span { flex: 1; min-width: 0; }
-.share-link { display: flex; gap: 8px; }
-.share-link .input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; }
-.share-warn { padding: 10px 12px; border-radius: var(--radius-sm); background: color-mix(in oklab, var(--public) 10%, transparent); color: var(--fg); font-size: 13px; line-height: 1.5; border-left: 3px solid var(--public); }
+.share-sheet { overflow: hidden; }
+.share-head { display: flex; align-items: center; gap: 12px; padding: 18px 18px 8px; background: linear-gradient(135deg, color-mix(in oklab, var(--public) 20%, transparent), transparent 70%); }
+.share-icon { width: 40px; height: 40px; flex: none; border-radius: 12px; display: grid; place-items: center; background: color-mix(in oklab, var(--public) 20%, transparent); color: var(--public); }
+.share-icon .i { width: 22px; height: 22px; }
+.share-titles { flex: 1; min-width: 0; }
+.share-titles h2 { margin: 0; font-size: 16.5px; }
+.share-titles span { display: block; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-state { flex: none; font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; color: var(--public); background: color-mix(in oklab, var(--public) 15%, transparent); }
+.share-state[hidden] { display: none; }
+.share-lead { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+.share-linkbox { display: flex; align-items: center; gap: 6px; padding: 5px; border-radius: 12px; border: 1px solid color-mix(in oklab, var(--public) 45%, var(--line)); background: var(--hover); }
+.share-linkbox[hidden] { display: none; }
+.share-linkbox input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: 12.5px var(--mono); padding: 0 6px; outline: none; }
+.share-copy { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--public); color: #fff; font: inherit; font-weight: 700; font-size: 13px; cursor: pointer; }
+.share-copy.done { background: var(--ok, #10b981); }
+.share-rows { display: flex; flex-direction: column; }
+.share-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); cursor: pointer; position: relative; }
+.share-row[hidden] { display: none; }
+.share-row .t { flex: 1; min-width: 0; }
+.share-row .t b { display: block; font-size: 14px; }
+.share-row .t small { display: block; font-size: 12.5px; color: var(--muted); }
+.share-row select.input { width: auto; max-width: 60%; }
+.share-row input[type="checkbox"] { position: absolute; opacity: 0; pointer-events: none; }
+.share-switch { width: 44px; height: 26px; flex: none; border-radius: 99px; background: var(--line-strong); position: relative; transition: background .2s; }
+.share-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35); transition: transform .2s; }
+.share-row input:checked + .share-switch { background: var(--public); }
+.share-row input:checked + .share-switch::after { transform: translateX(18px); }
+.share-row input:focus-visible + .share-switch { outline: 2px solid var(--public); outline-offset: 2px; }
+.share-row input:disabled + .share-switch { opacity: .4; }
+.share-warn { margin: -2px 0 10px; padding: 9px 11px; border-radius: var(--radius-sm); font-size: 12.5px; line-height: 1.5; color: var(--warn); background: var(--warn-soft); border-left: 3px solid var(--warn); }
+.share-warn[hidden] { display: none; }
 .share-meta { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.share-meta[hidden] { display: none; }
+#shareModal .sheet-foot [hidden] { display: none; }
 .public-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .public-list li { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .public-list .t { flex: 1; min-width: 0; }
@@ -981,38 +1011,42 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </form>
 </dialog>
 
-<!-- Public link of a session or recording -->
+<!-- Public link of a session or recording: makes it and manages it -->
 <dialog class="modal" id="shareModal" aria-labelledby="shareTitle">
-  <form class="sheet" id="shareForm" style="max-width:520px">
-    <div class="sheet-head"><h2 id="shareTitle">Share publicly</h2></div>
-    <div class="sheet-body">
-      <div class="share-warn" id="shareWarn"></div>
-      <div class="field" id="shareLinkField" hidden>
-        <label for="shareLink">Public link</label>
-        <div class="share-link"><input class="input" id="shareLink" readonly spellcheck="false"><button type="button" class="btn" id="shareCopy"><svg class="i sm"><use href="#i-copy"/></svg>Copy</button><a class="btn" id="shareOpen" target="_blank" rel="noopener noreferrer"><svg class="i sm"><use href="#i-arrow"/></svg>Open</a></div>
-        <div class="share-meta" id="shareMeta"></div>
-      </div>
-      <div class="field" id="shareModeField">
-        <label for="shareMode">People with the link can</label>
-        <select class="input" id="shareMode">
-          <option value="view">Watch only</option>
-          <option value="control">Watch and control (click, scroll, type)</option>
-        </select>
-        <div class="muted" id="shareModeNote" style="font-size:12.5px" hidden></div>
-      </div>
-      <div class="field">
-        <label for="shareExpiry" id="shareExpiryLabel">Link expires</label>
-        <select class="input" id="shareExpiry">
-          <option value="0">Never</option>
-          <option value="3600">In 1 hour</option>
-          <option value="86400">In 1 day</option>
-          <option value="604800">In 7 days</option>
-          <option value="2592000">In 30 days</option>
-        </select>
-      </div>
+  <div class="sheet share-sheet" style="max-width:480px">
+    <div class="share-head">
+      <span class="share-icon" aria-hidden="true"><svg class="i"><use href="#i-globe"/></svg></span>
+      <div class="share-titles"><h2 id="shareTitle">Share publicly</h2><span id="shareWhat"></span></div>
+      <span class="share-state" id="shareState" hidden></span>
     </div>
-    <div class="sheet-foot"><button type="button" class="btn danger-ghost" id="shareStop" hidden><svg class="i sm"><use href="#i-unlink"/></svg>Stop sharing</button><span style="flex:1"></span><button type="button" class="btn" data-close>Close</button><button type="submit" class="btn primary" id="shareOk">Create public link</button></div>
-  </form>
+    <div class="sheet-body">
+      <p class="share-lead" id="shareLead"></p>
+      <div class="share-linkbox" id="shareLinkField" hidden>
+        <input id="shareLink" readonly spellcheck="false" aria-label="Public link">
+        <button type="button" class="share-copy" id="shareCopy"><svg class="i sm"><use href="#i-copy"/></svg><span>Copy</span></button>
+        <a class="btn icon sm ghost" id="shareOpen" target="_blank" rel="noopener noreferrer" title="Open the link" aria-label="Open the link"><svg class="i sm"><use href="#i-arrow"/></svg></a>
+      </div>
+      <div class="share-rows">
+        <label class="share-row" id="shareModeField">
+          <span class="t"><b>Allow control</b><small id="shareModeNote">Visitors can click, scroll and type in the page, as you.</small></span>
+          <input type="checkbox" role="switch" id="shareControl"><span class="share-switch" aria-hidden="true"></span>
+        </label>
+        <div class="share-warn" id="shareWarn" hidden></div>
+        <label class="share-row">
+          <span class="t"><b>Link expires</b></span>
+          <select class="input" id="shareExpiry" aria-label="Link expires">
+            <option value="0">Never</option>
+            <option value="3600">In 1 hour</option>
+            <option value="86400">In 1 day</option>
+            <option value="604800">In 7 days</option>
+            <option value="2592000">In 30 days</option>
+          </select>
+        </label>
+      </div>
+      <div class="share-meta" id="shareMeta" hidden></div>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn danger-ghost" id="shareStop" hidden><svg class="i sm"><use href="#i-unlink"/></svg><span>Stop sharing</span></button><span style="flex:1"></span><button type="button" class="btn" data-close>Close</button><button type="button" class="btn primary" id="shareOk">Create public link</button></div>
+  </div>
 </dialog>
 
 <!-- Everything shared publicly -->
@@ -2723,6 +2757,7 @@ function publicItems() {
 // Always on screen while anything is public, so nothing stays shared by accident.
 function renderPublic() {
   const items = publicItems();
+  if ($('shareModal').open && shareCtx) { const it = shareItem(); if (it) fillShare(it); }
   const banner = $('publicBanner');
   banner.hidden = !items.length;
   if (!items.length) { banner.innerHTML = ''; if ($('publicModal').open) renderPublicList(); return; }
@@ -2760,81 +2795,127 @@ $('publicList').addEventListener('click', (e) => {
 $('publicModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeModal('publicModal'); });
 
 let shareCtx = null;   // { kind, key }: what the share dialog shows
+let shareBusy = false, shareStopArmed = 0;
 function shareItem() {
   if (!shareCtx) return null;
   return (shareCtx.kind === 'session' ? byKey.sessions : byKey.recordings).get(shareCtx.key) || null;
 }
 function openShare(kind, item) {
   shareCtx = { kind, key: kind === 'session' ? keyOf.session(item) : keyOf.recording(item) };
-  fillShare(item);
+  shareStopArmed = 0;
+  fillShare(item, true);
   openModal('shareModal');
+  if (item.share) setTimeout(() => $('shareLink').select(), 40);
 }
-function fillShare(item) {
+// Also on every overview while it is open: watchers, views, expiry.
+function fillShare(item, fresh = false) {
   const { kind } = shareCtx;
   const sh = item.share;
-  $('shareTitle').textContent = `${sh ? 'Public link' : 'Share publicly'}: ${shareLabel(kind, item)}`;
   const firefox = kind === 'session' && item.engine === 'firefox';
+  $('shareModal').classList.toggle('shared', !!sh);
+  $('shareTitle').textContent = sh ? 'Shared publicly' : 'Share publicly';
+  $('shareWhat').textContent = `${kind === 'session' ? 'Session' : 'Recording'} · ${shareLabel(kind, item)}`;
+  $('shareState').hidden = !sh;
+  if (sh) $('shareState').textContent = sh.watching ? `● ${plural(sh.watching, 'person', 'people')} watching` : kind === 'session' ? '● Live' : '● Public';
+  $('shareLead').textContent = kind === 'session'
+    ? (sh ? "Anyone with this link sees the session's front tab, without signing in. It stops working when the session ends."
+      : "Make a link anyone can open, without signing in, to see this session's front tab (about a picture a second).")
+    : (sh ? 'Anyone with this link can play the recording, with its sound, without signing in.'
+      : 'Make a link anyone can open, without signing in, to play this recording. Addresses show only their site; sharing also keeps the recording.');
   $('shareModeField').hidden = kind !== 'session';
-  $('shareMode').value = sh?.control ? 'control' : 'view';
-  $('shareMode').querySelector('[value="control"]').disabled = firefox;
-  $('shareModeNote').hidden = !firefox;
-  $('shareModeNote').textContent = firefox ? 'Control through a public link works for Chromium sessions only.' : '';
+  const ctl = $('shareControl');
+  if (fresh || (!shareBusy && document.activeElement !== ctl)) ctl.checked = !!sh?.control;
+  ctl.disabled = firefox || shareBusy;
+  $('shareModeNote').textContent = firefox ? 'Works for Chromium sessions only.' : 'Visitors can click, scroll and type in the page, as you.';
   syncShareWarn(kind);
-  fillShareRest(item);
-}
-function syncShareWarn(kind) {
-  const control = $('shareMode').value === 'control';
-  $('shareWarn').innerHTML = kind === 'session'
-    ? (control
-      ? `<b>Anyone with the link can watch and control this session</b>, without signing in: they click, scroll and type in the tab in front, as you, with its logins and cookies. They get no address bar and no shortcuts, but they can follow any link and submit any form. The link stops working when the session ends.`
-      : `<b>Anyone with the link can watch this session live</b>, without signing in: about a picture a second of the tab in front, including whatever it shows (mail, accounts, passwords typed in plain text fields). They cannot control it. The link stops working when the session ends.`)
-    : `<b>Anyone with the link can play this recording</b>, without signing in, with its sound. Addresses are shown by their site only, but the pictures show everything that was on screen. Sharing also keeps the recording, so the cleanup does not break the link.`;
-}
-function fillShareRest(item) {
-  const sh = item.share;
   $('shareLinkField').hidden = !sh;
-  $('shareStop').hidden = !sh;
+  if (sh && $('shareLink').value !== sh.url) $('shareLink').value = sh.url;
+  $('shareOpen').href = sh?.url || '#';
+  const sel = $('shareExpiry');
+  if (fresh || (!shareBusy && document.activeElement !== sel)) {
+    sel.querySelector('[value="keep"]')?.remove();
+    if (sh) sel.insertAdjacentHTML('afterbegin', `<option value="keep">${esc(sh.expires_at ? `Expires ${absTime(sh.expires_at)}` : 'Never expires')}</option>`);
+    sel.value = sh ? 'keep' : '0';
+  }
+  $('shareMeta').hidden = !sh;
   if (sh) {
-    $('shareLink').value = sh.url;
-    $('shareOpen').href = sh.url;
     $('shareMeta').innerHTML = [
       `<span>Shared ${esc(relTime(sh.created_at))}</span>`,
       `<span>${esc(plural(sh.views || 0, 'view'))}${sh.last_viewed_at ? `, last ${esc(relTime(sh.last_viewed_at))}` : ''}</span>`,
-      sh.watching ? `<span style="color:var(--public)">${esc(plural(sh.watching, 'person', 'people'))} watching now</span>` : '',
-      `<span>${sh.expires_at ? `Expires ${esc(absTime(sh.expires_at))}` : 'Never expires'}</span>`,
+      kind === 'session' ? `<span>${sh.control ? 'Can control' : 'Watch only'}</span>` : '',
     ].join('');
   }
-  $('shareExpiryLabel').textContent = 'Link expires';
-  // An existing link keeps its expiry unless another is picked.
-  const sel = $('shareExpiry');
-  sel.querySelector('[value="keep"]')?.remove();
-  if (sh) sel.insertAdjacentHTML('afterbegin', `<option value="keep">As now (${esc(sh.expires_at ? absTime(sh.expires_at) : 'never')})</option>`);
-  sel.value = sh ? 'keep' : '0';
-  $('shareOk').textContent = sh ? 'Update link' : 'Create public link';
+  $('shareOk').textContent = sh ? 'Done' : 'Create public link';
+  $('shareOk').classList.toggle('primary', !sh);
+  $('shareStop').hidden = !sh;
+  const armed = shareStopArmed > Date.now();
+  $('shareStop').classList.toggle('danger', armed);
+  $('shareStop').classList.toggle('danger-ghost', !armed);
+  $('shareStop').querySelector('span').textContent = armed ? 'Really stop sharing?' : 'Stop sharing';
 }
-$('shareMode').addEventListener('change', () => { if (shareCtx) syncShareWarn(shareCtx.kind); });
-$('shareCopy').addEventListener('click', () => copyText($('shareLink').value, $('shareCopy')));
-$('shareLink').addEventListener('focus', () => $('shareLink').select());
-$('shareForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
+function syncShareWarn(kind) {
+  const control = kind === 'session' && $('shareControl').checked;
+  $('shareWarn').hidden = !control;
+  $('shareWarn').textContent = control
+    ? "Visitors act as you, with this session's logins: they get no address bar, shortcuts or vault, but they can follow any link and submit any form."
+    : '';
+}
+// Sends the dialog's choices: makes the link, or changes the existing one.
+async function saveShare() {
   const item = shareItem();
   if (!item) { closeModal('shareModal'); return; }
+  const sh = item.share;
   const choice = $('shareExpiry').value;
   const secs = choice === 'keep'
-    ? (item.share?.expires_at ? Math.max(1, item.share.expires_at - Math.floor(Date.now() / 1000)) : null)
+    ? (sh?.expires_at ? Math.max(1, sh.expires_at - Math.floor(Date.now() / 1000)) : null)
     : Number(choice) || null;
-  const wasShared = !!item.share;
-  const created = await act(item.share ? 'Updating the link' : 'Creating a public link',
-    () => request('POST', api(item.node_name, '/shares'), { kind: shareCtx.kind, id: item.id, expires_in_secs: secs, ...(shareCtx.kind === 'session' ? { control: $('shareMode').value === 'control' } : {}) }),
-    item.share ? 'Link updated' : 'Shared publicly');
-  if (!created) return;
-  // Show the link right away; the overview catches up.
-  item.share = created;
-  fillShare(item);
-  if (!wasShared) copyText(created.url);
+  const body = { kind: shareCtx.kind, id: item.id, expires_in_secs: secs };
+  if (shareCtx.kind === 'session') body.control = $('shareControl').checked && !$('shareControl').disabled;
+  shareBusy = true;
+  const saved = await act(sh ? 'Updating the link' : 'Creating a public link',
+    () => request('POST', api(item.node_name, '/shares'), body), sh ? 'Link updated' : 'Shared publicly');
+  shareBusy = false;
+  if (saved) {
+    // Show it right away; the overview catches up.
+    item.share = saved;
+    if (!sh) copyText(saved.url);
+    refreshData(true);
+  }
+  if ($('shareModal').open && shareItem() === item) fillShare(item, true);
+}
+$('shareControl').addEventListener('change', () => {
+  if (!shareCtx) return;
+  syncShareWarn(shareCtx.kind);
+  // An existing link changes right away; a new one waits for "Create".
+  if (shareItem()?.share) saveShare();
+});
+$('shareExpiry').addEventListener('change', () => { if (shareItem()?.share) saveShare(); });
+$('shareCopy').addEventListener('click', () => {
+  copyText($('shareLink').value);
+  const b = $('shareCopy');
+  b.classList.add('done');
+  b.querySelector('span').textContent = 'Copied';
+  setTimeout(() => { b.classList.remove('done'); b.querySelector('span').textContent = 'Copy'; }, 1400);
+});
+$('shareLink').addEventListener('focus', () => $('shareLink').select());
+$('shareOk').addEventListener('click', () => { if (shareItem()?.share) { shareCtx = null; closeModal('shareModal'); } else saveShare(); });
+// Two clicks: the first arms the button, the second stops sharing.
+$('shareStop').addEventListener('click', async () => {
+  const item = shareItem();
+  if (!item?.share) return;
+  if (shareStopArmed < Date.now()) {
+    shareStopArmed = Date.now() + 4000;
+    fillShare(item);
+    setTimeout(() => { const it = shareItem(); if (it && $('shareModal').open) fillShare(it); }, 4100);
+    return;
+  }
+  const done = await act('Stopping the public link', () => request('DELETE', api(item.node_name, `/shares/${enc(item.share.id)}`)), 'No longer shared');
+  if (!done) return;
+  item.share = undefined;
+  shareCtx = null;
+  closeModal('shareModal');
   refreshData(true);
 });
-$('shareStop').addEventListener('click', () => { const item = shareItem(); if (item) stopSharing(item); });
 $('shareModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) { shareCtx = null; closeModal('shareModal'); } });
 async function stopSharing(item) {
   const sh = item.share;
