@@ -108,7 +108,8 @@
   .rec-pill[hidden] { display: none; }
   /* Shared publicly: anyone with the link watches. */
   .pub-pill { border-color: color-mix(in oklab, var(--pub) 45%, transparent); background: color-mix(in oklab, var(--pub) 14%, transparent); color: var(--pub); }
-  .pub-pill svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .pub-pill svg, .note-pill svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
+  .note-pill { border-color: color-mix(in oklab, var(--accent-btn) 45%, transparent); background: color-mix(in oklab, var(--accent-btn) 14%, transparent); color: var(--accent); }
   .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); animation: pulse 1.4s infinite; }
   .rec-pill.paused { color: var(--muted); border-color: var(--line); background: var(--btn); }
   .rec-pill.paused .rec-dot { background: var(--muted); animation: none; border-radius: 1px; width: 7px; box-shadow: none; }
@@ -246,16 +247,16 @@
   #notesDialog::backdrop { background: rgba(0, 0, 0, .5); }
   #notesDialog h2 { margin: 0 0 10px; font-size: 16px; }
   .nt-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 45vh; overflow-y: auto; -webkit-user-select: text; user-select: text; }
-  .nt-list li { padding: 9px 11px; border-radius: 10px; background: var(--btn); border: 1px solid var(--line); }
-  .nt-list .t { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.45; }
+  .nt-list > li { padding: 9px 11px; border-radius: 10px; background: var(--btn); border: 1px solid var(--line); }
+  .nt-list .t { font-size: 14px; }
   .nt-list .f { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; color: var(--muted); }
   .nt-list .f span { flex: 1; }
   .nt-list .f button { border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; padding: 2px 4px; border-radius: 6px; }
   .nt-list .f button.armed { color: #fff; background: var(--bad); }
   .nt-list .empty { color: var(--muted); font-size: 13px; background: none; border: 0; padding: 0; }
   .nt-add textarea { width: 100%; min-height: 70px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-size: 14px; resize: vertical; -webkit-user-select: text; user-select: text; }
-  .nt-actions { flex-direction: row; justify-content: flex-end; margin-top: 10px; }
-  .nt-actions button { padding: 0 16px; }
+  #notesDialog .nt-actions { flex-direction: row; justify-content: flex-end; margin-top: 10px; }
+  #notesDialog .nt-actions button { padding: 0 16px; flex: none; }
   .nt-actions .nt-go { background: var(--accent-btn); border-color: var(--accent-btn); color: #fff; }
   #lastTabDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(360px, calc(100vw - 32px)); }
   #lastTabDialog::backdrop { background: rgba(0, 0, 0, .5); }
@@ -442,6 +443,7 @@
     <div id="urlSuggest" role="listbox" hidden></div>
   </form>
   <button class="rec-pill" id="recPill" hidden title="Recording controls"><span class="rec-dot"></span><span id="recPillText">REC</span></button>
+  <button class="rec-pill note-pill" id="notePill" hidden title="Notes on this session"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></svg><span id="notePillText"></span></button>
   <button class="rec-pill pub-pill" id="pubPill" hidden title="Shared publicly: manage the link"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>PUBLIC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
   <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="menu" aria-expanded="false"><img class="rbw-ic" alt="" src="data:image/png;base64,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"><span class="vault-count" id="vaultCount" hidden></span></button>
@@ -598,7 +600,7 @@
   <h2 id="notesTitle">Notes</h2>
   <ol class="nt-list" id="ntList"></ol>
   <form id="ntForm" class="nt-add">
-    <textarea id="ntText" rows="3" maxlength="4000" placeholder="Add a note… (Ctrl+Enter)" aria-label="New note"></textarea>
+    <textarea id="ntText" rows="3" maxlength="4000" placeholder="Add a note… Markdown works (Ctrl+Enter)" aria-label="New note"></textarea>
     <div class="ltd-actions nt-actions"><button type="button" id="ntClose">Close</button><button type="submit" class="nt-go">Add note</button></div>
   </form>
 </dialog>
@@ -3544,7 +3546,7 @@ async function ntLoad() {
     ntNotes = res.ok ? await res.json() : [];
   } catch { ntNotes = []; }
   const fmt = (t) => new Date(t * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-  $("ntList").innerHTML = ntNotes.length ? ntNotes.map((n) => `<li data-note="${esc(n.id)}"><div class="t">${esc(n.text)}</div><div class="f"><span>${esc(fmt(n.created_at))}${n.edited_at ? " · edited" : ""}</span><button type="button" data-del>Delete</button></div></li>`).join("")
+  $("ntList").innerHTML = ntNotes.length ? ntNotes.map((n) => `<li data-note="${esc(n.id)}"><div class="t md">${markdown(n.text)}</div><div class="f"><span>${esc(fmt(n.created_at))}${n.edited_at ? " · edited" : ""}</span><button type="button" data-del>Delete</button></div></li>`).join("")
     : '<li class="empty">No notes yet.</li>';
   $("ntList").scrollTop = $("ntList").scrollHeight;
 }
@@ -3557,6 +3559,7 @@ $("smNotes").onclick = () => {
   ntLoad();
 };
 $("ntClose").onclick = () => $("notesDialog").close();
+$("notePill").onclick = (e) => { e.stopPropagation(); $("smNotes").click(); };
 $("ntText").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $("ntForm").requestSubmit(); } });
 $("ntForm").onsubmit = async (e) => {
   e.preventDefault();
@@ -4245,6 +4248,9 @@ function renderSession() {
   renderWatchers();
   $("smShareText").textContent = sess.share ? "Public link…" : "Share…";
   $("smNotesText").textContent = sess.notes?.count ? `Notes (${sess.notes.count})…` : "Notes…";
+  $("notePill").hidden = !sess.notes?.count;
+  $("notePillText").textContent = sess.notes?.count || "";
+  $("notePill").title = sess.notes?.count ? `${sess.notes.count} note${sess.notes.count === 1 ? "" : "s"}, the latest:\n\n${sess.notes.last || ""}` : "";
   if ($("shareDialog").open) renderShareDialog();
   // Which agent drives it, with its own mark.
   const driving = (sess.clients || []).filter((c) => c.agent);

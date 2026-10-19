@@ -308,6 +308,7 @@ button.hb, .hero-top button.chip { cursor: pointer; font: inherit; font-size: 11
 button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .hb.rec .rec-dot { background: #fff; }
 .hb.public { background: color-mix(in oklab, var(--public) 85%, #000); cursor: pointer; }
+.hb.note { background: color-mix(in oklab, var(--accent-btn) 88%, #000); }
 .hb.sound { color: #fff; background: color-mix(in oklab, var(--accent) 85%, #000); padding: 0 6px; }
 .hb-n { display: inline-flex; align-items: center; gap: 3px; padding-left: 5px; margin-left: 1px; border-left: 1px solid #fff6; }
 .hero-foot { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 22px 10px 8px;
@@ -330,14 +331,20 @@ button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .rec-state[hidden], #recordModal .sheet-foot [hidden], #recordSoundRow[hidden] { display: none; }
 .notes-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: min(50vh, 420px); overflow-y: auto; }
 .notes-list:empty { display: none; }
-.notes-list li { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--hover); border: 1px solid var(--line); }
-.notes-list .n-text { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; line-height: 1.5; }
+.notes-list > li { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--hover); border: 1px solid var(--line); }
+.notes-list .n-text { font-size: 13.5px; }
 .notes-list .n-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
 .notes-list .n-foot .btn { height: 24px; padding: 0 6px; }
 .notes-list .n-foot .grow { flex: 1; }
 .notes-list textarea { width: 100%; }
 .notes-empty { color: var(--muted); font-size: 13px; }
 .notes-add { display: flex; flex-direction: column; gap: 8px; }
+.notes-tabs { display: flex; align-items: center; gap: 2px; }
+.notes-tabs button { height: 26px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.notes-tabs button.on { background: var(--hover); color: var(--fg); }
+.notes-tabs .muted { margin-left: auto; font-size: 11.5px; }
+.notes-preview { min-height: 70px; padding: 9px 11px; border-radius: var(--radius-sm); border: 1px dashed var(--line-strong); }
+.notes-preview[hidden] { display: none; }
 .notes-add textarea { resize: vertical; min-height: 70px; font: inherit; font-size: 13.5px; line-height: 1.5; }
 .notes-add-foot { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-size: 12px; }
 .note-badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border: 0; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; vertical-align: 1px; }
@@ -895,6 +902,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view nodes" id="view-nodes" hidden>
+    <p><a class="btn" href="/extension/">Temporary browsers · share and control your own tabs</a></p>
     <div id="nodesList" class="nodes-list"></div>
     <form id="addPeerForm" class="field add-peer"><label for="peerUrl">Add a peer</label>
       <div style="display:flex;gap:8px"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.rofl-13.example.net"><button class="btn primary" type="submit"><svg class="i"><use href="#i-plus"/></svg>Add</button></div>
@@ -1157,7 +1165,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-body">
       <ol class="notes-list" id="notesList"></ol>
       <form class="notes-add" id="notesForm">
-        <textarea class="input" id="notesText" rows="3" maxlength="4000" placeholder="Add a note… (Ctrl+Enter)" aria-label="New note"></textarea>
+        <div class="notes-tabs" role="tablist" aria-label="Write or preview"><button type="button" class="on" data-notes-tab="write" role="tab">Write</button><button type="button" data-notes-tab="preview" role="tab">Preview</button><span class="muted">Markdown</span></div>
+        <textarea class="input" id="notesText" rows="3" maxlength="4000" placeholder="Add a note… **bold**, *italic*, `code`, - lists, [links](https://…) (Ctrl+Enter)" aria-label="New note"></textarea>
+        <div class="notes-preview md" id="notesPreview" hidden></div>
         <div class="notes-add-foot"><span class="muted" id="notesHint"></span><button type="submit" class="btn primary sm" id="notesAdd"><svg class="i sm"><use href="#i-plus"/></svg>Add note</button></div>
       </form>
     </div>
@@ -2127,6 +2137,7 @@ function sessionCard(s) {
       : `<button class="hb rec" data-act="rec-dialog" data-key="${key}" title="Recording${s.recording_audio ? ' with sound' : ''}: pause, stop or switch the sound"><span class="rec-dot" aria-hidden="true"></span>REC${s.recording_audio ? ` ${icon('speaker', 'sm')}` : ''}</button>`),
     sh && `<button class="hb public" data-act="share-session" data-key="${key}" title="${esc(`Shared publicly: anyone with the link can ${sh.control ? 'watch and control' : 'watch'} it${sh.expires_at ? ` (until ${absTime(sh.expires_at)})` : ''}${sh.watching ? `; ${sh.watching} watching now` : ''}. Manage the link`)}">${icon('globe', 'sm')}${sh.control ? 'Public · control' : 'Public'}${sh.watching ? `<span class="hb-n">${icon('eye', 'sm')}${sh.watching}</span>` : ''}</button>`,
     s.audible && `<span class="hb sound" title="Playing sound">${icon('speaker', 'sm')}</span>`,
+    s.notes && `<button class="hb note" data-act="notes-session" data-key="${key}" title="${esc(`${plural(s.notes.count, 'note')}, the latest:\n\n${s.notes.last || ''}`)}" aria-label="${esc(plural(s.notes.count, 'note'))}">${icon('note', 'sm')}${s.notes.count}</button>`,
   ].filter(Boolean).join('');
   const more = pages.length > 1 ? `<span class="hero-more">+${pages.length - 1} tab${pages.length === 2 ? '' : 's'}</span>` : '';
   const hero = `
@@ -2146,7 +2157,6 @@ function sessionCard(s) {
   // The rest: small icons with tooltips.
   const ind = (cls, ico, text, title, act = '') => `<span class="ind ${cls}"${act ? ` role="button" tabindex="0" data-act="${act}" data-key="${key}"` : ''} title="${esc(title)}" aria-label="${esc(title)}">${ico}${text ? `<span>${esc(text)}</span>` : ''}</span>`;
   const inds = [
-    s.notes && ind('accent', icon('note', 'sm'), String(s.notes.count), `${plural(s.notes.count, 'note')}, the latest:\n\n${s.notes.last || ''}`, 'notes-session'),
     !s.persistent && ind('', icon('clock', 'sm'), '', 'Ephemeral: stops when its last client disconnects'),
     s.adblock && ind('ok', icon('shield', 'sm'), '', 'Ads and trackers are blocked'),
     s.proxy && ind('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
@@ -3203,6 +3213,7 @@ async function openNotes(kind, item) {
   notesCtx = { kind, key: kind === 'session' ? keyOf.session(item) : kind === 'profile' ? keyOf.profile(item) : keyOf.recording(item) };
   $('notesTitle').textContent = `Notes · ${notesLabel(kind, item)}`;
   $('notesText').value = '';
+  notesTab('write');
   $('notesHint').textContent = kind === 'session' ? 'Session notes end with the session.' : kind === 'profile' ? 'Kept with the profile (also when moved or cleared).' : 'Kept with the recording.';
   $('notesList').innerHTML = '<li class="notes-empty">Loading…</li>';
   openModal('notesModal');
@@ -3223,7 +3234,7 @@ async function loadNotes() {
 }
 function renderNotes() {
   $('notesList').innerHTML = notesShown.length ? notesShown.map((n) => `<li data-note="${esc(n.id)}">
-      <div class="n-text">${esc(n.text)}</div>
+      <div class="n-text md">${markdown(n.text)}</div>
       <div class="n-foot"><span title="${esc(absTime(n.created_at))}">${esc(relTime(n.created_at))}</span>${n.edited_at ? `<span title="${esc(absTime(n.edited_at))}">· edited</span>` : ''}<span class="grow"></span>
         <button type="button" class="btn ghost sm" data-note-edit title="Edit">${icon('edit', 'sm')}</button>
         <button type="button" class="btn ghost sm" data-note-del title="Delete">${icon('trash', 'sm')}</button></div>
@@ -3243,6 +3254,7 @@ $('notesForm').addEventListener('submit', async (e) => {
   try {
     await request('POST', notesPath(notesCtx.kind, item), { text });
     $('notesText').value = '';
+    notesTab('write');
     await notesChanged();
   } catch (err) {
     showToast('Could not add the note', 'danger', 6000, null, err.message);
@@ -3251,6 +3263,15 @@ $('notesForm').addEventListener('submit', async (e) => {
     $('notesText').focus();
   }
 });
+function notesTab(which) {
+  const preview = which === 'preview';
+  document.querySelectorAll('[data-notes-tab]').forEach((b) => b.classList.toggle('on', b.dataset.notesTab === which));
+  $('notesText').hidden = preview;
+  $('notesPreview').hidden = !preview;
+  if (preview) $('notesPreview').innerHTML = $('notesText').value.trim() ? markdown($('notesText').value) : '<span class="muted">Nothing to preview</span>';
+  else $('notesText').focus();
+}
+document.querySelectorAll('[data-notes-tab]').forEach((b) => b.addEventListener('click', () => notesTab(b.dataset.notesTab)));
 $('notesText').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('notesForm').requestSubmit(); }
 });

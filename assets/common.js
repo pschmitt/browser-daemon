@@ -160,3 +160,66 @@ function agentBrand(c) {
   if (/hermes/.test(n)) return 'hermes';
   return 'agent';
 }
+
+// Markdown for notes, rendered here (no library): the text is escaped first, so
+// nothing in it becomes markup but what this makes; links only to http(s) and
+// mailto, opened in a new tab without a referrer. Headings, emphasis, inline
+// and fenced code, links (and bare URLs), lists (with [ ] / [x]), quotes, rules.
+function markdown(src) {
+  const safeUrl = (u) => (/^(https?:\/\/|mailto:)/i.test(u) ? u : null);
+  const inline = (text) => {
+    const codes = [];
+    let s = escapeHtml(text).replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
+    s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (m, label, url) => {
+      const u = safeUrl(url.replace(/&amp;/g, '&'));
+      return u ? `<a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer">${label}</a>` : m;
+    });
+    s = s.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g, (m, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>').replace(/(^|[^_\w])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>');
+    s = s.replace(/~~([^~\n]+)~~/g, '<del>$1</del>');
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+  };
+  const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^\s*```/);
+    if (fence) {
+      const body = [];
+      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) body.push(lines[i]);
+      i++;
+      out.push(`<pre><code>${escapeHtml(body.join('\n'))}</code></pre>`);
+      continue;
+    }
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h) { out.push(`<h${h[1].length + 3}>${inline(h[2])}</h${h[1].length + 3}>`); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { out.push('<hr>'); i++; continue; }
+    if (/^\s*>/.test(line)) {
+      const body = [];
+      for (; i < lines.length && /^\s*>/.test(lines[i]); i++) body.push(lines[i].replace(/^\s*>\s?/, ''));
+      out.push(`<blockquote>${markdown(body.join('\n'))}</blockquote>`);
+      continue;
+    }
+    const item = (l) => l.match(/^\s*(?:([-*+])|(\d+)[.)])\s+(.*)$/);
+    if (item(line)) {
+      const ordered = !!item(line)[2];
+      const items = [];
+      for (; i < lines.length && item(lines[i]) && !!item(lines[i])[2] === ordered; i++) {
+        let text = item(lines[i])[3];
+        const box = text.match(/^\[([ xX])\]\s+(.*)$/);
+        text = box ? `<input type="checkbox" disabled${box[1] !== ' ' ? ' checked' : ''}> ${inline(box[2])}` : inline(text);
+        items.push(`<li${box ? ' class="task"' : ''}>${text}</li>`);
+      }
+      out.push(ordered ? `<ol>${items.join('')}</ol>` : `<ul>${items.join('')}</ul>`);
+      continue;
+    }
+    if (!line.trim()) { i++; continue; }
+    const para = [];
+    for (; i < lines.length && lines[i].trim() && !/^\s*(```|#{1,3}\s|>|([-*+]|\d+[.)])\s)/.test(lines[i]); i++) para.push(inline(lines[i]));
+    if (!para.length) { para.push(inline(lines[i])); i++; }
+    out.push(`<p>${para.join('<br>')}</p>`);
+  }
+  return out.join('');
+}
