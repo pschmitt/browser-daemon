@@ -345,6 +345,37 @@ pub(crate) async fn api_session_stop_record(
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct RecordAudioRequest {
+    pub(crate) audio: bool,
+}
+
+/// Switch the sound of a running recording on or off (`{"audio": false}`): while
+/// off nothing is recorded, which plays back as silence.
+pub(crate) async fn api_session_record_audio(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RecordAudioRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let recs = state.active_recordings.read().await;
+    let handle = recs
+        .get(&id)
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session is not actively recording"))?;
+    if !handle.set_audio(req.audio) {
+        return Err(api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "This session has no sound to record",
+        ));
+    }
+    Ok(Json(serde_json::json!({
+        "session_id": id,
+        "recording_id": handle.recording_id,
+        "audio": req.audio,
+    })))
+}
+
 pub(crate) async fn api_session_pause_record(
     AxumPath(id): AxumPath<Uuid>,
     State(state): State<AppState>,

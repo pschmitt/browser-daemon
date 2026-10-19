@@ -304,6 +304,8 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
   color: #fff; background: rgba(15, 17, 24, .72); backdrop-filter: blur(6px); box-shadow: 0 1px 4px #0004; white-space: nowrap; }
 .hb .i { width: 12px; height: 12px; }
 .hb.rec { background: color-mix(in oklab, var(--bad) 88%, #000); }
+button.hb, .hero-top button.chip { cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 700; border: 0; }
+button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .hb.rec .rec-dot { background: #fff; }
 .hb.public { background: color-mix(in oklab, var(--public) 85%, #000); cursor: pointer; }
 .hb.sound { color: #fff; background: color-mix(in oklab, var(--accent) 85%, #000); padding: 0 6px; }
@@ -322,6 +324,14 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .scard .scard-head { padding: 10px 12px 4px; }
 .scard .scard-head .engine-badge { width: 32px; height: 32px; }
 .scard-sub .sep { color: var(--faint); }
+/* Idle time next to the age: muted, or a warning when it is about to stop. */
+.rec-state { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; color: var(--bad); background: var(--bad-soft); }
+.rec-state.paused { color: var(--muted); background: var(--hover); }
+.rec-state[hidden], #recordModal .sheet-foot [hidden], #recordSoundRow[hidden] { display: none; }
+.idle-note { margin-left: 4px; padding: 0 6px; border-radius: 99px; font-size: 11.5px; font-weight: 700; }
+.idle-note[hidden] { display: none; }
+.idle-note.warn { color: var(--warn); background: var(--warn-soft); }
+.idle-note.bad { color: var(--bad); background: color-mix(in oklab, var(--bad) 14%, transparent); }
 .scard-who { padding: 2px 12px 2px 55px; display: flex; flex-direction: column; gap: 2px; }
 .scard-who .scard-agent { margin-top: 0; }
 .tab-strip { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
@@ -1101,20 +1111,27 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </div>
 </dialog>
 
-<!-- Start a recording (sessions with sound) -->
+<!-- A session's recording: start it (with or without sound), or pause, resume,
+     stop it and switch its sound while it runs -->
 <dialog class="modal" id="recordModal" aria-labelledby="recordTitle">
-  <div class="sheet" style="max-width:400px">
-    <div class="sheet-head"><h2 id="recordTitle">Start recording</h2></div>
+  <div class="sheet" style="max-width:420px">
+    <div class="sheet-head"><h2 id="recordTitle">Start recording</h2><span class="rec-state" id="recordState" hidden></span></div>
     <div class="sheet-body">
-      <div class="muted" style="font-size:13.5px">Records <b id="recordWhat"></b> until you stop it; it shows up under Recordings.</div>
-      <div class="share-rows">
+      <div class="muted" style="font-size:13.5px" id="recordLead"></div>
+      <div class="share-rows" id="recordSoundRow">
         <label class="share-row">
-          <span class="t"><b>Record sound</b><small>The session's audio, played in step with the pictures.</small></span>
+          <span class="t"><b>Record sound</b><small id="recordSoundNote">The session's audio, played in step with the pictures.</small></span>
           <input type="checkbox" role="switch" id="recordSound"><span class="share-switch" aria-hidden="true"></span>
         </label>
       </div>
     </div>
-    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="button" class="btn primary" id="recordOk"><svg class="i sm"><use href="#i-rec"/></svg>Start recording</button></div>
+    <div class="sheet-foot">
+      <button type="button" class="btn danger-ghost" id="recordStop" hidden><svg class="i sm"><use href="#i-stop"/></svg>Stop recording</button>
+      <span style="flex:1"></span>
+      <button type="button" class="btn" data-close>Close</button>
+      <button type="button" class="btn" id="recordPause" hidden></button>
+      <button type="button" class="btn primary" id="recordOk"><svg class="i sm"><use href="#i-rec"/></svg>Start recording</button>
+    </div>
   </div>
 </dialog>
 
@@ -1651,38 +1668,84 @@ new MutationObserver((changes) => changes.forEach(({ target }) => syncPressed(ta
 /* ================================================================ keyed rendering */
 // Only items whose markup changed are replaced, so scroll positions, focus and
 // hover state survive the live updates.
-function reconcile(container, items, keyOf, htmlOf, patch) {
-  const cache = container._cache || (container._cache = new Map());
-  const seen = new Set();
-  let prev = null;
-  for (const item of items) {
-    const key = keyOf(item);
-    seen.add(key);
-    const html = htmlOf(item);
-    let entry = cache.get(key);
-    if (!entry || entry.html !== html) {
-      const tpl = document.createElement('template');
-      tpl.innerHTML = html.trim();
-      const el = tpl.content.firstElementChild;
-      if (entry) entry.el.replaceWith(el);
-      entry = { html, el };
-      cache.set(key, entry);
+// Cards that come and go move instead of jumping (the sessions grid): new ones
+// grow in, removed ones shrink out, and the rest glide to their new places. Not
+// on the first render, and not when the system asks for less motion.
+const lessMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const EASE = 'cubic-bezier(.2, .8, .2, 1)';
+function flip(container, change) {
+  const before = new Map([...container.children].map((el) => [el, el.getBoundingClientRect()]));
+  change();
+  for (const el of container.children) {
+    const a = before.get(el);
+    if (!a || el.dataset.leaving) continue;
+    const b = el.getBoundingClientRect();
+    const dx = a.left - b.left, dy = a.top - b.top;
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+      el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 280, easing: EASE });
     }
-    if (patch) patch(entry.el, item);
-    const want = prev ? prev.nextElementSibling : container.firstElementChild;
-    if (want !== entry.el) container.insertBefore(entry.el, want);
-    prev = entry.el;
   }
-  for (const [key, entry] of cache) {
-    if (!seen.has(key)) { entry.el.remove(); cache.delete(key); }
-  }
+}
+function animateOut(container, el) {
+  el.dataset.leaving = '1';
+  el.style.pointerEvents = 'none';
+  const anim = el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.92)' }],
+    { duration: 220, easing: 'ease-in', fill: 'forwards' });
+  anim.onfinish = () => { if (el.isConnected) flip(container, () => el.remove()); };
+}
+function reconcile(container, items, keyOf, htmlOf, patch, { animate = false } = {}) {
+  const moving = animate && container._ready && !lessMotion.matches;
+  container._ready = true;
+  container._animate = animate;
+  const run = () => {
+    const cache = container._cache || (container._cache = new Map());
+    const seen = new Set();
+    let prev = null;
+    for (const item of items) {
+      const key = keyOf(item);
+      seen.add(key);
+      const html = htmlOf(item);
+      let entry = cache.get(key);
+      const fresh = !entry;
+      if (!entry || entry.html !== html) {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = html.trim();
+        const el = tpl.content.firstElementChild;
+        if (entry) entry.el.replaceWith(el);
+        entry = { html, el };
+        cache.set(key, entry);
+      }
+      if (patch) patch(entry.el, item);
+      let want = prev ? prev.nextElementSibling : container.firstElementChild;
+      // Cards on their way out keep their place until they are gone.
+      while (want?.dataset.leaving && want !== entry.el) want = want.nextElementSibling;
+      if (want !== entry.el) container.insertBefore(entry.el, want);
+      if (fresh && moving) {
+        entry.el.animate([{ opacity: 0, transform: 'scale(.94) translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: EASE });
+      }
+      prev = entry.el;
+    }
+    for (const [key, entry] of cache) {
+      if (seen.has(key)) continue;
+      cache.delete(key);
+      if (moving) animateOut(container, entry.el); else entry.el.remove();
+    }
+  };
+  if (moving) flip(container, run); else run();
 }
 function setStatic(container, html) {
   if (container._static === html) return;
-  container._cache?.forEach((e) => e.el.remove());
+  const leaving = [...(container._cache?.values() || [])].map((e) => e.el);
   container._cache = new Map();
-  container.innerHTML = html;
   container._static = html;
+  // The last card shrinks out before the empty state shows.
+  if (container._animate && leaving.length && !lessMotion.matches) {
+    leaving.forEach((el) => animateOut(container, el));
+    setTimeout(() => { if (container._static === html) container.innerHTML = html; }, 240);
+    return;
+  }
+  leaving.forEach((el) => el.remove());
+  container.innerHTML = html;
 }
 function clearStatic(container) {
   if (container._static !== undefined) { container.innerHTML = ''; container._static = undefined; }
@@ -1805,6 +1868,7 @@ function render() {
   updateFavicon(ov.sessions.length);
   renderStats();
   renderSessions();
+  if ($('recordModal').open && recordSession()) fillRecordModal(recordSession());
   renderProfiles();
   renderRecordings();
   renderNodes();
@@ -1919,15 +1983,15 @@ function renderSessions() {
     const up = el.querySelector('[data-up]');
     if (up) {
       up.dataset.start = sessionStart(s);
-      up.textContent = formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - sessionStart(s))));
+      up.textContent = cardAge(Math.max(0, Math.floor(Date.now() / 1000 - sessionStart(s))));
     }
     const idle = el.querySelector('[data-idle]');
     if (idle) {
       const st = idleState(s);
       idle.hidden = !st;
-      if (st) { idle.textContent = st.text; idle.className = 'ind ' + st.cls; idle.title = st.title; }
+      if (st) { idle.textContent = st.text; idle.className = 'idle-note ' + st.cls; idle.title = st.title; }
     }
-  });
+  }, { animate: true });
 }
 
 // A recent picture of the tab each session shows. Fetched with the auth headers into
@@ -1981,18 +2045,21 @@ function sessionStart(s) {
 setInterval(() => {
   const now = Date.now() / 1000;
   document.querySelectorAll('[data-up][data-start]').forEach((el) => {
-    el.textContent = formatUptime(Math.max(0, Math.floor(now - +el.dataset.start)));
+    el.textContent = cardAge(Math.max(0, Math.floor(now - +el.dataset.start)));
   });
 }, 1000);
+
+// Ages on the cards: seconds only in the first minute.
+const cardAge = (secs) => (secs < 60 ? formatUptime(secs) : formatUptime(secs).replace(/ \d+s$/, ''));
 
 // Idle time is only worth showing once the session has sat unused for a bit.
 function idleState(s) {
   const idle = s.idle_seconds || 0, limit = s.idle_timeout_seconds || 0;
   if (limit && limit - idle <= 600) {
     const left = Math.max(0, limit - idle);
-    return { cls: 'warn', text: left < 60 ? 'stopping…' : `stops in ${formatUptime(left)}`, title: `Idle for ${formatUptime(idle)}; stops after ${formatUptime(limit)} without use` };
+    return { cls: 'warn', text: left < 60 ? 'stopping…' : `stops in ${cardAge(left)}`, title: `Idle for ${formatUptime(idle)}; stops after ${formatUptime(limit)} without use` };
   }
-  if (idle >= 300) return { cls: '', text: `idle ${formatUptime(idle)}`, title: limit ? `Stops after ${formatUptime(limit)} without use` : 'Never stopped for inactivity' };
+  if (idle >= 300) return { cls: '', text: `idle ${cardAge(idle)}`, title: limit ? `Stops after ${formatUptime(limit)} without use` : 'Never stopped for inactivity' };
   return null;
 }
 
@@ -2027,8 +2094,8 @@ function sessionCard(s) {
   const sh = s.share;
   const badges = [
     s.is_recording && (s.recording_paused
-      ? `<span class="hb" title="Recording paused">${icon('pause', 'sm')}Paused</span>`
-      : `<span class="hb rec" title="Recording this session"><span class="rec-dot" aria-hidden="true"></span>REC</span>`),
+      ? `<button class="hb" data-act="rec-dialog" data-key="${key}" title="Recording paused: resume, stop or switch the sound">${icon('pause', 'sm')}Paused</button>`
+      : `<button class="hb rec" data-act="rec-dialog" data-key="${key}" title="Recording${s.recording_audio ? ' with sound' : ''}: pause, stop or switch the sound"><span class="rec-dot" aria-hidden="true"></span>REC${s.recording_audio ? ` ${icon('speaker', 'sm')}` : ''}</button>`),
     sh && `<button class="hb public" data-act="share-session" data-key="${key}" title="${esc(`Shared publicly: anyone with the link can ${sh.control ? 'watch and control' : 'watch'} it${sh.expires_at ? ` (until ${absTime(sh.expires_at)})` : ''}${sh.watching ? `; ${sh.watching} watching now` : ''}. Manage the link`)}">${icon('globe', 'sm')}${sh.control ? 'Public · control' : 'Public'}${sh.watching ? `<span class="hb-n">${icon('eye', 'sm')}${sh.watching}</span>` : ''}</button>`,
     s.audible && `<span class="hb sound" title="Playing sound">${icon('speaker', 'sm')}</span>`,
   ].filter(Boolean).join('');
@@ -2037,7 +2104,7 @@ function sessionCard(s) {
     <a class="scard-hero" href="${esc(handoffUrl(s.node_name, { session: s.id }))}" title="Take over"${drv}>
       <span class="hero-ph" aria-hidden="true">${front ? `<span class="fav">${favicon(front.url)}</span>` : icon(engine)}</span>
       <span class="shot" data-shot hidden></span>
-      <span class="hero-top"><span class="hero-badges">${badges}</span>${nodeChip(s.node_name)}</span>
+      <span class="hero-top"><span class="hero-badges">${badges}</span><button class="chip node" style="--node:${nodeColor(s.node_name)}" data-act="node-menu" data-node="${esc(s.node_name)}" title="Node ${esc(s.node_name)}">${esc(s.node_name)}</button></span>
       <span class="hero-foot">${front ? `<span class="fav">${favicon(front.url)}</span><span class="hero-title"><b>${front.audible ? `${icon('speaker', 'sm')} ` : ''}${esc(tabTitle(front))}</b><span>${esc(shortUrl(front.url) || 'about:blank')}</span></span>` : '<span class="hero-title"><b>No open tabs</b></span>'}${more}</span>
     </a>`;
 
@@ -2045,17 +2112,17 @@ function sessionCard(s) {
   const meta = [
     `<span title="${esc(s.profile ? `Profile ${s.profile}: its logins and cookies are kept` : 'No profile: nothing is kept')}">${esc(s.profile || 'Throwaway')}</span>`,
     `<span data-up title="Uptime"></span>`,
-    !s.persistent && '<span title="Ephemeral: stops when its last client disconnects">ephemeral</span>',
-  ].filter(Boolean).join('<span class="sep">·</span>');
+  ].join('<span class="sep">·</span>') + '<span data-idle hidden></span>';
 
   // The rest: small icons with tooltips.
   const ind = (cls, ico, text, title, act = '') => `<span class="ind ${cls}"${act ? ` role="button" tabindex="0" data-act="${act}" data-key="${key}"` : ''} title="${esc(title)}" aria-label="${esc(title)}">${ico}${text ? `<span>${esc(text)}</span>` : ''}</span>`;
   const inds = [
+    !s.persistent && ind('', icon('clock', 'sm'), '', 'Ephemeral: stops when its last client disconnects'),
     s.adblock && ind('ok', icon('shield', 'sm'), '', 'Ads and trackers are blocked'),
     s.proxy && ind('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
     others.length && ind('', icon('users', 'sm'), String(others.length), `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`, 'session-clients'),
     !clients.length && n && ind('', icon('users', 'sm'), String(n), `${n} automation client${n === 1 ? '' : 's'} attached`),
-  ].filter(Boolean).join('') + '<span data-idle hidden></span>';
+  ].filter(Boolean).join('');
 
   // Its tabs, as icons: each opens that tab.
   const strip = pages.slice(0, 6).map((p) => `<a class="tab-ico" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="${esc(`${tabTitle(p)}\n${p.url}`)}" aria-label="${esc(`Take over the tab ${tabTitle(p)}`)}"${drv}>${favicon(p.url)}${p.audible ? '<span class="tab-ico-sound" aria-hidden="true"></span>' : ''}</a>`).join('')
@@ -2293,39 +2360,44 @@ const ACT = {
     const s = byKey.sessions.get(el.dataset.key);
     if (s) showClientDetails(s);
   },
+  // In the order of the live view's session menu: recording, then getting into the
+  // session, its browser, the session itself, and stopping it.
   'session-menu': (el) => {
     const s = byKey.sessions.get(el.dataset.key); if (!s) return;
-    const rec = [
-      s.is_recording
-        ? { icon: 'stop', label: 'Stop recording', run: () => toggleRecording(s) }
-        : { icon: 'rec', label: s.audio ? 'Start recording…' : 'Start recording', run: () => (s.audio ? openRecordModal(s) : toggleRecording(s)) },
-      s.is_recording && (s.recording_paused
-        ? { icon: 'play', label: 'Resume recording', run: () => setRecordingPaused(s, false) }
-        : { icon: 'pause', label: 'Pause recording', run: () => setRecordingPaused(s, true) }),
-    ];
     openMenu(el, [
+      { label: sessName(s) },
+      s.is_recording
+        ? { icon: s.recording_paused ? 'pause' : 'rec', label: s.recording_paused ? 'Recording paused…' : 'Recording…', meta: s.recording_audio ? 'with sound' : '', run: () => openRecordModal(s) }
+        : { icon: 'rec', label: s.audio ? 'Start recording…' : 'Start recording', run: () => (s.audio ? openRecordModal(s) : toggleRecording(s)) },
+      '-',
       { icon: 'takeover', label: 'Take over', run: () => takeOver(s.node_name, { session: s.id }, s) },
       { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
-      '-',
-      ...rec,
-      '-',
-      { icon: 'clock', label: `Auto-stop when idle: ${idleLabel(s.idle_timeout_seconds)}…`, run: () => setIdleTimeout(s) },
+      { label: 'Browser' },
       nodeProxies(s.node_name).length && { icon: 'route', label: 'Proxy', meta: s.proxy ? proxyName(s.node_name, s.proxy) : 'Direct', run: () => openMenu(el, [
         { label: 'Proxy (switches now)' },
         { label: 'Direct', on: !s.proxy, run: () => setSessionProxy(s, 'none') },
         ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
       ]) },
-      '-',
-      { icon: s.share ? 'link' : 'globe', label: s.share ? 'Public link…' : 'Share…', run: () => openShare('session', s) },
-      s.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(s) },
-      '-',
       { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
-      { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
+      { icon: s.share ? 'link' : 'globe', label: s.share ? 'Public link…' : 'Share…', run: () => openShare('session', s) },
       !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },
+      { label: 'Session' },
+      { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
+      { icon: 'clock', label: 'Auto-stop when idle', meta: idleLabel(s.idle_timeout_seconds), run: () => setIdleTimeout(s) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
       '-',
       { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
     ]);
+  },
+  'rec-dialog': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) openRecordModal(s); },
+  // A node's chip: show only its sessions (again: all), or its card on the Nodes tab.
+  'node-menu': (el) => {
+    const node = el.dataset.node;
+    openMenu(el, [
+      { label: node },
+      { icon: 'server', label: filter === node ? 'Show all nodes' : `Only ${node}`, run: () => { filter = filter === node ? 'all' : node; render(); } },
+      { icon: 'info-c', label: 'Node details', run: () => setView('nodes') },
+    ], { align: 'left' });
   },
   'share-session': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) openShare('session', s); },
   'share-recording': (el) => { const r = byKey.recordings.get(el.dataset.key); if (r) openShare('recording', r); },
@@ -2759,20 +2831,59 @@ async function stopSession(s) {
 
 // audio: whether the recording takes the sound (default: the session's, from its
 // profile or node).
-// Starting a recording of a session with sound: one dialog, the sound a switch
-// (the session's default first).
+// A session's recording in one dialog: starting it (the sound a switch, the
+// session's default first), or, while it runs, pausing, resuming and stopping it
+// and switching its sound (that applies at once).
 let recordFor = null;
 function openRecordModal(s) {
   recordFor = keyOf.session(s);
-  $('recordWhat').textContent = sessName(s);
-  $('recordSound').checked = !!s.record_audio;
+  fillRecordModal(s, true);
   openModal('recordModal');
-  setTimeout(() => $('recordOk').focus(), 40);
+  setTimeout(() => (s.is_recording ? $('recordPause') : $('recordOk')).focus(), 40);
 }
+function fillRecordModal(s, fresh = false) {
+  const on = s.is_recording;
+  $('recordTitle').textContent = on ? 'Recording' : 'Start recording';
+  $('recordState').hidden = !on;
+  $('recordState').textContent = s.recording_paused ? 'Paused' : '● REC';
+  $('recordState').classList.toggle('paused', !!s.recording_paused);
+  $('recordLead').innerHTML = on
+    ? `<b>${esc(sessName(s))}</b> is being recorded${s.recording_paused ? ' (paused: nothing is recorded until you resume)' : ''}. Stopping it saves the recording under Recordings.`
+    : `Records <b>${esc(sessName(s))}</b> until you stop it; it shows up under Recordings.`;
+  $('recordSoundRow').hidden = !s.audio;
+  if (fresh || document.activeElement !== $('recordSound')) $('recordSound').checked = on ? !!s.recording_audio : !!s.record_audio;
+  $('recordSoundNote').textContent = on ? 'Switches at once; while off, the recording is silent.' : "The session's audio, played in step with the pictures.";
+  $('recordOk').hidden = on;
+  $('recordStop').hidden = !on;
+  $('recordPause').hidden = !on;
+  $('recordPause').innerHTML = s.recording_paused ? `${icon('play', 'sm')}Resume` : `${icon('pause', 'sm')}Pause`;
+}
+const recordSession = () => byKey.sessions.get(recordFor);
 $('recordOk').addEventListener('click', () => {
-  const s = byKey.sessions.get(recordFor);
+  const s = recordSession();
   closeModal('recordModal');
-  if (s && !s.is_recording) toggleRecording(s, $('recordSound').checked);
+  if (s && !s.is_recording) toggleRecording(s, s.audio ? $('recordSound').checked : undefined);
+});
+$('recordSound').addEventListener('change', async () => {
+  const s = recordSession();
+  if (!s?.is_recording) return;
+  const on = $('recordSound').checked;
+  const ok = await act(on ? 'Recording the sound' : 'Muting the recording',
+    () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/record-audio`), { audio: on }), on ? 'Recording with sound' : 'Recording without sound');
+  if (ok) s.recording_audio = on; else $('recordSound').checked = !on;
+});
+$('recordPause').addEventListener('click', async () => {
+  const s = recordSession();
+  if (!s?.is_recording) return;
+  const pause = !s.recording_paused;
+  await setRecordingPaused(s, pause);
+  s.recording_paused = pause;
+  fillRecordModal(s);
+});
+$('recordStop').addEventListener('click', () => {
+  const s = recordSession();
+  closeModal('recordModal');
+  if (s?.is_recording) toggleRecording(s);
 });
 $('recordModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeModal('recordModal'); });
 function toggleRecording(s, audio) {
@@ -3063,7 +3174,7 @@ async function setIdleTimeout(s) {
 }
 
 function setRecordingPaused(s, paused) {
-  act(paused ? 'Pausing recording' : 'Resuming recording',
+  return act(paused ? 'Pausing recording' : 'Resuming recording',
     () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/${paused ? 'pause-record' : 'resume-record'}`)),
     paused ? 'Recording paused' : 'Recording resumed');
 }

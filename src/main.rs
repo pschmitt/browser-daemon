@@ -899,6 +899,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(api_session_idle_timeout),
         )
         .route(
+            "/api/sessions/{id}/record-audio",
+            post(api_session_record_audio),
+        )
+        .route(
             "/api/sessions/{id}/pause-record",
             post(api_session_pause_record),
         )

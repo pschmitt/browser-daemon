@@ -158,8 +158,8 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("POST", ["sessions", _, "save-as-profile"]) => (false, Long),
         (
             "POST",
-            ["sessions", _, "record" | "stop-record" | "pause-record" | "resume-record" | "idle-timeout" | "name"
-            | "proxy"],
+            ["sessions", _, "record" | "stop-record" | "pause-record" | "resume-record" | "record-audio"
+            | "idle-timeout" | "name" | "proxy"],
         ) => (false, Short),
         ("PATCH", ["settings"]) => (false, Short),
         ("POST", ["profiles"]) => (false, Long),

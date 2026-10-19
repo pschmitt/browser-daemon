@@ -306,7 +306,7 @@ impl AppState {
             .read()
             .await
             .get(&session.id)
-            .map_or((false, false), |r| (true, r.audio));
+            .map_or((false, false), |r| (true, r.audio_on()));
         let guard = session.browser.lock().await;
         let Some(browser) = guard.as_ref() else {
             return;
@@ -494,15 +494,17 @@ impl AppState {
             self.node_name.clone(),
             (*self.recorder_config).clone(),
             grab,
-            audio
-                .unwrap_or(session.record_audio)
-                .then(|| {
-                    Some(rec_audio::Source {
-                        cfg: self.config.audio.clone()?,
-                        sink: session.audio_sink.clone()?,
-                    })
-                })
-                .flatten(),
+            // Whenever the session has sound, so it can be switched on later.
+            self.config
+                .audio
+                .clone()
+                .zip(session.audio_sink.clone())
+                .map(|(cfg, sink)| {
+                    (
+                        rec_audio::Source { cfg, sink },
+                        audio.unwrap_or(session.record_audio),
+                    )
+                }),
         );
         // Firefox has no screencast: feed the recorder with BiDi screenshots instead.
         if let Some(ref hub) = session.bidi {

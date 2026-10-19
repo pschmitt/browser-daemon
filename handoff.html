@@ -274,8 +274,6 @@
     border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 600 13px system-ui, sans-serif; cursor: pointer; }
   .sm-rec button:hover { border-color: var(--muted); }
   .sm-rec button.rec { color: var(--bad); }
-  .sm-rec-note { flex: none; display: inline-flex; align-items: center; padding: 0 8px; color: var(--muted); }
-  .sm-rec-note svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .sm-rec svg, .sm-item svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
   .sm-rec svg.fill { fill: currentColor; stroke: none; }
   .sm-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent;
@@ -4196,7 +4194,8 @@ function renderSession() {
   const html = !rec ? btn("record", "rec", "Start recording", "rec")
       + (sess.audio ? btn("sound", sound ? "sound" : "mute", sound ? "With sound" : "Silent", "", sound ? "The recording takes the session's sound: tap to record without" : "The recording is silent: tap to record the sound too") : "")
     : (paused ? btn("resume-record", "play", "Resume") : btn("pause-record", "pause", "Pause")) + btn("stop-record", "stop", "Stop", "rec")
-      + (sess.recording_audio ? `<span class="sm-rec-note" title="Recording the sound too">${ICON.sound}</span>` : "");
+      // While recording, the sound switches at once (off: silent from here).
+      + (sess.audio ? btn("record-audio", sess.recording_audio ? "sound" : "mute", sess.recording_audio ? "Sound" : "Silent", "", sess.recording_audio ? "Recording the sound: tap to mute the recording" : "The recording is silent: tap to record the sound") : "");
   const box = $("smRec");
   if (box._html !== html) { box.innerHTML = html; box._html = html; }
 }
@@ -4214,7 +4213,7 @@ for (const el of E.sessMenu.querySelectorAll("button.sm-item:not([role]), a.sm-i
 for (const el of document.querySelectorAll("#smLayout button")) el.setAttribute("role", "radio");
 E.sessMenu.addEventListener("click", (e) => {
   const item = e.target.closest("button.sm-item, a.sm-item, #smLayout button, #smRec button");
-  if (!item || item.disabled || item.id === "smStop" || item.dataset.rec === "sound" || item.id === "smTitle") return;
+  if (!item || item.disabled || item.id === "smStop" || item.dataset.rec === "sound" || item.dataset.rec === "record-audio" || item.id === "smTitle") return;
   setTimeout(() => toggleSessMenu(false), 0);
 });
 E.sessMenu.addEventListener("change", () => setTimeout(() => toggleSessMenu(false), 0));
@@ -4256,6 +4255,19 @@ $("smRec").onclick = async (e) => {
   if (b.dataset.rec === "sound") {
     recSoundPick.set(target?.sessionId, !recSound());
     refreshSession();
+    return;
+  }
+  if (b.dataset.rec === "record-audio") {
+    b.disabled = true;
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/record-audio`, {
+        method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ audio: !sess.recording_audio }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    } catch (err) {
+      $("smStatus").textContent = "Failed: " + err.message;
+    }
+    await refreshSession();
     return;
   }
   b.disabled = true;

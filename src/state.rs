@@ -114,7 +114,7 @@ impl ManagedSession {
             idle_timeout_seconds: self.activity.timeout_secs(),
             is_recording: recording.is_some(),
             recording_paused: recording.is_some_and(SessionRecorderHandle::is_paused),
-            recording_audio: recording.is_some_and(|r| r.audio),
+            recording_audio: recording.is_some_and(SessionRecorderHandle::audio_on),
             record_audio: self.record_audio,
         }
     }

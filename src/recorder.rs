@@ -173,8 +173,8 @@ pub struct SessionRecorderHandle {
     pub stop_flag: Arc<AtomicBool>,
     pub clock: Arc<RecordingClock>,
     pub frame_tx: FrameSender,
-    /// Recording the session's sound too.
-    pub audio: bool,
+    /// Whether the sound is being recorded; None when the session has none.
+    pub sound: Option<Arc<AtomicBool>>,
 }
 
 impl SessionRecorderHandle {
@@ -184,6 +184,23 @@ impl SessionRecorderHandle {
 
     pub fn is_paused(&self) -> bool {
         self.clock.is_paused()
+    }
+
+    /// Recording the session's sound right now.
+    pub fn audio_on(&self) -> bool {
+        self.sound
+            .as_ref()
+            .is_some_and(|s| s.load(Ordering::SeqCst))
+    }
+
+    /// Switch the sound on or off while recording; false when there is none.
+    pub fn set_audio(&self, on: bool) -> bool {
+        let Some(ref sound) = self.sound else {
+            return false;
+        };
+        sound.store(on, Ordering::SeqCst);
+        self.clock.wake();
+        true
     }
 }
 
@@ -356,9 +373,15 @@ pub fn start_recording(
     node_name: String,
     config: RecorderConfig,
     grab: Option<DisplayGrab>,
-    audio: Option<crate::rec_audio::Source>,
+    // The session's sound, and whether to record it from the start (it can be
+    // switched later).
+    audio: Option<(crate::rec_audio::Source, bool)>,
 ) -> SessionRecorderHandle {
-    let has_audio = audio.is_some();
+    let (audio, sound) = match audio {
+        Some((src, on)) => (Some(src), Some(Arc::new(AtomicBool::new(on)))),
+        None => (None, None),
+    };
+    let sound_task = sound.clone();
     let recording_id = Uuid::new_v4();
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_clone = stop_flag.clone();
@@ -385,7 +408,7 @@ pub fn start_recording(
             clock_clone,
             frame_rx,
             grab,
-            audio,
+            audio.zip(sound_task),
             active,
         )
         .await;
@@ -396,7 +419,7 @@ pub fn start_recording(
         stop_flag,
         clock,
         frame_tx,
-        audio: has_audio,
+        sound,
     }
 }
 
@@ -528,7 +551,7 @@ async fn record_session_loop(
     clock: Arc<RecordingClock>,
     mut frame_rx: tokio::sync::mpsc::Receiver<StampedFrame>,
     grab: Option<DisplayGrab>,
-    audio: Option<crate::rec_audio::Source>,
+    audio: Option<(crate::rec_audio::Source, Arc<AtomicBool>)>,
     // Registered until the recording is final.
     active: ActiveGuard,
 ) {
@@ -574,8 +597,14 @@ async fn record_session_loop(
     // The sound, on the same clock; stopped once the frames are done (the loop
     // also ends without the stop flag, when the session goes away).
     let audio_stop = Arc::new(AtomicBool::new(false));
-    let audio_task = audio.map(|src| {
-        crate::rec_audio::spawn(src, rec_dir.clone(), clock.clone(), audio_stop.clone())
+    let audio_task = audio.map(|(src, sound)| {
+        crate::rec_audio::spawn(
+            src,
+            rec_dir.clone(),
+            clock.clone(),
+            audio_stop.clone(),
+            sound,
+        )
     });
 
     info!(

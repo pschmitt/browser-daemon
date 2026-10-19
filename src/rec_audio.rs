@@ -46,13 +46,15 @@ const WORKING_AFTER: Duration = Duration::from_secs(2);
 const START_POLL: Duration = Duration::from_millis(40);
 const POLL: Duration = Duration::from_millis(500);
 
-/// Records `src` into `dir` until `stop` is set, following the clock's pauses.
-/// The task answers whether the recording kept audio.
+/// Records `src` into `dir` until `stop` is set, following the clock's pauses and
+/// `sound` (off: nothing is recorded, which plays back as silence; switched with
+/// a [`RecordingClock::wake`]). The task answers whether the recording kept audio.
 pub fn spawn(
     src: Source,
     dir: PathBuf,
     clock: Arc<RecordingClock>,
     stop: Arc<AtomicBool>,
+    sound: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<bool> {
     tokio::spawn(async move {
         let parts = dir.join(PARTS);
@@ -69,7 +71,7 @@ pub fn spawn(
             tokio::pin!(changed);
             changed.as_mut().enable();
             let stopping = stop.load(Ordering::SeqCst);
-            if stopping || clock.is_paused() {
+            if stopping || clock.is_paused() || !sound.load(Ordering::SeqCst) {
                 if let Some(live) = current.take() {
                     finish(live.child).await;
                 }
