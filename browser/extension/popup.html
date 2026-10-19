@@ -19,7 +19,7 @@
   </ul>
   <label class="field">Name this browser<input id="approvalName" maxlength="80" placeholder="My laptop"></label>
   <label class="row"><span><b>Remote control</b><small>Viewers can click, type and navigate</small></span><input id="approvalControl" type="checkbox" class="switch danger"></label>
-  <label class="row"><span><b>Reconnect automatically</b><small>Also after a browser restart</small></span><input id="approvalRemember" type="checkbox" class="switch"></label>
+  <label class="row"><span><b>Disable key expiry</b><small>Reconnects after a browser restart</small></span><input id="approvalRemember" type="checkbox" class="switch"></label>
   <button id="approvePairing" type="button" class="primary wide big">Connect</button>
   <button id="rejectPairing" type="button" class="link wide quiet">Not now</button>
 </section>
@@ -57,7 +57,7 @@
     <summary>Pair with a code instead</summary>
     <form id="connect">
       <label class="field">Pairing code<input id="code" type="password" autocomplete="off" spellcheck="false" required pattern="[a-f0-9]{64}"></label>
-      <label class="row"><span><b>Reconnect automatically</b><small>Also after a browser restart</small></span><input id="rememberKey" type="checkbox" class="switch"></label>
+      <label class="row"><span><b>Disable key expiry</b><small>Reconnects after a browser restart</small></span><input id="rememberKey" type="checkbox" class="switch"></label>
       <button type="submit" class="primary wide">Connect</button>
       <p class="muted small">From a trusted machine:</p><code id="pairCommand"></code>
     </form>

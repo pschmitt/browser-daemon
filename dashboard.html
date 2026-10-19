@@ -935,7 +935,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
           </div>
           <div class="add-row add-options">
             <label class="switch add-check"><input id="controlBrowser" type="checkbox" checked><span class="track"></span>Allow remote control</label>
-            <label class="switch add-check"><input id="rememberBrowser" type="checkbox" checked><span class="track"></span>Stay paired after restarts</label></div>
+            <label class="switch add-check"><input id="rememberBrowser" type="checkbox" checked><span class="track"></span>Disable key expiry</label></div>
           <p id="pairBrowserStatus" class="add-status" role="status"></p>
         </div>
         <form id="addPeerForm" class="add-card">
@@ -3993,7 +3993,7 @@ function extensionNodeCard(n) {
     <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
       <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span><span class="chip">browser</span>${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
         <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
-        <div class="bars"><span><b>${online ? 1 : 0}</b> session${online ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Reconnects after restart' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span>${!online && n.forget_at ? (() => {
+        <div class="bars"><span><b>${online ? 1 : 0}</b> session${online ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Key expiry disabled' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span>${!online && n.forget_at ? (() => {
           const days = Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400));
           return `<span class="chip warn" title="Offline browsers are forgotten (key revoked) after a while; reconnecting resets it. Forgotten ${esc(absTime(n.forget_at))}.">${icon('clock', 'sm')}${days ? `Forgotten in ${days} day${days === 1 ? '' : 's'}` : 'Forgotten today'}</span>`;
         })() : ''}</div>

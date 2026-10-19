@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
@@ -171,6 +171,9 @@ struct Node {
     // Live views of shared tabs (see `cdp`). Dropping one closes its socket.
     channels: Mutex<HashMap<Uuid, Channel>>,
     stop: tokio::sync::Notify,
+    // Bumped when its shared tabs change or it goes away (see `changes`).
+    revision: std::sync::atomic::AtomicU64,
+    changed: tokio::sync::Notify,
 }
 
 struct Channel {
@@ -182,6 +185,12 @@ impl Node {
     fn end(&self) {
         self.pending.lock().unwrap().clear();
         self.channels.lock().unwrap().clear();
+        self.bump();
+    }
+    fn bump(&self) {
+        self.revision
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.changed.notify_waiters();
     }
     fn control(&self, tab: u32) -> Option<bool> {
         let info = self.info.lock().unwrap();
@@ -746,6 +755,8 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
         pending: Mutex::default(),
         channels: Mutex::default(),
         stop: tokio::sync::Notify::new(),
+        revision: std::sync::atomic::AtomicU64::new(0),
+        changed: tokio::sync::Notify::new(),
     });
     if let Some(previous) = broker.nodes.lock().unwrap().insert(id, node.clone()) {
         previous.stop.notify_one();
@@ -804,6 +815,8 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 info.tabs = tabs;
                                 info.native_control = value["native_control"].as_bool().unwrap_or(false);
                                 info.can_open = value["can_open"].as_bool().unwrap_or(false);
+                                drop(info);
+                                node.bump();
                             }
                             Some("cdp_result") => {
                                 let channel = value["channel"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or(())?;
@@ -841,6 +854,46 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
         }
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct Since {
+    since: Option<u64>,
+}
+
+/// Long poll: answers at once when the browser's tabs changed since `since`
+/// (its revision), else when they change or after 25 s. Live views reload their
+/// tab list then, instead of finding out on the next round.
+pub async fn changes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Query(query): Query<Since>,
+) -> Result<Response, ApiError> {
+    use std::sync::atomic::Ordering;
+    state.check_auth(&headers)?;
+    let node = state
+        .extensions
+        .nodes
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Browser disconnected"))?;
+    let current = node.revision.load(Ordering::SeqCst);
+    if query.since == Some(current) {
+        // Created before checking again: a change in between still wakes it.
+        let changed = node.changed.notified();
+        if node.revision.load(Ordering::SeqCst) == current {
+            let _ = tokio::time::timeout(Duration::from_secs(25), changed).await;
+        }
+    }
+    let revision = node.revision.load(Ordering::SeqCst);
+    Ok((
+        [("cache-control", "no-store")],
+        Json(json!({"revision": revision})),
+    )
+        .into_response())
 }
 
 /// A view that cannot keep up is closed rather than silently missing frames:

@@ -2777,6 +2777,17 @@ async function loadTabs() {
   } catch { /* ignore */ }
 }
 // Titles and the speaker on tabs playing sound stay current between page events.
+// A shared browser's tabs as they are shared and unshared: the daemon answers the
+// long poll when they change (the timer below stays for titles and as a fallback).
+if (sharedBrowserId) (async () => {
+  let revision = null;
+  for (;;) {
+    try {
+      const r = await getJson(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/changes${revision === null ? "" : `?since=${revision}`}`);
+      if (r.revision !== revision) { const first = revision === null; revision = r.revision; if (!first) loadTabs(); }
+    } catch { revision = null; await sleep(3000); }
+  }
+})();
 // A shared browser is also watched before it has a tab: its first one is shown as it appears.
 setInterval(() => { if (document.visibilityState === "visible" && (target || sharedBrowserId)) loadTabs(); }, 2500);
 
@@ -4492,7 +4503,7 @@ function renderSharedSession() {
   E.profChip.onclick = e => { e.stopPropagation(); toggleSessMenu(true); };
   $('smTitle').textContent = sharedBrowser.name; $('smTitle').title = 'Shared browser';
   $('smTitle').onclick = null; $('smTitle').removeAttribute('role'); $('smTitle').removeAttribute('tabindex');
-  $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Reconnects after restart' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}`;
+  $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Key expiry disabled' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}`;
   setEngineIcon($('smEngine'), sharedBrowser.browser);
   for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow', 'vaultBtn', 'audioBtn']) $(id).hidden = true;
   // New tabs need control (they are shared with it); recording needs none.

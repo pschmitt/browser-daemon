@@ -93,7 +93,21 @@ try {
   await message({type: 'share', tabs: [tab.id], urls: {[tab.id]: pageURL}, control: true});
   await until(async () => (await view.evaluate(`!document.getElementById('overlay').classList.contains('show')`)));
   assert.equal(await view.evaluate(`new URLSearchParams(location.search).get('page')`), String(tab.id));
-  console.log('Handoff: a shared browser without tabs shows its first shared tab by itself passed');
+  // Sharing and unsharing reach the tab strip at once (long poll), not on the next round.
+  const second = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent(`${pageURL}two`)}`, {method: 'PUT'}).then(r => r.json());
+  const secondTab = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}two`));
+  const strip = () => view.evaluate(`document.querySelectorAll('.tab-strip-item').length`);
+  let started = Date.now();
+  await message({type: 'share', tabs: [tab.id, secondTab.id], urls: {[tab.id]: pageURL, [secondTab.id]: `${pageURL}two`}, control: true});
+  await until(async () => (await strip()) === 2);
+  const shown = Date.now() - started;
+  started = Date.now();
+  await message({type: 'share', tabs: [tab.id], urls: {[tab.id]: pageURL}, control: true});
+  await until(async () => (await strip()) === 1);
+  const hidden = Date.now() - started;
+  assert.ok(shown < 1500 && hidden < 1500, `tab strip took ${shown} / ${hidden} ms`);
+  await fetch(`http://127.0.0.1:${chromePort}/json/close/${second.id}`, {method: 'PUT'});
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

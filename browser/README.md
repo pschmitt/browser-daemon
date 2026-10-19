@@ -49,7 +49,7 @@ not restored. **Open setup in a tab** gives a stable page for permission prompts
 
 ## Remembered browsers and key expiry
 
-Select **Remember this browser and reconnect after restart (no key expiry)** on
+Select **Disable key expiry** on
 the dashboard and approve that choice in the extension. The daemon stores a
 hash of a random browser-only key in `browser-keys.json` (mode 0600). The key
 itself stays in the extension's local storage; it is bound to the extension

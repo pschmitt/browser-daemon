@@ -841,6 +841,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/extension/nodes/{id}/tabs/{tab}/cdp",
             get(extension::cdp),
         )
+        .route("/api/extension/nodes/{id}/changes", get(extension::changes))
         .route(
             "/api/extension/nodes/{id}/command",
             post(extension::command),
