@@ -15,5 +15,17 @@
     "schedule": [
       "on monday"
     ]
-  }
+  },
+  "packageRules": [
+    {
+      "matchPackageNames": [
+        "reqwest"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false,
+      "description": "reqwest 0.13's rustls backend pulls in aws-lc-rs, which does not link against musl (the release builds static musl binaries). Re-enable once reqwest offers a ring-based rustls backend again or aws-lc-rs supports musl (as in rbw)."
+    }
+  ]
 }
