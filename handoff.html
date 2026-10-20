@@ -958,7 +958,7 @@ class CdpDriver {
   // agent and pages belong to that person: no resizing, emulation or hooks.
   constructor(url, h, { shared = false } = {}) {
     this.h = h; this.shared = shared;
-    this.cdp = new Cdp(url, { event: (m, p) => this.onEvent(m, p), close: () => h.close(this) });
+    this.cdp = new Cdp(url, { event: (m, p) => this.onEvent(m, p), close: () => { if (audio.sharedDriver === this) stopAudio(); h.close(this); } });
     this.ready = this.cdp.ready;
   }
   isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
@@ -1155,6 +1155,8 @@ class CdpDriver {
       return;
     }
     if (method === "Runtime.bindingCalled" && p.name === "__bdPasskey") { passkeyRequested(this, p.payload); return; }
+    if (method === "Page.audioChunk") { playSharedAudio(this, p); return; }
+    if (method === "Page.audioStopped") { if (audio.sharedDriver === this) stopAudio(); return; }
     if (method === "Page.windowOpen") { h.popup(p.url); return; }
     if (method === "Page.fileChooserOpened") { this.fileChooser(p); return; }
     if (method === "Page.screencastFrame") {
@@ -4287,9 +4289,9 @@ const audio = { el: null, ws: null, ms: null, sb: null, queue: [], session: null
 let audioWanted = true;
 try { audioWanted = localStorage.getItem("handoff.audio") !== "0"; } catch { /* storage unavailable */ }
 function renderAudioButton() {
-  const on = !!audio.el;
+  const on = !!(audio.el || audio.context);
   E.audioBtn.innerHTML = (on ? AUDIO_ICONS.on : AUDIO_ICONS.off) + (on ? "Audio on" : "Audio off");
-  E.audioBtn.title = on ? "Mute the page's sound in this view" : "Play the page's sound in this view";
+  E.audioBtn.title = sharedBrowser ? (on ? "Mute shared media audio in this view" : "Play audio/video sound shared by the browser extension") : on ? "Mute the page's sound in this view" : "Play the page's sound in this view";
   E.audioBtn.setAttribute("aria-checked", String(on));
 }
 // Browsers only start playback after a click or key press on this page: until then
@@ -4301,6 +4303,11 @@ function playWhenAllowed(el) {
   });
 }
 function stopAudio() {
+  if (audio.sharedDriver) audio.sharedDriver.cdp.send("Page.stopAudio");
+  if (audio.resume) for (const type of ["pointerdown", "keydown"]) removeEventListener(type, audio.resume, true);
+  audio.resume = null;
+  if (audio.context) void audio.context.close().catch(() => {});
+  Object.assign(audio, {context: null, sharedDriver: null, sharedPage: null, clocks: null});
   try { audio.ws?.close(); } catch { /* closed */ }
   if (audio.el) { audio.el.pause(); URL.revokeObjectURL(audio.el.src); audio.el.removeAttribute("src"); }
   Object.assign(audio, { el: null, ws: null, ms: null, sb: null, queue: [], session: null, appending: false, synced: false });
@@ -4334,6 +4341,7 @@ function pumpAudio() {
 }
 // Must run inside the click: browsers only allow playback started by a gesture.
 function startAudio() {
+  if (sharedBrowser) return startSharedAudio();
   const sessionId = target?.sessionId;
   const type = 'audio/webm; codecs="opus"';
   if (!sessionId || !window.MediaSource || !MediaSource.isTypeSupported(type)) {
@@ -4359,8 +4367,56 @@ function startAudio() {
   }, { once: true });
   renderAudioButton();
 }
+// Extension sound is per shared tab, PCM stereo from its audio/video elements.
+// Independent frame clocks allow embedded media to join without restarting it.
+function startSharedAudio() {
+  if (!sharedBrowser?.audio || !drv?.shared || !drv.cdp) return;
+  if (audio.context && audio.sharedDriver === drv && audio.sharedPage === pageId) return;
+  stopAudio();
+  const context = new AudioContext();
+  const owner = drv;
+  Object.assign(audio, {context, sharedDriver: owner, sharedPage: pageId, clocks: new Map()});
+  audio.resume = () => {
+    if (audio.context !== context) return;
+    void context.resume().catch(() => {});
+  };
+  for (const type of ["pointerdown", "keydown"]) addEventListener(type, audio.resume, {capture: true});
+  audio.resume();
+  owner.cdp.call("Page.startAudio").catch(() => {
+    if (audio.sharedDriver !== owner) return;
+    stopAudio(); toast("Could not start shared sound. Check Share sound in the browser extension.", 4000);
+  });
+  renderAudioButton();
+}
+function playSharedAudio(owner, p) {
+  const context = audio.context;
+  if (!context || audio.sharedDriver !== owner || audio.sharedPage !== pageId ||
+      ![44100, 48000].includes(p.rate) || typeof p.data !== "string" || p.data.length > 24000 || typeof p.stream !== "string") return;
+  if (context.state !== "running") { void context.resume().catch(() => {}); return; }
+  let raw;
+  try { raw = atob(p.data); } catch { return; }
+  if (!raw.length || raw.length % 4) return;
+  const count = raw.length / 4;
+  const buffer = context.createBuffer(2, count, p.rate);
+  for (let channel = 0; channel < 2; channel++) {
+    const samples = buffer.getChannelData(channel);
+    for (let i = 0; i < count; i++) {
+      const offset = i * 4 + channel * 2;
+      const value = raw.charCodeAt(offset) | raw.charCodeAt(offset + 1) << 8;
+      samples[i] = (value >= 32768 ? value - 65536 : value) / 32768;
+    }
+  }
+  // Bound buffering; a stalled connection resumes at live sound.
+  let at = audio.clocks.get(p.stream) || 0;
+  if (at < context.currentTime || at > context.currentTime + 0.5) at = context.currentTime + 0.12;
+  const source = context.createBufferSource(); source.buffer = buffer;
+  source.connect(context.destination); source.start(at);
+  source.onended = () => source.disconnect();
+  audio.clocks.set(p.stream, at + buffer.duration);
+  if (audio.clocks.size > 64) audio.clocks.delete(audio.clocks.keys().next().value);
+}
 E.audioBtn.onclick = () => {
-  audioWanted = !audio.el;
+  audioWanted = !(audio.el || audio.context);
   try { localStorage.setItem("handoff.audio", audioWanted ? "1" : "0"); } catch { /* storage unavailable */ }
   audioWanted ? startAudio() : stopAudio();
 };
@@ -4902,7 +4958,10 @@ function renderSharedSession() {
   $('smTitle').onclick = null; $('smTitle').removeAttribute('role'); $('smTitle').removeAttribute('tabindex');
   $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Key expiry disabled' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}`;
   setEngineIcon($('smEngine'), sharedBrowser.browser);
-  for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow', 'audioBtn']) $(id).hidden = true;
+  for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow']) $(id).hidden = true;
+  E.audioBtn.hidden = !sharedBrowser.audio;
+  if (audio.context && (!sharedBrowser.audio || audio.sharedPage !== pageId || audio.sharedDriver !== drv)) stopAudio();
+  if (sharedBrowser.audio && audioWanted && !audio.context && drv?.shared) startSharedAudio();
   // The vault fills logins into tabs the owner lets viewers control.
   $('vaultBtn').hidden = !control;
   // New tabs need control (they are shared with it); recording needs none.

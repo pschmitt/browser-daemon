@@ -65,6 +65,24 @@ The dashboard can revoke offline remembered browsers too. Pairing codes still
 expire in five minutes. Manual pairing uses `extension pair --remember`; a
 memory-only connection with no time limit uses `--lifetime-secs 0` instead.
 
+## Shared sound
+
+Enable **Share sound** in the owner's extension, then use **Audio on/off** in
+its handoff view. Sound comes from audio/video elements in the viewed tab,
+including permitted embedded frames and open shadow roots. Other tabs, the
+microphone, and desktop audio are never captured. Local playback stays intact.
+The viewer may need to click the live view once to permit browser playback.
+
+This media-element capture works without Firefox's native companion or new
+browser permissions. It does not capture standalone Web Audio graphs, protected
+media, or inaccessible frames. Extension session recordings remain silent.
+Sound sharing defaults off and is independent of remote control: view-only
+clients can listen when the owner enables it. Closing the last listening view,
+unsharing the tab, or disabling sound stops capture; a twenty-second lease
+also stops it if the extension worker disappears. PCM stereo is relayed through
+the existing authenticated, tab-scoped live-view connection, with bounded
+buffering and backpressure.
+
 ## Install and pair manually
 
 1. Build with `python3 browser/build.py` (or download the CI artifacts).

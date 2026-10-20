@@ -143,6 +143,7 @@ async function refresh() {
     if (document.activeElement !== $('autoShare')) $('autoShare').checked = state.sharing.autoShare;
     if (document.activeElement !== $('shareAll')) $('shareAll').checked = state.sharing.all;
     if (document.activeElement !== $('follow')) $('follow').checked = state.sharing.follow;
+    if (document.activeElement !== $('shareAudio')) $('shareAudio').checked = state.sharing.audio;
     $('autoShareRow').hidden = state.sharing.all;
     $('serverHost').textContent = new URL(reg.server).host;
     $('serverHost').title = reg.server;
@@ -294,3 +295,8 @@ $('saveDaemonAllowlist').addEventListener('click', async () => {
 
 void refresh().catch(showError);
 setInterval(() => { if (!busy) void refresh().catch(showError); }, 1500);
+
+$('shareAudio').addEventListener('change', () => {
+  const enabled = $('shareAudio').checked;
+  void message({type: 'shareAudio', enabled}).then(refresh, error => { $('shareAudio').checked = !enabled; showError(error); });
+});

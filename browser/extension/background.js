@@ -1,5 +1,5 @@
 /* Local extension code only; dashboard bridge requires explicit daemon approval. */
-if (typeof importScripts === 'function') importScripts('policy.js');
+if (typeof importScripts === 'function') importScripts('policy.js', 'audio.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
 void api.storage.local.setAccessLevel?.({accessLevel: 'TRUSTED_CONTEXTS'});
@@ -24,9 +24,9 @@ function castState(tab) {
 // By default every tab is shared (all: true), with the remote control choice.
 // Without that, chosen tabs are, and new ones join if autoShare.
 // follow: the tab a live view switches to comes to the front here as well.
-let sharing = {all: true, autoShare: true, control: false, follow: true};
-const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView']).then(saved => {
-  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView !== false};
+let sharing = {all: true, autoShare: true, control: false, follow: true, audio: false};
+const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio']).then(saved => {
+  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView !== false, audio: saved.shareAudio === true};
 });
 // Controllers may open tabs where those are shared with control.
 const canOpen = () => sharing.control && (sharing.all || sharing.autoShare);
@@ -267,6 +267,7 @@ async function badge() {
 }
 
 async function detach(tab) {
+  stopTabAudio(tab);
   for (const [channel, owner] of channels) if (owner === tab) { channels.delete(channel); stopCast(channel); }
   hooked.delete(tab);
   if (!attached.delete(tab)) return;
@@ -289,6 +290,7 @@ async function stop(reason = 'Disconnected', retry = false) {
   published = [];
   for (const channel of casts.keys()) stopCast(channel);
   channels.clear();
+  for (const tab of mediaAudio.keys()) stopTabAudio(tab);
   disconnectNative();
   if (old) old.close();
   await clearedAlarm;
@@ -329,7 +331,8 @@ async function publish() {
   await syncNativeGrants();
   if (generation !== currentGeneration) return;
   published = tabs;
-  send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen()});
+  for (const tab of mediaAudio.keys()) if (!tabs.some(t => t.id === tab)) stopTabAudio(tab);
+  send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen(), audio: sharing.audio});
   await badge();
 }
 
@@ -696,6 +699,14 @@ async function relayCdp(message, connection, currentGeneration) {
       throw new ShimError('Not permitted for this shared tab.');
     }
     channels.set(channel, tab);
+    if (method === 'Page.startAudio' || method === 'Page.stopAudio') {
+      if (method === 'Page.startAudio') {
+        if (!sharing.audio) throw new ShimError('Enable Share sound in the browser extension first.');
+        await startTabAudio(tab, channel);
+      } else stopChannelAudio(channel);
+      reply({result: {}});
+      return;
+    }
     if (automation) automations.set(channel, tab);
     if (chromium && method === 'Page.screencastFrameAck') {
       // The browser had its acknowledgement already: this one frees a slot.
@@ -756,6 +767,7 @@ async function resetAutomation(tab) {
   for (const name of left?.bindings || []) await send('Runtime.removeBinding', {name});
 }
 function closeChannel(channel) {
+  stopChannelAudio(channel);
   const tab = channels.get(channel);
   channels.delete(channel);
   if (automations.delete(channel) && ![...automations.values()].includes(tab)) void resetAutomation(tab);
@@ -768,6 +780,63 @@ function closeChannel(channel) {
 }
 function sendEvent(tab, method, params, channel) {
   if (shared.get(tab)?.paused === false) send({type: 'cdp_event', tab, method, params, ...(channel ? {channel} : {})});
+}
+
+// Sound follows live-view channels; a lease also covers crashed/restarted workers.
+const mediaAudio = new Map();
+async function renewTabAudio(tab) {
+  const state = mediaAudio.get(tab);
+  if (!state || !registration || !sharing.audio || shared.get(tab)?.paused !== false) { stopTabAudio(tab); return; }
+  try {
+    await api.scripting.executeScript({target: {tabId: tab, allFrames: true}, func: captureMediaAudio, args: [state.token]});
+  } catch { /* Navigation or an inaccessible frame: retry only while watched. */ }
+}
+async function startTabAudio(tab, channel) {
+  let state = mediaAudio.get(tab);
+  if (!state) {
+    if (mediaAudio.size >= 8) throw new ShimError('Too many tabs are streaming sound.');
+    state = {token: crypto.randomUUID(), channels: new Set(), timer: null};
+    mediaAudio.set(tab, state);
+    state.timer = setInterval(() => void renewTabAudio(tab), 5000);
+  }
+  state.channels.add(channel);
+  try {
+    await api.scripting.executeScript({target: {tabId: tab, allFrames: true}, func: captureMediaAudio, args: [state.token]});
+  } catch {
+    stopChannelAudio(channel);
+    throw new ShimError('This page does not allow media sound capture.');
+  }
+}
+function stopTabAudio(tab) {
+  const state = mediaAudio.get(tab);
+  if (!state) return;
+  mediaAudio.delete(tab);
+  clearInterval(state.timer);
+  void api.scripting.executeScript({target: {tabId: tab, allFrames: true}, func: captureMediaAudio, args: [null, state.token]}).catch(() => {});
+  for (const channel of state.channels) sendEvent(tab, 'Page.audioStopped', {}, channel);
+}
+function stopChannelAudio(channel) {
+  for (const [tab, state] of mediaAudio) {
+    state.channels.delete(channel);
+    if (!state.channels.size) stopTabAudio(tab);
+  }
+}
+function relayMediaAudio(message, sender) {
+  const tab = sender.tab?.id;
+  const state = mediaAudio.get(tab);
+  if (sender.id !== api.runtime.id || !state || message.token !== state.token ||
+      !registration || !sharing.audio || shared.get(tab)?.paused !== false ||
+      !safeTab(sender.tab) || !safeURL(sender.url) ||
+      typeof message.data !== 'string' || message.data.length > 24000 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(message.data) || ![44100, 48000].includes(message.rate)) return {ok: false};
+  // Don't accumulate latency on slow networks. Each frame has its own PCM clock.
+  if (socket?.readyState !== WebSocket.OPEN || socket.bufferedAmount > 256 * 1024) return {ok: true};
+  for (const channel of state.channels) {
+    if (channels.get(channel) === tab) sendEvent(tab, 'Page.audioChunk', {
+      data: message.data, rate: message.rate, stream: `${sender.frameId}:${sender.documentId || state.token}`,
+    }, channel);
+  }
+  return {ok: true};
 }
 
 class ShimError extends Error {}
@@ -1012,6 +1081,7 @@ async function restoreRemembered(force = false) {
 
 async function localMessage(message, sender) {
   // Accept only our own extension UI, never a content script or web page.
+  if (message.type === 'mediaAudio') return relayMediaAudio(message, sender);
   if (message.type === 'dashboardPair') return dashboardMessage(message, sender);
   if (sender.id !== api.runtime.id ||
       sender.url !== api.runtime.getURL('popup.html')) throw new Error('Extension UI only.');
@@ -1119,6 +1189,13 @@ async function localMessage(message, sender) {
     publishSoon();
     return {ok: true};
   }
+  if (message.type === 'shareAudio') {
+    sharing.audio = message.enabled === true;
+    await api.storage.local.set({shareAudio: sharing.audio});
+    if (!sharing.audio) for (const tab of mediaAudio.keys()) stopTabAudio(tab);
+    publishSoon();
+    return {ok: true};
+  }
   if (message.type === 'follow') {
     sharing.follow = message.enabled === true;
     await api.storage.local.set({followView: sharing.follow});
@@ -1165,6 +1242,8 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
   }
   if (!chromium && change.status === 'loading') { sendEvent(id, 'Page.frameStartedLoading', {frameId: String(id)}); touchCast(id); }
   if (!chromium && change.status === 'complete') { sendEvent(id, 'Page.loadEventFired', {timestamp: Date.now() / 1000}); touchCast(id); }
+  if (grant.paused) stopTabAudio(id);
+  if (change.status === 'complete' && mediaAudio.has(id)) void renewTabAudio(id);
   if (change.url || change.title || change.status === 'complete') publishSoon();
 });
 // Which shared tab is in front: recordings follow it.

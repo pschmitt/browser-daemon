@@ -231,6 +231,8 @@ pub struct NodeInfo {
     /// Its owner lets controllers open tabs (they are shared with control).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub can_open: bool,
+    /// Owner enabled media-element sound sharing.
+    pub audio: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub recording: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -354,6 +356,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<R
                 version: String::new(),
                 forget_at: forget_after.map(|a| record.last_seen + a.as_secs()),
                 can_open: false,
+                audio: false,
                 recording: false,
                 recording_paused: false,
                 tabs: vec![],
@@ -466,7 +469,9 @@ pub fn relay_allowed(method: &str, params: &Value, control: bool) -> bool {
     }
     if matches!(
         method,
-        "Page.enable"
+        "Page.startAudio"
+            | "Page.stopAudio"
+            | "Page.enable"
             | "Page.bringToFront"
             | "Page.startScreencast"
             | "Page.stopScreencast"
@@ -902,6 +907,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
             version: hello.version,
             forget_at: None,
             can_open: false,
+            audio: false,
             recording: false,
             recording_paused: false,
             tabs: vec![],
@@ -971,6 +977,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 info.tabs = tabs;
                                 info.native_control = value["native_control"].as_bool().unwrap_or(false);
                                 info.can_open = value["can_open"].as_bool().unwrap_or(false);
+                                info.audio = value["audio"].as_bool().unwrap_or(false);
                                 drop(info);
                                 node.bump();
                             }

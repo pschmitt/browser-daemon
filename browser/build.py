@@ -48,7 +48,7 @@ def main():
         else:
             manifest["optional_permissions"] = ["nativeMessaging"]
             manifest["optional_host_permissions"] = ["<all_urls>"]
-            manifest["background"] = {"scripts": ["policy.js", "background.js"]}
+            manifest["background"] = {"scripts": ["policy.js", "audio.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
                 "id": "browser-daemon-node@pschmitt.dev",
                 "strict_min_version": "142.0",
