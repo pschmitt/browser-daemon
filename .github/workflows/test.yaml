@@ -92,6 +92,8 @@ jobs:
         run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_chromium.mjs
       - name: Live views of a shared browser
         run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_handoff.mjs
+      - name: Shared media audio and owner revocation
+        run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_audio.mjs
       - name: Playwright against a shared browser
         run: |
           npm install --silent --prefix "$RUNNER_TEMP/playwright" playwright-core

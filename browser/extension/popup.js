@@ -296,7 +296,14 @@ $('saveDaemonAllowlist').addEventListener('click', async () => {
 void refresh().catch(showError);
 setInterval(() => { if (!busy) void refresh().catch(showError); }, 1500);
 
-$('shareAudio').addEventListener('change', () => {
+$('shareAudio').addEventListener('click', () => {
   const enabled = $('shareAudio').checked;
-  void message({type: 'shareAudio', enabled}).then(refresh, error => { $('shareAudio').checked = !enabled; showError(error); });
+  // Chromium's debugger grant covers pictures/input, but scripting media capture
+  // also needs site access. Request it in this local user gesture.
+  const permission = enabled ? api.permissions.request({origins: state.chromium
+    ? ['http://*/*', 'https://*/*'] : ['<all_urls>']}) : Promise.resolve(true);
+  void permission.then(allowed => {
+    if (!allowed) throw new Error('Site access is needed to share media sound.');
+    return message({type: 'shareAudio', enabled});
+  }).then(refresh, error => { $('shareAudio').checked = !enabled; showError(error); });
 });

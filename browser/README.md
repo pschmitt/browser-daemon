@@ -73,8 +73,8 @@ including permitted embedded frames and open shadow roots. Other tabs, the
 microphone, and desktop audio are never captured. Local playback stays intact.
 The viewer may need to click the live view once to permit browser playback.
 
-This media-element capture works without Firefox's native companion or new
-browser permissions. It does not capture standalone Web Audio graphs, protected
+This media-element capture works without Firefox's native companion. Enabling
+sound requests access to web pages so the extension can capture their media. It does not capture standalone Web Audio graphs, protected
 media, or inaccessible frames. Extension session recordings remain silent.
 Sound sharing defaults off and is independent of remote control: view-only
 clients can listen when the owner enables it. Closing the last listening view,

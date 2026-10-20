@@ -25,8 +25,14 @@ function castState(tab) {
 // Without that, chosen tabs are, and new ones join if autoShare.
 // follow: the tab a live view switches to comes to the front here as well.
 let sharing = {all: true, autoShare: true, control: false, follow: true, audio: false};
-const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio']).then(saved => {
+const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio']).then(async saved => {
   sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView !== false, audio: saved.shareAudio === true};
+  if (sharing.audio && !(await api.permissions.contains({origins: chromium
+      ? ['http://*/*', 'https://*/*'] : ['<all_urls>']}))) {
+    // Upgrade from 0.3.12: its switch did not obtain Chromium site access.
+    sharing.audio = false;
+    await api.storage.local.set({shareAudio: false});
+  }
 });
 // Controllers may open tabs where those are shared with control.
 const canOpen = () => sharing.control && (sharing.all || sharing.autoShare);

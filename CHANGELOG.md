@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-10-20
+
+### Fixed
+
+* Enabling shared sound requests the site access Chromium needs to capture
+  media audio. A saved sound setting without that grant resets to off, so
+  upgrading from 0.3.12 offers the permission request when sound is enabled again.
+* A real stereo-media smoke check covers view-only playback and owner revocation.
+
+### Changed
+
+* Extension node badges include the installed extension version.
+
 ## [0.3.12] - 2026-10-20
 
 ### Added
