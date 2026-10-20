@@ -137,7 +137,7 @@ function filePageBridge(p) {
     } else {
       const x = Number.isFinite(target.x) ? target.x : target.element.getBoundingClientRect().left + target.element.getBoundingClientRect().width / 2;
       const y = Number.isFinite(target.y) ? target.y : target.element.getBoundingClientRect().top + target.element.getBoundingClientRect().height / 2;
-      for (const type of ['dragenter', 'dragover', 'drop']) target.dispatchEvent(new DragEvent(type, {
+      for (const type of ['dragenter', 'dragover', 'drop']) target.element.dispatchEvent(new DragEvent(type, {
         bubbles: true, composed: true, cancelable: true, dataTransfer: transfer, clientX: x, clientY: y,
       }));
     }
