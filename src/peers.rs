@@ -166,6 +166,7 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ) => (false, Short),
         ("PATCH", ["settings"]) => (false, Short),
         ("POST", ["profiles"]) => (false, Long),
+        ("GET", ["profiles", _, "icon"]) => (false, Short),
         ("GET" | "PATCH" | "PUT", ["profiles", _]) => (false, Short),
         ("DELETE", ["profiles", _]) => (false, Long),
         ("POST", ["profiles", _, "clone" | "clear" | "import" | "transfer"]) => (false, Long),
