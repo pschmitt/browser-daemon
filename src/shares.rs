@@ -1086,7 +1086,7 @@ async fn public_tabs(state: &AppState, share: &Share) -> Response {
             return not_found();
         };
         return Json(serde_json::json!({"tabs": browser.tabs.iter().map(|t| serde_json::json!({
-            "id": t.id.to_string(), "title": t.title, "url": t.url, "control": t.control, "active": t.active})).collect::<Vec<_>>(), "can_open": browser.can_open})).into_response();
+            "id": t.id.to_string(), "title": t.title, "url": t.url, "control": t.control, "active": t.active})).collect::<Vec<_>>(), "can_open": browser.can_open || browser.tabs.iter().any(|t| t.control)})).into_response();
     }
     let Some(session) = state.sessions.read().await.get(&share.target).cloned() else {
         return not_found();
@@ -1186,6 +1186,24 @@ async fn extension_input(
     let Some((browser, _)) = state.extensions.public_browser(share.target, Some(grant)) else {
         return not_found();
     };
+    if let Input::Open { url } = ev {
+        if browser.tabs.is_empty() && browser.can_open {
+            return match state
+                .extensions
+                .public_command(
+                    share.target,
+                    grant,
+                    0,
+                    "open",
+                    serde_json::json!({"url":url}),
+                )
+                .await
+            {
+                Ok(_) => Json(serde_json::json!({"ok":true})).into_response(),
+                Err(error) => error.into_response(),
+            };
+        }
+    }
     let requested = match ev {
         Input::Focus { tab } | Input::Close { tab } => Some(tab.as_str()),
         _ => selected,

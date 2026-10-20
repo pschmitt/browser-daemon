@@ -1031,6 +1031,7 @@ async function handleCommand(command, connection, currentGeneration) {
   if (busy >= 16) return;
   busy++;
   try {
+    if (command.public_grant && (!sharing.public || command.public_grant !== publicGrant)) throw new Error('Public sharing ended.');
     // Tab 0: the browser's first tab, where the owner lets controllers open tabs.
     if (command.tab === 0 && command.action === 'open') {
       if (!registration || !canOpen() || !NodePolicy.pageURL(command.params?.url)) throw new Error('Opening tabs is not allowed.');

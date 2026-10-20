@@ -715,8 +715,10 @@ impl Broker {
             .public_browser(id, Some(grant))
             .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Public sharing ended"))?;
         let control = info.tabs.iter().find(|t| t.id == tab).map(|t| t.control);
-        if control.is_none()
-            || (!matches!(action, "screenshot" | "publicAudio") && control != Some(true))
+        let first_tab = tab == 0 && action == "open" && info.can_open;
+        if !first_tab
+            && (control.is_none()
+                || (!matches!(action, "screenshot" | "publicAudio") && control != Some(true)))
         {
             return Err(failure(
                 StatusCode::FORBIDDEN,
@@ -733,7 +735,7 @@ impl Broker {
         let result = ask_granted(&node, tab, action, params, Some(grant)).await?;
         self.public_browser(id, Some(grant))
             .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Public sharing ended"))?;
-        if action != "close" && node.control(tab).is_none() {
+        if !first_tab && action != "close" && node.control(tab).is_none() {
             return Err(failure(StatusCode::FORBIDDEN, "Tab grant ended"));
         }
         if result["error"].is_string() {
