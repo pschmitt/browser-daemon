@@ -334,7 +334,7 @@ async function publish() {
 }
 
 function safeURL(url) {
-  if (!NodePolicy.webURL(url)) return false;
+  if (!NodePolicy.pageURL(url)) return false;
   // A controller must never read its own pairing UI, a dashboard's credential,
   // or a code printed in a localhost daemon page.
   const u = new URL(url);
@@ -384,18 +384,35 @@ const PASSKEY_HOOK = `(() => {
   // answer: true = let the browser handle it (its authenticator has the passkey now),
   // false = cancelled, an object = the signed assertion to resolve with.
   globalThis.__bdPasskeyAnswer = (id, answer = true) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
+  const viewed = () => Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
   c.get = function (opts) {
     const pk = opts && opts.publicKey;
-    const viewed = Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
-    if (!pk || opts.mediation === "conditional" || !viewed || typeof globalThis.__bdPasskey !== "function") return get(opts);
+    // A conditional request (the passkey among a login field's suggestions) only where
+    // the view offers it itself (__bdPasskeyOffer: a shared browser, whose suggestions
+    // are not in the picture); elsewhere the browser shows them.
+    const conditional = opts.mediation === "conditional";
+    if (!pk || (conditional && !globalThis.__bdPasskeyOffer) || !viewed() || typeof globalThis.__bdPasskey !== "function") return get(opts);
     const id = Math.random().toString(36).slice(2);
     let req;
     try {
-      req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)) };
+      req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)), conditional };
     } catch { return get(opts); }
-    return new Promise((go) => {
+    return new Promise((go, fail) => {
       waiting.set(id, go);
       setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
+      // The page gave up (e.g. a conditional request it replaces): so does the view.
+      opts.signal?.addEventListener("abort", () => {
+        if (!waiting.delete(id)) return;
+        try { globalThis.__bdPasskey(JSON.stringify({ id, cancel: true })); } catch {}
+        fail(opts.signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+      }, { once: true });
+      // A held conditional request goes back to the browser once nobody watches.
+      if (conditional) {
+        const check = setInterval(() => {
+          if (!waiting.has(id)) clearInterval(check);
+          else if (!viewed()) { clearInterval(check); globalThis.__bdPasskeyAnswer(id); }
+        }, 4000);
+      }
       try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
     }).then((answer) => answer === true ? get(opts)
       : answer && typeof answer === "object" ? credential(answer)
@@ -654,14 +671,19 @@ async function execute(command) {
 async function relayCdp(message, connection, currentGeneration) {
   const {channel, tab, id, method} = message;
   const params = message.params || {};
+  // A CDP client's session (Playwright via the daemon): the automation set, Chromium only.
+  const automation = message.automation === true && chromium;
   const reply = value => {
     if (socket === connection && currentGeneration === generation) connection.send(JSON.stringify({type: 'cdp_result', channel, id, ...value}));
   };
   try {
     const grant = shared.get(tab);
     if (typeof channel !== 'string' || !registration || !grant || grant.paused ||
-        !NodePolicy.relayAllowed(method, params, grant.control)) throw new Error('Not permitted for this shared tab.');
+        !(NodePolicy.relayAllowed(method, params, grant.control) || (automation && grant.control && NodePolicy.automationAllowed(method, params)))) {
+      throw new ShimError('Not permitted for this shared tab.');
+    }
     channels.set(channel, tab);
+    if (automation) automations.set(channel, tab);
     if (chromium && method === 'Page.screencastFrameAck') {
       // The browser had its acknowledgement already: this one frees a slot.
       const cast = castState(tab);
@@ -678,17 +700,52 @@ async function relayCdp(message, connection, currentGeneration) {
     }
     if (chromium && (method === 'Page.startScreencast' || method === 'Page.stopScreencast')) screencasts.delete(tab);
     const result = chromium ? await cdp(tab, method, params) : await shim(tab, channel, method, params);
+    if (automation) leftBehind(tab, method, params, result);
     // Never return data after local unsharing, pausing or replacement of a grant.
     if (shared.get(tab) !== grant || grant.paused) throw new Error('Sharing ended.');
     reply({result: result ?? {}});
   } catch (error) {
-    // Browser/CDP errors can embed page content, input text or script source.
-    reply({error: {message: error instanceof ShimError ? error.message : 'Action failed, or the tab is no longer shared.'}});
+    // Browser/CDP errors can embed page content, input text or script source: only a
+    // controlling CDP client gets them (it needs them, e.g. "Cannot find context").
+    reply({error: {message: error instanceof ShimError || automation ? String(error?.message || error) : 'Action failed, or the tab is no longer shared.'}});
   }
+}
+// What CDP clients set in a tab's debugger session (which the live views share), to
+// undo when the last one leaves: the owner's tab then behaves as before.
+const automations = new Map();
+const leftovers = new Map();
+function leftBehind(tab, method, params, result) {
+  const left = leftovers.get(tab) || {scripts: new Set(), bindings: new Set()};
+  leftovers.set(tab, left);
+  if (method === 'Page.addScriptToEvaluateOnNewDocument' && result?.identifier) left.scripts.add(result.identifier);
+  if (method === 'Runtime.addBinding' && params.name && params.name !== '__bdPasskey') left.bindings.add(params.name);
+}
+const RESETS = [
+  ['Fetch.disable', {}], ['Network.setExtraHTTPHeaders', {headers: {}}], ['Network.setCacheDisabled', {cacheDisabled: false}],
+  ['Network.setBlockedURLs', {urls: []}], ['Network.setBypassServiceWorker', {bypass: false}],
+  ['Network.emulateNetworkConditions', {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1}],
+  ['Network.disable', {}], ['Log.disable', {}],
+  ['Emulation.clearDeviceMetricsOverride', {}], ['Emulation.setEmulatedMedia', {media: '', features: []}],
+  ['Emulation.setTouchEmulationEnabled', {enabled: false}], ['Emulation.setFocusEmulationEnabled', {enabled: false}],
+  ['Emulation.clearGeolocationOverride', {}], ['Emulation.setUserAgentOverride', {userAgent: ''}],
+  ['Emulation.setLocaleOverride', {}], ['Emulation.setTimezoneOverride', {timezoneId: ''}],
+  ['Emulation.setScriptExecutionDisabled', {value: false}], ['Emulation.setCPUThrottlingRate', {rate: 1}],
+  ['Page.setBypassCSP', {enabled: false}], ['Page.setInterceptFileChooserDialog', {enabled: false}],
+  ['Page.setLifecycleEventsEnabled', {enabled: false}],
+];
+async function resetAutomation(tab) {
+  const left = leftovers.get(tab);
+  leftovers.delete(tab);
+  if (!chromium || !attached.has(tab)) return;
+  const send = (method, params) => api.debugger.sendCommand({tabId: tab}, method, params).catch(() => {});
+  for (const [method, params] of RESETS) await send(method, params);
+  for (const identifier of left?.scripts || []) await send('Page.removeScriptToEvaluateOnNewDocument', {identifier});
+  for (const name of left?.bindings || []) await send('Runtime.removeBinding', {name});
 }
 function closeChannel(channel) {
   const tab = channels.get(channel);
   channels.delete(channel);
+  if (automations.delete(channel) && ![...automations.values()].includes(tab)) void resetAutomation(tab);
   stopCast(channel);
   screencasts.delete(tab);
   // Stop encoding frames nobody watches.
@@ -822,7 +879,7 @@ async function handleCommand(command, connection, currentGeneration) {
   try {
     // Tab 0: the browser's first tab, where the owner lets controllers open tabs.
     if (command.tab === 0 && command.action === 'open') {
-      if (!registration || !canOpen() || !NodePolicy.webURL(command.params?.url)) throw new Error('Opening tabs is not allowed.');
+      if (!registration || !canOpen() || !NodePolicy.pageURL(command.params?.url)) throw new Error('Opening tabs is not allowed.');
       const result = await openTab(command.params.url);
       if (socket === connection && currentGeneration === generation) connection.send(JSON.stringify({type: 'result', id: command.id, result}));
       return;
@@ -872,7 +929,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
   };
   connection.onmessage = async event => {
     if (socket !== connection) return;
-    if (event.data.length > 256 * 1024) { void stop('Invalid daemon message'); return; }
+    if (event.data.length > 8 * 1024 * 1024) { void stop('Invalid daemon message'); return; }
     let message;
     try { message = JSON.parse(event.data); } catch { void stop('Invalid daemon message'); return; }
     if (message.type === 'registered' && !registration) {
@@ -1113,8 +1170,9 @@ if (chromium) api.debugger.onEvent.addListener((source, method, params) => {
     if (!grant.paused) grant.origin = new URL(params.frame.url).origin;
     publishSoon();
   }
-  // Runtime is enabled only for the passkey hook: nothing else of it leaves the browser.
-  if (method.startsWith('Runtime.') && !(method === 'Runtime.bindingCalled' && params.name === '__bdPasskey')) return;
+  // Runtime is enabled for the passkey hook: its events leave only for CDP clients.
+  if (method.startsWith('Runtime.') && !(method === 'Runtime.bindingCalled' && params.name === '__bdPasskey') &&
+      ![...automations.values()].includes(source.tabId)) return;
   if (method === 'Page.screencastFrame') {
     api.debugger.sendCommand({tabId: source.tabId}, 'Page.screencastFrameAck', {sessionId: params.sessionId}).catch(() => {});
     const cast = castState(source.tabId);

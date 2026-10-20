@@ -275,6 +275,17 @@
   #lastTabDialog::backdrop { background: rgba(0, 0, 0, .5); }
   #lastTabDialog h2 { margin: 0 0 6px; font-size: 16px; }
   #lastTabDialog p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
+  /* The view's own dialogs (never the browser's alert/confirm/prompt). */
+  #askDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(400px, calc(100vw - 32px)); }
+  #askDialog::backdrop { background: rgba(0, 0, 0, .5); }
+  #askDialog h2 { margin: 0 0 6px; font-size: 16px; overflow-wrap: anywhere; }
+  #askDialog p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+  #askDialog .ask-field { width: 100%; box-sizing: border-box; margin: 0 0 14px; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-size: 16px; }
+  #askDialog textarea.ask-field { min-height: 110px; resize: vertical; }
+  .ask-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .ask-actions button { height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
+  .ask-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ask-actions button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
   .ltd-actions { display: flex; flex-direction: column; gap: 8px; }
   .ltd-actions button { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
   .ltd-actions button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
@@ -346,6 +357,9 @@
   #zoomReset { position: absolute; top: 8px; right: 8px; z-index: 4; font: 600 12px/1 system-ui, sans-serif; padding: 7px 10px; border-radius: 999px;
     border: 1px solid var(--line); background: color-mix(in oklab, var(--bar) 85%, transparent); color: var(--fg); cursor: pointer; backdrop-filter: blur(6px); }
   #view.zoomed { transform-origin: 0 0; }
+  #pkOffer { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px);
+    padding: 10px 16px; border-radius: 999px; border: 0; background: var(--accent); color: #fff; font: 600 14px/1.2 system-ui, sans-serif; cursor: pointer; box-shadow: 0 4px 16px #0005; }
+  #pkOffer span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #touchDot { position: absolute; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; pointer-events: none; z-index: 3;
     background: rgba(255, 255, 255, .28); border: 2px solid rgba(255, 255, 255, .85); box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); }
   @keyframes ripple { from { opacity: .9; transform: scale(.4); } to { opacity: 0; transform: scale(1.5); } }
@@ -492,6 +506,8 @@
     <button class="sm-item" id="smFwd"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>Forward</button>
     <button class="sm-item" id="smReload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>Reload</button>
   </div>
+  <button class="sm-item" id="smReopen" hidden><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg><span id="smReopenText">Reopen closed tab</span></button>
+  <button class="sm-item" id="followBtn" role="menuitemcheckbox" aria-checked="true" hidden title="The tab you switch to here comes to the front in the owner's browser"></button>
   <div class="sm-label">Screen</div>
   <div class="sm-seg" role="radiogroup" aria-label="Screen" id="smLayout">
     <button type="button" data-layout="window" title="The remote browser keeps its own window size">Window</button>
@@ -547,6 +563,7 @@
   <div id="ripple"></div>
   <div id="touchDot" hidden></div>
   <button id="zoomReset" type="button" hidden title="Back to the whole page">100%</button>
+  <button id="pkOffer" type="button" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></svg><span id="pkOfferText"></span></button>
   <div id="switching" hidden><div class="spin"></div><span id="switchingText">Loading tab…</span></div>
   <div id="overlay">
     <div class="spin" id="spin"></div>
@@ -574,6 +591,18 @@
       <button value="stop" class="danger">Stop the session</button>
       <button value="keep">Keep it running with a blank tab</button>
       <button value="cancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="askDialog" aria-labelledby="askTitle">
+  <form method="dialog">
+    <h2 id="askTitle"></h2>
+    <p id="askText" hidden></p>
+    <input id="askInput" class="ask-field" autocomplete="off" spellcheck="false" hidden>
+    <textarea id="askArea" class="ask-field" spellcheck="false" hidden></textarea>
+    <div class="ask-actions">
+      <button value="cancel" id="askCancel">Cancel</button>
+      <button value="ok" id="askOk" class="primary">OK</button>
     </div>
   </form>
 </dialog>
@@ -829,18 +858,35 @@ const PASSKEY_HOOK = `(() => {
   // answer: true = let the browser handle it (its authenticator has the passkey now),
   // false = cancelled, an object = the signed assertion to resolve with.
   globalThis.__bdPasskeyAnswer = (id, answer = true) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
+  const viewed = () => Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
   c.get = function (opts) {
     const pk = opts && opts.publicKey;
-    const viewed = Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
-    if (!pk || opts.mediation === "conditional" || !viewed || typeof globalThis.__bdPasskey !== "function") return get(opts);
+    // A conditional request (the passkey among a login field's suggestions) only where
+    // the view offers it itself (__bdPasskeyOffer: a shared browser, whose suggestions
+    // are not in the picture); elsewhere the browser shows them.
+    const conditional = opts.mediation === "conditional";
+    if (!pk || (conditional && !globalThis.__bdPasskeyOffer) || !viewed() || typeof globalThis.__bdPasskey !== "function") return get(opts);
     const id = Math.random().toString(36).slice(2);
     let req;
     try {
-      req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)) };
+      req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)), conditional };
     } catch { return get(opts); }
-    return new Promise((go) => {
+    return new Promise((go, fail) => {
       waiting.set(id, go);
       setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
+      // The page gave up (e.g. a conditional request it replaces): so does the view.
+      opts.signal?.addEventListener("abort", () => {
+        if (!waiting.delete(id)) return;
+        try { globalThis.__bdPasskey(JSON.stringify({ id, cancel: true })); } catch {}
+        fail(opts.signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+      }, { once: true });
+      // A held conditional request goes back to the browser once nobody watches.
+      if (conditional) {
+        const check = setInterval(() => {
+          if (!waiting.has(id)) clearInterval(check);
+          else if (!viewed()) { clearInterval(check); globalThis.__bdPasskeyAnswer(id); }
+        }, 4000);
+      }
       try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
     }).then((answer) => answer === true ? get(opts)
       : answer && typeof answer === "object" ? credential(answer)
@@ -883,13 +929,14 @@ class CdpDriver {
   async start() {
     await this.cdp.call("Page.enable");
     // Chromium only paints (and screencasts) the tab in front of its window.
-    // A shared browser brings it forward only if its user lets views follow.
-    await this.cdp.call("Page.bringToFront").catch(() => {});
+    // A shared browser brings it forward only if its user lets views follow (and this view does).
+    if (!this.shared || followFocus()) await this.cdp.call("Page.bringToFront").catch(() => {});
     if (this.shared) {
       this.watchFrames();
       // The owner's extension hooks passkeys in the tab; this view only says it is watching
       // (refused without control, and the page then uses its own passkey dialog).
-      const beat = () => this.cdp.send("Runtime.evaluate", { expression: "globalThis.__bdPasskeyAlive = Date.now()" });
+      // It also offers conditional passkeys itself (see PASSKEY_HOOK).
+      const beat = () => this.cdp.send("Runtime.evaluate", { expression: "globalThis.__bdPasskeyAlive = Date.now(); globalThis.__bdPasskeyOffer = true" });
       this.passkeyBeatNow = beat;
       beat();
       this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
@@ -1087,8 +1134,13 @@ class CdpDriver {
       }
       h.loaded();
     } else if (method === "Page.javascriptDialogOpening") {
+      // One answer per dialog: the page is blocked until then, so a repeat is the same one.
+      if (this.dialogOpen) return;
+      this.dialogOpen = true;
       h.dialog({ type: p.type, message: p.message, defaultValue: p.defaultPrompt })
-        .then(({ accept, text }) => this.cdp.send("Page.handleJavaScriptDialog", { accept, promptText: text }));
+        .then(({ accept, text }) => { this.dialogOpen = false; this.cdp.send("Page.handleJavaScriptDialog", { accept, promptText: text }); });
+    } else if (method === "Page.javascriptDialogClosed") {
+      this.dialogOpen = false;
     } else if (method === "Inspector.detached" || method === "Target.targetCrashed") {
       h.gone("The page was closed");
     }
@@ -1514,9 +1566,28 @@ async function fetchTargets() {
 function passkeyRequested(d, payload) {
   let req;
   try { req = JSON.parse(payload); } catch { return; }
+  if (req.cancel) { if (passkeyOffer?.req.id === req.id) showPasskeyOffer(null); return; }
+  // A conditional request waits for the person: the view offers it (no input needed).
+  if (req.conditional) { showPasskeyOffer({ d, req }); return; }
   if (!(performance.now() - (d.lastInput || -1e9) < 15000)) { d.passkeyAnswer(req.id, true); return; }
   d.h.passkey(req).then((answer) => d.passkeyAnswer(req.id, answer), () => d.passkeyAnswer(req.id, false));
 }
+// The page's conditional passkey request, offered as a button over the picture.
+let passkeyOffer = null;
+function showPasskeyOffer(offer) {
+  passkeyOffer = offer;
+  $("pkOffer").hidden = !offer;
+  if (offer) $("pkOfferText").textContent = `Sign in to ${offer.req.rpId} with a passkey`;
+}
+$("pkOffer").addEventListener("click", () => {
+  const offer = passkeyOffer;
+  if (!offer) return;
+  showPasskeyOffer(null);
+  offer.d.h.passkey(offer.req).then(
+    // Declined: the request stays the page's (offered again on its next one).
+    (answer) => offer.d.passkeyAnswer(offer.req.id, answer || true),
+    () => offer.d.passkeyAnswer(offer.req.id, true));
+});
 let passkeyPending = null;
 // A request to the passkey helper (via the node): started, then polled with short
 // calls. The helper may wait minutes for the phone unlock, and a request held open
@@ -1646,12 +1717,14 @@ const handlers = {
     if (fitLayout && target && target.engine !== "firefox") applyMetrics({ ifDrifted: true });
   },
   dialog: async ({ type, message, defaultValue }) => {
+    // The page's own dialogs, shown as the view's.
     if (type === "prompt") {
-      const text = window.prompt(message, defaultValue || "");
+      const text = await ask({ title: "The page asks", text: message, input: defaultValue || "" });
       return { accept: text !== null, text: text ?? undefined };
     }
-    if (type === "alert") { window.alert(message); return { accept: true }; }
-    return { accept: window.confirm(message || "Leave this page?") };
+    if (type === "alert") { await ask({ title: "The page says", text: message, cancel: false }); return { accept: true }; }
+    if (type === "beforeunload") return { accept: await ask({ title: "Leave this page?", text: "Changes you made may not be saved.", ok: "Leave", danger: true }) };
+    return { accept: await ask({ title: "The page asks", text: message || "Continue?" }) };
   },
   gone: (why) => setState("bad", stopping ? "Session stopped" : why),
   // The page opened a popup or a new tab: the browser shows that one now, so the view
@@ -2339,6 +2412,66 @@ async function loadEngineDefaults(engine) {
     if (touchesChoice === null && (d || sess?.show_touches !== undefined)) { showTouches = sess?.show_touches ?? !!d.show_touches; renderTouches(); }
   } catch { /* older node */ }
 }
+// Closed tabs, newest last: the menu reopens them at their address. A session's tabs
+// that left the strip (closed here or by the page); a shared browser's closed here
+// only (one that leaves its list may just be unshared).
+const closedTabs = [];
+function noteClosedTab(p) {
+  if (!/^https?:/.test(p.url || "")) return;
+  closedTabs.push({ url: p.url, title: p.title || p.url });
+  if (closedTabs.length > 10) closedTabs.shift();
+  renderReopen();
+}
+function noteClosedTabs(before, after) {
+  if (sharedBrowserId || !Array.isArray(before) || !Array.isArray(after) || !after.length) return;
+  for (const p of before) if (!after.some((q) => q.id === p.id)) noteClosedTab(p);
+}
+function renderReopen() {
+  const last = closedTabs.at(-1);
+  $("smReopen").hidden = !last;
+  if (last) {
+    $("smReopenText").textContent = `Reopen ${last.title.length > 32 ? last.title.slice(0, 31) + "…" : last.title}`;
+    $("smReopen").title = `Reopen the last closed tab: ${last.url}`;
+  }
+}
+$("smReopen").addEventListener("click", async () => {
+  const last = closedTabs.pop();
+  renderReopen();
+  toggleSessMenu(false);
+  if (!last) return;
+  if (sharedBrowserId) { openSharedTabAt(last.url); return; }
+  try {
+    const qs = new URLSearchParams({ url: last.url, ...(pageId ? { page: pageId } : {}) });
+    const res = await fetch("/json/new?" + qs, { method: "PUT", headers: authHeaders() });
+    const created = await res.json().catch(() => ({}));
+    if (!res.ok || !created.id) throw new Error(created.error || res.statusText);
+    await switchTab(created.id);
+  } catch (err) {
+    closedTabs.push(last);
+    renderReopen();
+    toast("Could not reopen the tab: " + err.message, 5000);
+  }
+});
+
+// Shared browsers: the tab shown here comes to the front in the owner's browser
+// (the extension's "Follow live view" must allow it too). Per browser, here.
+const followKey = () => `handoff.follow.${sharedBrowserId}`;
+function followFocus() {
+  try { return localStorage.getItem(followKey()) !== "0"; } catch { return true; }
+}
+function renderFollow() {
+  const b = $("followBtn"), on = followFocus();
+  b.hidden = !sharedBrowserId;
+  b.innerHTML = `<svg viewBox="0 0 24 24"><path d="${on ? "M4 12l5 5L20 6" : "M4 4h16v16H4z"}"/></svg>Follow in the browser`;
+  b.setAttribute("aria-checked", String(on));
+}
+$("followBtn").addEventListener("click", () => {
+  const on = !followFocus();
+  try { localStorage.setItem(followKey(), on ? "1" : "0"); } catch { /* storage unavailable */ }
+  renderFollow();
+  if (on) drv?.cdp?.call("Page.bringToFront").catch(() => {});
+});
+
 function renderTouches() {
   const b = $("touchesBtn");
   b.innerHTML = `<svg viewBox="0 0 24 24"><path d="${showTouches ? "M4 12l5 5L20 6" : "M4 4h16v16H4z"}"/></svg>Show touches &amp; clicks`;
@@ -2660,7 +2793,7 @@ E.urlBar.onsubmit = async (e) => {
     try {
       await drv.navigate(dest);
     } catch (err) {
-      alert("Failed to navigate: " + err.message);
+      toast("Could not navigate: " + err.message, 5000);
       E.dot.className = "bad";
     }
   }
@@ -2755,7 +2888,7 @@ async function openNewTab() {
     }
     throw new Error("Invalid response from /json/new");
   } catch (err) {
-    alert("Failed to create new tab: " + err.message);
+    toast("Could not open a new tab: " + err.message, 5000);
   }
 }
 
@@ -2790,6 +2923,39 @@ async function openSharedTabAt(url) {
 }
 
 // Closing the session's only tab would leave a browser without tabs: ask what to do.
+// The view's dialog in place of alert/confirm/prompt. input: a string (its start
+// value) asks for text (resolves to it, or null); cancel: false makes it a notice.
+// Resolves to true/false otherwise.
+// One at a time: a second question waits for the first to be answered.
+let askQueue = Promise.resolve();
+function ask(options) {
+  const answer = askQueue.then(() => askNow(options));
+  askQueue = answer.catch(() => {});
+  return answer;
+}
+function askNow({ title, text = "", input = null, multiline = false, placeholder = "", ok = "OK", cancel = "Cancel", danger = false }) {
+  const dlg = $("askDialog"), field = multiline ? $("askArea") : $("askInput");
+  $("askTitle").textContent = title;
+  $("askText").textContent = text;
+  $("askText").hidden = !text;
+  $("askInput").hidden = $("askArea").hidden = true;
+  if (input !== null) { field.hidden = false; field.value = input; field.placeholder = placeholder; }
+  $("askOk").textContent = ok;
+  $("askOk").className = danger ? "danger" : "primary";
+  $("askCancel").hidden = cancel === false;
+  $("askCancel").textContent = cancel || "Cancel";
+  return new Promise((resolve) => {
+    dlg.returnValue = "cancel";
+    dlg.addEventListener("close", () => {
+      const yes = dlg.returnValue === "ok";
+      resolve(input !== null ? (yes ? field.value : null) : yes || cancel === false);
+    }, { once: true });
+    dlg.showModal();
+    if (input !== null) { field.focus(); field.select(); } else $("askOk").focus();
+  });
+}
+$("askInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("askDialog").close("ok"); } });
+
 function askLastTab() {
   const dlg = $("lastTabDialog");
   return new Promise((resolve) => {
@@ -2802,9 +2968,10 @@ function askLastTab() {
 async function closeTab(id) {
   if (sharedBrowserId) {
     const tab = sharedBrowser?.tabs.find(t => String(t.id) === String(id));
-    if (!tab?.control || !confirm(`Close ${tab.title || 'this tab'} in the owner's browser?`)) return;
+    if (!tab?.control || !(await ask({ title: "Close this tab?", text: `${tab.title || tab.url || "The tab"} closes in the owner's browser.`, ok: "Close tab", danger: true }))) return;
     try {
       await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {method: 'POST', headers: authHeaders({'Content-Type': 'application/json'}), body: JSON.stringify({tab: Number(id), action: 'close', params: {}})}).then(r => { if (!r.ok) throw Error('Close request failed'); });
+      noteClosedTab(tab);
       const remaining = await fetchTargets();
       if (String(id) === pageId) {
         if (remaining.length) await switchTab(remaining[0].id);
@@ -2827,7 +2994,7 @@ async function closeTab(id) {
         location.href = "/";
       } catch (err) {
         stopping = false;
-        alert("Could not stop the session: " + err.message);
+        toast("Could not stop the session: " + err.message, 5000);
       }
       return;
     }
@@ -2842,7 +3009,7 @@ async function closeTab(id) {
       E.urlInput.value = "";
       E.urlInput.focus();
     } catch (err) {
-      alert("Failed to close tab: " + err.message);
+      toast("Could not close the tab: " + err.message, 5000);
     }
     return;
   }
@@ -2866,7 +3033,7 @@ async function closeTab(id) {
       loadTabs();
     }
   } catch (err) {
-    alert("Failed to close tab: " + err.message);
+    toast("Could not close the tab: " + err.message, 5000);
   }
 }
 
@@ -2911,6 +3078,7 @@ setInterval(() => { if (document.visibilityState === "visible" && (target || sha
 let lastStripPages = [];
 function renderTabStrip(pages) {
   if (!E.tabsScroll) return;
+  noteClosedTabs(lastStripPages, pages);
   lastStripPages = pages;
   E.tabsScroll.innerHTML = "";
   for (const p of pages) {
@@ -3173,7 +3341,7 @@ async function pasteToRemote() {
       } catch(e) {}
     }
     if (!t) {
-      t = prompt("Paste text into browser session:");
+      t = await ask({ title: "Paste into the page", input: "", multiline: true, placeholder: "Text to type into the page", ok: "Paste" });
     }
     if (t) {
       drv.insertText(t);
@@ -3728,7 +3896,7 @@ $("pmEditSave").onclick = async () => {
   }
 };
 $("pmRename").onclick = async () => {
-  const name = window.prompt("New name of the profile", sess.profile);
+  const name = await ask({ title: "Rename the profile", input: sess.profile, ok: "Rename" });
   showProfMenu(false);
   if (!name || !name.trim() || name.trim() === sess.profile) return;
   try {
@@ -3937,7 +4105,7 @@ $("ntList").onclick = async (e) => {
 // as a session of that profile (the browser restarts on the same pages).
 $("smSave").onclick = async () => {
   if (!sess || !target?.sessionId) return;
-  const name = window.prompt("Name of the new profile", "");
+  const name = await ask({ title: "Save as a profile", text: "The browser restarts as a session of the new profile, on the same pages.", input: "", placeholder: "Profile name", ok: "Save" });
   if (!name || !name.trim()) return;
   toggleSessMenu(false);
   toast("Saving the session as a profile…", 15000);
@@ -3956,7 +4124,7 @@ $("smSave").onclick = async () => {
 // Tapping the session's name renames it (empty: a made-up name again).
 $("smTitle").addEventListener("click", async () => {
   if (!sess || !target?.sessionId) return;
-  const name = window.prompt("Session name (empty for a made-up one)", sess.name || "");
+  const name = await ask({ title: "Rename the session", text: "Empty for a made-up name.", input: sess.name || "", ok: "Rename" });
   if (name === null) return;
   try {
     const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/name`, {
@@ -4652,6 +4820,7 @@ function renderSharedSession() {
   const tab = sharedBrowser.tabs.find(t => String(t.id) === pageId), control = tab?.control === true;
   E.sessBtn.hidden = false; E.profChip.hidden = false; E.agentChip.hidden = true;
   E.sessBtn.title = 'Shared browser';
+  renderFollow();
   $('profChipText').textContent = sharedBrowser.name + (control ? '' : ' · View only');
   E.profChip.title = `${sharedBrowser.name} · ${control ? 'Control allowed' : 'View only'} · Tabs shared by their owner`;
   E.profChip.onclick = e => { e.stopPropagation(); toggleSessMenu(true); };

@@ -635,6 +635,29 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .node-card .t > b { display: flex; align-items: center; gap: 7px; }
 .node-card .t > span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-card .bars { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
+.node-card .t > b { flex-wrap: wrap; row-gap: 4px; }
+.node-card .node-head { align-items: flex-start; }
+.node-card .node-head .gear { flex: none; margin: -4px -4px 0 0; }
+.node-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.node-stat { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: 10px; background: color-mix(in oklab, var(--node) 7%, var(--bg)); min-width: 0; }
+.node-stat b { font-size: 15px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-stat span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-stat.warn b { color: var(--warn); }
+.node-card .node-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.node-card .node-note { font-size: 12.5px; color: var(--muted); margin: 0; }
+@media (max-width: 640px) {
+  .node-card .node-buttons > * { flex: 1; justify-content: center; }
+  .node-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .node-stat { padding: 7px 8px; }
+  .node-stat b { font-size: 14px; }
+}
+.settings-list { display: flex; flex-direction: column; gap: 14px; }
+.settings-list .node-setting { flex-direction: column; align-items: stretch; gap: 6px; }
+.settings-list .node-setting > span:first-child { min-width: 0; }
+.settings-list .node-setting select { max-width: none; }
+.settings-danger { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.settings-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; margin: 0; }
+.settings-facts dt { color: var(--muted); } .settings-facts dd { margin: 0; overflow-wrap: anywhere; }
 
 /* ------------------------------------------------------------ toasts */
 .toasts { position: fixed; inset: auto; margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; z-index: 100; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); width: min(360px, calc(100vw - 36px)); pointer-events: none; }
@@ -852,6 +875,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16M3 12a9 9 0 0 1 15.4-6.4L21 8M21 3v5h-5M3 21v-5h5"/></symbol>
   <symbol id="i-install" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
   <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
@@ -907,8 +932,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <button data-act="view" data-view="engines" role="tab"><svg class="i sm"><use href="#i-globe"/></svg>Engines <span class="count" id="countEngines">0</span></button>
       <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes <span class="count" id="countNodes">0</span></button>
     </nav>
-    <button class="node-filter" id="nodeFilterChip" data-act="filter" data-node="all" title="Showing one node only: click to show all nodes" hidden>
-      <span class="dot"></span>Only <b id="nodeFilterName"></b><svg class="i sm"><use href="#i-x"/></svg>
+    <button class="node-filter" id="nodeFilterChip" data-act="filter" data-node="all" title="Filtered to one node: click to show all nodes" hidden>
+      <span class="dot"></span>Filter: <b id="nodeFilterName"></b><svg class="i sm"><use href="#i-x"/></svg>
     </button>
     <div class="view-actions" id="viewActions"></div>
   </div>
@@ -926,8 +951,17 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view nodes" id="view-nodes" hidden>
     <div id="nodesList" class="nodes-list"></div>
-    <section class="add-node" aria-labelledby="addNodeTitle">
-      <h2 id="addNodeTitle">Add a node</h2>
+  </section>
+</main>
+
+<div class="menu" id="menu" role="menu" popover="manual"></div>
+<div class="toasts" id="toastContainer" popover="manual" role="status" aria-live="polite"></div>
+
+<!-- New session -->
+<dialog class="modal" id="addNodeModal" aria-labelledby="addNodeTitle">
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="addNodeTitle">Add a node</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
       <div class="add-grid">
         <div class="add-card">
           <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-globe"/></svg></span>
@@ -945,14 +979,18 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
           <div class="add-row"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.host.example" aria-label="Daemon URL"><button class="btn primary" type="submit"><svg class="i sm"><use href="#i-plus"/></svg>Add</button></div>
         </form>
       </div>
-    </section>
-  </section>
-</main>
+    </div>
+  </div>
+</dialog>
 
-<div class="menu" id="menu" role="menu" popover="manual"></div>
-<div class="toasts" id="toastContainer" popover="manual" role="status" aria-live="polite"></div>
+<!-- A node's, a browser's or an engine's settings (see openSettings) -->
+<dialog class="modal" id="settingsModal" aria-labelledby="settingsTitle">
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="settingsTitle">Settings</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body" id="settingsBody"></div>
+  </div>
+</dialog>
 
-<!-- New session -->
 <dialog class="modal" id="newSessionModal" aria-label="New browser session">
   <form class="sheet" id="newSessionForm">
     <div class="sheet-head"><h2>New browser session</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
@@ -1443,9 +1481,10 @@ async function revokeExtension(n) {
   const ok = await ask({title: `${n.remembered ? 'Forget' : 'Disconnect'} ${n.name}?`,
     text: n.remembered ? 'Revoke this browser’s remembered key and stop sharing its tabs. Pair again to reconnect.' : 'End this connection and stop sharing its tabs. Your browser and tabs stay open.',
     ok: n.remembered ? 'Forget browser' : 'Disconnect', danger: true});
-  if (!ok) return;
+  if (!ok) return false;
   await act(`Disconnecting ${n.name}`, () => request('DELETE', extensionApi(n)), `${n.name} disconnected`);
   window.dispatchEvent(new Event('browser-daemon-refresh-extensions'));
+  return true;
 }
 
 const localName = () => ov?.local_node?.name;
@@ -2371,6 +2410,11 @@ function renderRecordings() {
 function renderViewActions(recordings = listedRecordings()) {
   const actions = $('viewActions');
   actions.classList.toggle('recording-actions', view === 'recordings');
+  if (view === 'nodes') {
+    const html = `<button class="btn sm" data-act="add-node" title="Pair this browser or add another daemon">${icon('plus', 'sm')}<span class="lbl">Add node</span></button>`;
+    if (actions.innerHTML !== html) actions.innerHTML = html;
+    return;
+  }
   if (view === 'profiles') {
     const html = `<button class="btn sm" data-act="new-profile" title="New profile">${icon('plus', 'sm')}<span class="lbl">New profile</span></button>`;
     if (actions.innerHTML !== html) actions.innerHTML = html;
@@ -2473,6 +2517,7 @@ const ACT = {
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
+  'add-node': () => openModal('addNodeModal'),
   'vacuum': () => vacuum(),
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
@@ -4017,57 +4062,61 @@ function renderNodes() {
     ? `<div class="node-warn" role="alert">${icon('alert', 'sm')}<span>${[...odd].map(esc).join(', ')} ${odd.size === 1 ? 'runs' : 'run'} another version than the other nodes (${esc(mainBuild)}). Mixed versions can behave differently: update them together.</span></div>` : '';
   const html = mismatch + nodes.map((n) => {
     const online = n.status === 'online';
-    const proxies = n.proxies || [];
-    const def = n.settings?.default_proxy || '';
     const rev = n.revision ? ` · ${n.revision.slice(0, 7)}` : '';
-    const settings = !online ? '' : `<div class="node-settings">
-        <label class="node-setting"><span>${icon('route', 'sm')}Default proxy</span>${proxies.length
-          ? `<select class="input sm" data-node-proxy="${esc(n.name)}" aria-label="Default proxy of ${esc(n.name)}">
-              <option value=""${def ? '' : ' selected'}>Direct</option>
-              ${proxies.map((x) => `<option value="${esc(x.id)}"${def === x.id ? ' selected' : ''}>${esc(x.name)} (${esc(x.host)}:${x.port})</option>`).join('')}
-            </select>`
-          : '<span class="muted">No proxies on this node</span>'}</label>
-        <span class="hint">For new sessions that pick no proxy and whose profile has none.</span>
-      </div>`;
+    const stat = (value, label, cls = '') => `<div class="node-stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
     return `<div class="node-card" style="--node:${nodeColor(n.name)}">
       <div class="node-head">
         <div class="avatar">${icon('server')}</div>
         <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${esc(n.latency_ms)} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
-          <span>${/^https?:\/\//.test(n.url) ? `<a class="node-url" href="${esc(n.url)}" target="_blank" rel="noopener" title="Open ${esc(n.url)}">${esc(n.url)}</a>` : esc(n.url)}${n.version ? (odd.has(n.name)
+          <span>${/^https?:\/\//.test(n.url) ? `<a class="node-url" href="${esc(n.url)}" target="_blank" rel="noopener" title="Open ${esc(n.url)}">${esc(n.url.replace(/^https?:\/\//, ''))}</a>` : esc(n.url)}${n.version ? (odd.has(n.name)
             ? ` · <span class="chip warn" title="${esc(`Another version than the other nodes (${mainBuild})`)}">${icon('alert', 'sm')}v${esc(n.version)}${esc(rev)}</span>`
             : ` · v${esc(n.version)}${esc(rev)}`) : ''}</span>
-          ${online ? `<div class="bars"><span><b>${esc(n.active_sessions)}</b>/${esc(n.max_sessions)} sessions</span><span><b>${esc(n.profiles_count)}</b> profiles</span><span>${formatBytes(n.storage_used_bytes || 0)} recordings</span>${n.uptime_seconds ? `<span>up ${formatUptime(n.uptime_seconds)}</span>` : ''}${n.supported_engines?.length ? `<span>${n.supported_engines.map(esc).join(' · ')}</span>` : ''}</div>` : ''}
         </div>
-        <div style="display:flex;gap:6px;flex:none">
-          <button class="btn sm${filter === n.name ? ' primary' : ''}" data-act="filter" data-node="${esc(n.name)}" aria-label="${filter === n.name ? 'Showing only' : 'Show only'} ${esc(n.name)}" title="${filter === n.name ? 'Showing only this node: click to show all' : 'Show only this node on the other tabs'}">${icon('layers', 'sm')}${filter === n.name ? 'Showing only' : 'Show only'}</button>
-          ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus', 'sm')}New session</button>` : ''}
-          ${!n.isLocal ? `<button class="btn icon sm ghost" data-node-remove="${esc(n.name)}" title="Remove peer ${esc(n.name)}" aria-label="Remove peer ${esc(n.name)}">${icon('trash', 'sm')}</button>` : ''}
-        </div>
+        <button class="btn icon sm ghost gear" data-settings="node" data-key="${esc(n.name)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}</button>
       </div>
-      ${settings}
+      ${online ? `<div class="node-stats">
+        ${stat(`${esc(n.active_sessions)}<small class="muted">/${esc(n.max_sessions)}</small>`, 'sessions')}
+        ${stat(esc(n.profiles_count), 'profiles')}
+        ${stat(formatBytes(n.storage_used_bytes || 0), 'recordings')}
+        ${n.uptime_seconds ? stat(formatUptime(n.uptime_seconds), 'uptime') : ''}
+        ${n.supported_engines?.length ? stat(n.supported_engines.map((e) => icon(e, 'sm')).join(' '), plural(n.supported_engines.length, 'engine').replace(/^\d+ /, '')) : ''}
+      </div>` : ''}
+      <div class="node-buttons">
+        <button class="btn sm${filter === n.name ? ' primary' : ''}" data-act="filter" data-node="${esc(n.name)}" aria-pressed="${filter === n.name}" title="${filter === n.name ? 'Filtered to this node: click to show all' : 'Show only this node on the other tabs'}">${icon('filter', 'sm')}${filter === n.name ? 'Filtered' : 'Filter'}</button>
+        ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus', 'sm')}New session</button>` : ''}
+      </div>
     </div>`;
   }).join('') + extensionBrowserNodes.map(extensionNodeCard).join('');
   if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
+  renderSettings();
 }
+// Time left until a Unix time, short: 45m, 7h, 3d.
+const untilShort = (at) => {
+  const m = Math.max(0, Math.round((at - Date.now() / 1000) / 60));
+  return m < 60 ? `${m}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+};
 function extensionNodeCard(n) {
   const key = extensionNodeKey(n), online = n.online !== false;
   const controls = n.tabs.filter(t => t.control).length;
+  const stat = (value, label, cls = '') => `<div class="node-stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
+  const days = !online && n.forget_at ? Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400)) : null;
   return `<div class="node-card" style="--node:${nodeColor(key)}">
     <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
       <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span><span class="chip">browser</span>${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
         <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
-        <div class="bars"><span><b>${online ? 1 : 0}</b> session${online ? '' : 's'}</span><span><b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}</span><span>${controls ? `${controls} with control` : 'View only'}</span><span>${n.remembered ? 'Key expiry disabled' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No key expiry'}</span>${!online && n.forget_at ? (() => {
-          const days = Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400));
-          return `<span class="chip warn" title="Offline browsers are forgotten (key revoked) after a while; reconnecting resets it. Expires ${esc(absTime(n.forget_at))}.">${icon('clock', 'sm')}${days ? `Expires in ${days}d` : 'Expires today'}</span>`;
-        })() : ''}</div>
       </div>
-      <div style="display:flex;gap:6px;flex:none">
-        <button class="btn sm${filter === key ? ' primary' : ''}" data-act="filter" data-node="${esc(key)}">${icon('layers', 'sm')}${filter === key ? 'Showing only' : 'Show only'}</button>
-        ${online && (n.tabs.length || n.can_open) ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}</a>` : ''}
-        <button class="btn icon sm ghost" data-extension-revoke="${esc(key)}" title="${n.remembered ? 'Forget browser and revoke key' : 'Disconnect browser'}" aria-label="${n.remembered ? 'Forget' : 'Disconnect'} ${esc(n.name)}">${icon('trash', 'sm')}</button>
-      </div>
+      <button class="btn icon sm ghost gear" data-settings="browser" data-key="${esc(key)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}</button>
     </div>
-    ${!n.tabs.length ? `<div class="node-settings"><span class="hint">${online ? 'Switch tabs on in the browser extension to share them here.' : 'This browser reconnects when it starts; its tabs stay private until shared again.'}</span></div>` : ''}
+    <div class="node-stats">
+      ${stat(esc(n.tabs.length), `shared tab${n.tabs.length === 1 ? '' : 's'}`)}
+      ${stat(controls ? esc(controls) : 'View', controls ? 'with control' : 'only')}
+      ${days !== null ? stat(days ? `${days}d` : 'today', 'until forgotten', 'warn') : stat(n.remembered ? 'Off' : n.expires_at ? untilShort(n.expires_at) : 'None', n.remembered ? 'key expiry' : 'key expires in')}
+    </div>
+    ${!n.tabs.length ? `<p class="node-note">${online ? 'Switch tabs on in the browser extension to share them here.' : 'This browser reconnects when it starts; its tabs stay private until shared again.'}</p>` : ''}
+    <div class="node-buttons">
+      <button class="btn sm${filter === key ? ' primary' : ''}" data-act="filter" data-node="${esc(key)}" aria-pressed="${filter === key}">${icon('filter', 'sm')}${filter === key ? 'Filtered' : 'Filter'}</button>
+      ${online && (n.tabs.length || n.can_open) ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}</a>` : ''}
+    </div>
   </div>`;
 }
 // Defaults per browser engine, the same on every node: shown as the local node has
@@ -4093,22 +4142,92 @@ function renderEngines() {
     const d = enginesDraft[id] || engineBase(id);
     const changes = engineChanges(id);
     const differ = online.filter((n) => !n.isLocal && n.settings && JSON.stringify(n.settings.engines?.[id] || {}) !== JSON.stringify(engineBase(id))).map((n) => n.name);
-    const sel = (key, value, opts) => `<select class="input" data-engine="${id}" data-key="${key}" aria-label="${esc(ENGINE_KEYS[key])} for ${label}">${opts.map(([v, l]) => `<option value="${v}"${String(value ?? '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    const stat = (value, label) => `<div class="node-stat"><b>${value}</b><span>${label}</span></div>`;
     return `<div class="node-card" style="--node:var(--${id})">
       <div class="node-head"><div class="avatar">${icon(id)}</div>
-        <div class="t"><b>${label}</b><span>Defaults for new ${label} sessions and their live views. A session's own choice, or its profile's, wins.</span></div></div>
-      <div class="node-settings">
-        <label class="node-setting"><span>${icon('shield', 'sm')}Ad blocking</span>${sel('adblock', d.adblock === undefined ? '' : String(d.adblock), [['', 'Node default'], ['true', 'On'], ['false', 'Off']])}</label>
-        <label class="node-setting"><span>${icon('moon', 'sm')}Appearance</span>${sel('color_scheme', d.color_scheme, [['', 'Dark'], ['light', 'Light']])}</label>
-        <label class="node-setting"><span>${icon('takeover', 'sm')}Show touches</span><input type="checkbox" data-engine="${id}" data-key="show_touches"${d.show_touches ? ' checked' : ''}> <span class="muted">Live views mark taps and clicks (a viewer can still switch it in the view's menu)</span></label>
-        ${differ.length ? `<span class="hint">Differs on ${esc(differ.join(', '))}: applying sets it everywhere.</span>` : ''}
-        ${changes.length ? `<div class="node-actions"><button class="btn primary sm" data-engine-apply="${id}">Apply to ${plural(online.length, 'node')}</button><button class="btn sm" data-engine-discard="${id}">Discard</button><span class="hint">Not saved yet: ${esc(changes.join(', '))}</span></div>` : ''}
+        <div class="t"><b>${label}${changes.length ? ' <span class="chip warn">not applied</span>' : ''}</b><span>Defaults for new ${label} sessions and their live views</span></div>
+        <button class="btn icon sm ghost gear" data-settings="engine" data-key="${id}" title="${label} defaults" aria-label="${label} defaults">${icon('gear', 'sm')}</button></div>
+      <div class="node-stats">
+        ${stat(d.adblock === undefined ? 'Node default' : d.adblock ? 'On' : 'Off', 'ad blocking')}
+        ${stat(d.color_scheme === 'light' ? 'Light' : 'Dark', 'appearance')}
+        ${stat(d.show_touches ? 'On' : 'Off', 'show touches')}
       </div>
+      ${differ.length ? `<p class="node-note">Differs on ${esc(differ.join(', '))}.</p>` : ''}
     </div>`;
   }).join('');
   if ($('enginesList').innerHTML !== html) $('enginesList').innerHTML = html;
+  renderSettings();
 }
-$('enginesList').addEventListener('change', (e) => {
+
+/* Settings sheets: a node's (default proxy, removing a peer), a shared browser's
+   (disconnecting or forgetting it) and an engine's defaults, behind the cards' gear. */
+let settingsCtx = null;
+function openSettings(kind, key) {
+  settingsCtx = { kind, key };
+  $('settingsBody').innerHTML = '';
+  openModal('settingsModal');
+  renderSettings();
+}
+// Also on every overview while it is open.
+function renderSettings() {
+  if (!settingsCtx || !$('settingsModal').open) return;
+  const body = $('settingsBody');
+  if (body.contains(document.activeElement) && document.activeElement.matches('select, input')) return;
+  const { kind, key } = settingsCtx;
+  let title = 'Settings', html = '';
+  if (kind === 'node') {
+    const n = nodes.find((x) => x.name === key);
+    if (!n) { closeModal('settingsModal'); settingsCtx = null; return; }
+    const online = n.status === 'online', proxies = n.proxies || [], def = n.settings?.default_proxy || '';
+    title = n.name;
+    html = `<div class="settings-list">
+      <dl class="settings-facts"><dt>Address</dt><dd>${esc(n.url)}</dd>${n.version ? `<dt>Version</dt><dd>${esc(n.version)}${n.revision ? ` · ${esc(n.revision.slice(0, 7))}` : ''}</dd>` : ''}</dl>
+      ${online ? `<label class="node-setting"><span>${icon('route', 'sm')}Default proxy</span>${proxies.length
+        ? `<select class="input" data-node-proxy="${esc(n.name)}" aria-label="Default proxy of ${esc(n.name)}">
+            <option value=""${def ? '' : ' selected'}>Direct</option>
+            ${proxies.map((x) => `<option value="${esc(x.id)}"${def === x.id ? ' selected' : ''}>${esc(x.name)} (${esc(x.host)}:${x.port})</option>`).join('')}
+          </select>`
+        : '<span class="muted">No proxies on this node</span>'}<span class="hint">For new sessions that pick no proxy and whose profile has none.</span></label>` : ''}
+      ${!n.isLocal ? `<div class="settings-danger"><button class="btn danger" data-node-remove="${esc(n.name)}">${icon('trash', 'sm')}Remove peer</button><span class="hint">Configured peers come back when this node restarts.</span></div>` : ''}
+    </div>`;
+  } else if (kind === 'browser') {
+    const n = extensionNodeOf(key);
+    if (!n) { closeModal('settingsModal'); settingsCtx = null; return; }
+    title = n.name;
+    html = `<div class="settings-list">
+      <dl class="settings-facts"><dt>Browser</dt><dd>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')}${n.version ? ` · extension v${esc(n.version)}` : ''}</dd>
+        <dt>Connected to</dt><dd>${esc(n.daemon || localName())}</dd>
+        <dt>Key</dt><dd>${n.remembered ? 'Does not expire (reconnects after a restart)' : n.expires_at ? `Expires ${esc(absTime(n.expires_at))}` : 'No expiry'}</dd>
+        ${n.forget_at && n.online === false ? `<dt>Forgotten</dt><dd>${esc(absTime(n.forget_at))}, unless it reconnects</dd>` : ''}</dl>
+      <span class="hint">Sharing, remote control and following the live view are set in the browser's extension.</span>
+      <div class="settings-danger"><button class="btn danger" data-extension-revoke="${esc(key)}">${icon('trash', 'sm')}${n.remembered ? 'Forget browser' : 'Disconnect browser'}</button><span class="hint">${n.remembered ? 'Revokes its key: pairing again is needed.' : 'It can pair again.'}</span></div>
+    </div>`;
+  } else if (kind === 'engine') {
+    const id = key, label = engineLabel(id);
+    const d = enginesDraft[id] || engineBase(id), changes = engineChanges(id);
+    const online = nodes.filter((n) => n.status === 'online');
+    const differ = online.filter((n) => !n.isLocal && n.settings && JSON.stringify(n.settings.engines?.[id] || {}) !== JSON.stringify(engineBase(id))).map((n) => n.name);
+    const sel = (k, value, opts) => `<select class="input" data-engine="${id}" data-key="${k}" aria-label="${esc(ENGINE_KEYS[k])} for ${label}">${opts.map(([v, l]) => `<option value="${v}"${String(value ?? '') === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    title = `${label} defaults`;
+    html = `<div class="settings-list">
+      <span class="hint">For new ${label} sessions and their live views. A session's own choice, or its profile's, wins.</span>
+      <label class="node-setting"><span>${icon('shield', 'sm')}Ad blocking</span>${sel('adblock', d.adblock === undefined ? '' : String(d.adblock), [['', 'Node default'], ['true', 'On'], ['false', 'Off']])}</label>
+      <label class="node-setting"><span>${icon('moon', 'sm')}Appearance</span>${sel('color_scheme', d.color_scheme, [['', 'Dark'], ['light', 'Light']])}</label>
+      <label class="switch"><input type="checkbox" data-engine="${id}" data-key="show_touches"${d.show_touches ? ' checked' : ''}><span class="track"></span><span class="txt"><b>Show touches</b><span>Live views mark taps and clicks (a viewer can still switch it in the view's menu)</span></span></label>
+      ${differ.length ? `<span class="hint">Differs on ${esc(differ.join(', '))}: applying sets it everywhere.</span>` : ''}
+      ${changes.length ? `<div class="node-actions"><button class="btn primary" data-engine-apply="${id}">Apply to ${plural(online.length, 'node')}</button><button class="btn" data-engine-discard="${id}">Discard</button><span class="hint">Not saved yet: ${esc(changes.join(', '))}</span></div>` : ''}
+    </div>`;
+  }
+  $('settingsTitle').textContent = title;
+  if (body.innerHTML !== html) body.innerHTML = html;
+}
+for (const list of ['nodesList', 'enginesList']) {
+  $(list).addEventListener('click', (e) => {
+    const gear = e.target.closest('[data-settings]');
+    if (gear) openSettings(gear.dataset.settings, gear.dataset.key);
+  });
+}
+$('settingsBody').addEventListener('change', (e) => {
   const el = e.target.closest('[data-engine][data-key]');
   if (!el) return;
   const { engine, key } = el.dataset;
@@ -4120,7 +4239,7 @@ $('enginesList').addEventListener('change', (e) => {
   el.blur();
   renderEngines();
 });
-$('enginesList').addEventListener('click', async (e) => {
+$('settingsBody').addEventListener('click', async (e) => {
   const discard = e.target.closest('[data-engine-discard]');
   if (discard) { delete enginesDraft[discard.dataset.engineDiscard]; renderEngines(); return; }
   const apply = e.target.closest('[data-engine-apply]');
@@ -4148,7 +4267,7 @@ $('enginesList').addEventListener('click', async (e) => {
   refreshData();
   renderEngines();
 });
-$('nodesList').addEventListener('change', async (e) => {
+$('settingsBody').addEventListener('change', async (e) => {
   const sel = e.target.closest('[data-node-proxy]');
   if (!sel) return;
   const node = sel.dataset.nodeProxy;
@@ -4159,16 +4278,22 @@ $('nodesList').addEventListener('change', async (e) => {
   if (r !== undefined) { const n = nodes.find((x) => x.name === node); if (n) n.settings = r; }
   renderNodes();
 });
-$('nodesList').addEventListener('click', async (e) => {
-  const revoke = e.target.closest('[data-extension-revoke]');
-  if (revoke) { const n = extensionNodeOf(revoke.dataset.extensionRevoke); if (n) await revokeExtension(n); return; }
+$('nodesList').addEventListener('click', (e) => {
   const launch = e.target.closest('[data-node-launch]');
-  if (launch) { openNewSession({ node: launch.dataset.nodeLaunch }); return; }
+  if (launch) openNewSession({ node: launch.dataset.nodeLaunch });
+});
+$('settingsBody').addEventListener('click', async (e) => {
+  const revoke = e.target.closest('[data-extension-revoke]');
+  if (revoke) {
+    const n = extensionNodeOf(revoke.dataset.extensionRevoke);
+    if (n && await revokeExtension(n) !== false) closeModal('settingsModal');
+    return;
+  }
   const rm = e.target.closest('[data-node-remove]');
   if (rm) {
     const name = rm.dataset.nodeRemove;
     const ok = await ask({ title: `Remove ${name}?`, text: 'It is dropped from this node\'s peer list until it is added again (configured peers come back on restart).', ok: 'Remove', danger: true });
-    if (ok) { await act(`Removing ${name}`, () => request('DELETE', `/api/peers/${enc(name)}`), `${name} removed`); renderNodes(); }
+    if (ok) { await act(`Removing ${name}`, () => request('DELETE', `/api/peers/${enc(name)}`), `${name} removed`); closeModal('settingsModal'); renderNodes(); }
   }
 });
 $('addPeerForm').addEventListener('submit', async (e) => {
@@ -5720,10 +5845,13 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+// #nodes/add: the Add node sheet (the extension's "Pair from the dashboard" opens it).
+const addNodeLink = () => { if (location.hash !== '#nodes/add') return false; setView('nodes'); openModal('addNodeModal'); return true; };
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
-setView(VIEWS.includes(initialView) ? initialView : 'sessions');
+if (!addNodeLink()) setView(VIEWS.includes(initialView) ? initialView : 'sessions');
 addEventListener('hashchange', () => {
+  if (addNodeLink()) return;
   const v = location.hash.slice(1);
   if (VIEWS.includes(v)) setView(v);
   const m = /^recordings\/(.+)$/.exec(v);

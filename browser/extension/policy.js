@@ -24,6 +24,8 @@ globalThis.NodePolicy = (() => {
       return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password;
     } catch { return false; }
   }
+  // A web page, or the blank page a CDP client opens before navigating.
+  const pageURL = value => value === 'about:blank' || webURL(value);
   function serverURL(value) {
     const u = new URL(value);
     if (u.hostname.includes('*') || u.username || u.password || u.search || u.hash || !['', '/'].includes(u.pathname)) {
@@ -49,7 +51,7 @@ globalThis.NodePolicy = (() => {
         JSON.stringify(command.params).length > 128 * 1024) return false;
     if (['screenshot', 'snapshot'].includes(command.action)) return true;
     if (!control) return false;
-    if (command.action === 'navigate' || command.action === 'open') return webURL(command.params.url);
+    if (command.action === 'navigate' || command.action === 'open') return pageURL(command.params.url);
     if (command.action === 'cdp') return methods.has(command.params.method);
     return ['click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate', 'frames', 'fill'].includes(command.action);
   }
@@ -58,10 +60,28 @@ globalThis.NodePolicy = (() => {
         JSON.stringify(params).length > 128 * 1024) return false;
     if (viewing.has(method)) return true;
     if (!control) return false;
-    if (method === 'Page.navigate') return webURL(params.url);
+    if (method === 'Page.navigate') return pageURL(params.url);
     return steering.has(method) || methods.has(method);
+  }
+  // CDP clients (Playwright's connectOverCDP, via the daemon) in a tab shared with
+  // control: the page's own domains, never the profile's. No cookies or cache of
+  // other sites, no requests with the browser's credentials outside the page, no
+  // files from the owner's disk, no downloads to it. Same as automation_allowed.
+  const automationDenied = new Set([
+    'Page.setDownloadBehavior', 'Page.crash', 'Network.getAllCookies', 'Network.getCookies',
+    'Network.setCookie', 'Network.setCookies', 'Network.deleteCookies', 'Network.clearBrowserCookies',
+    'Network.clearBrowserCache', 'Network.loadNetworkResource', 'DOM.setFileInputFiles',
+  ]);
+  const automationDomains = new Set(['Page', 'Runtime', 'DOM', 'Input', 'Emulation', 'Network', 'Fetch', 'Log',
+    'Accessibility', 'CSS', 'Overlay', 'Performance', 'DOMSnapshot']);
+  function automationAllowed(method, params) {
+    if (typeof method !== 'string' || !params || typeof params !== 'object' || Array.isArray(params) ||
+        JSON.stringify(params).length > 8 * 1024 * 1024 || automationDenied.has(method)) return false;
+    if (method === 'Page.navigate') return pageURL(params.url);
+    if (method === 'IO.read' || method === 'IO.close') return true;
+    return automationDomains.has(method.split('.')[0]);
   }
   // Events a view-only viewer may see: the page's frames and navigation state.
   const viewEvent = method => method.startsWith('Page.') || method === 'Inspector.detached';
-  return {webURL, serverURL, daemonOrigins, approvedServer, allowed, relayAllowed, viewEvent};
+  return {webURL, pageURL, serverURL, daemonOrigins, approvedServer, allowed, relayAllowed, automationAllowed, viewEvent};
 })();

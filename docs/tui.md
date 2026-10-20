@@ -1,0 +1,11 @@
+# Terminal UI
+
+`browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, kept current by the overviews the daemon pushes (polled every 3 s while that socket is down), and does what the dashboard does. Requests run in the background (a spinner shows while they do), so the view stays responsive when a node is slow or unreachable.
+
+- `m` (or Space) opens the menu of the selected row with everything the dashboard offers: take over, new tab, rename, auto-stop timeout, proxy, recording control, details, stop for sessions; launch, rename, proxy, appearance, homepage, duplicate, copy or move to another node, backups & data (back up, restore, clear, export and import archives) and delete for profiles; play, export frames, delete for recordings; filter, settings, new session or profile there, remove for nodes. `M` opens the menu of the view (new session or profile, stop all, retention, add a peer).
+- Hotkeys for the common ones (`?` lists them, and the bottom line shows the ones of the view): `Enter`/`o` open (take over, launch, play), `s` stop, `X` stop all, `p` proxy (sessions, profiles), `R` record, `t` new tab, `T` auto-stop timeout, `e` rename, `n` throwaway session on the node, `N` new session or profile, `w` WebSocket URL, `b` backups & data, `K` keep a recording, `E` export frames, `v` vacuum, `d` delete, `i` details, `a`/`x` add or remove a peer (Nodes). `q` or Ctrl-C quits (Esc only closes menus).
+- `f` shows only the selected row's node on the other tabs (again: every node); the header says so.
+- The **Engines** tab (`5`) lists each node's engines with the defaults new sessions start with (ad blocker, appearance, show touches): `a`, `c`, `t` change them, `m` has the same as menus; the node's default proxy is in the Nodes tab's menu.
+- New sessions and profiles come from a form (node, engine, profile, name, proxy, appearance, recording, ad blocker, auto-stop).
+
+It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (an explicit file that cannot be read is an error), the NixOS module's secret when readable, or otherwise the `bd_auth` token the dashboard of that node hands out (see Access control).

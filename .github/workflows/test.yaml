@@ -75,6 +75,10 @@ jobs:
         run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_chromium.mjs
       - name: Live views of a shared browser
         run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_handoff.mjs
+      - name: Playwright against a shared browser
+        run: |
+          npm install --silent --prefix "$RUNNER_TEMP/playwright" playwright-core
+          PLAYWRIGHT_DIR="$RUNNER_TEMP/playwright" nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_playwright.mjs
       - name: Firefox companion with real trusted input
         run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
       - name: Firefox extension and native messaging round trip

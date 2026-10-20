@@ -2,8 +2,29 @@
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-10-20
+
+### Added
+
+* Playwright and other CDP clients drive a shared Chromium browser:
+  `connectOverCDP("https://<daemon>/api/extension/nodes/<id>")`. Its tabs
+  shared with control are the pages; `newPage()` opens a tab. Other sites'
+  cookies, downloads and the owner's files stay out of reach, and what a
+  client set in a tab is undone when it disconnects.
+* Shared browsers: passkeys offered in a login field's suggestions
+  (conditional mediation) appear as a "Sign in with a passkey" button in the
+  live view, instead of in a dropdown on the owner's screen.
+* Live view: "Reopen closed tab" and "Follow in the browser" (per shared
+  browser) in the session menu.
+
 ### Changed
 
+* The live view never uses the browser's alert/confirm/prompt: its own dialogs,
+  also for the page's dialogs ("Leave this page?").
+* Dashboard: node, browser and engine cards are laid out for phones; their
+  settings (default proxy, removing a peer, disconnecting a browser, engine
+  defaults) moved behind a gear; "Show only" is "Filter"; "Add a node" is a
+  sheet behind **Add node**.
 * CI is split into `build`, `test` and `release` workflows (as in rbw): Rust
   jobs use rust-cache, Nix jobs keep their store between runs.
 * The Nix package builds with crane: the dependencies are their own
@@ -11,6 +32,10 @@
 * Releases: `just release-prepare X.Y.Z`, then `just release-tag`. A version
   tag publishes Linux binaries and the signed browser extension, with
   checksums and build attestations.
+
+### Fixed
+
+* The extension no longer disconnects on daemon messages over 256 KB.
 
 ## [0.3.8] - 2026-10-20
 

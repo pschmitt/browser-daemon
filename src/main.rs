@@ -843,6 +843,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/extension/nodes/{id}/changes", get(extension::changes))
         .route(
+            "/api/extension/nodes/{id}/cdp",
+            get(extension::automation::socket),
+        )
+        .route(
+            "/api/extension/nodes/{id}/json/version",
+            get(extension::automation::version),
+        )
+        .route(
+            "/api/extension/nodes/{id}/json/version/",
+            get(extension::automation::version),
+        )
+        .route(
             "/api/extension/nodes/{id}/command",
             post(extension::command),
         )

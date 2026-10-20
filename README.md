@@ -12,296 +12,76 @@
 
 ## Features
 
-- **Multi-Tenant Process Isolation:** Spawns an isolated browser instance per incoming connection (`/chromium` for CDP, `/firefox` for WebDriver BiDi). Connections never interfere with one another.
-- **Dual Engine Support:** Runs Chromium with native CDP and Firefox with WebDriver BiDi (`/firefox`). Firefox only allows one WebDriver session per process, so the daemon owns it and multiplexes it: any number of BiDi clients (automation, handoff, recorder) can attach to the same Firefox session (`/firefox?session_id=<id>`).
-- **Cluster Mesh & Profile Migration:** Discovers peer nodes across Tailscale/wireguard meshes and transfers persistent browser profiles between nodes with live progress toasts.
-- **Bot Detection Immunity:** Runs headful Chromium inside an X11 virtual display (`Xvfb`) with `--disable-blink-features=AutomationControlled` natively. Cleanly passes Google Botguard, Cloudflare Turnstile, and other bot detection systems.
-- **Session Screencasting & Playback:** Built-in lightweight screencast recorder capturing JPEG frames and metadata, with an interactive scrubbing video player, IndexedDB background downloading, and client-side WebM export.
-- **Live Handoff:** Embedded `/handoff/` view of any tab, for phones and desktops. Touch: tap to click, drag to scroll, the phone keyboard mirrors the focused field. Mouse and keyboard: drag to select, double/triple click, Ctrl+C/X/V through the local clipboard, Ctrl+A/Z/Y, arrow keys; a capture button (fullscreen + Keyboard Lock) sends browser shortcuts like Ctrl+W to the page. Files dropped onto the view are dropped into the page (Chromium). When the page opens a file chooser (an upload button, or `input.click()` from its script), the view's own chooser opens instead, right away after the click that asked, otherwise from a bar with **Choose…** and **Cancel**; the picked files go into the page's file input (Chromium, and Firefox 139 or later). Without a view connected, the page's chooser is left alone. Works for both engines: Chromium streams a CDP screencast, Firefox streams WebDriver BiDi screenshots.
-- **Downloads:** what a page downloads is saved on its node (`<state dir>/downloads/<session>/`, removed when the session ends) and lands on the viewer's device: a download that starts right after your click or tap in the view is saved by itself once it is done; any other waits in a tray at the bottom with **Save**, and every one of the session's downloads is in the view's session menu (**Downloads**) and the dashboard's session menu (**Downloads…**). Chromium (`Browser.setDownloadBehavior`) and Firefox (WebDriver BiDi `browser.setDownloadBehavior`). An automation client that sets its own download behaviour (Playwright does) keeps it while it is connected; the node still lists those downloads where the client put them, and takes over again when the client leaves. API: `GET /api/sessions/<id>/downloads` lists them, `GET /api/sessions/<id>/downloads/<download>` serves the file (Range requests work), `DELETE` removes one; `browser-daemon session downloads SESSION`, `browser-daemon session download SESSION DOWNLOAD [-o FILE]`.
-- **Dashboard and handoff details:** site icons are fetched by the node (`GET /api/favicon?url=<page>`: public http(s) hosts only, raster images up to 256 KB, remembered per origin; a letter where there is none), so no browser contacts a site or an icon service. The live view opens in **Phone** on touch and narrow screens (until you pick another Screen). A password field's text never reaches the view (the phone keyboard mirrors bullets). Taking over a session an agent drives asks first. Dashboard defaults: a new session is **ephemeral** (it stops once its last automation client disconnects; the live view does not hold it); turn **Ephemeral** off for one that runs until stopped. Profiles launched from the Profiles tab, the CLI and the TUI start persistent ones. Defaults on the Engines tab are drafts until **Apply to N nodes** (with a confirmation).
-- **Vault Logins in the Handoff:** the key button next to the dashboard button works like the Bitwarden extension's popup: it lists the [rbw](https://github.com/doy/rbw) vault's logins for the page's site (its badge counts them) and fills the one you pick into the login form (username and password, or the username alone on a username-first page; **TOTP** fills the one-time code). The vault stays with the passkey helper (`browser-daemon passkey-helper`), which picks the entries by their URIs and match types as Bitwarden's autofill would, and asks your phone to unlock rbw when it's locked. The node fills the values from an isolated world (Chromium) or sandbox (Firefox), only into frames on a site the entry is saved for; the view sees names and users, never a password or code. The site always comes from the browser's own page list, not from the page or the view. API: `POST /api/sessions/<id>/autofill {"page_id": ...}` lists, `{"page_id": ..., "entry": "<vault id>", "fields": ["username", "password", "totp"]}` fills; both answer `{"request": ...}`, polled at `/api/passkey/<request>`. An entry that is not saved for the page's site can be picked from a search and filled into the page's own site only; the helper then posts `{"message": "..."}` (entry, site, fields; never a value) to `--notify-webhook URL`. The helper answers only requests it got from the node and checks their fields, each request once; the fill reaches the page only through the node's `/api/pages/<id>/autofill`, which needs the cluster secret and an approved request for that page.
-- **Resource Limits & Governance:** Configurable per-session memory limits (`--max-session-memory-mb`, V8 heap limits) and global systemd service limits (`MemoryMax`, `MemoryHigh`, `CPUQuota`).
-- **Named Profile Persistence:** Optional persistent profiles via `?profile=<name or id>` query parameter, alongside ephemeral auto-cleaned sessions. Each profile lives in `/var/lib/browser-daemon/profiles/<uuid>/` with a `profile.json` holding its free-text name (e.g. `Google (p@example.com)`) and engine; the API reports the directory as `storage_dir`. Name-based directories from older versions are migrated on startup.
-- **What a profile keeps:** cookies (including the ones without an expiry that many logins use), localStorage and IndexedDB, like a desktop browser. A session of a profile is quit properly when it stops, so the browser writes its data first (a signal would lose cookies set in the last seconds), and the profile's saved tabs are not restored: only the pages in its default tabs open. This holds for sessions made by agents through Playwright too: Playwright works in a context of its own, which the daemon maps onto the profile's. Throwaway sessions keep nothing, until **Save as profile** (session menu in the dashboard and handoff, `browser-daemon session save-as-profile`, `POST /api/sessions/<id>/save-as-profile {"name": "..."}`): the browser quits, its data is copied into a new profile, and a session of that profile opens the same pages.
-- **Recordings with sound:** with session audio (`services.browser-daemon.audio.enable`), a recording takes the session's sound too (`recordAudio`, `--record-audio`, on by default), paused and resumed with it; a recording that stayed silent keeps none. Start one without from the dashboard's recording dialog, the handoff's **Sound** toggle or `POST /api/sessions/<id>/record?audio=false`; while it runs, the sound switches on and off at once (the dashboard's REC badge or recording dialog, the handoff's **Sound** button, `POST /api/sessions/<id>/record-audio {"audio": false}`), and what was recorded silent plays back silent. A profile can say for itself whether its sessions are recorded and whether with sound (dashboard: profile menu → **Recording**; `browser-daemon profile set NAME --record on --record-audio off`; `PATCH /api/profiles/<name> {"record": true, "record_audio": false}`, `null` for the node's default). The player plays it in step with the frames (`m` mutes, ↑/↓ volume), and `GET /api/recordings/<id>/audio` serves it (Opus in WebM). **Save as WebM** encodes the recording on its node with ffmpeg, frames at their own times (VP9) and its sound: `GET /api/recordings/<id>/export.webm`, `browser-daemon recording export ID --webm`.
-- **Merging recordings:** select two or more recordings of a node in the dashboard and **Merge**: pick their order (drag or arrows) and whether the originals go once merged. They become one recording, one after the other, sound included. `browser-daemon recording merge ID... [--delete]`, `POST /api/recordings/merge {"ids": [...], "delete": false}`. The merge is kept if any source was, and its age counts from the merge; the originals stay if their sound could not be carried over. A recording being exported or merged is not removed by the cleanup or a delete (409). The Recordings tab's search field finds recordings by title, address, profile, node or date.
-- **Kept recordings:** the cleanup (age, count and storage limits) removes old recordings. Mark one as kept and it is never removed: the pin in the dashboard (recording menu, or select several), `K` in the TUI, `browser-daemon recording keep ID...` (`unkeep` undoes it), `POST /api/recordings/<id>/keep {"keep": true}`. Kept (and still running) recordings do not count against the count and storage limits. Nothing is kept unless you ask; deleting a kept recording by hand still works (after a warning). Recordings, backups, history and profile directories are readable by the daemon's user only; `meta.json` is replaced atomically and rebuilt from `frames.jsonl` if a crash leaves it unreadable.
-- **Public links:** share a recording or a running session with anyone, no sign-in: the dashboard's session or recording menu (**Share…**), the live view's session menu, `browser-daemon recording share ID`, `browser-daemon session share SESSION [--control]` (links expire after an hour unless told otherwise: `--expires 7d`, `--expires never`, or the dialog; the API's `expires_in_secs` absent means never; `unshare` ends it), `POST /api/shares {"kind": "recording"|"session", "id": ..., "expires_in_secs": ..., "control": false}`, `DELETE /api/shares/<id>`. A link is `<share URL>/share/<node>/<token>` with a 64-byte random token (86 characters); any node serves it and forwards to the node named in it, so one public name (`services.browser-daemon.shareUrl`, `--share-url`) reaches the whole mesh. A recording's page plays it (sound included, addresses cut down to their site); a session's page shows its front tab, about a picture a second, and with **control** (Chromium) also takes clicks, scrolling, typed text and a few named keys (Enter, Tab, arrows, ...), as input events: no DevTools connection, no address bar, no shortcuts. Sharing a recording keeps it. A link ends when it is unshared, expires, or its session or recording is gone. What is public is marked everywhere: a banner on the dashboard while anything is shared (**Manage** lists every link, with **Stop**), a **Public** chip on session cards and recordings, a **PUBLIC** pill in the live view, whose eye chip counts the other live views, the people on the public link and the automation clients. One dialog (dashboard and live view) makes a link and manages it: the link with **Copy** and its QR code (`GET /api/qr?text=...`, SVG), **Allow control**, the expiry (changes apply at once) and **Stop sharing** (two clicks). While a session is shared, the passkey prompt and the vault button say so (with control: someone on the link may have started the sign-in), without refusing anything. The reverse proxy must serve `/share/` without its login (only that path: the daemon's pages hand out a sign-in cookie); share pages carry `noindex`, `no-referrer` and a strict CSP, and cannot be embedded.
-- **Notes:** sessions, profiles and recordings take notes (short texts with their time, in Markdown: emphasis, code, links, lists and task boxes, quotes; rendered without HTML, links only to http(s) and mailto): the dashboard's menus (**Notes…**) and the note badges on cards and rows, the live view's session menu, `browser-daemon session|profile|recording note TARGET [TEXT|-]` (without TEXT: list), `GET|POST /api/notes/<sessions|profiles|recordings>/<id>`, `PUT|DELETE /api/notes/<kind>/<id>/<note>`. A profile's notes live in its directory (`bd-notes.json`: they move, back up and export with it, and clearing its data keeps them), a recording's in its directory, a session's in the state directory until the session ends. The overview carries each item's count and latest note, and the search fields find notes.
-- **Upstream Proxies:** Route a session through a SOCKS or HTTP proxy configured on its node (`services.browser-daemon.proxies`). Pick one per session (`"proxy": "<id>"` when creating it, `?proxy=<id>` on `/chromium` and `/firefox`, `none` for direct) or store a default on a profile (`PATCH /api/profiles/<name> {"proxy": "<id>"}`). A running session switches on the fly (`POST /api/sessions/<id>/proxy {"proxy": "<id>"}`, the session menu in the dashboard and handoff, `p` in the TUI): browsers always talk to a per-session SOCKS5 relay in the daemon, which forwards directly or through the chosen proxy and drops open connections when the route changes. DNS goes through SOCKS5 proxies, and WebRTC is kept from bypassing them. `GET /api/proxies` lists a node's proxies.
-- **Installable PWA:** Web App Manifest with standalone display mode, badging, and offline service worker caching.
-- **Drop-In CDP & BiDi Compatibility:** Standard endpoints:
-  - `/chromium` (WebSocket for Playwright, Puppeteer, CDP clients)
-  - `/firefox` (WebSocket for Firefox WebDriver BiDi clients)
-  - `/json/version`
-  - `/json/list` (aggregates active pages across all active sessions)
-  - `/devtools/page/:page_id` (WebSocket for individual page inspection)
-  - `/health`
+- **A browser per connection**, Chromium over CDP (`/chromium`) and Firefox over
+  WebDriver BiDi (`/firefox`), for Playwright, Puppeteer and any CDP/BiDi client.
+- **Headful in a virtual display**, so bot checks (Botguard, Turnstile) pass.
+- **Live view (handoff)** of any tab on phones and desktops: touch and mouse
+  input, the phone keyboard, files, downloads, vault logins and passkeys.
+- **Recordings** with sound, a scrubbing player, WebM export and merging.
+- **Persistent profiles** with free-text names, backups, exports and transfers
+  between nodes, per-profile proxies.
+- **A mesh of nodes** with one dashboard, CLI, terminal UI and MCP server for
+  AI agents across all of them.
+- **Your own desktop browser as a node**: the browser extension shares its tabs
+  for live views, recordings and Playwright.
+- **Public links** to a running session or a recording.
+- **NixOS module**, hardened service, installable PWA.
 
-![Profiles with free-text names and per-profile proxies](dashboard-profiles.png)
+## Install
 
-## Share an existing desktop browser
-
-The [Browser Daemon Node extension](browser/README.md) registers a running
-Chromium or Firefox browser temporarily, with selected-tab sharing and a separate
-remote-control grant. It includes a live browser page, CLI/MCP tools, and an
-optional Linux Firefox companion for trusted input. Build development packages
-with `python3 browser/build.py`; see its README for pairing and signed releases.
-
-## NixOS Module
-
-Add the flake input:
+On NixOS, add the flake input and enable the service:
 
 ```nix
-inputs = {
-  browser-daemon = {
-    url = "github:pschmitt/browser-daemon";
-    inputs.nixpkgs.follows = "nixpkgs";
-  };
+inputs.browser-daemon = {
+  url = "github:pschmitt/browser-daemon";
+  inputs.nixpkgs.follows = "nixpkgs";
 };
 ```
-
-Enable the service in your NixOS configuration:
 
 ```nix
 { inputs, ... }:
 {
-  imports = [
-    inputs.browser-daemon.nixosModules.default
-  ];
-
-  services.browser-daemon = {
-    enable = true;
-    bind = "127.0.0.1:3001";
-    maxSessions = 8;
-    # Optional: proxies sessions and profiles can choose from.
-    proxies = [
-      {
-        id = "vpn";
-        name = "VPN exit";
-        url = "socks5://10.0.0.1:1080";
-      }
-    ];
-  };
+  imports = [ inputs.browser-daemon.nixosModules.default ];
+  services.browser-daemon.enable = true;
 }
 ```
 
-The flake's own package is the module's default, so no overlay is needed. More options (see `nix/module.nix` for all of them):
+Release archives (Linux, glibc and static musl) with checksums and build
+attestations are on the [releases page](https://github.com/pschmitt/browser-daemon/releases).
+See [docs/nixos.md](docs/nixos.md) for the options and the mesh.
 
-| Option | What it does |
-| --- | --- |
-| `displayMode` | `"shared"` (one Xvfb, `display`) or `"per-session"` (an Xvfb per session, sized to its window) |
-| `video.enable`, `video.encoder`, `video.vaapiDevice` | H.264 live view (needs `per-session`); `x264` on the CPU or `vaapi` on the GPU |
-| `gpu.enable` | render Chromium on the GPU (ANGLE on Vulkan) instead of in software |
-| `audio.enable` | a PulseAudio server for the browsers, streamed to the handoff and recorded |
-| `adblock.enable`, `adblock.default` | uBlock Origin (Lite) for the sessions, on by default |
-| `recordSessions`, `recordAudio` | record new sessions (with sound); `recordingMax{StorageMB,AgeHours,Count}` are the cleanup limits |
-| `maxSessions`, `sessionMemoryMaxMB`, `idleTimeoutMinutes` | per-node and per-session limits |
-| `memoryMax`, `memoryHigh`, `cpuQuota` | systemd limits of the service |
-| `keepSessionsOnRestart` | leave the browsers running when the service restarts (the next daemon adopts them) |
-| `allowedHosts` | `Host` header values accepted besides `publicUrl` and loopback (`--allowed-host`) |
-| `shareUrl` | base URL of public share links (`--share-url`); its reverse proxy serves `/share/` without a login |
+## Quick start
 
-At startup the daemon kills browsers and session displays that no session record claims (leftovers of a crash). Only its own are touched, so several daemons of one user can coexist: every browser and Xvfb it starts carries `BROWSER_DAEMON_INSTANCE=<id derived from the state directory>`, and the sweep kills only processes with its id. Processes without a tag (started by an older version) are killed only when their command line names a path under the profiles or state directory (or a `browserd-*` temporary profile), or, for an Xvfb, when its display number appears in this daemon's session records.
-
-The service runs hardened: `ProtectSystem=strict` (writes go to `dataDir`, `recordingsDir`), `ProtectHome`, `NoNewPrivileges`, no capabilities, a state directory of mode 0700 and `UMask=0077`. User namespaces stay allowed for the Chromium sandbox, and `/dev` is not restricted so the GPU render node and audio work.
-
-### Mesh
-
-Nodes find each other through `peers` (base URLs) and authenticate with a shared secret kept in a file, outside the Nix store (for example a sops-nix secret):
-
-```nix
-services.browser-daemon = {
-  nodeName = "rofl-13";
-  publicUrl = "https://browser-13.example.org";
-  peers = [ "https://browser-14.example.org" ];
-  clusterSecretFile = "/run/secrets/browser-daemon/cluster-secret"; # a string, not a path literal
-};
+```js
+// Playwright against a node: a fresh browser for this connection.
+const browser = await chromium.connectOverCDP('ws://127.0.0.1:3001/chromium');
 ```
-
-`clusterSecret` (a plain string) still works but is deprecated: it lands in the Nix store and on the command line. Set only one of the two. `peers` without a secret warns. The module exports the file's path as `$BROWSER_DAEMON_SECRET_FILE` to the CLI, TUI and MCP server on the host. `bind` must be `IP:PORT`. The package installs shell completions for bash, zsh and fish.
-
-## Terminal UI
-
-`browser-daemon tui` shows the whole mesh in the terminal: sessions (with their tabs), profiles, recordings and nodes, kept current by the overviews the daemon pushes (polled every 3 s while that socket is down), and does what the dashboard does. Requests run in the background (a spinner shows while they do), so the view stays responsive when a node is slow or unreachable.
-
-- `m` (or Space) opens the menu of the selected row with everything the dashboard offers: take over, new tab, rename, auto-stop timeout, proxy, recording control, details, stop for sessions; launch, rename, proxy, appearance, homepage, duplicate, copy or move to another node, backups & data (back up, restore, clear, export and import archives) and delete for profiles; play, export frames, delete for recordings; filter, settings, new session or profile there, remove for nodes. `M` opens the menu of the view (new session or profile, stop all, retention, add a peer).
-- Hotkeys for the common ones (`?` lists them, and the bottom line shows the ones of the view): `Enter`/`o` open (take over, launch, play), `s` stop, `X` stop all, `p` proxy (sessions, profiles), `R` record, `t` new tab, `T` auto-stop timeout, `e` rename, `n` throwaway session on the node, `N` new session or profile, `w` WebSocket URL, `b` backups & data, `K` keep a recording, `E` export frames, `v` vacuum, `d` delete, `i` details, `a`/`x` add or remove a peer (Nodes). `q` or Ctrl-C quits (Esc only closes menus).
-- `f` shows only the selected row's node on the other tabs (again: every node); the header says so.
-- The **Engines** tab (`5`) lists each node's engines with the defaults new sessions start with (ad blocker, appearance, show touches): `a`, `c`, `t` change them, `m` has the same as menus; the node's default proxy is in the Nodes tab's menu.
-- New sessions and profiles come from a form (node, engine, profile, name, proxy, appearance, recording, ad blocker, auto-stop).
-
-It talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (an explicit file that cannot be read is an error), the NixOS module's secret when readable, or otherwise the `bd_auth` token the dashboard of that node hands out (see Access control).
-
-## Access control
-
-Every route needs the cluster secret or a token derived from it, WebSocket upgrades included; without a cluster secret the daemon stays open, but the checks on `Host` and `Origin` below still apply.
-
-- **Routes without sign-in:** the static assets, `/health`, `/json/version`, `POST /api/agent-topic`, `/` and `/handoff/`, which hand out the cookie, and public links (`/share/<node>/<token>[/<what>]`, checked by their token).
-- **Cookie `bd_auth`:** an HMAC-SHA256 token (valid 30 days; `HttpOnly`, `SameSite=Strict`, `Secure` behind `X-Forwarded-Proto: https`) derived from the cluster secret, so it survives restarts and works on every node of the mesh. The pages never contain the secret.
-- **Other ways in:** `Authorization: Bearer <token>`, `?auth=<token>` (CDP endpoints for tools that cannot set a header, e.g. `wss://node/chromium?auth=...`; `browser-daemon mcp` does this itself), and the cluster secret itself as a bearer or `X-Browser-Cluster-Secret` (peers, the CLI, the passkey helper). `GET /api/auth/token` returns `{"token", "expires_at"}`. The secret is compared in constant time and never goes into a URL.
-- **Secret only:** the passkey helper routes, `POST /api/pages/{id}/autofill` and adding or removing peers refuse a token, because a page running in a session can obtain one (peers receive the cluster secret).
-- **`Host` and `Origin`:** the `Host` must be the public URL's host, `127.0.0.1`, `localhost` or `[::1]` on the bind port, or one given with `--allowed-host HOST[:PORT]` (repeatable); anything else is 403 (DNS rebinding). An `Origin` header must be the node itself, so another site cannot open a WebSocket. Requests a browser marks `Sec-Fetch-Site: cross-site` or `same-site` are refused, except a click through to `/` or `/handoff/`.
-- **Browsers cannot reach the daemon:** a session's relay refuses loopback and link-local addresses and the host names of the mesh's daemons (this node's, its peers'), and Chromium and Firefox send loopback through the relay too. A page or an agent therefore cannot open `http://127.0.0.1:3001/` in its own browser to get a cookie.
-- **Service worker:** caches icons and the manifest only, never pages or API answers.
-
-## CLI
-
-The `browser-daemon` binary is the daemon (`run`, what the systemd service starts) and a command-line client for its API. The client talks to `http://127.0.0.1:3001` unless `--url` (or `BROWSER_DAEMON_URL`) names another node; peers are reached through it. The cluster secret comes from `--secret-file` (or `BROWSER_DAEMON_SECRET_FILE`, which the NixOS module sets from `clusterSecretFile`), else `/run/secrets/browser-daemon/cluster-secret` when readable. `--json` prints JSON instead of tables.
-
-```text
-browser-daemon run [OPTIONS]              the daemon (see `run --help`)
-browser-daemon session list|show|new|delete (stop)|stop-all|rename|proxy|idle-timeout|record|tabs|open|close-tab|save-as-profile|url|downloads|download
-browser-daemon profile list|show|new|set|clone|delete (rm)|clear|backup|export|import|transfer
-browser-daemon profile backup list|create|restore|rm PROFILE
-browser-daemon recording list|show|keep|unkeep|delete (rm)|merge|export|vacuum
-browser-daemon node list|show|set|add|remove (rm)
-browser-daemon completions bash|zsh|fish   shell completions (the package installs them)
-browser-daemon mcp                        MCP server for AI agents (see below)
-browser-daemon tui                        terminal UI (see above)
-browser-daemon passkey-helper             serve approved passkeys and vault logins from rbw
-```
-
-Sessions, profiles and recordings are named by id or, for sessions and profiles, by name. An exact id wins over an exact name, which wins over the start of an id (at least 4 characters); `--node` narrows a name that exists on several nodes. Commands with several targets (`session stop`, `recording rm|keep|unkeep`) try each one and report the ones that failed. Commands that destroy data (`profile rm|clear`, `profile backup restore|rm`, `profile import --overwrite`, `profile transfer --move|--overwrite`, `recording rm`, `session stop-all`) ask first, or take `-y`. Exports (`profile export`, `recording export`) stream into a temporary file that replaces the target when complete, and refuse to overwrite an existing file without `--force`.
-
-Exit status: 0 success, 1 failure, 2 bad command line, 3 not found, 4 node unreachable, 5 cancelled (or not confirmed), 6 unauthorized.
 
 ```sh
-browser-daemon session list
-browser-daemon session new --engine firefox --profile hrworks --node rofl-14   # prints the id, WebSocket URL on stderr
-browser-daemon session open quiet-otter https://example.org/
-browser-daemon session record quiet-otter pause
-browser-daemon session stop-all --node rofl-13 -y
-browser-daemon profile backup create hrworks before-cleanup
-browser-daemon profile transfer hrworks --to rofl-14 --move
-browser-daemon recording export 1b2c3d4e -o rec.jsonl --force
+browser-daemon session list        # what runs on the mesh
+browser-daemon tui                 # the terminal UI
 ```
 
-### MCP server for agents
+Open `http://127.0.0.1:3001/` for the dashboard and take over any tab in the
+live view.
 
-`browser-daemon mcp` is an MCP server (stdio) that gives an agent a browser on any node of the mesh with a single entry in its MCP configuration. The browser tools are [Playwright MCP](https://github.com/microsoft/playwright-mcp)'s, run as a child on a CDP endpoint of a node; Playwright MCP cannot change that endpoint while it runs, so the server swaps the child when the agent asks for something else. These tools are added:
+## Documentation
 
-- `browser_status`: the browser in use, the profiles the agent may open, the nodes and their load.
-- `browser_use`: switch to a saved profile (`profile`, which also fixes the node) or to a throwaway browser on a chosen node (`node`). The previous browser is closed.
-- `browser_fill_secret` (only with `--allow-secret`): type a field of an [rbw](https://github.com/doy/rbw) vault entry (`password`, `username`, `totp` or a custom field) into a page field without the value reaching the agent. See below.
-
-Without a choice the agent gets a throwaway browser on the node with the most room. Profiles keep whatever they are signed in to, so agents may only open the ones named with `--allow-profile` (repeatable; `*` allows every profile); anything else is refused. `--playwright-cmd` names the program that runs Playwright MCP, called as `PROGRAM ENDPOINT OUTPUT_DIR`; `--url`, `--secret-file` as for the other commands.
-
-```json
-{ "command": "browser-daemon", "args": ["mcp", "--url", "https://browser.fnuc.example", "--allow-profile", "work"] }
-```
-
-#### Secrets: `browser_fill_secret`
-
-Typing a password with Playwright MCP's own tools puts it in the tool call, and Playwright MCP echoes every script it runs into its answer and logs. `browser_fill_secret` keeps the value out of both:
-
-1. The entry must be named with `--allow-secret` (repeatable; exact rbw entry names, or `*` for every entry of the vault).
-2. The value is read here with rbw (`--rbw`, default `rbw`; `rbw get --raw`, `rbw code` for `totp`). An empty field is an error; it never falls back to another field (`rbw get` prints the notes of an entry without a password).
-3. The page must be on a site the entry is saved for, by the entry's URIs and their match type as Bitwarden's autofill decides (base domain by the Public Suffix List, so `a.github.io` is not `b.github.io`; host, starts-with and exact are honoured; an https entry is not used on http, and a port counts; regex URIs never match). The address comes from Playwright's page, not from page script.
-4. The field is focused with a Playwright click on the agent's `target`, then the node types the value over CDP (`POST /api/pages/{page_id}/insert-text`, with the entry's URIs and the session the page is in: a page id that is not in that session, or that several sessions show, is refused; refused unless the page, and the frame with focus, are on a site the entry is saved for, checked on the same connection right before typing; the text is never logged).
-5. Every value filled in the session is masked as `•••` in the answers and error messages of all later tool calls, also as JSON-escaped, percent-encoded, HTML-escaped and base64 (standard and URL-safe alphabet, at all three byte alignments, so a copy inside a longer encoded string is caught too), and the `user:password` pair of the entry's username (HTTP Basic auth) the same way (values under four characters only where they are the whole text). Files Playwright MCP writes to its output directory (snapshots) are not rewritten; password fields never show their value there.
-6. The answer of `browser_fill_secret` only says what was typed where (`Typed the password of 'entry' into <element> on <host>`), never the value. Before typing, the field is marked `data-bd-secret` and given a style (from an isolated world, as a constructed stylesheet so a page's CSP does not block it) that shows its value as dots whatever its `type` becomes (`-webkit-text-security: disc`), so a page's "show password" toggle does not put the value into a screenshot. The vault button's autofill does the same for every field it fills (username, password, TOTP), in Firefox with transparent text instead, as Firefox has no text-security. What this does not protect: a page that replaces the element (a re-render drops the mark), a field in a frame nested deeper than the focused frame, text the page copies elsewhere (a "your password is ..." line), canvas or custom-drawn inputs, and the page's own script, which can read the value or remove the mark. Playwright's snapshot reads the field's value whatever the screen shows, so the MCP server masks the filled values in what it returns and, as Playwright MCP keeps snapshots and logs in files its answers only link, in the text files under `--output-dir` written during each call.
-
-This guards against accidents, not against an agent bent on reading the value back in another form (e.g. encoded by a script): only allow entries for agents you trust with them.
-
-Default tabs are not opened for Playwright connections (it ignores tabs it did not open); a profile's login is what an agent gets from it.
-
-### `browser-daemon run`
-
-```text
-Run the daemon (what the systemd service does)
-
-Usage: browser-daemon run [OPTIONS]
-
-Options:
-  -b, --bind <BIND>
-          [default: 127.0.0.1:3001]
-      --chromium <CHROMIUM>
-          [default: chromium]
-      --firefox <FIREFOX>
-
-      --display <DISPLAY>
-
-      --max-sessions <MAX_SESSIONS>
-          [default: 8]
-      --profile-dir <PROFILE_DIR>
-          [default: /var/lib/browser-daemon/profiles]
-      --default-width <DEFAULT_WIDTH>
-          [default: 1600]
-      --default-height <DEFAULT_HEIGHT>
-          [default: 1000]
-      --node-name <NODE_NAME>
-
-      --public-url <PUBLIC_URL>
-
-      --peer <PEERS>
-
-      --cluster-secret <CLUSTER_SECRET>
-          Shared cluster secret for peer-to-peer authentication
-      --cluster-secret-file <CLUSTER_SECRET_FILE>
-          Path to file containing shared cluster secret
-      --allowed-host <ALLOWED_HOSTS>
-          A `Host` (HOST[:PORT]) the node answers to besides its public URL's and loopback's (repeat for several); other hosts get 403
-      --recordings-dir <RECORDINGS_DIR>
-          [default: /var/lib/browser-daemon/recordings]
-      --record-sessions <RECORD_SESSIONS>
-          Record new sessions unless they opt out (`--record-sessions false` to turn off) [default: true] [possible values: true, false]
-      --record-audio <RECORD_AUDIO>
-          Record the session's sound with its recording (needs --pulse-server); a recording can still be started without (`POST .../record?audio=false`) [default: true] [possible values: true, false]
-      --recording-max-storage-mb <RECORDING_MAX_STORAGE_MB>
-          [default: 2048]
-      --recording-max-age-hours <RECORDING_MAX_AGE_HOURS>
-          [default: 168]
-      --recording-max-count <RECORDING_MAX_COUNT>
-          [default: 100]
-      --max-session-memory-mb <MAX_SESSION_MEMORY_MB>
-          Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N)
-      --idle-timeout-minutes <IDLE_TIMEOUT_MINUTES>
-          Stop sessions nobody used for this many minutes (0 = never) [default: 30]
-      --chromium-adblock <CHROMIUM_ADBLOCK>
-          Unpacked ad blocker extension (uBlock Origin Lite) for Chromium
-      --firefox-adblock <FIREFOX_ADBLOCK>
-          Ad blocker add-on (uBlock Origin .xpi) for Firefox
-      --adblock-default <ADBLOCK_DEFAULT>
-          Block ads in new sessions unless they opt out [default: true] [possible values: true, false]
-      --proxies-file <PROXIES_FILE>
-          JSON list of upstream proxies sessions can use: [{"id", "name", "url"}]
-      --pulse-server <PULSE_SERVER>
-          PulseAudio socket for session audio (per-session sinks, streamed on /audio)
-      --pactl <PACTL>
-          [default: pactl]
-      --ffmpeg <FFMPEG>
-          [default: ffmpeg]
-      --display-mode <DISPLAY_MODE>
-          X display per session (own Xvfb, needed for video streaming) or one shared --display [default: shared] [possible values: shared, per-session]
-      --xvfb <XVFB>
-          Xvfb binary for --display-mode per-session [default: Xvfb]
-      --xdotool <XDOTOOL>
-          xdotool, to park the X pointer on per-session displays
-      --video-encoder <VIDEO_ENCODER>
-          Offer the live view as H.264 video (needs --display-mode per-session) [possible values: vaapi, x264]
-      --video-ffmpeg <VIDEO_FFMPEG>
-          ffmpeg with x11grab (ffmpeg-full) for --video-encoder [default: ffmpeg]
-      --vaapi-device <VAAPI_DEVICE>
-          [default: /dev/dri/renderD128]
-      --chromium-gpu <CHROMIUM_GPU>
-          Render Chromium on the GPU: vulkan (ANGLE on Vulkan), or none (software) [default: none] [possible values: none, vulkan]
-  -h, --help
-          Print help
-```
-
-## Behaviour worth knowing
-
-- **One browser per profile.** Launching a profile that is already running, or being launched at that moment, attaches to its session. Launches in progress count against `--max-sessions`. A throwaway session whose client disconnects before the connection is complete ends with it.
-- **Tabs over HTTP.** `PUT /json/new` opens a tab in the session named by `session_id`, or in the one showing `page`; with neither it starts a session of its own, and an unknown session or page is a 404. `/json/new`, `/json/close/{id}` and `/json/activate/{id}` take PUT only.
-- **Only the tab in front is recorded.** The recorder takes the screencast frames a client receives, and a frame is kept only when its page reports `document.visibilityState` visible (asked of the browser, remembered for a second). The page comes from the endpoint (`/devtools/page/<id>`) or, on `/chromium`, from the CDP session of the frame (`Target.attachedToTarget`, `Target.attachToTarget`); a frame whose page cannot be told is kept.
-- **The player holds a window of the recording.** The dashboard's player keeps an index of all frames (time, address, title) and the pictures of a few chunks of frames at a time (the others are dropped, least recently used first), read from the browser's cache when the recording is cached there, otherwise fetched from `GET /api/recordings/<id>/frames` with a `Range` request, so a long recording does not fill the tab's memory. Recordings cached by an older dashboard are still held whole while they play.
-- **The SOCKS relay is local and serves only its browser.** A session's relay listens on `127.0.0.1` only, and never connects to loopback, link-local or the mesh's daemons. It has no credentials (Chromium cannot do SOCKS5 authentication), so on every connection the daemon looks up the process that owns the client socket (`/proc/net/tcp{,6}`, then `/proc/<pid>/fd`) and accepts it only when it is the session's browser or one of its descendants (checked by walking parent pids, and by the browser's start time against pid reuse). Any other local process is dropped, and so is everything while the lookup fails or before the browser has started. This needs `/proc` to show the browsers' processes (no `hidepid`/`ProtectProc=invisible`; the service does not set them).
-- **Idle timeouts** are given in minutes (0 = never) and capped at a year.
-- **Peers.** `/api/peers/{peer}/...` forwards a management request to a node of the mesh, with the same path and body as on that node (`GET .../profiles/{name}` included); the peer is named exactly, by name or URL. Requests that copy data (import, export, transfer, clone, clear, restore, recordings) may take up to an hour, others two minutes; bodies are streamed in both directions. The overview's polls of the peers stay short.
-- **The overview** (`/api/mesh/overview`, `/api/ws/overview`) is computed once every two seconds, while somebody listens, and shared by every dashboard, CLI and TUI. Profile sizes in it are at most a minute old.
-- **Profiles.** Exports, imports and transfers are streamed (nothing is held in memory); an import is unpacked into a hidden `.import-*` directory next to the profiles and renamed into place when complete. Delete, clear, restore, backup, export and transfer refuse a profile that a session uses or is starting (`?force=true` stops the session first for delete, clear and restore). A recording that is still being made cannot be deleted.
+| Topic | |
+|---|---|
+| [NixOS module](docs/nixos.md) | Options, mesh, resource limits |
+| [Automation](docs/automation.md) | CDP and BiDi endpoints, engines, Playwright on shared browsers |
+| [Live view](docs/live-view.md) | Handoff, downloads, vault logins |
+| [Recordings](docs/recordings.md) | Sound, merging, keeping |
+| [Profiles](docs/profiles.md) | What a profile keeps, transfers, proxies, notes |
+| [Public links](docs/sharing.md) | Sharing sessions and recordings |
+| [Access control](docs/access-control.md) | Cluster secret, tokens, Host and Origin checks |
+| [CLI](docs/cli.md) | Commands and `browser-daemon run` |
+| [Terminal UI](docs/tui.md) | `browser-daemon tui` |
+| [MCP server](docs/mcp.md) | Browsers for AI agents, `browser_fill_secret` |
+| [Behaviour worth knowing](docs/behaviour.md) | Profiles, recording, relay, peers |
+| [Browser extension](browser/README.md) | Sharing a desktop browser |
+| [Changelog](CHANGELOG.md) | |
 
 ## License
 

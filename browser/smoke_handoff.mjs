@@ -180,6 +180,14 @@ try {
   // Passkeys: the extension hooks the tab; with the view watching, the page's request
   // reaches the view, and the vault signs for the tab's own origin.
   await until(() => login.evaluate(`navigator.credentials.__bdHooked === true && Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000`));
+  // A conditional request (the passkey in a login field's suggestions) is offered by
+  // the view, and withdrawn when the page aborts it.
+  await until(() => login.evaluate(`globalThis.__bdPasskeyOffer === true`));
+  await login.evaluate(`window.__abort = new AbortController(); void navigator.credentials.get({mediation: 'conditional', signal: window.__abort.signal, publicKey: {challenge: new Uint8Array([5, 6, 7, 8]), rpId: location.hostname}}).catch(e => { window.__aborted = e.name; }), true`);
+  await until(() => view.evaluate(`!document.getElementById('pkOffer').hidden && passkeyOffer?.req.conditional === true`));
+  await login.evaluate(`window.__abort.abort(), true`);
+  await until(() => view.evaluate(`document.getElementById('pkOffer').hidden`));
+  assert.equal(await login.evaluate(`window.__aborted`), 'AbortError');
   await view.evaluate(`window.__seen = []; passkeyRequested = (d, p) => window.__seen.push(JSON.parse(p))`);
   await login.evaluate(`void navigator.credentials.get({publicKey: {challenge: new Uint8Array([1, 2, 3, 4]), rpId: location.hostname}}).catch(() => {}), true`);
   const seenReq = await until(async () => (await view.evaluate(`window.__seen[0] || null`)));
@@ -192,7 +200,25 @@ try {
   assert.deepEqual([signJob.kind, signJob.origin, signJob.challenge], ['assert', loginOrigin, seenReq.challenge]);
   const wrongSite = await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: '1', rp_id: 'example.org', find: false, challenge: 'AQID'})});
   assert.equal(wrongSite.status, 403);
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it; vault logins; passkeys passed`);
+  // The page's own dialogs show as the view's, never as the browser's confirm().
+  // (The view is a tab of the shared browser here, behind the tab it follows: bring it up.)
+  await view.call('Page.bringToFront');
+  await login.evaluate(`setTimeout(() => { window.__said = confirm('Sure?'); }, 10), true`);
+  await until(() => view.evaluate(`document.getElementById('askDialog').open && document.getElementById('askText').textContent === 'Sure?'`));
+  await view.evaluate(`document.getElementById('askDialog').close('ok')`);
+  await until(() => login.evaluate(`window.__said === true`));
+  // A tab closed here reopens from the menu, at its address (after the closing is confirmed).
+  const dashTab = (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}dash`);
+  await message({type: 'share', tabs: [typed.id, dashTab.id], urls: {[typed.id]: `${pageURL}login`, [dashTab.id]: `${pageURL}dash`}, control: true});
+  await until(() => view.evaluate(`!!sharedBrowser?.tabs.some(t => t.id === ${dashTab.id})`));
+  await view.evaluate(`void closeTab(${JSON.stringify(String(dashTab.id))}), true`);
+  await until(() => view.evaluate(`document.getElementById('askDialog').open`));
+  await view.evaluate(`document.getElementById('askDialog').close('ok')`);
+  await until(() => view.evaluate(`!document.getElementById('smReopen').hidden && closedTabs.at(-1)?.url === ${JSON.stringify(`${pageURL}dash`)}`));
+  await until(async () => !(await message({type: 'state'})).tabs.some(t => t.url === `${pageURL}dash`));
+  await view.evaluate(`document.getElementById('smReopen').click()`);
+  await until(async () => (await message({type: 'state'})).tabs.some(t => t.url === `${pageURL}dash` && t.shared));
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it; vault logins; passkeys; the view's dialogs; reopening closed tabs passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

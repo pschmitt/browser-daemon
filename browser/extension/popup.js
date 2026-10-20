@@ -261,7 +261,7 @@ $('enableDashboard').addEventListener('click', async () => {
     await configured;
     if (!(await permission)) throw new Error('Allow access to your daemons to pair from their dashboards.');
     await message({type: 'configureDashboard', server: address, name});
-    await api.tabs.create({url: `${address}/#nodes`});
+    await api.tabs.create({url: `${address}/#nodes/add`});
   } catch (error) { showError(error); }
 });
 $('approvePairing').addEventListener('click', async () => {

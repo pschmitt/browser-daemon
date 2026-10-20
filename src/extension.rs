@@ -179,6 +179,9 @@ struct Node {
 struct Channel {
     tab: u32,
     tx: mpsc::Sender<String>,
+    // A CDP client's session (see automation.rs): all of the tab's events, not
+    // only the live view's.
+    automation: bool,
 }
 
 impl Node {
@@ -415,7 +418,7 @@ fn valid_command(command: &Command, control: bool) -> bool {
         return false;
     }
     match command.action.as_str() {
-        "navigate" | "open" => command.params["url"].as_str().is_some_and(web_url),
+        "navigate" | "open" => command.params["url"].as_str().is_some_and(page_url),
         "click" | "type" | "key" | "scroll" | "reload" | "back" | "forward" | "focus" | "close"
         | "evaluate" => true,
         "cdp" => command.params["method"].as_str().is_some_and(cdp_allowed),
@@ -481,7 +484,7 @@ pub fn relay_allowed(method: &str, params: &Value, control: bool) -> bool {
         return false;
     }
     match method {
-        "Page.navigate" => params["url"].as_str().is_some_and(web_url),
+        "Page.navigate" => params["url"].as_str().is_some_and(page_url),
         "Page.reload" | "Page.navigateToHistoryEntry" | "Page.handleJavaScriptDialog" => true,
         _ => cdp_allowed(method),
     }
@@ -490,6 +493,59 @@ pub fn relay_allowed(method: &str, params: &Value, control: bool) -> bool {
 /// Events a view-only viewer may see: the page's frames and navigation state.
 fn view_event(method: &str) -> bool {
     method.starts_with("Page.") || method == "Inspector.detached"
+}
+
+/// What CDP clients (Playwright's `connectOverCDP`, see automation.rs) may do in
+/// a tab shared with control, on top of the live view's protocol: the page's own
+/// domains, never the profile's. No cookies or cache of other sites, no requests
+/// made with the browser's credentials outside the page, no files from the
+/// owner's disk and no downloads to it.
+pub fn automation_allowed(method: &str, params: &Value) -> bool {
+    if matches!(
+        method,
+        "Page.setDownloadBehavior"
+            | "Page.crash"
+            | "Network.getAllCookies"
+            | "Network.getCookies"
+            | "Network.setCookie"
+            | "Network.setCookies"
+            | "Network.deleteCookies"
+            | "Network.clearBrowserCookies"
+            | "Network.clearBrowserCache"
+            | "Network.loadNetworkResource"
+            | "DOM.setFileInputFiles"
+    ) {
+        return false;
+    }
+    if method == "Page.navigate" {
+        return params["url"].as_str().is_some_and(page_url);
+    }
+    if matches!(method, "IO.read" | "IO.close") {
+        return true;
+    }
+    matches!(
+        method.split_once('.').map(|(domain, _)| domain),
+        Some(
+            "Page"
+                | "Runtime"
+                | "DOM"
+                | "Input"
+                | "Emulation"
+                | "Network"
+                | "Fetch"
+                | "Log"
+                | "Accessibility"
+                | "CSS"
+                | "Overlay"
+                | "Performance"
+                | "DOMSnapshot"
+        )
+    )
+}
+
+/// A web page, or the blank page a CDP client opens before navigating.
+fn page_url(s: &str) -> bool {
+    s == "about:blank" || web_url(s)
 }
 
 fn web_url(s: &str) -> bool {
@@ -675,6 +731,9 @@ impl Controlled {
             .collect())
     }
 }
+
+#[path = "extension_automation.rs"]
+pub mod automation;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -905,7 +964,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                             Some("heartbeat") => send(ws, json!({"type": "heartbeat"})).await?,
                             Some("tabs") => {
                                 let tabs: Vec<Tab> = serde_json::from_value(value["tabs"].clone()).map_err(|_| ())?;
-                                if tabs.len() > MAX_TABS || tabs.iter().any(|t| !web_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024)
+                                if tabs.len() > MAX_TABS || tabs.iter().any(|t| !page_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024)
                                     || tabs.iter().map(|t| t.id).collect::<std::collections::HashSet<_>>().len() != tabs.len() { return Err(()); }
                                 node.channels.lock().unwrap().retain(|_, c| tabs.iter().any(|t| t.id == c.tab));
                                 let mut info = node.info.lock().unwrap();
@@ -931,7 +990,9 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 if !control && !view_event(method) { continue; }
                                 let only = value["channel"].as_str().and_then(|s| Uuid::parse_str(s).ok());
                                 let event = json!({"method": method, "params": value["params"]}).to_string();
-                                deliver(&node, |id, c| c.tab == tab && only.is_none_or(|o| o == *id), &event);
+                                // Live views get page state (and the passkey hook's calls); CDP clients everything.
+                                let viewed = view_event(method) || method == "Runtime.bindingCalled";
+                                deliver(&node, |id, c| c.tab == tab && only.is_none_or(|o| o == *id) && (viewed || c.automation), &event);
                             }
                             Some("result") => {
                                 let request = value["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or(())?;
@@ -1048,10 +1109,14 @@ pub async fn cdp(
 async fn relay(node: &Arc<Node>, tab: u32, ws: &mut WebSocket) {
     let channel = Uuid::new_v4();
     let (tx, mut rx) = mpsc::channel::<String>(256);
-    node.channels
-        .lock()
-        .unwrap()
-        .insert(channel, Channel { tab, tx });
+    node.channels.lock().unwrap().insert(
+        channel,
+        Channel {
+            tab,
+            tx,
+            automation: false,
+        },
+    );
     struct Open(Arc<Node>, Uuid, u32);
     impl Drop for Open {
         fn drop(&mut self) {
@@ -1177,7 +1242,7 @@ async fn feed(
                     }
                     tab = want;
                     if let Some(t) = tab {
-                        node.channels.lock().unwrap().insert(channel, Channel { tab: t, tx: tx.clone() });
+                        node.channels.lock().unwrap().insert(channel, Channel { tab: t, tx: tx.clone(), automation: false });
                         request(t, next, "Page.enable", json!({}));
                         request(t, next + 1, "Page.startScreencast", screencast.clone());
                         next += 2;
