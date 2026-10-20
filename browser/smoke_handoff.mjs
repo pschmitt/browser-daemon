@@ -179,7 +179,11 @@ try {
   assert.equal(again.status, 403);
   // Passkeys: the extension hooks the tab; with the view watching, the page's request
   // reaches the view, and the vault signs for the tab's own origin.
-  await until(() => login.evaluate(`navigator.credentials.__bdHooked === true && Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000`));
+  await until(() => login.evaluate(`typeof globalThis.__bdPasskeyRepair === "function" && Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000`));
+  // A provider injected later (as rbw does) must remain the fallback, while the
+  // heartbeat restores interception for the controlling view.
+  await login.evaluate(`window.__providerCalls = 0; window.__provider = async () => { window.__providerCalls++; return null; }; Object.defineProperty(navigator.credentials, 'get', {configurable: true, value: window.__provider}), true`);
+  await until(() => login.evaluate(`navigator.credentials.get !== window.__provider`));
   // A conditional request (the passkey in a login field's suggestions) is offered by
   // the view, and withdrawn when the page aborts it.
   await until(() => login.evaluate(`globalThis.__bdPasskeyOffer === true`));
@@ -192,6 +196,7 @@ try {
   await login.evaluate(`void navigator.credentials.get({publicKey: {challenge: new Uint8Array([1, 2, 3, 4]), rpId: location.hostname}}).catch(() => {}), true`);
   const seenReq = await until(async () => (await view.evaluate(`window.__seen[0] || null`)));
   assert.equal(seenReq.rpId, new URL(pageURL).hostname);
+  assert.equal(await login.evaluate(`window.__providerCalls`), 0, 'the provider must not open its local prompt');
   const signTaken = helper('/passkey-helper/next?finds=true&autofill=true').then(r => r.json());
   await sleep(300);
   const signAsked = await (await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: String(typed.id), rp_id: seenReq.rpId, find: false, challenge: seenReq.challenge, allow: []})})).json();
