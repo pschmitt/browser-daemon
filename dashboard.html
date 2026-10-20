@@ -1455,7 +1455,7 @@ let filter = 'all';
 let extensionBrowserNodes = [];
 const extensionNodeKey = n => `browser:${n.daemon || ''}:${n.id}`;
 const extensionNodeOf = name => extensionBrowserNodes.find(n => extensionNodeKey(n) === name);
-const addonBadge = (version = '') => `<span class="chip accent" title="Connected through the browser extension">${icon('addon', 'sm')}Addon${version ? ` v${esc(version)}` : ''}</span>`;
+const addonBadge = () => `<span class="chip accent" title="Connected through the browser extension">${icon('addon', 'sm')}Addon</span>`;
 const nodeLabel = name => extensionNodeOf(name)?.name || name;
 // A connected browser is a session from the start, also before anything is shared.
 const extensionSessions = () => extensionBrowserNodes.filter(n => n.online !== false).map(n => ({
@@ -4104,8 +4104,8 @@ function extensionNodeCard(n) {
   const days = !online && n.forget_at ? Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400)) : null;
   return `<div class="node-card" style="--node:${nodeColor(key)}">
     <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
-      <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span>${addonBadge(n.version)}${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
-        <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${!n.version && online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
+      <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span>${addonBadge()}${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
+        <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
       </div>
       <button class="btn icon sm ghost gear" data-settings="browser" data-key="${esc(key)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}</button>
     </div>

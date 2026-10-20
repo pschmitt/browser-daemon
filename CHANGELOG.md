@@ -11,10 +11,6 @@
   upgrading from 0.3.12 offers the permission request when sound is enabled again.
 * A real stereo-media smoke check covers view-only playback and owner revocation.
 
-### Changed
-
-* Extension node badges include the installed extension version.
-
 ## [0.3.12] - 2026-10-20
 
 ### Added
