@@ -19,7 +19,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
-ratatui = "0.29"
+ratatui = "0.30"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 tempfile = "3"
 tower-http = { version = "0.6", features = ["fs"] }
@@ -31,7 +31,7 @@ sha2 = "0.11"
 psl = "2"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-ratatui-image = { version = "8.0.1", default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 
 [profile.release]
 lto = "thin"
