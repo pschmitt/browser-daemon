@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-10-20
+
+### Fixed
+
+* Live-view passkey requests keep reaching the view when rbw or another
+  extension replaces the WebAuthn handler after the page loads. The provider
+  remains the fallback when the view is absent or chooses the browser.
+
 ## [0.3.10] - 2026-10-20
 
 ### Added

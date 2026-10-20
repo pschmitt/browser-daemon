@@ -250,3 +250,34 @@ test('the extension hooks passkeys exactly as live views do', () => {
   const hook = text => text.match(/const PASSKEY_HOOK = `[\s\S]*?`;\n/)[0];
   assert.equal(hook(source('background.js')), hook(readFileSync(new URL('../handoff.html', import.meta.url), 'utf8')));
 });
+
+test('passkey repair wraps later providers and falls back without asking twice', async () => {
+  const declaration = source('background.js').match(/const PASSKEY_HOOK = `[\s\S]*?`;\n/)[0];
+  let nativeCalls = 0, providerCalls = 0, offers = 0;
+  const credentials = {get: async () => { nativeCalls++; return 'native'; }};
+  const context = vm.createContext({navigator: {credentials}, Date, Map, Math,
+    location: {hostname: 'example.org'}, Uint8Array, ArrayBuffer,
+    btoa: value => Buffer.from(value, 'binary').toString('base64'),
+    setTimeout: () => 1, setInterval: () => 1, clearInterval() {}, DOMException});
+  vm.runInContext(declaration + '; globalThis.hookSource = PASSKEY_HOOK', context);
+  vm.runInContext(context.hookSource, context);
+  const old = credentials.get.bind(credentials);
+  Object.defineProperty(credentials, 'get', {configurable: true, writable: false,
+    value: async options => { providerCalls++; return old(options); }});
+  context.__bdPasskeyRepair();
+  const repaired = credentials.get;
+  context.__bdPasskeyRepair();
+  assert.equal(credentials.get, repaired, 'heartbeat must not stack wrappers');
+  context.__bdPasskeyAlive = Date.now();
+  context.__bdPasskey = payload => { offers++; context.__bdPasskeyAnswer(JSON.parse(payload).id, true); };
+  const options = {publicKey: {challenge: new Uint8Array([1, 2, 3])}};
+  assert.equal(await credentials.get(options), 'native');
+  assert.equal(offers, 1);
+  assert.equal(providerCalls, 1);
+  assert.equal(nativeCalls, 1);
+  context.__bdPasskeyAlive = 0;
+  assert.equal(await credentials.get(options), 'native');
+  assert.equal(offers, 1, 'unwatched requests must go straight to the provider');
+  assert.equal(providerCalls, 2);
+  assert.equal(nativeCalls, 2);
+});

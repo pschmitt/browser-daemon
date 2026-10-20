@@ -360,9 +360,9 @@ async function grantFor(command) {
 // usual. The same hook as in the daemon's own sessions (handoff.html).
 const PASSKEY_HOOK = `(() => {
   const c = navigator.credentials;
-  if (!c || c.__bdHooked) return;
-  Object.defineProperty(c, "__bdHooked", { value: true });
-  const get = c.get.bind(c), waiting = new Map();
+  if (!c || globalThis.__bdPasskeyRepair) return;
+  const waiting = new Map();
+  let current;
   const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf)))
     .replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
   const bytes = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4); return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0)).buffer; };
@@ -385,39 +385,52 @@ const PASSKEY_HOOK = `(() => {
   // false = cancelled, an object = the signed assertion to resolve with.
   globalThis.__bdPasskeyAnswer = (id, answer = true) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
   const viewed = () => Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000;
-  c.get = function (opts) {
-    const pk = opts && opts.publicKey;
-    // A conditional request (the passkey among a login field's suggestions) only where
-    // the view offers it itself (__bdPasskeyOffer: a shared browser, whose suggestions
-    // are not in the picture); elsewhere the browser shows them.
-    const conditional = opts.mediation === "conditional";
-    if (!pk || (conditional && !globalThis.__bdPasskeyOffer) || !viewed() || typeof globalThis.__bdPasskey !== "function") return get(opts);
-    const id = Math.random().toString(36).slice(2);
-    let req;
-    try {
-      req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)), conditional };
-    } catch { return get(opts); }
-    return new Promise((go, fail) => {
-      waiting.set(id, go);
-      setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
-      // The page gave up (e.g. a conditional request it replaces): so does the view.
-      opts.signal?.addEventListener("abort", () => {
-        if (!waiting.delete(id)) return;
-        try { globalThis.__bdPasskey(JSON.stringify({ id, cancel: true })); } catch {}
-        fail(opts.signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
-      }, { once: true });
-      // A held conditional request goes back to the browser once nobody watches.
-      if (conditional) {
-        const check = setInterval(() => {
-          if (!waiting.has(id)) clearInterval(check);
-          else if (!viewed()) { clearInterval(check); globalThis.__bdPasskeyAnswer(id); }
-        }, 4000);
-      }
-      try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
-    }).then((answer) => answer === true ? get(opts)
-      : answer && typeof answer === "object" ? credential(answer)
-      : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
+  // Extensions such as rbw install their own handler after document creation.
+  // Refresh from the live-view heartbeat, wrapping their handler as our fallback.
+  const repair = () => {
+    if (c.get === current) return;
+    const get = c.get.bind(c);
+    const hook = function (opts) {
+      // A later extension may have captured an older wrapper. Bypass that wrapper
+      // when falling back, so a request is never offered to the view twice.
+      if (hook !== current) return get(opts);
+      const pk = opts && opts.publicKey;
+      // A conditional request (the passkey among a login field's suggestions) only where
+      // the view offers it itself (__bdPasskeyOffer: a shared browser, whose suggestions
+      // are not in the picture); elsewhere the browser shows them.
+      const conditional = opts?.mediation === "conditional";
+      if (!pk || (conditional && !globalThis.__bdPasskeyOffer) || !viewed() || typeof globalThis.__bdPasskey !== "function") return get(opts);
+      const id = Math.random().toString(36).slice(2);
+      let req;
+      try {
+        req = { id, rpId: pk.rpId || location.hostname, challenge: b64url(pk.challenge), allow: (pk.allowCredentials || []).map((x) => b64url(x.id)), conditional };
+      } catch { return get(opts); }
+      return new Promise((go, fail) => {
+        waiting.set(id, go);
+        setTimeout(() => globalThis.__bdPasskeyAnswer(id), 330000);
+        // The page gave up (e.g. a conditional request it replaces): so does the view.
+        opts.signal?.addEventListener("abort", () => {
+          if (!waiting.delete(id)) return;
+          try { globalThis.__bdPasskey(JSON.stringify({ id, cancel: true })); } catch {}
+          fail(opts.signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
+        }, { once: true });
+        // A held conditional request goes back to the browser once nobody watches.
+        if (conditional) {
+          const check = setInterval(() => {
+            if (!waiting.has(id)) clearInterval(check);
+            else if (!viewed()) { clearInterval(check); globalThis.__bdPasskeyAnswer(id); }
+          }, 4000);
+        }
+        try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
+      }).then((answer) => answer === true ? get(opts)
+        : answer && typeof answer === "object" ? credential(answer)
+        : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
+    };
+    Object.defineProperty(c, "get", { configurable: true, writable: true, value: hook });
+    current = hook;
   };
+  globalThis.__bdPasskeyRepair = repair;
+  repair();
 })()`;
 // Only tabs shared with control (a view-only tab gets nothing but page events), once per attachment.
 const hooked = new Set();
