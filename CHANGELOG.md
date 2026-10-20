@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-10-20
+
+### Changed
+
+* Extension popup: the connected status control disconnects; tab and sharing
+  options start collapsed, Follow focus is renamed, and dashboard navigation
+  is clearer.
+* Handoff settings now live in a dialog opened from the overflow menu. The
+  recorder control starts recording, new blank tabs switch into view at once,
+  and extension-backed sessions appear in the session picker.
+* File drops preserve the pointer coordinates and dispatch to the selected
+  page element.
+
 ## [0.3.13] - 2026-10-20
 
 ### Added
