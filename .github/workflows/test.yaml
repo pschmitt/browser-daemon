@@ -47,7 +47,24 @@ jobs:
           node --test browser/check.mjs
           python3 browser/check_companion.py
       - name: Verify checked-in signed packages
-        run: python3 browser/verify.py --signed-directory browser/packages
+        shell: bash
+        run: |
+          # A new version is signed by the release workflow after this CI passes.
+          # Until then, verify the previous packages against their tagged source.
+          signed_version=$(python3 -c 'import glob,json,zipfile; print(json.loads(zipfile.ZipFile(glob.glob("browser/packages/*.xpi")[0]).read("manifest.json"))["version"])')
+          source_version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          if [[ "$signed_version" == "$source_version" ]]
+          then
+            python3 browser/verify.py --signed-directory browser/packages
+          else
+            [[ "$signed_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            git fetch --depth=1 origin "refs/tags/v$signed_version:refs/tags/v$signed_version"
+            previous=$(mktemp -d)
+            trap 'rm -rf "$previous"' EXIT
+            git archive "v$signed_version" | tar -x -C "$previous"
+            python3 "$previous/browser/build.py"
+            python3 "$previous/browser/verify.py" --signed-directory "$PWD/browser/packages"
+          fi
       - name: Lint Firefox extension
         run: npx --yes web-ext@8 lint --source-dir browser/dist/firefox --warnings-as-errors
   # Real browsers against the real daemon: the extension, its live views and the
