@@ -2111,7 +2111,7 @@ function staleCard(s) {
   const engine = s.engine === 'firefox' ? 'firefox' : 'chromium';
   return `<article class="scard stale" data-key="${esc(keyOf.session(s))}">
     <div class="scard-head"><div class="engine-badge ${engine}">${icon(engine)}</div>
-      <div style="min-width:0;flex:1"><div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span></div>
+      <div style="min-width:0;flex:1"><div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span>${s._extension ? addonBadge() : ''}</div>
         <div class="scard-sub">${nodeChip(s.node_name)}<span>offline, last seen ${esc(relTime(s._stale / 1000))}</span></div></div></div>
   </article>`;
 }
@@ -2314,7 +2314,7 @@ function sessionCard(s) {
     <div class="scard-head">
       ${sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`}
       <div style="min-width:0;flex:1">
-        <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span></div>
+        <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span>${s._extension ? addonBadge() : ''}</div>
         <div class="scard-sub">${meta}</div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
