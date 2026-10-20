@@ -612,7 +612,7 @@ async function execute(command) {
     state.publicUntil = Date.now() + 10000;
     const since = Number.isSafeInteger(params.since) ? params.since : 0;
     const chunks = (state.publicRing || []).filter(c => c.seq > since);
-    return {chunks, cursor: state.publicSeq || 0, token: state.token};
+    return {chunks, cursor: state.publicSeq || 0, generation: state.publicGeneration ||= crypto.randomUUID()};
   }
   if (action === 'publicInput') {
     const allowed = ['click', 'scroll', 'key', 'text'];

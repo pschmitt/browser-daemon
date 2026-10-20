@@ -1141,6 +1141,9 @@ async fn extension_frame(state: &AppState, share: &Share, selected: Option<&str>
     else {
         return not_found();
     };
+    if state.shares.by_token(&share.token).is_none() {
+        return not_found();
+    }
     let Some(data) = result["data"].as_str() else {
         return StatusCode::NO_CONTENT.into_response();
     };

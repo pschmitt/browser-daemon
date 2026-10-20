@@ -550,8 +550,8 @@ async function session(info) {
           if (response.status === 404) { audioStopped = true; stopLiveAudio(); break; }
           if (response.ok && response.status !== 204) {
             const value = await response.json();
-            if (audioToken && audioToken !== value.token) { audioCursor = 0; audioToken = value.token; continue; }
-            audioToken = value.token; audioCursor = value.cursor || 0;
+            if (audioToken && audioToken !== value.generation) { audioCursor = 0; audioToken = value.generation; continue; }
+            audioToken = value.generation; audioCursor = value.cursor || 0;
             if (tab === selectedTab && audioEnabled && audioContext) for (const chunk of value.chunks || []) {
               const bytes = Uint8Array.from(atob(chunk.data), c => c.charCodeAt(0));
               const samples = new DataView(bytes.buffer), frames = bytes.length / 4;
@@ -567,6 +567,7 @@ async function session(info) {
               const source = audioContext.createBufferSource(); source.buffer = buffer;
               source.connect(audioContext.destination); source.onended = () => source.disconnect(); source.start(at);
               audioClocks.set(chunk.stream, at + buffer.duration);
+              if (audioClocks.size > 64) audioClocks.delete(audioClocks.keys().next().value);
             }
           }
         } catch { /* A transient network failure retries without accumulating audio. */ }

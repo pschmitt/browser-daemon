@@ -2486,7 +2486,7 @@ addEventListener("keydown", e => {
 const viewerOnly = () => !!sharedBrowserId && !sharedBrowser?.tabs.some(t => String(t.id) === pageId && t.control);
 let localPan = null;
 E.view.addEventListener("pointerdown", e => {
-  if (!viewerOnly() || e.button !== 0) return;
+  if (!viewerOnly() || e.pointerType !== "mouse" || e.button !== 0) return;
   e.preventDefault(); e.stopImmediatePropagation();
   E.view.setPointerCapture(e.pointerId);
   localPan = {id: e.pointerId, x: e.clientX, y: e.clientY, from: {...zoom}};
