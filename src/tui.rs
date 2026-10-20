@@ -381,10 +381,14 @@ fn with_viewer_cell_size(picker: Picker) -> Picker {
     let Some(cell) = tmux_viewer_cell_size() else {
         return picker;
     };
-    if cell == picker.font_size() {
+    let current = picker.font_size();
+    if cell == (current.width, current.height) {
         return picker;
     }
+    let cell = ratatui_image::FontSize::new(cell.0, cell.1);
     let protocol = picker.protocol_type();
+    // Deprecated without a replacement for a known cell size: the queried one is wrong here.
+    #[allow(deprecated)]
     let mut updated = Picker::from_fontsize(cell);
     updated.set_protocol_type(protocol);
     updated
@@ -3531,7 +3535,10 @@ fn draw_session(f: &mut Frame, app: &mut App, ov: &MeshOverview, s: &MeshSession
     }
 
     // Where the screenshot goes.
-    let (cw, ch) = app.picker.as_ref().map_or_else(cell_px, Picker::font_size);
+    let (cw, ch) = app.picker.as_ref().map_or_else(cell_px, |p| {
+        let f = p.font_size();
+        (f.width, f.height)
+    });
     let (cw, ch) = (u32::from(cw.max(1)), u32::from(ch.max(1)));
     let shot_area = |room: Rect, max_w: u16| -> Rect {
         // 16:10 at the largest size that fits the room.
