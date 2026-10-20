@@ -212,7 +212,7 @@ jobs:
             found { print }
           ' CHANGELOG.md > RELEASE_NOTES.md
           test -s RELEASE_NOTES.md || { echo "::error::CHANGELOG.md has no section for $version"; exit 1; }
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           name: ${{ env.TAG }}
