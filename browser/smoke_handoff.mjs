@@ -66,7 +66,7 @@ try {
   const launch = (program, args) => { const child = spawn(program, args, {stdio: 'ignore'}); children.push(child); return child; };
   launch(resolve('target/debug/browser-daemon'), ['run', '--bind', `127.0.0.1:${daemonPort}`, '--public-url', base, '--profile-dir', join(directory, 'daemon/profiles'), '--recordings-dir', join(directory, 'daemon/recordings'), '--cluster-secret-file', secretFile, '--record-sessions', 'false']);
   await until(async () => (await fetch(`${base}/health`)).ok);
-  const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); if (req.url === '/login') return res.end('<!doctype html><title>Sign in</title><form><input name=user autocomplete=username><input name=pw type=password></form>'); res.end('<!doctype html><title>Later tab</title><h1>Later</h1><p id=c></p><script>let n=0;(function f(){document.getElementById("c").textContent=n++;requestAnimationFrame(f)})()</script>'); });
+  const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); if (req.url === '/login') return res.end('<!doctype html><title>Sign in</title><form><input name=user autocomplete=username><input name=pw type=password></form>'); res.end('<!doctype html><title>Later tab</title><h1>Later</h1><p id=c></p><div id=drop-left>Left target</div><div id=drop-right>Right target</div><script>let n=0;(function f(){document.getElementById("c").textContent=n++;requestAnimationFrame(f)})(); for(const id of ["drop-left","drop-right"]) { const e=document.getElementById(id); Object.assign(e.style,{position:"fixed",top:"0",left:id==="drop-left"?"0":"100px",width:"100px",height:"100px"}); e.addEventListener("drop",event=>window.__lastDrop={id:event.currentTarget.id,x:event.clientX,y:event.clientY}); }</script>'); });
   await new Promise(r => pageServer.listen(0, '127.0.0.2', r));
   const pageURL = `http://127.0.0.2:${pageServer.address().port}/`;
   launch('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
@@ -80,6 +80,7 @@ try {
   await until(async () => Array.isArray((await message({type: 'state'}))?.tabs));
   await message({type: 'setDaemonAllowlist', origins: [base]});
   await message({type: 'shareAll', enabled: false});
+  await message({type: 'shareFiles', enabled: true});
   const pairing = await (await fetch(`${base}/api/extension/pair`, {method: 'POST', headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json'}, body: JSON.stringify({origin})})).json();
   await message({type: 'connect', server: base, code: pairing.code, name: 'notab'});
   const state = await until(async () => { const s = await message({type: 'state'}); return s.registration && s; });
@@ -116,13 +117,26 @@ try {
   const typed = (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}typed`);
   assert.ok(typed?.shared && typed.control, 'typed address opened a shared, controllable tab');
   assert.equal(await view.evaluate(`new URLSearchParams(location.search).get('page')`), String(typed.id));
-  // + works as in a regular session: a "New Tab" placeholder and the focused
-  // address bar; the submitted address becomes the real tab.
+  // + opens and switches to a real blank tab before its address is entered.
   await view.evaluate(`document.getElementById('tabAddBtn').click()`);
-  assert.equal(await view.evaluate(`[!!document.querySelector('.tab-strip-item.pending'), document.activeElement?.id].join()`), 'true,urlInput');
+  const blank = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === 'about:blank'));
+  await until(async () => (await view.evaluate(`new URLSearchParams(location.search).get('page') === ${JSON.stringify(String(blank.id))} && document.activeElement?.id === 'urlInput'`)));
+  assert.equal(await view.evaluate(`document.querySelector('.tab-strip-item.pending') === null`), true);
   await view.evaluate(`(() => { document.getElementById('urlInput').value = ${JSON.stringify(`${pageURL}plus`)}; document.getElementById('urlBar').requestSubmit(); })()`);
-  const plus = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}plus`));
-  await until(async () => (await view.evaluate(`new URLSearchParams(location.search).get('page') === ${JSON.stringify(String(plus.id))} && !document.querySelector('.tab-strip-item.pending')`)));
+  const plus = await until(async () => (await message({type: 'state'})).tabs.find(t => t.id === blank.id && t.url === `${pageURL}plus`));
+  await until(async () => (await view.evaluate(`new URLSearchParams(location.search).get('page') === ${JSON.stringify(String(plus.id))}`)));
+  // File transfer dispatches the drop to the element under the pointer and
+  // preserves that point so pages can distinguish nearby drop zones.
+  await view.evaluate(`drv.cdp.call('Page.startFiles')`);
+  const fileTarget = await view.evaluate(`drv.cdp.call('Page.fileTarget', {x: 150, y: 50})`);
+  assert.ok(fileTarget.target);
+  const page = await CDP.open((await targets()).find(t => t.url === pageURL).webSocketDebuggerUrl);
+  const hit = await page.evaluate(`document.elementFromPoint(150, 50)?.id`);
+  assert.equal(hit, 'drop-right');
+  const upload = await view.evaluate(`drv.cdp.call('Page.beginFile', {target: ${JSON.stringify(fileTarget.target)}, name: 'point.txt', type: 'text/plain', size: 0, lastModified: 0})`);
+  assert.ok(upload.id);
+  const applied = await view.evaluate(`drv.cdp.call('Page.applyFiles', {target: ${JSON.stringify(fileTarget.target)}, files: [${JSON.stringify(upload.id)}]})`);
+  assert.equal(applied.count, 1);
   // The view streams a screencast (not the screenshot fallback): frames keep coming.
   await until(async () => (await view.evaluate(`!!drv?.castParams`)));
   const seen = await view.evaluate(`drv.lastFrameAt || 0`);

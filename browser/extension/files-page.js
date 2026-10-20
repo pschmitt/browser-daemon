@@ -9,9 +9,9 @@ function filePageBridge(p) {
     globalThis.__bdFileState = s;
     const encode = bytes => { let raw = ''; for (let i = 0; i < bytes.length; i += 8192) raw += String.fromCharCode(...bytes.subarray(i, i + 8192)); return btoa(raw); };
     const emit = message => api.runtime.sendMessage({type: 'fileBridge', cap: s.cap, ...message});
-    s.remember = (id, element) => {
+    s.remember = (id, element, x = null, y = null) => {
       if (s.targets.size >= 64) s.targets.delete(s.targets.keys().next().value);
-      s.targets.set(id, element);
+      s.targets.set(id, {element, x, y});
     };
     const find = (x, y) => {
       let element = document.elementFromPoint(x, y);
@@ -30,7 +30,7 @@ function filePageBridge(p) {
         element.contentWindow?.postMessage({bdFileTarget: nonce, x: (x - r.left) * element.offsetWidth / r.width - element.clientLeft, y: (y - r.top) * element.offsetHeight / r.height - element.clientTop}, '*');
         return;
       }
-      s.remember(nonce, element);
+      s.remember(nonce, element, x, y);
       void emit({event: 'target', request: nonce}).catch(() => {});
     };
     const locate = e => {
@@ -107,7 +107,7 @@ function filePageBridge(p) {
     return;
   }
   if (p.op === 'begin') {
-    if (s.uploads.size >= 32 || !s.targets.get(p.target)?.isConnected) throw new Error('Upload target changed');
+    if (s.uploads.size >= 32 || !s.targets.get(p.target)?.element?.isConnected) throw new Error('Upload target changed');
     s.uploads.set(p.id, {name: p.name, type: p.type, size: p.size, lastModified: p.lastModified, parts: [], received: 0});
     return;
   }
@@ -122,22 +122,23 @@ function filePageBridge(p) {
   if (p.op === 'cancel') { s.uploads.delete(p.id); return; }
   if (p.op === 'apply') {
     const target = s.targets.get(p.target);
-    if (!target?.isConnected) throw new Error('Upload target changed');
+    if (!target?.element?.isConnected) throw new Error('Upload target changed');
     const transfer = new DataTransfer();
     for (const id of p.files) {
       const file = s.uploads.get(id);
       if (!file || file.received !== file.size) throw new Error('Upload is incomplete');
       transfer.items.add(new File(file.parts, file.name, {type: file.type, lastModified: file.lastModified}));
     }
-    if (target instanceof HTMLInputElement && target.type === 'file') {
-      if (!target.multiple && transfer.files.length > 1) throw new Error('This field accepts one file');
-      target.files = transfer.files;
-      target.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
-      target.dispatchEvent(new Event('change', {bubbles: true}));
+    if (target.element instanceof HTMLInputElement && target.element.type === 'file') {
+      if (!target.element.multiple && transfer.files.length > 1) throw new Error('This field accepts one file');
+      target.element.files = transfer.files;
+      target.element.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
+      target.element.dispatchEvent(new Event('change', {bubbles: true}));
     } else {
-      const r = target.getBoundingClientRect();
+      const x = Number.isFinite(target.x) ? target.x : target.element.getBoundingClientRect().left + target.element.getBoundingClientRect().width / 2;
+      const y = Number.isFinite(target.y) ? target.y : target.element.getBoundingClientRect().top + target.element.getBoundingClientRect().height / 2;
       for (const type of ['dragenter', 'dragover', 'drop']) target.dispatchEvent(new DragEvent(type, {
-        bubbles: true, composed: true, cancelable: true, dataTransfer: transfer, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+        bubbles: true, composed: true, cancelable: true, dataTransfer: transfer, clientX: x, clientY: y,
       }));
     }
     for (const id of p.files) s.uploads.delete(id);

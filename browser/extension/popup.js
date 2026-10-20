@@ -42,10 +42,12 @@ function renderHeader() {
   const reg = state.registration;
   $('title').textContent = reg ? (state.saved.name || 'Browser node') : 'Browser node';
   // The version where the eye looks first; the daemon gets room in the main card.
-  $('subtitle').textContent = `v${state.version} · ${state.chromium ? 'Chromium' : 'Firefox'}${state.nativeReady ? ' · companion' : ''}`;
+  $('subtitle').textContent = `v${state.version}${state.nativeReady ? ' · companion' : ''}`;
   $('subtitle').title = reg ? '' : state.status;
   $('pill').textContent = reg ? 'Connected' : state.connecting ? 'Connecting' : 'Offline';
   $('pill').className = `pill${reg ? ' on' : state.connecting ? ' wait' : ''}`;
+  $('pill').disabled = !reg;
+  $('pill').title = reg ? 'Disconnect this browser' : state.connecting ? 'Connecting' : 'Offline';
 }
 
 function favicon(tab) {
@@ -199,7 +201,9 @@ $('tabs').addEventListener('click', event => {
   const ids = toggle.checked ? [...sharedIds(), id] : sharedIds().filter(t => t !== id);
   void (toggle.checked ? capturePermission() : Promise.resolve()).then(() => share(ids), error => { toggle.checked = false; showError(error); });
 });
-$('shareAllTabs').addEventListener('click', () => {
+$('shareAllTabs').addEventListener('click', event => {
+  event.preventDefault();
+  event.stopPropagation();
   const all = sharedIds().length === state.tabs.length;
   void (all ? Promise.resolve() : capturePermission()).then(() => share(all ? [] : state.tabs.map(t => t.id)), showError);
 });
@@ -240,7 +244,8 @@ $('connect').addEventListener('submit', async event => {
   } catch (error) { showError(error); }
   finally { busy = false; }
 });
-$('stop').addEventListener('click', async () => {
+$('pill').addEventListener('click', async () => {
+  if (!state.registration) return;
   try { await message({type: 'stop'}); await refresh(); }
   catch (error) { showError(error); }
 });
