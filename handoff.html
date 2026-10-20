@@ -155,53 +155,90 @@
   .vault-count { position: absolute; top: 5px; right: 4px; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box; border-radius: 99px;
     background: var(--accent-btn); color: #fff; font: 700 9.5px/15px system-ui, sans-serif; text-align: center; pointer-events: none; }
   .vault-count[hidden] { display: none; }
-  #vaultPop { position: fixed; z-index: 61; top: 52px; left: 8px; width: 320px; max-width: calc(100vw - 16px); max-height: min(70vh, 480px); overflow-y: auto;
-    padding: 6px; background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
+  /* The vault keeps the rbw extension's neutral palette inside the live view. */
+  .rbw-surface { --bg: #202020; --bar: #282828; --btn: #383838; --line: #494949; --fg: #efefef; --muted: #adadad; --accent: #d0d0d0; --accent-btn: #d0d0d0;
+    color-scheme: dark; color: var(--fg); font: 14px/1.45 system-ui, sans-serif; }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) .rbw-surface { --bg: #f5f5f5; --bar: #fff; --btn: #e8e8e8; --line: #cacaca; --fg: #202020; --muted: #626262; --accent: #454545; --accent-btn: #454545; color-scheme: light; }
+  }
+  :root[data-theme="light"] .rbw-surface { --bg: #f5f5f5; --bar: #fff; --btn: #e8e8e8; --line: #cacaca; --fg: #202020; --muted: #626262; --accent: #454545; --accent-btn: #454545; color-scheme: light; }
+  .rbw-surface .rw-icon { width: 19px; height: 19px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .rbw-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--bar); border-bottom: 1px solid var(--line); }
+  .rbw-head .rbw-ic { width: 32px; height: 32px; object-fit: contain; }
+  .rbw-heading { flex: 1; min-width: 0; }
+  .rbw-heading strong, .rbw-heading small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rbw-heading strong { font-size: 17px; font-weight: 600; }
+  .rbw-heading small { color: var(--muted); font-size: 11px; }
+  .rbw-close { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+  .rbw-close:hover { background: var(--btn); color: var(--fg); }
+  .rbw-surface :is(button, input, label):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #vaultPop { position: fixed; z-index: 61; top: 52px; left: 8px; width: 360px; max-width: calc(100vw - 16px); max-height: min(70dvh, 560px); overflow-y: auto;
+    padding: 0; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 16px 48px #0006; }
   #vaultPop[hidden] { display: none; }
-  #vaultPop .sp-head { padding: 6px 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #vaultPop .sp-empty { padding: 10px; color: var(--muted); font-size: 13px; }
+  #vaultPop .vp-search-wrap { display: flex; align-items: center; gap: 8px; margin: 12px; padding: 0 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--btn); color: var(--muted); }
+  #vaultPop .vp-search-wrap:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #vaultPop .vp-search { width: 100%; min-width: 0; height: 40px; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; }
+  #vaultPop .vp-search:focus-visible { outline: none; }
+  #vaultList { padding: 0 12px 10px; }
+  #vaultPop .sp-empty { padding: 20px 10px; color: var(--muted); font-size: 13px; text-align: center; }
   #vaultPop .sp-empty.bad { color: var(--bad); }
-  #vaultPop .sp-empty.locked { color: #f59e0b; }
+  #vaultPop .sp-empty.locked { color: var(--warn-fg); }
   #vaultPop .sp-empty.checking::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 8px; vertical-align: -1px;
     border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: vspin .8s linear infinite; }
   @keyframes vspin { to { transform: rotate(360deg); } }
-  #vaultPop .vp-row { display: flex; align-items: center; gap: 4px; }
-  #vaultPop .vp-entry { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent;
+  #vaultPop .vp-row { display: flex; align-items: center; gap: 4px; margin: 6px 0; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--bar); }
+  #vaultPop .vp-row:focus-within, #vaultPop .vp-row:hover { background: var(--btn); }
+  #vaultPop .vp-entry { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 9px 7px; border: 0; border-radius: 7px; background: transparent;
     color: inherit; font: inherit; text-align: left; cursor: pointer; }
-  #vaultPop .vp-entry:hover, #vaultPop .vp-entry:focus-visible, #vaultPop .vp-totp:hover { background: var(--btn); outline: none; }
-  #vaultPop .sp-eng { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--btn); color: var(--accent); }
-  #vaultPop .sp-t { min-width: 0; display: flex; flex-direction: column; }
-  #vaultPop .sp-t b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #vaultPop .sp-eng { flex: none; width: 32px; height: 32px; border-radius: 7px; display: grid; place-items: center; font-size: 14px; font-weight: 600; color: var(--accent); }
+  #vaultPop .sp-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #vaultPop .sp-t b { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #vaultPop .sp-t span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #vaultPop .vp-totp { flex: none; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted);
-    font: 600 11px system-ui, sans-serif; cursor: pointer; }
-  #vaultPop .vp-act { display: block; width: calc(100% - 12px); margin: 2px 6px 6px; height: 34px; border: 0; border-radius: 9px; background: var(--accent-btn); color: #fff;
+  #vaultPop .vp-fill { color: var(--muted); font-size: 11px; }
+  #vaultPop .vp-totp { flex: none; min-height: 34px; padding: 0 8px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: transparent; color: var(--muted);
+    font: 500 11px system-ui, sans-serif; cursor: pointer; }
+  #vaultPop .vp-totp:hover { color: var(--fg); }
+  #vaultPop .vp-act { display: block; width: 100%; min-height: 40px; margin: 0 0 8px; border: 0; border-radius: 8px; background: var(--accent-btn); color: var(--bg);
     font: 600 13px system-ui, sans-serif; cursor: pointer; }
-  #vaultPop .vp-note { padding: 6px 10px 4px; font-size: 11.5px; color: var(--muted); }
-  #vaultPop .vp-search { display: block; width: calc(100% - 12px); box-sizing: border-box; height: 34px; margin: 2px 6px 6px; padding: 0 10px; border-radius: 9px;
-    border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 13.5px system-ui, sans-serif; }
-  #vaultPop .vp-search:focus { outline: none; border-color: var(--accent); }
-  #vaultPop .vp-sep { padding: 8px 10px 2px; font-size: 11px; font-weight: 600; color: var(--muted); }
+  #vaultPop .vp-note { padding: 12px 0 2px; font-size: 11px; color: var(--muted); text-align: center; }
+  #vaultPop .vp-sep { display: flex; justify-content: space-between; padding: 3px 2px 5px; font-size: 12px; font-weight: 500; color: var(--muted); }
+  #vaultPop .vp-sep.other { padding-top: 12px; }
   #vaultPop .vp-entry.other .sp-eng { color: var(--muted); }
-  #vaultPop .vp-entry.armed { background: rgba(245, 158, 11, .14); }
-  #vaultPop .vp-entry.armed .sp-t span { color: #f59e0b; }
+  #vaultPop .vp-entry.armed { background: color-mix(in srgb, var(--warn-fg) 14%, transparent); }
+  #vaultPop .vp-entry.armed .sp-t span { color: var(--warn-fg); }
+  @media (pointer: coarse) { #vaultPop .vp-search { font-size: 16px; } #vaultPop .vp-entry { min-height: 50px; } }
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
   #view:focus { outline: none; }
-  #passkeyDialog { border: 1px solid var(--line); border-radius: 14px; background: var(--bar); color: var(--fg); padding: 18px; width: min(380px, calc(100vw - 32px)); }
-  #passkeyDialog::backdrop { background: rgba(0, 0, 0, .5); }
-  #passkeyDialog h2 { margin: 0 0 6px; font-size: 16px; }
-  #passkeyDialog p { margin: 0 0 14px; color: var(--muted); font-size: 13.5px; }
-  #passkeyDialog .pk-info { color: var(--fg); padding: 8px 10px; border-radius: 9px; background: var(--btn); }
-  #passkeyDialog .pk-entry { width: 100%; height: 38px; margin: -6px 0 14px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: inherit; }
-  /* The main action stands out; while the vault is checked it is visibly unavailable. */
-  #passkeyDialog button[value="vault"] { background: var(--accent-btn); border-color: var(--accent-btn); color: #fff; }
-  #passkeyDialog button:disabled { background: var(--btn); border-color: var(--line); color: var(--muted); opacity: .5; cursor: not-allowed; }
+  #passkeyDialog { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 0; width: min(400px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow-y: auto; box-shadow: 0 24px 70px #0008; }
+  #passkeyDialog::backdrop { background: #0007; backdrop-filter: blur(3px); }
+  #passkeyDialog .pk-body { padding: 18px; }
+  #passkeyDialog .pk-intro { display: flex; align-items: center; gap: 12px; margin: 4px 0 14px; }
+  #passkeyDialog .pk-emblem { display: grid; place-items: center; flex: none; width: 46px; height: 46px; border-radius: 13px; background: var(--btn); color: var(--accent); }
+  #passkeyDialog .pk-emblem .rw-icon { width: 25px; height: 25px; }
+  #passkeyDialog h2 { margin: 0 0 3px; font-size: 18px; font-weight: 600; }
+  #passkeyDialog #passkeyRp { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  #passkeyDialog .pk-info { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  #passkeyEntries { display: grid; gap: 8px; margin: 0 0 18px; }
+  #passkeyDialog .pk-choice { display: flex; align-items: center; gap: 11px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--bar); cursor: pointer; }
+  #passkeyDialog .pk-choice:has(input:checked) { border-color: var(--accent); background: var(--btn); }
+  #passkeyDialog .pk-choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #passkeyDialog .pk-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #passkeyDialog .pk-account { flex: 1; min-width: 0; }
+  #passkeyDialog .pk-account strong, #passkeyDialog .pk-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #passkeyDialog .pk-account strong { font-size: 14px; font-weight: 600; }
+  #passkeyDialog .pk-account small { margin-top: 2px; font-size: 12px; color: var(--muted); }
+  #passkeyDialog .pk-tick { color: var(--accent); visibility: hidden; }
+  #passkeyDialog .pk-choice:has(input:checked) .pk-tick { visibility: visible; }
+  #passkeyDialog .ltd-actions { border-top: 1px solid var(--line); padding-top: 16px; }
+  #passkeyDialog .ltd-actions button { background: var(--bar); color: var(--fg); }
+  #passkeyDialog button[value="vault"] { background: var(--accent-btn); border-color: var(--accent-btn); color: var(--bg); }
+  #passkeyDialog button:disabled { opacity: .45; cursor: not-allowed; }
   #passkeyDialog .pk-info.checking::before { content: ""; display: inline-block; width: 11px; height: 11px; margin-right: 8px; vertical-align: -1px;
-    border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%; animation: pk-spin .8s linear infinite; }
-  @keyframes pk-spin { to { transform: rotate(360deg); } }
-  #passkeyDialog .pk-info.locked { color: #f59e0b; background: rgba(245, 158, 11, .14); }
-  #passkeyDialog .pk-info.bad { color: var(--bad); background: color-mix(in oklab, var(--bad) 14%, transparent); }
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: vspin .8s linear infinite; }
+  #passkeyDialog .pk-info.locked { color: var(--warn-fg); }
+  #passkeyDialog .pk-info.bad { color: var(--bad); }
+  @media (prefers-reduced-motion: reduce) { .rbw-surface .checking::before { animation: none !important; } }
   /* Share: one dialog makes and manages the link. */
   #shareDialog { border: 1px solid var(--line); border-radius: 18px; background: var(--bar); color: var(--fg); padding: 0; width: min(440px, calc(100vw - 24px));
     box-shadow: 0 24px 60px rgba(0, 0, 0, .45); overflow: hidden; }
@@ -492,11 +529,11 @@
   <button class="rec-pill note-pill" id="notePill" hidden title="Notes on this session"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></svg><span id="notePillText"></span></button>
   <button class="rec-pill pub-pill" id="pubPill" hidden title="Shared publicly: manage the link"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>PUBLIC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
-  <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="menu" aria-expanded="false"><img class="rbw-ic" alt="" src="data:image/png;base64,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"><span class="vault-count" id="vaultCount" hidden></span></button>
+  <button class="ib" id="vaultBtn" aria-label="Vault logins" title="Fill a login from the vault (rbw)" aria-haspopup="dialog" aria-expanded="false"><img class="rbw-ic" alt="" src="data:image/png;base64,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"><span class="vault-count" id="vaultCount" hidden></span></button>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
 </div>
 <div id="sessPop" role="menu" hidden></div>
-<div id="vaultPop" role="menu" hidden></div>
+<div id="vaultPop" class="rbw-surface" role="dialog" aria-label="rbw vault" hidden></div>
 <div id="sessMenu" role="menu" hidden>
   <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle" title="Rename this session" role="button" tabindex="0">Session</span></div>
   <div class="sm-status" id="smStatus"></div>
@@ -670,16 +707,18 @@
     <div class="ltd-actions nt-actions"><button type="button" id="ntClose">Close</button><button type="submit" class="nt-go">Add note</button></div>
   </form>
 </dialog>
-<dialog id="passkeyDialog">
+<dialog id="passkeyDialog" class="rbw-surface" aria-labelledby="passkeyTitle" aria-describedby="passkeyRp passkeyInfo">
   <form method="dialog">
-    <h2>Sign in with a passkey?</h2>
-    <p><b id="passkeyRp"></b> asks for a passkey. Yours can come from the vault (rbw).</p>
-    <div class="pub-warn" id="passkeyPublic" role="alert" hidden></div>
-    <p id="passkeyInfo" class="pk-info"></p>
-    <select id="passkeyEntry" class="pk-entry" aria-label="Vault entry" hidden></select>
-    <div class="ltd-actions">
-      <button value="vault">Use passkey</button>
-      <button value="cancel">Cancel</button>
+    <div class="rbw-head" id="passkeyBrand"></div>
+    <div class="pk-body">
+      <div class="pk-intro"><span class="pk-emblem" id="passkeyEmblem" aria-hidden="true"></span><div><h2 id="passkeyTitle">Sign in with a passkey</h2><span id="passkeyRp"></span></div></div>
+      <div class="pub-warn" id="passkeyPublic" role="alert" hidden></div>
+      <p id="passkeyInfo" class="pk-info" role="status" aria-live="polite"></p>
+      <div id="passkeyEntries" role="group" aria-label="Choose an account"></div>
+      <div class="ltd-actions">
+        <button value="vault">Use passkey</button>
+        <button value="cancel">Cancel request</button>
+      </div>
     </div>
   </form>
 </dialog>
@@ -1637,14 +1676,13 @@ async function helperRequest(url, body, onNote = () => {}, signal = null, base =
 }
 // Before approving: is rbw locked, and which entry would sign in?
 async function showPasskeyEntry(rpId, dlg) {
-  const info = $("passkeyInfo"), pick = $("passkeyEntry"), use = dlg.querySelector('button[value="vault"]');
-  const cancel = dlg.querySelector('button[value="cancel"]');
-  cancel.textContent = "Cancel";
+  const info = $("passkeyInfo"), pick = $("passkeyEntries"), use = dlg.querySelector('button[value="vault"]');
+  const cancel = dlg.querySelector('.ltd-actions button[value="cancel"]');
+  cancel.textContent = "Cancel request";
+  use.textContent = "Use passkey";
   use.hidden = false;
   const set = (text, cls = "") => { if (dlg.open) { info.textContent = text; info.className = "pk-info " + cls; } };
-  const label = (e) => { const who = e.user || e.passkey_user; return `${e.name || "?"}${who ? ` (${who})` : ""}`; };
   set("Checking the vault…", "checking");
-  pick.hidden = true;
   pick.innerHTML = "";
   // Not before the lookup: rbw would have to guess the entry (and fails with several).
   use.disabled = true;
@@ -1653,7 +1691,7 @@ async function showPasskeyEntry(rpId, dlg) {
     const ac = new AbortController();
     dlg.addEventListener("close", () => ac.abort(), { once: true });
     const found = await passkeyHelper(rpId, true, () => {}, null, {}, ac.signal);
-    if (found?.locked) { set("rbw is locked: approving asks your phone to unlock it first.", "locked"); use.disabled = false; }
+    if (found?.locked) { set("Your vault is locked. Continue to unlock it from your phone.", "locked"); use.textContent = "Unlock and continue"; use.disabled = false; }
     else if (!Array.isArray(found) || !found.length) {
       // Nothing to approve: say so and get out of the way. The site hears "cancelled"
       // and usually offers another way to sign in (password, code, ...).
@@ -1663,13 +1701,12 @@ async function showPasskeyEntry(rpId, dlg) {
       cancel.focus();
       setTimeout(() => { if (dlg.open && $("passkeyRp").textContent === rpId) dlg.close("cancel"); }, 6000);
     }
-    else if (found.length === 1) { set(`Entry: ${label(found[0])}`); use.disabled = false; }
     else {
+      set(found.length === 1 ? "Use this account to continue." : "Choose an account to continue.");
+      pick.innerHTML = found.map((e, i) => `<label class="pk-choice"><input type="radio" name="passkeyEntry" value="${esc(e.id)}"${i === 0 ? " checked" : ""}>`
+        + `${rbwIcon("key")}<span class="pk-account"><strong>${esc(e.name || "Passkey")}</strong><small>${esc(e.user || e.passkey_user || rpId)}</small></span>`
+        + `<span class="pk-tick" aria-hidden="true">${rbwIcon("check")}</span></label>`).join("");
       use.disabled = false;
-      // Several entries hold a passkey for this site: the user picks one.
-      set(`${found.length} entries hold a passkey for ${rpId}:`);
-      for (const e of found) pick.add(new Option(label(e), e.id));
-      pick.hidden = false;
     }
   } catch (err) {
     if (err.aborted) return;
@@ -1680,8 +1717,11 @@ async function showPasskeyEntry(rpId, dlg) {
 }
 async function askPasskey({ rpId, challenge, allow }) {
   const dlg = $("passkeyDialog");
+  $("passkeyBrand").innerHTML = rbwHeader("Vault", "rbw", true);
+  $("passkeyEmblem").innerHTML = rbwIcon("key");
   $("passkeyRp").textContent = rpId;
   publicWarning($("passkeyPublic"), "passkey");
+  dlg.returnValue = "cancel";
   dlg.showModal();
   showPasskeyEntry(rpId, dlg);
   const choice = await new Promise((done) => dlg.addEventListener("close", () => done(dlg.returnValue), { once: true }));
@@ -1689,7 +1729,7 @@ async function askPasskey({ rpId, challenge, allow }) {
   toast(`Getting the passkey for ${rpId}…`, 0);
   try {
     let shown = "";
-    const entry = $("passkeyEntry").hidden ? null : $("passkeyEntry").value || null;
+    const entry = dlg.querySelector('input[name="passkeyEntry"]:checked')?.value || null;
     const onNote = (note) => { if (note !== shown) { shown = note; toast(`${rpId}: ${note}`, 0); } };
     // Chromium: the passkey goes into its authenticator and the page's request goes on.
     // Firefox: the request is signed outside the browser and the page gets the result.
@@ -4574,12 +4614,29 @@ function placeVaultPop() {
 }
 // The popup: a search field over the vault and, below it, the site's logins (or what
 // the search found: the site's first, then the rest of the vault).
+// Small, local icons and the same rbw mark as the toolbar extension.
+function rbwIcon(name) {
+  const paths = {
+    key: '<circle cx="8" cy="15" r="5"/><path d="m11.5 11.5 8-8M17 6l3 3M15 8l3 3"/>',
+    search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+    close: '<path d="m6 6 12 12M6 18 18 6"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+  };
+  return `<svg class="rw-icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.key}</svg>`;
+}
+function rbwHeader(title, subtitle, dialog = false) {
+  return $("vaultBtn").querySelector("img").outerHTML
+    + `<div class="rbw-heading"><strong>${esc(title)}</strong><small>${esc(subtitle)}</small></div>`
+    + (dialog ? `<button type="submit" value="cancel" class="rbw-close" aria-label="Cancel passkey request">${rbwIcon("close")}</button>`
+      : `<button type="button" id="vaultClose" class="rbw-close" aria-label="Close vault">${rbwIcon("close")}</button>`);
+}
 function openVaultPop() {
   const pop = $("vaultPop"), host = pageHost();
-  pop.innerHTML = `<div class="sp-head" title="${esc(host)}">Vault${host ? " · " + esc(host) : ""}</div>`
+  pop.innerHTML = `<div class="rbw-head">${rbwHeader("Vault", host || "rbw")}</div>`
     + '<div class="pub-warn" id="vaultPublic" role="alert" hidden></div>'
-    + '<input class="vp-search" id="vaultSearch" type="search" placeholder="Search the vault" autocomplete="off" spellcheck="false" aria-label="Search the vault">'
-    + '<div id="vaultList"></div>';
+    + `<label class="vp-search-wrap">${rbwIcon("search")}<input class="vp-search" id="vaultSearch" type="search" placeholder="Search vault" autocomplete="off" spellcheck="false" aria-label="Search vault"></label>`
+    + '<div id="vaultList" aria-live="polite"></div>';
+  $("vaultClose").onclick = () => { closeVaultPop(); $("vaultBtn").focus(); };
   pop.hidden = false;
   publicWarning($("vaultPublic"), "fill");
   $("vaultBtn").setAttribute("aria-expanded", "true");
@@ -4631,7 +4688,7 @@ async function vaultLoad(host, unlock = false, query = "") {
   }
   if (pop.hidden || seq !== vaultSeq || pageHost() !== host) return;
   if (found?.locked) {
-    body('<div class="sp-empty locked">rbw is locked.</div><button class="vp-act" id="vaultUnlock">Unlock from your phone</button>');
+    body('<div class="sp-empty locked">Your vault is locked.</div><button class="vp-act" id="vaultUnlock">Unlock from your phone</button>');
     $("vaultUnlock").onclick = () => vaultLoad(host, true, query);
     return;
   }
@@ -4654,14 +4711,16 @@ function vaultRender(found, host, query, partial = false) {
   }
   const row = (e, i) => {
     const other = e.site === false;
-    return `<div class="vp-row"><button class="vp-entry${other ? " other" : ""}" data-i="${i}" role="menuitem" title="${other ? `Not saved for ${esc(host)}` : "Fill this login"}">`
+    return `<div class="vp-row"><button class="vp-entry${other ? " other" : ""}" data-i="${i}" title="${other ? `Not saved for ${esc(host)}` : "Fill this login"}">`
       + `<span class="sp-eng">${esc((e.name || "?").slice(0, 1).toUpperCase())}</span>`
-      + `<span class="sp-t"><b>${esc(e.name || "?")}</b><span>${esc(e.user || "no username")}${e.folder ? " · " + esc(e.folder) : ""}</span></span></button>`
-      + (e.totp ? `<button class="vp-totp" data-i="${i}" title="Fill only the one-time code">TOTP</button>` : "") + "</div>";
+      + `<span class="sp-t"><b>${esc(e.name || "?")}</b><span>${esc(e.user || "no username")}${e.folder ? " · " + esc(e.folder) : ""}</span></span><span class="vp-fill" aria-hidden="true">Fill</span></button>`
+      + (e.totp ? `<button class="vp-totp" data-i="${i}" title="Fill only the one-time code" aria-label="Fill one-time code">Code</button>` : "") + "</div>";
   };
   const firstOther = found.findIndex((e) => e.site === false);
-  list.innerHTML = found.map((e, i) => (i === firstOther ? `<div class="vp-sep">${firstOther ? "Other logins" : `Not saved for ${esc(host)}`}</div>` : "") + row(e, i)).join("")
-    + '<div class="vp-note">Filled straight from the vault: passwords never reach this view.</div>';
+  const matches = firstOther < 0 ? found.length : firstOther;
+  list.innerHTML = (matches ? `<div class="vp-sep"><span>${query ? "Matching this site" : "Suggested for this site"}</span><span>${matches}</span></div>` : "")
+    + found.map((e, i) => (i === firstOther ? `<div class="vp-sep other"><span>${firstOther ? "Other logins" : `Not saved for ${esc(host)}`}</span><span>${found.length - firstOther}</span></div>` : "") + row(e, i)).join("")
+    + '<div class="vp-note">Select a login to fill this page</div>';
   // A login saved for another site fills only after a second click (it may be a
   // phishing page asking for it): the first one says so.
   const pick = (b, fields) => {

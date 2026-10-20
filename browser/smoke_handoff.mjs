@@ -177,6 +177,17 @@ try {
   // A second fill for the same approval is refused.
   const again = await helper(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'x'})});
   assert.equal(again.status, 403);
+  // The simplified rbw prompt presents accounts as keyboard-selectable cards.
+  // Picking one must pass its exact id to the helper.
+  await view.evaluate(`window.__savedPasskeyHelper = passkeyHelper; window.__passkeyEntry = null; passkeyHelper = async (_rp, find, _note, entry) => { if (find) return [{id:'personal',name:'Example',user:'alice'}, {id:'work',name:'Example Work',user:'alice-work'}]; window.__passkeyEntry = entry; return {}; }; void askPasskey({rpId:'example.org',challenge:'AQID',allow:[]}); true`);
+  await until(() => view.evaluate(`document.querySelectorAll('#passkeyEntries input[type=radio]').length === 2`));
+  assert.equal(await view.evaluate(`document.querySelector('#passkeyEntries input:checked').value`), 'personal');
+  await view.evaluate(`document.querySelector('#passkeyEntries input[value=work]').click(); document.querySelector('#passkeyDialog button[value=vault]').click(); true`);
+  await until(() => view.evaluate(`window.__passkeyEntry === 'work'`));
+  await view.evaluate(`passkeyHelper = async () => ({locked:true}); void askPasskey({rpId:'locked.example',challenge:'AQID',allow:[]}); true`);
+  await until(() => view.evaluate(`document.querySelector('#passkeyDialog button[value=vault]').textContent === 'Unlock and continue'`));
+  assert.equal(await view.evaluate(`document.querySelectorAll('#passkeyEntries input').length`), 0);
+  await view.evaluate(`document.getElementById('passkeyDialog').close('cancel'); passkeyHelper = window.__savedPasskeyHelper; true`);
   // Passkeys: the extension hooks the tab; with the view watching, the page's request
   // reaches the view, and the vault signs for the tab's own origin.
   await until(() => login.evaluate(`typeof globalThis.__bdPasskeyRepair === "function" && Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000`));

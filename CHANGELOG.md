@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The live view’s vault and passkey dialogs follow the rbw extension’s neutral
+  palette, branded header, search and account cards, with a compact layout
+  for phones and clear locked, loading and empty states.
+
 ## [0.3.11] - 2026-10-20
 
 ### Fixed
