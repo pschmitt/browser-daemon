@@ -830,6 +830,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-addon" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3h1a3 3 0 0 1 0 6H3v5a2 2 0 0 0 2 2h5v-1a3 3 0 0 1 6 0v1h3a2 2 0 0 0 2-2v-5h-1a3 3 0 0 1 0-6h1V5a2 2 0 0 0-2-2h-5V2a3 3 0 0 0-6 0z"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
@@ -1454,7 +1455,7 @@ let filter = 'all';
 let extensionBrowserNodes = [];
 const extensionNodeKey = n => `browser:${n.daemon || ''}:${n.id}`;
 const extensionNodeOf = name => extensionBrowserNodes.find(n => extensionNodeKey(n) === name);
-const addonBadge = () => '<span class="chip accent" title="Connected through the browser extension">Addon</span>';
+const addonBadge = () => `<span class="chip accent" title="Connected through the browser extension">${icon('addon', 'sm')}Addon</span>`;
 const nodeLabel = name => extensionNodeOf(name)?.name || name;
 // A connected browser is a session from the start, also before anything is shared.
 const extensionSessions = () => extensionBrowserNodes.filter(n => n.online !== false).map(n => ({
