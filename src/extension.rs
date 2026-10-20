@@ -165,6 +165,7 @@ struct Pair {
 
 struct Node {
     info: Mutex<NodeInfo>,
+    public_grant: Mutex<Option<Uuid>>,
     deadline: Option<Instant>,
     outbound: mpsc::Sender<Value>,
     pending: Mutex<HashMap<Uuid, oneshot::Sender<Value>>>,
@@ -233,6 +234,11 @@ pub struct NodeInfo {
     pub can_open: bool,
     /// Owner enabled media-element sound sharing.
     pub audio: bool,
+    /// Owner enabled viewer file transfers under a control grant.
+    pub files: bool,
+    pub public_share: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share: Option<crate::shares::ShareView>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub recording: bool,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -357,10 +363,25 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<R
                 forget_at: forget_after.map(|a| record.last_seen + a.as_secs()),
                 can_open: false,
                 audio: false,
+                files: false,
+                public_share: false,
+                share: None,
                 recording: false,
                 recording_paused: false,
                 tabs: vec![],
             });
+        }
+    }
+    for info in &mut nodes {
+        if let Some((_, grant)) = state.extensions.public_browser(info.id, None) {
+            if let Some(share) = state
+                .shares
+                .all()
+                .into_iter()
+                .find(|s| s.target == info.id && s.browser_grant == Some(grant))
+            {
+                info.share = Some(state.share_view(share));
+            }
         }
     }
     {
@@ -490,7 +511,19 @@ pub fn relay_allowed(method: &str, params: &Value, control: bool) -> bool {
     }
     match method {
         "Page.navigate" => params["url"].as_str().is_some_and(page_url),
-        "Page.reload" | "Page.navigateToHistoryEntry" | "Page.handleJavaScriptDialog" => true,
+        "Page.reload"
+        | "Page.navigateToHistoryEntry"
+        | "Page.handleJavaScriptDialog"
+        | "Page.startFiles"
+        | "Page.stopFiles"
+        | "Page.fileTarget"
+        | "Page.beginFile"
+        | "Page.fileChunk"
+        | "Page.cancelFile"
+        | "Page.applyFiles"
+        | "Page.listDownloads"
+        | "Page.readDownload"
+        | "Page.removeDownload" => true,
         _ => cdp_allowed(method),
     }
 }
@@ -614,6 +647,16 @@ pub async fn command(
 
 /// Sends one command to the browser and waits for its answer ({result, error}).
 async fn ask(node: &Arc<Node>, tab: u32, action: &str, params: Value) -> Result<Value, ApiError> {
+    ask_granted(node, tab, action, params, None).await
+}
+
+async fn ask_granted(
+    node: &Arc<Node>,
+    tab: u32,
+    action: &str,
+    params: Value,
+    grant: Option<Uuid>,
+) -> Result<Value, ApiError> {
     let request = Uuid::new_v4();
     let (tx, rx) = oneshot::channel();
     {
@@ -633,7 +676,7 @@ async fn ask(node: &Arc<Node>, tab: u32, action: &str, params: Value) -> Result<
     let _pending = Pending(node.clone(), request);
     node.outbound
         .try_send(json!({"type": "command", "id": request, "tab": tab,
-        "action": action, "params": params}))
+        "action": action, "params": params, "public_grant": grant}))
         .map_err(|_| {
             failure(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -644,6 +687,63 @@ async fn ask(node: &Arc<Node>, tab: u32, action: &str, params: Value) -> Result<
         .await
         .map_err(|_| failure(StatusCode::GATEWAY_TIMEOUT, "Browser did not answer"))?
         .map_err(|_| failure(StatusCode::GONE, "Browser disconnected"))
+}
+
+impl Broker {
+    pub(crate) fn public_browser(&self, id: Uuid, grant: Option<Uuid>) -> Option<(NodeInfo, Uuid)> {
+        let node = self.nodes.lock().unwrap().get(&id).cloned()?;
+        if node.deadline.is_some_and(|d| d <= Instant::now()) {
+            return None;
+        }
+        let info = node.info.lock().unwrap().clone();
+        let current = (*node.public_grant.lock().unwrap())?;
+        if grant.is_some_and(|g| g != current) || !info.public_share {
+            return None;
+        }
+        Some((info, current))
+    }
+
+    pub(crate) async fn public_command(
+        &self,
+        id: Uuid,
+        grant: Uuid,
+        tab: u32,
+        action: &str,
+        params: Value,
+    ) -> Result<Value, ApiError> {
+        let (info, _) = self
+            .public_browser(id, Some(grant))
+            .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Public sharing ended"))?;
+        let control = info.tabs.iter().find(|t| t.id == tab).map(|t| t.control);
+        if control.is_none()
+            || (!matches!(action, "screenshot" | "publicAudio") && control != Some(true))
+        {
+            return Err(failure(
+                StatusCode::FORBIDDEN,
+                "Tab is not shared with this permission",
+            ));
+        }
+        let node = self
+            .nodes
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Browser disconnected"))?;
+        let result = ask_granted(&node, tab, action, params, Some(grant)).await?;
+        self.public_browser(id, Some(grant))
+            .ok_or_else(|| failure(StatusCode::NOT_FOUND, "Public sharing ended"))?;
+        if action != "close" && node.control(tab).is_none() {
+            return Err(failure(StatusCode::FORBIDDEN, "Tab grant ended"));
+        }
+        if result["error"].is_string() {
+            return Err(failure(
+                StatusCode::BAD_GATEWAY,
+                "The browser rejected the action",
+            ));
+        }
+        Ok(result["result"].clone())
+    }
 }
 
 /// Vault requests name a shared tab as a page: "ext-<browser>-<tab>".
@@ -908,10 +1008,14 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
             forget_at: None,
             can_open: false,
             audio: false,
+            files: false,
+            public_share: false,
+            share: None,
             recording: false,
             recording_paused: false,
             tabs: vec![],
         }),
+        public_grant: Mutex::default(),
         deadline: (!lifetime.is_zero()).then(|| Instant::now() + lifetime),
         outbound,
         pending: Mutex::default(),
@@ -978,6 +1082,10 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 info.native_control = value["native_control"].as_bool().unwrap_or(false);
                                 info.can_open = value["can_open"].as_bool().unwrap_or(false);
                                 info.audio = value["audio"].as_bool().unwrap_or(false);
+                                info.files = value["files"].as_bool().unwrap_or(false);
+                                let grant = value["public_grant"].as_str().and_then(|s| Uuid::parse_str(s).ok());
+                                info.public_share = grant.is_some();
+                                *node.public_grant.lock().unwrap() = grant;
                                 drop(info);
                                 node.bump();
                             }

@@ -4,11 +4,29 @@
 
 ## [0.3.13] - 2026-10-20
 
+### Added
+
+* Extension handoff views support file uploads, file drag-and-drop and shared
+  downloads, including page-generated files. Enable **File transfer** in the
+  owner’s extension; a control grant and site access are required.
+* File transfers accept up to **1 GiB per file**. Regular handoff uploads use
+  the same limit. Extension transfer buffers are capped at 2 GiB in total.
+
+* Extension sessions support public links with owner permission, revocation,
+  optional control, URL navigation, and all shared tabs. Live public views play
+  session audio unless the owner disables it.
+* Desktop viewers support Ctrl+plus/minus and Ctrl+wheel zoom, Ctrl+0 reset,
+  and drag-to-pan in view-only mode.
+
 ### Fixed
 
-* Enabling shared sound requests the site access Chromium needs to capture
-  media audio. A saved sound setting without that grant resets to off, so
-  upgrading from 0.3.12 offers the permission request when sound is enabled again.
+* Shared sound is enabled by default unless the owner saved an off setting.
+  Installation/update requests the site access required for media capture.
+* Public capture uses the visible viewport without a scaled document clip,
+  preventing gray captures and flashing in concurrent handoff views.
+* Overflow menus scroll within small windows. Picture quality has a separate
+  Auto checkbox; manual quality supports the full range through 100.
+* Share actions use an Android-style connected-dots icon.
 * A real stereo-media smoke check covers view-only playback and owner revocation.
 
 ## [0.3.12] - 2026-10-20

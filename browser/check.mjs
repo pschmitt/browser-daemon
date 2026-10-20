@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {test} from 'node:test';
+import {webcrypto} from 'node:crypto';
 
 const source = name => readFileSync(new URL(`extension/${name}`, import.meta.url), 'utf8');
 const policy = vm.createContext({URL});
@@ -61,9 +62,11 @@ function harness(firefox = false, stored = {shareAll: false}) {
     permissions: {contains: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
   };
   if (firefox) api.runtime.getBrowserInfo = async () => ({name: 'Firefox'});
-  const context = vm.createContext({URL, console, chrome: api, WebSocket: Socket,
+  const context = vm.createContext({URL, console, crypto: webcrypto, chrome: api, WebSocket: Socket,
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}});
   vm.runInContext(source('policy.js'), context);
+  vm.runInContext(source('files-page.js'), context);
+  vm.runInContext(source('files.js'), context);
   vm.runInContext(source('background.js'), context);
   const ui = {id: 'test', url: 'chrome-extension://test/popup.html'};
   async function message(value, sender = ui) {

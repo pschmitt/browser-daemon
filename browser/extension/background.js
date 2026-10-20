@@ -1,5 +1,5 @@
 /* Local extension code only; dashboard bridge requires explicit daemon approval. */
-if (typeof importScripts === 'function') importScripts('policy.js', 'audio.js');
+if (typeof importScripts === 'function') importScripts('policy.js', 'audio.js', 'files-page.js', 'files.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
 void api.storage.local.setAccessLevel?.({accessLevel: 'TRUSTED_CONTEXTS'});
@@ -24,14 +24,14 @@ function castState(tab) {
 // By default every tab is shared (all: true), with the remote control choice.
 // Without that, chosen tabs are, and new ones join if autoShare.
 // follow: the tab a live view switches to comes to the front here as well.
-let sharing = {all: true, autoShare: true, control: false, follow: true, audio: false};
-const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio']).then(async saved => {
-  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView !== false, audio: saved.shareAudio === true};
-  if (sharing.audio && !(await api.permissions.contains({origins: chromium
-      ? ['http://*/*', 'https://*/*'] : ['<all_urls>']}))) {
-    // Upgrade from 0.3.12: its switch did not obtain Chromium site access.
-    sharing.audio = false;
-    await api.storage.local.set({shareAudio: false});
+let sharing = {all: true, autoShare: true, control: false, follow: true, audio: true, files: false, public: false};
+let publicGrant = crypto.randomUUID();
+const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio', 'shareFiles', 'sharePublic']).then(async saved => {
+  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView !== false, audio: saved.shareAudio !== false, files: saved.shareFiles === true, public: saved.sharePublic === true};
+  if (sharing.files && !(await api.permissions.contains({origins: chromium ? ['http://*/*', 'https://*/*'] : ['<all_urls>'],
+      ...(!chromium ? {permissions: ['webRequest', 'webRequestBlocking', 'webRequestFilterResponse']} : {})}))) {
+    sharing.files = false;
+    await api.storage.local.set({shareFiles: false});
   }
 });
 // Controllers may open tabs where those are shared with control.
@@ -274,6 +274,7 @@ async function badge() {
 
 async function detach(tab) {
   stopTabAudio(tab);
+  stopFileTab(tab);
   for (const [channel, owner] of channels) if (owner === tab) { channels.delete(channel); stopCast(channel); }
   hooked.delete(tab);
   if (!attached.delete(tab)) return;
@@ -297,6 +298,7 @@ async function stop(reason = 'Disconnected', retry = false) {
   for (const channel of casts.keys()) stopCast(channel);
   channels.clear();
   for (const tab of mediaAudio.keys()) stopTabAudio(tab);
+  for (const tab of fileTabs.keys()) stopFileTab(tab);
   disconnectNative();
   if (old) old.close();
   await clearedAlarm;
@@ -338,7 +340,8 @@ async function publish() {
   if (generation !== currentGeneration) return;
   published = tabs;
   for (const tab of mediaAudio.keys()) if (!tabs.some(t => t.id === tab)) stopTabAudio(tab);
-  send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen(), audio: sharing.audio});
+  for (const tab of fileTabs.keys()) if (!tabs.some(t => t.id === tab && t.control)) stopFileTab(tab);
+  send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen(), audio: sharing.audio, files: sharing.files, public_grant: sharing.public ? publicGrant : null});
   await badge();
 }
 
@@ -353,6 +356,7 @@ function safeURL(url) {
 function safeTab(tab) { return !tab.incognito && safeURL(tab.url); }
 
 async function grantFor(command) {
+  if (command.public_grant && (!sharing.public || command.public_grant !== publicGrant)) throw new Error("Public sharing ended.");
   if (registration) await requireDaemon(registration.server);
   const grant = shared.get(command.tab);
   if (!registration || (registration.expires_at !== 0 && Date.now() >= registration.expires_at * 1000) ||
@@ -601,6 +605,39 @@ const fillLogin = (c, urls) => {
 async function execute(command) {
   const grant = await grantFor(command);
   const {tab, action, params} = command;
+  if (action === 'publicAudio') {
+    if (!command.public_grant || !sharing.audio) throw new Error('Audio sharing is disabled.');
+    let state = mediaAudio.get(tab);
+    if (!state?.channels.has('public')) { await startTabAudio(tab, 'public'); state = mediaAudio.get(tab); }
+    state.publicUntil = Date.now() + 10000;
+    const since = Number.isSafeInteger(params.since) ? params.since : 0;
+    const chunks = (state.publicRing || []).filter(c => c.seq > since);
+    return {chunks, cursor: state.publicSeq || 0, token: state.token};
+  }
+  if (action === 'publicInput') {
+    const allowed = ['click', 'scroll', 'key', 'text'];
+    if (!command.public_grant || !allowed.includes(params.type)) throw new Error('Invalid public input.');
+    let actual = params.type === 'text' ? 'type' : params.type;
+    let values = {...params};
+    if (params.type === 'click' || params.type === 'scroll') {
+      let width, height;
+      if (chromium) {
+        const m = (await cdp(tab, 'Page.getLayoutMetrics')).cssVisualViewport;
+        width = m.clientWidth; height = m.clientHeight;
+      } else {
+        const t = await api.tabs.get(tab); width = t.width; height = t.height;
+      }
+      values.x = Math.max(0, Math.min(1, params.x)) * width;
+      values.y = Math.max(0, Math.min(1, params.y)) * height;
+      if (params.type === 'scroll') {
+        if (chromium) return cdp(tab, 'Input.dispatchMouseEvent', {type: 'mouseWheel', x: values.x, y: values.y,
+          deltaX: Math.max(-3000, Math.min(3000, params.dx)), deltaY: Math.max(-3000, Math.min(3000, params.dy))});
+        values = {x: params.dx, y: params.dy};
+      }
+    }
+    await grantFor(command);
+    return execute({...command, action: actual, params: values});
+  }
   if (!chromium && nativeReady && ['screenshot', 'snapshot', 'click', 'type', 'key', 'scroll', 'evaluate'].includes(action)) {
     return nativeRequest({tab, action, params});
   }
@@ -690,7 +727,13 @@ async function execute(command) {
 
 // The live view's CDP socket, relayed by the daemon. Chromium answers from the
 // tab's debugger; Firefox emulates the subset the view uses (see `shim`).
-async function relayCdp(message, connection, currentGeneration) {
+async function relayCdp(message, connection, currentGeneration, queued = false) {
+  const fileState = fileTabs.get(message.tab);
+  if (!queued && message.method?.startsWith('Input.') && fileState?.channels.has(message.channel)) {
+    fileState.inputSerial = (fileState.inputSerial || Promise.resolve())
+      .then(() => relayCdp(message, connection, currentGeneration, true)).catch(() => {});
+    return;
+  }
   const {channel, tab, id, method} = message;
   const params = message.params || {};
   // A CDP client's session (Playwright via the daemon): the automation set, Chromium only.
@@ -705,6 +748,16 @@ async function relayCdp(message, connection, currentGeneration) {
       throw new ShimError('Not permitted for this shared tab.');
     }
     channels.set(channel, tab);
+    if (fileMethods.has(method)) {
+      const result = await fileCommand(tab, channel, method, params);
+      if (shared.get(tab) !== grant || grant.paused || !grant.control) throw new ShimError('File sharing ended.');
+      reply({result});
+      return;
+    }
+    await armFileInput(tab, channel, method, params);
+    if (automation && method === 'Fetch.enable' && fileTabs.has(tab)) {
+      fileTabs.get(tab).automationFetch = true; fileTabs.get(tab).network = false;
+    }
     if (method === 'Page.startAudio' || method === 'Page.stopAudio') {
       if (method === 'Page.startAudio') {
         if (!sharing.audio) throw new ShimError('Enable Share sound in the browser extension first.');
@@ -731,6 +784,7 @@ async function relayCdp(message, connection, currentGeneration) {
     if (chromium && (method === 'Page.startScreencast' || method === 'Page.stopScreencast')) screencasts.delete(tab);
     const result = chromium ? await cdp(tab, method, params) : await shim(tab, channel, method, params);
     if (automation) leftBehind(tab, method, params, result);
+    if (automation && method === 'Fetch.disable') await resumeFileNetwork(tab);
     // Never return data after local unsharing, pausing or replacement of a grant.
     if (shared.get(tab) !== grant || grant.paused) throw new Error('Sharing ended.');
     reply({result: result ?? {}});
@@ -771,9 +825,11 @@ async function resetAutomation(tab) {
   for (const [method, params] of RESETS) await send(method, params);
   for (const identifier of left?.scripts || []) await send('Page.removeScriptToEvaluateOnNewDocument', {identifier});
   for (const name of left?.bindings || []) await send('Runtime.removeBinding', {name});
+  await resumeFileNetwork(tab).catch(() => {});
 }
 function closeChannel(channel) {
   stopChannelAudio(channel);
+  stopFileChannel(channel);
   const tab = channels.get(channel);
   channels.delete(channel);
   if (automations.delete(channel) && ![...automations.values()].includes(tab)) void resetAutomation(tab);
@@ -793,6 +849,10 @@ const mediaAudio = new Map();
 async function renewTabAudio(tab) {
   const state = mediaAudio.get(tab);
   if (!state || !registration || !sharing.audio || shared.get(tab)?.paused !== false) { stopTabAudio(tab); return; }
+  if (state.channels.has('public') && (!sharing.public || Date.now() > (state.publicUntil || 0))) {
+    state.channels.delete('public'); state.publicRing = [];
+    if (!state.channels.size) { stopTabAudio(tab); return; }
+  }
   try {
     await api.scripting.executeScript({target: {tabId: tab, allFrames: true}, func: captureMediaAudio, args: [state.token]});
   } catch { /* Navigation or an inaccessible frame: retry only while watched. */ }
@@ -835,6 +895,12 @@ function relayMediaAudio(message, sender) {
       !safeTab(sender.tab) || !safeURL(sender.url) ||
       typeof message.data !== 'string' || message.data.length > 24000 ||
       !/^[A-Za-z0-9+/]+={0,2}$/.test(message.data) || ![44100, 48000].includes(message.rate)) return {ok: false};
+  if (state.channels.has('public') && sharing.public && Date.now() < state.publicUntil) {
+    const chunk = {seq: state.publicSeq = (state.publicSeq || 0) + 1,
+      data: message.data, rate: message.rate, stream: `${sender.frameId}:${sender.documentId || state.token}`};
+    (state.publicRing ||= []).push(chunk);
+    if (state.publicRing.length > 24) state.publicRing.shift();
+  }
   // Don't accumulate latency on slow networks. Each frame has its own PCM clock.
   if (socket?.readyState !== WebSocket.OPEN || socket.bufferedAmount > 256 * 1024) return {ok: true};
   for (const channel of state.channels) {
@@ -998,6 +1064,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
     if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
   }
   await stop();
+  publicGrant = crypto.randomUUID();
   const myGeneration = generation;
   status = 'Connecting to daemon';
   record(status);
@@ -1087,6 +1154,7 @@ async function restoreRemembered(force = false) {
 
 async function localMessage(message, sender) {
   // Accept only our own extension UI, never a content script or web page.
+  if (message.type === 'fileBridge') return fileBridgeMessage(message, sender);
   if (message.type === 'mediaAudio') return relayMediaAudio(message, sender);
   if (message.type === 'dashboardPair') return dashboardMessage(message, sender);
   if (sender.id !== api.runtime.id ||
@@ -1195,6 +1263,25 @@ async function localMessage(message, sender) {
     publishSoon();
     return {ok: true};
   }
+  if (message.type === 'shareFiles') {
+    if (message.enabled && !(await api.permissions.contains({origins: chromium
+        ? ['http://*/*', 'https://*/*'] : ['<all_urls>'],
+        ...(!chromium ? {permissions: ['webRequest', 'webRequestBlocking', 'webRequestFilterResponse']} : {})}))) throw new Error('Site access is needed for file transfer.');
+    sharing.files = message.enabled === true;
+    await api.storage.local.set({shareFiles: sharing.files});
+    if (!sharing.files) for (const tab of fileTabs.keys()) stopFileTab(tab);
+    if (sharing.files && !chromium) installFirefoxFileFilter();
+    publishSoon();
+    return {ok: true};
+  }
+  if (message.type === 'sharePublic') {
+    sharing.public = message.enabled === true;
+    publicGrant = crypto.randomUUID();
+    for (const state of mediaAudio.values()) { state.publicRing = []; state.publicUntil = 0; }
+    await api.storage.local.set({sharePublic: sharing.public});
+    publishSoon();
+    return {ok: true};
+  }
   if (message.type === 'shareAudio') {
     sharing.audio = message.enabled === true;
     await api.storage.local.set({shareAudio: sharing.audio});
@@ -1248,8 +1335,9 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
   }
   if (!chromium && change.status === 'loading') { sendEvent(id, 'Page.frameStartedLoading', {frameId: String(id)}); touchCast(id); }
   if (!chromium && change.status === 'complete') { sendEvent(id, 'Page.loadEventFired', {timestamp: Date.now() / 1000}); touchCast(id); }
-  if (grant.paused) stopTabAudio(id);
+  if (grant.paused) { stopTabAudio(id); stopFileTab(id); }
   if (change.status === 'complete' && mediaAudio.has(id)) void renewTabAudio(id);
+  if (change.status === 'complete' && fileTabs.get(id)?.channels.size) void installFilePages(id);
   if (change.url || change.title || change.status === 'complete') publishSoon();
 });
 // Which shared tab is in front: recordings follow it.
@@ -1263,6 +1351,14 @@ api.tabs.onCreated.addListener(tab => {
 if (chromium) api.debugger.onEvent.addListener((source, method, params) => {
   const grant = shared.get(source.tabId);
   if (!grant || !registration) return;
+  if (method === 'Fetch.requestPaused' && fileTabs.get(source.tabId)?.network && !fileTabs.get(source.tabId)?.automationFetch) {
+    void interceptFileResponse(source.tabId, params).catch(() => cdp(source.tabId, 'Fetch.continueRequest', {requestId: params.requestId}).catch(() => {}));
+    return;
+  }
+  if (method === 'Page.fileChooserOpened' && fileTabs.has(source.tabId)) {
+    void interceptFileChooser(source.tabId, params).catch(() => {});
+    return;
+  }
   if (method === 'Page.frameNavigated' && !params.frame.parentId) {
     grant.paused = !safeURL(params.frame.url);
     if (!grant.paused) grant.origin = new URL(params.frame.url).origin;
@@ -1323,3 +1419,5 @@ api.storage.onChanged.addListener((changes, area) => {
     await installDashboardBridge();
   })().catch(() => stop('Daemon allowlist could not be loaded'));
 });
+
+void sharingReady.then(() => { if (!chromium && sharing.files) installFirefoxFileFilter(); }).catch(() => {});

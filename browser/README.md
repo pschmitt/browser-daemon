@@ -67,21 +67,48 @@ memory-only connection with no time limit uses `--lifetime-secs 0` instead.
 
 ## Shared sound
 
-Enable **Share sound** in the owner's extension, then use **Audio on/off** in
+**Share sound** is on by default in the owner's extension. Use **Audio on/off** in
 its handoff view. Sound comes from audio/video elements in the viewed tab,
 including permitted embedded frames and open shadow roots. Other tabs, the
 microphone, and desktop audio are never captured. Local playback stays intact.
 The viewer may need to click the live view once to permit browser playback.
 
-This media-element capture works without Firefox's native companion. Enabling
-sound requests access to web pages so the extension can capture their media. It does not capture standalone Web Audio graphs, protected
+This media-element capture works without Firefox's native companion. Installation
+requests access to web pages so the extension can capture their media. It does not capture standalone Web Audio graphs, protected
 media, or inaccessible frames. Extension session recordings remain silent.
-Sound sharing defaults off and is independent of remote control: view-only
-clients can listen when the owner enables it. Closing the last listening view,
+Sound sharing defaults on and is independent of remote control: view-only
+clients can listen unless the owner disables it. A saved off setting stays off. Closing the last listening view,
 unsharing the tab, or disabling sound stops capture; a twenty-second lease
 also stops it if the extension worker disappears. PCM stereo is relayed through
 the existing authenticated, tab-scoped live-view connection, with bounded
 buffering and backpressure.
+
+## File transfer in live views
+
+Enable **File transfer** in the owner's extension and grant the requested site
+access. File transfers require a tab shared with **Remote control**. The
+handoff view uses its normal file picker, drag-and-drop area and download tray:
+
+* Choose files in the handoff view when the page asks for them, or drop files
+  onto a file input or drop zone. Files are sent in bounded chunks and created
+  inside the selected page; no paths on the owner's machine are accepted.
+* Downloads started by input in the controlling view appear in its download
+  tray. This includes server attachments and page-generated blob/data links.
+  The **Save** action saves the shared copy on the viewer's device; **Remove**
+  removes that shared copy. Firefox also keeps the browser's normal local
+  download for server attachments.
+* The per-file limit is **1 GiB**, matching regular handoff uploads. Extension
+  transfers have a **2 GiB** aggregate buffer budget, up to 32 pending uploads,
+  and up to 64 cached downloads. Download copies expire after 15 minutes;
+  inactive uploads expire after five minutes.
+
+Upload/drop events use the page's File and DataTransfer APIs; page applications
+that demand native trusted drop events may reject them. File inputs in embedded
+frames and open shadow roots are supported. Navigation that replaces the target
+cancels the upload instead of applying it to a different field. Unsharing,
+revoking control, disabling file transfer, or disconnecting clears transfers;
+page helpers also stop after a twenty-second lease if their worker disappears.
+No microphone, arbitrary local files, or another tab's downloads are exposed.
 
 ## Install and pair manually
 
@@ -311,3 +338,21 @@ the same profile. Launching against an already-running ordinary Firefox reuses
 that process and does not enable the Remote Agent. Installation does not connect or share any tabs:
 pair the extension, enable the companion, then explicitly select tabs and
 whether to allow control.
+
+## Public links for extension sessions
+
+Enable **Allow public links** in the owner’s extension, then choose **Share…** in
+its handoff menu or dashboard session card. Links can watch the shared tab and
+hear its media audio unless **Share sound** is disabled. A controlling link can
+navigate, switch between all shared tabs, open tabs when allowed, close tabs,
+and send page input, within the owner’s per-tab control grants. Unshared,
+private and restricted browser pages remain outside the session.
+
+Disabling public links or reconnecting the extension invalidates existing public
+links. Re-enabling requires a new link; old tokens never regain access. Public
+links do not expose the vault, raw CDP, or authenticated file transfer methods.
+
+The public viewer supports Ctrl+plus/minus, Ctrl+wheel, and Ctrl+0 for local
+zoom/reset. Drag to pan a magnified view-only picture. Handoff views support the
+same desktop gestures. The overflow menu scrolls within small windows; picture
+quality has a separate Auto switch and a manual 15–100 slider.

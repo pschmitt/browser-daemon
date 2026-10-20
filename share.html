@@ -73,7 +73,8 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .time { font: 600 12.5px var(--mono); margin-left: 6px; white-space: nowrap; }
 .volume { width: 84px; accent-color: var(--accent); }
 .badge.control { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.stage.controllable img { cursor: pointer; touch-action: none; }
+.stage img { touch-action: none; }
+.stage.controllable img { cursor: pointer; }
 .typebar { display: flex; gap: 6px; padding: 8px 12px; background: var(--raised); border-top: 1px solid var(--line); flex-wrap: wrap; }
 .typebar[hidden] { display: none; }
 .typebar input { flex: 1; min-width: 140px; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: 14px var(--sans); }
@@ -93,9 +94,17 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
 <header>
   <div class="fav" id="fav">·</div>
   <div class="what"><b id="title">Loading…</b><span id="site"></span></div>
+  <button type="button" id="liveSound" hidden>Sound on</button>
   <span class="badge" id="badge" hidden></span>
 </header>
 <main>
+  <form class="typebar" id="navigation" hidden autocomplete="off">
+    <select id="tabPicker" aria-label="Shared tab" style="max-width:30%;min-width:100px"></select>
+    <input id="address" type="text" aria-label="Page URL" placeholder="https://…" spellcheck="false">
+    <button type="submit" class="primary">Go</button>
+    <button type="button" id="openTab" title="Open a new tab">+</button>
+    <button type="button" id="closeTab" title="Close this tab">Close tab</button>
+  </form>
   <div class="stage" id="stage">
     <canvas id="canvas" hidden></canvas>
     <img id="live" alt="Live view of the shared browser" hidden>
@@ -399,9 +408,55 @@ async function session(info) {
   overlay("Connecting…", "", { spin: true });
 
   const img = $("live");
-  let control = false, refreshNow = null;
+  let control = false, refreshNow = null, selectedTab = null, tabs = [];
+  const zoom = {scale: 1, x: 0, y: 0};
+  let pan = null;
+  img.draggable = false;
+  function magnify(cx, cy, scale, from = {...zoom}, to = {x: cx, y: cy}) {
+    const r = $("stage").getBoundingClientRect();
+    scale = Math.max(1, Math.min(5, scale));
+    const x = cx - r.left - r.width / 2, y = cy - r.top - r.height / 2;
+    zoom.x = Math.max(-r.width * (scale - 1) / 2, Math.min(r.width * (scale - 1) / 2,
+      to.x - r.left - r.width / 2 - (x - from.x) * scale / from.scale));
+    zoom.y = Math.max(-r.height * (scale - 1) / 2, Math.min(r.height * (scale - 1) / 2,
+      to.y - r.top - r.height / 2 - (y - from.y) * scale / from.scale));
+    zoom.scale = scale;
+    img.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${scale})`;
+  }
+  document.addEventListener("keydown", e => {
+    if (!e.ctrlKey || e.altKey || e.metaKey || !["+", "=", "-", "0"].includes(e.key) || e.target.closest("input, textarea")) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const r = $("stage").getBoundingClientRect();
+    magnify(r.left + r.width / 2, r.top + r.height / 2,
+      e.key === "0" ? 1 : zoom.scale * (e.key === "-" ? 1 / 1.2 : 1.2));
+  }, true);
+  img.addEventListener("wheel", e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const delta = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 100 : 1);
+    magnify(e.clientX, e.clientY, zoom.scale * Math.exp(-delta * .01));
+  }, {capture: true, passive: false});
+  img.addEventListener("pointerdown", e => {
+    if (control || e.button !== 0) return;
+    e.preventDefault(); img.setPointerCapture(e.pointerId);
+    pan = {id: e.pointerId, x: e.clientX, y: e.clientY, from: {...zoom}};
+    img.style.cursor = "grabbing";
+  });
+  img.addEventListener("pointermove", e => {
+    if (!pan || pan.id !== e.pointerId) return;
+    magnify(pan.x, pan.y, pan.from.scale, pan.from, {x: e.clientX, y: e.clientY});
+  });
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) img.addEventListener(type, e => {
+    if (pan?.id === e.pointerId) { pan = null; img.style.cursor = control ? "pointer" : "grab"; }
+  });
+  addEventListener("resize", () => {
+    const r = $("stage").getBoundingClientRect();
+    magnify(r.left + r.width / 2, r.top + r.height / 2, zoom.scale);
+  });
+
   function setControl(on) {
     control = !!on;
+    img.style.cursor = control ? "pointer" : "grab";
     $("badge").className = control ? "badge live control" : "badge live";
     $("badge").textContent = control ? "Live · you can control" : "Live";
     $("footNote").textContent = control
@@ -409,17 +464,116 @@ async function session(info) {
       : "A live view of a remote browser, shared publicly. You can watch, not control it.";
     $("stage").classList.toggle("controllable", control);
     $("typebar").hidden = !control;
+    $("navigation").hidden = !control;
   }
   setControl(info.control);
 
   async function send(ev) {
     if (!control) return;
     try {
-      const res = await fetch(`${base}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ev) });
+      const res = await fetch(`${base}/input`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({...ev, selected_tab: selectedTab}) });
       if (res.status === 403 || res.status === 404) setControl(false);
     } catch { /* the next picture says whether it worked */ }
+    await refreshTabs();
     refreshNow?.();
   }
+  async function refreshTabs() {
+    if (!control) return;
+    try {
+      const response = await fetch(`${base}/tabs`, {cache: 'no-store'});
+      if (!response.ok) return;
+      const value = await response.json(); tabs = value.tabs || [];
+      if (!info.extension || !tabs.some(t => t.id === selectedTab)) selectedTab = (tabs.find(t => t.active) || tabs[0])?.id || null;
+      const picker = $("tabPicker");
+      picker.replaceChildren(...tabs.map(t => {
+        const option = document.createElement('option'); option.value = t.id;
+        option.textContent = (t.title || t.url || 'New tab') + (t.control === false ? ' · View only' : ''); return option;
+      }));
+      picker.value = selectedTab || '';
+      const current = tabs.find(t => t.id === selectedTab);
+      if (document.activeElement !== $("address")) $("address").value = current?.url || '';
+      $("openTab").disabled = !value.can_open;
+      $("closeTab").disabled = !current || current.control === false;
+    } catch { /* The next frame/refresh retries. */ }
+  }
+  $("tabPicker").onchange = () => { selectedTab = $("tabPicker").value; send({type: 'focus', tab: selectedTab}); };
+  const navigationURL = () => {
+    const value = $("address").value.trim();
+    return /^[a-z][a-z0-9+.-]*:/i.test(value) ? value : `https://${value}`;
+  };
+  $("navigation").onsubmit = e => { e.preventDefault(); send({type: 'navigate', url: navigationURL()}); };
+  $("openTab").onclick = () => send({type: 'open', url: 'about:blank'});
+  $("closeTab").onclick = () => { if (selectedTab && confirm('Close this tab in the shared browser?')) send({type: 'close', tab: selectedTab}); };
+  await refreshTabs();
+  setInterval(refreshTabs, 3000);
+  let audioEnabled = true, audioStopped = false, audioContext = null, audioElement = null;
+  let audioCursor = 0, audioToken = null, audioTab = null;
+  const audioClocks = new Map();
+  const sound = $("liveSound");
+  sound.hidden = !info.audio;
+  function stopLiveAudio() {
+    audioElement?.pause();
+    if (audioElement) { audioElement.removeAttribute('src'); audioElement.load(); audioElement.remove(); audioElement = null; }
+    if (audioContext) void audioContext.close();
+    audioContext = null; audioClocks.clear(); audioCursor = 0; audioToken = null;
+  }
+  function resumeLiveAudio() {
+    if (!audioEnabled || !info.audio || audioStopped) return;
+    if (info.extension) {
+      audioContext ||= new AudioContext();
+      void audioContext.resume().then(() => { sound.textContent = audioContext?.state === 'running' ? 'Sound on' : 'Enable sound'; }).catch(() => {});
+    } else {
+      if (!audioElement) {
+        audioElement = document.createElement('audio'); audioElement.src = `${base}/audio`;
+        audioElement.preload = 'none'; document.body.append(audioElement);
+      }
+      void audioElement.play().then(() => { sound.textContent = 'Sound on'; }, () => { sound.textContent = 'Enable sound'; });
+    }
+  }
+  sound.onclick = () => {
+    if (sound.textContent === 'Enable sound') { resumeLiveAudio(); return; }
+    audioEnabled = !audioEnabled; sound.textContent = audioEnabled ? 'Sound on' : 'Sound off';
+    sound.setAttribute('aria-pressed', String(audioEnabled));
+    if (audioEnabled) resumeLiveAudio(); else stopLiveAudio();
+  };
+  for (const type of ['pointerdown','keydown']) addEventListener(type, resumeLiveAudio, {capture: true});
+  addEventListener('pagehide', () => { audioStopped = true; stopLiveAudio(); }, {once: true});
+  resumeLiveAudio();
+  if (info.extension) void (async () => {
+    while (!audioStopped) {
+      if (!document.hidden && audioEnabled && info.audio && audioContext?.state === 'running') {
+        const tab = selectedTab;
+        if (audioTab !== tab) { audioTab = tab; audioCursor = 0; audioToken = null; audioClocks.clear(); }
+        try {
+          const response = await fetch(`${base}/audio`, {cache: 'no-store', headers: {
+            'X-Share-Audio-Since': String(audioCursor), ...(tab ? {'X-Share-Tab': tab} : {})}});
+          if (response.status === 404) { audioStopped = true; stopLiveAudio(); break; }
+          if (response.ok && response.status !== 204) {
+            const value = await response.json();
+            if (audioToken && audioToken !== value.token) { audioCursor = 0; audioToken = value.token; continue; }
+            audioToken = value.token; audioCursor = value.cursor || 0;
+            if (tab === selectedTab && audioEnabled && audioContext) for (const chunk of value.chunks || []) {
+              const bytes = Uint8Array.from(atob(chunk.data), c => c.charCodeAt(0));
+              const samples = new DataView(bytes.buffer), frames = bytes.length / 4;
+              if (!Number.isInteger(frames) || !frames || ![44100,48000].includes(chunk.rate)) continue;
+              const buffer = audioContext.createBuffer(2, frames, chunk.rate);
+              for (let channel = 0; channel < 2; channel++) {
+                const out = buffer.getChannelData(channel);
+                for (let i = 0; i < frames; i++) out[i] = samples.getInt16(i * 4 + channel * 2, true) / 32768;
+              }
+              const now = audioContext.currentTime;
+              let at = audioClocks.get(chunk.stream) || now + .05;
+              if (at < now || at > now + 1) at = now + .05;
+              const source = audioContext.createBufferSource(); source.buffer = buffer;
+              source.connect(audioContext.destination); source.onended = () => source.disconnect(); source.start(at);
+              audioClocks.set(chunk.stream, at + buffer.duration);
+            }
+          }
+        } catch { /* A transient network failure retries without accumulating audio. */ }
+      }
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  })();
   const where = (e) => {
     const r = img.getBoundingClientRect();
     return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
@@ -489,7 +643,13 @@ async function session(info) {
   setInterval(async () => {
     try {
       const r = await fetch(`${base}/info`, { cache: "no-store" });
-      if (r.ok) setControl((await r.json()).control);
+      if (r.ok) {
+        const current = await r.json(); setControl(current.control);
+        if (info.audio !== current.audio) {
+          info.audio = current.audio; sound.hidden = !info.audio;
+          if (info.audio) resumeLiveAudio(); else stopLiveAudio();
+        }
+      }
     } catch { /* next time */ }
   }, 15000);
 
@@ -499,9 +659,10 @@ async function session(info) {
     if (document.hidden) { await new Promise((r) => document.addEventListener("visibilitychange", r, { once: true })); continue; }
     const started = performance.now();
     let res = null;
-    try { res = await fetch(`${base}/frame`, { cache: "no-store", headers: { "X-Share-Viewer": viewerId } }); } catch { res = null; }
+    try { res = await fetch(`${base}/frame`, { cache: "no-store", headers: { "X-Share-Viewer": viewerId, ...(selectedTab ? {"X-Share-Tab": selectedTab} : {}) } }); } catch { res = null; }
     if (res && res.status === 404) {
       setControl(false);
+      audioStopped = true; stopLiveAudio();
       $("badge").className = "badge ended";
       $("badge").textContent = "Ended";
       img.hidden = true;

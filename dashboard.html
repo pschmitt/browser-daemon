@@ -883,7 +883,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
   <symbol id="i-unlink" viewBox="0 0 24 24"><path d="M17 13.5l3.5-3a5 5 0 0 0-7-7L11.8 5.2M7 10.5l-3.5 3a5 5 0 0 0 7 7l1.7-1.7M3 3l18 18"/></symbol>
-  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/></symbol>
+<symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
   <symbol id="i-grip" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-broom" viewBox="0 0 24 24"><path d="m15 4 5 5M9.5 9.5 14.5 14.5M4 20s1-5 3.5-7.5l4 4C9 19 4 20 4 20zM13 7l4 4 2.5-2.5-4-4z"/></symbol>
@@ -1196,7 +1197,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       </div>
       <div class="share-rows">
         <label class="share-row" id="shareModeField">
-          <span class="t"><b>Allow control</b><small id="shareModeNote">Visitors can click, scroll and type in the page, as you.</small></span>
+          <span class="t"><b>Allow control</b><small id="shareModeNote">Visitors can navigate, manage tabs, click, scroll and type as you.</small></span>
           <input type="checkbox" role="switch" id="shareControl"><span class="share-switch" aria-hidden="true"></span>
         </label>
         <div class="share-warn" id="shareWarn" hidden></div>
@@ -1460,7 +1461,7 @@ const nodeLabel = name => extensionNodeOf(name)?.name || name;
 // A connected browser is a session from the start, also before anything is shared.
 const extensionSessions = () => extensionBrowserNodes.filter(n => n.online !== false).map(n => ({
   id: n.id, node_name: extensionNodeKey(n), name: n.name, engine: n.browser, persistent: true,
-  uptime_seconds: 0, client_count: 0, tabs_count: n.tabs.length, _extension: n,
+  uptime_seconds: 0, client_count: 0, tabs_count: n.tabs.length, _extension: n, share: n.share,
 }));
 const dashboardSessions = () => [...(ov?.sessions || []), ...extensionSessions()];
 const sharedBrowserTabCount = () => extensionSessions().filter(inFilter).reduce((sum, s) => sum + s.tabs_count, 0);
@@ -1491,7 +1492,11 @@ async function revokeExtension(n) {
 
 const localName = () => ov?.local_node?.name;
 const isLocal = (node) => !node || node === localName();
-const api = (node, path) => (isLocal(node) ? `/api${path}` : `/api/peers/${enc(node)}${path}`);
+const api = (node, path) => {
+  const extension = extensionNodeOf(node);
+  if (extension) node = extension.daemon;
+  return isLocal(node) ? `/api${path}` : `/api/peers/${enc(node)}${path}`;
+};
 const jsonNewUrl = (node, qs) => (isLocal(node) ? `/json/new?${qs}` : `/api/peers/${enc(node)}/json/new?${qs}`);
 function nodeBase(node) {
   if (isLocal(node)) return location.origin;
@@ -2553,6 +2558,7 @@ const ACT = {
       openMenu(el, [
         {label: sessName(s)},
         {icon: 'takeover', label: s._extension.tabs.some(t => t.control) ? 'Take over' : 'View', run: () => { location.href = handoffUrl(s.node_name); }},
+        ...(s._extension.public_share ? [{icon: 'share', label: 'Share…', run: () => openShare('session', s)}] : []),
         {icon: 'server', label: 'Node details', run: () => { filter = s.node_name; setView('nodes'); render(); }},
         '-',
         {icon: 'power', label: s._extension.remembered ? 'Forget browser…' : 'Disconnect browser…', danger: true, run: () => revokeExtension(s._extension)},
@@ -2573,7 +2579,7 @@ const ACT = {
         ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
       ]) },
       { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
-      { icon: s.share ? 'link' : 'globe', label: s.share ? 'Public link…' : 'Share…', run: () => openShare('session', s) },
+      { icon: 'share', label: s.share ? 'Public link…' : 'Share…', run: () => openShare('session', s) },
       !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },
       { label: 'Session' },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
@@ -2645,7 +2651,7 @@ const ACT = {
       { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
       { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
       { icon: 'note', label: 'Notes…', meta: r.notes ? String(r.notes.count) : '', run: () => openNotes('recording', r) },
-      { icon: r.share ? 'link' : 'globe', label: r.share ? 'Public link…' : 'Share…', run: () => openShare('recording', r) },
+      { icon: 'share', label: r.share ? 'Public link…' : 'Share…', run: () => openShare('recording', r) },
       r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
       { icon: 'download', label: r.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
@@ -3233,7 +3239,7 @@ const shareLabel = (kind, item) => (kind === 'session' ? sessName(item) : record
 function publicItems() {
   if (!ov) return [];
   return [
-    ...ov.sessions.filter((s) => s.share).map((s) => ({ kind: 'session', item: s })),
+    ...dashboardSessions().filter((s) => s.share).map((s) => ({ kind: 'session', item: s })),
     ...(ov.recordings || []).filter((r) => r.share).map((r) => ({ kind: 'recording', item: r })),
   ];
 }
@@ -3293,7 +3299,7 @@ function openShare(kind, item) {
 function fillShare(item, fresh = false) {
   const { kind } = shareCtx;
   const sh = item.share;
-  const firefox = kind === 'session' && item.engine === 'firefox';
+  const firefox = kind === 'session' && !item._extension && item.engine === 'firefox';
   $('shareModal').classList.toggle('shared', !!sh);
   $('shareTitle').textContent = sh ? 'Shared publicly' : 'Share';
   $('shareWhat').textContent = `${kind === 'session' ? 'Session' : 'Recording'} · ${shareLabel(kind, item)}`;
@@ -3308,7 +3314,7 @@ function fillShare(item, fresh = false) {
   const ctl = $('shareControl');
   if (fresh || (!shareBusy && document.activeElement !== ctl)) ctl.checked = !!sh?.control;
   ctl.disabled = firefox || shareBusy;
-  $('shareModeNote').textContent = firefox ? 'Works for Chromium sessions only.' : 'Visitors can click, scroll and type in the page, as you.';
+  $('shareModeNote').textContent = firefox ? 'Works for Chromium sessions only.' : 'Visitors can navigate, manage tabs, click, scroll and type as you.';
   syncShareWarn(kind);
   $('shareLinkField').hidden = !sh;
   if (sh && $('shareLink').getAttribute('href') !== sh.url) { $('shareLink').href = sh.url; $('shareLink').innerHTML = urlHtml(sh.url); }

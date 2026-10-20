@@ -104,25 +104,16 @@ pub async fn capture(
                 serde_json::json!({ "id": next, "method": method, "params": params }),
             )
         };
-        let (id, cmd) = ask("Page.getLayoutMetrics", serde_json::json!({}));
-        ws.send(Message::Text(cmd.to_string().into())).await.ok()?;
-        let metrics = answer(&mut ws, id).await?;
-        let vp = metrics.get("cssVisualViewport")?;
-        let (w, h) = (
-            vp.get("clientWidth")?.as_f64()?,
-            vp.get("clientHeight")?.as_f64()?,
-        );
-        if w < 1.0 || h < 1.0 {
-            return None;
-        }
-        let scale = (width / w).min(1.0);
+        // A scaled document clip can scroll/repaint a headed Chromium while a
+        // handoff screencast is running. Capture the actual viewport unchanged;
+        // resize the JPEG outside Chromium below.
         let (id, cmd) = ask(
             "Page.captureScreenshot",
             serde_json::json!({
                 "format": "jpeg",
                 "quality": quality,
-                "optimizeForSpeed": true,
-                "clip": { "x": 0, "y": 0, "width": w, "height": h, "scale": scale },
+                "fromSurface": false,
+                "captureBeyondViewport": false,
             }),
         );
         ws.send(Message::Text(cmd.to_string().into())).await.ok()?;
@@ -136,6 +127,25 @@ pub async fn capture(
         .await
         .ok()
         .flatten()?;
+    let jpeg = tokio::task::spawn_blocking(move || {
+        let picture = image::load_from_memory(&jpeg).ok()?;
+        if picture.width() as f64 <= width {
+            return Some(jpeg);
+        }
+        let resized = picture.resize(
+            width.max(1.0) as u32,
+            u32::MAX,
+            image::imageops::FilterType::Triangle,
+        );
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
+            .encode_image(&resized)
+            .ok()?;
+        Some(bytes)
+    })
+    .await
+    .ok()
+    .flatten()?;
     Some(Capture {
         jpeg,
         id,

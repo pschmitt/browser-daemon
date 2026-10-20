@@ -68,6 +68,8 @@ pub struct Share {
     /// otherwise.
     #[serde(default)]
     pub control: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_grant: Option<Uuid>,
 }
 
 impl Share {
@@ -200,14 +202,28 @@ impl Store {
         expires_at: Option<u64>,
         control: Option<bool>,
     ) -> std::io::Result<Share> {
+        self.share_granted(kind, target, expires_at, control, None)
+            .await
+    }
+
+    async fn share_granted(
+        &self,
+        kind: ShareKind,
+        target: Uuid,
+        expires_at: Option<u64>,
+        control: Option<bool>,
+        browser_grant: Option<Uuid>,
+    ) -> std::io::Result<Share> {
         let control = control.filter(|_| kind == ShareKind::Session);
         let token = new_token()?;
         self.update(|shares| {
             let now = auth::now();
-            if let Some(s) = shares
-                .values_mut()
-                .find(|s| s.kind == kind && s.target == target && !s.expired(now))
-            {
+            if let Some(s) = shares.values_mut().find(|s| {
+                s.kind == kind
+                    && s.target == target
+                    && s.browser_grant == browser_grant
+                    && !s.expired(now)
+            }) {
                 let changed = s.expires_at != expires_at || control.is_some_and(|c| c != s.control);
                 s.expires_at = expires_at;
                 s.control = control.unwrap_or(s.control);
@@ -224,6 +240,7 @@ impl Store {
                 views: 0,
                 last_viewed_at: None,
                 control: control.unwrap_or(false),
+                browser_grant,
             };
             shares.insert(share.id, share.clone());
             (true, share)
@@ -363,7 +380,10 @@ impl AppState {
         self.shares
             .prune(|s| match s.kind {
                 ShareKind::Recording => recordings.contains(&s.target),
-                ShareKind::Session => sessions.contains(&s.target),
+                ShareKind::Session => s.browser_grant.map_or_else(
+                    || sessions.contains(&s.target),
+                    |g| self.extensions.public_browser(s.target, Some(g)).is_some(),
+                ),
             })
             .await;
         self.shares
@@ -406,6 +426,7 @@ pub(crate) async fn api_create_share(
     Json(req): Json<ShareRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
+    let mut browser_grant = None;
     match req.kind {
         ShareKind::Recording => {
             if !recorder::set_keep(&state.recorder_config, req.id, true).await {
@@ -413,10 +434,27 @@ pub(crate) async fn api_create_share(
             }
         }
         ShareKind::Session => {
-            let Some(session) = state.sessions.read().await.get(&req.id).cloned() else {
-                return Err(api_error(StatusCode::NOT_FOUND, "Session not found"));
-            };
-            if req.control == Some(true) && session.bidi.is_some() {
+            let session = state.sessions.read().await.get(&req.id).cloned();
+            if session.is_none() {
+                let (browser, grant) =
+                    state
+                        .extensions
+                        .public_browser(req.id, None)
+                        .ok_or_else(|| {
+                            api_error(
+                                StatusCode::FORBIDDEN,
+                                "Enable Allow public links in the browser extension",
+                            )
+                        })?;
+                if req.control == Some(true) && !browser.tabs.iter().any(|t| t.control) {
+                    return Err(api_error(
+                        StatusCode::FORBIDDEN,
+                        "The owner has not shared any tabs with control",
+                    ));
+                }
+                browser_grant = Some(grant);
+            }
+            if req.control == Some(true) && session.is_some_and(|s| s.bidi.is_some()) {
                 return Err(api_error(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "Control through a public link works for Chromium sessions only",
@@ -428,11 +466,31 @@ pub(crate) async fn api_create_share(
         .expires_in_secs
         .filter(|s| *s > 0)
         .map(|s| auth::now().saturating_add(s));
-    let share = state
-        .shares
-        .share(req.kind, req.id, expires_at, req.control)
-        .await
-        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let created = match browser_grant {
+        Some(grant) => {
+            state
+                .shares
+                .share_granted(req.kind, req.id, expires_at, req.control, Some(grant))
+                .await
+        }
+        None => {
+            state
+                .shares
+                .share(req.kind, req.id, expires_at, req.control)
+                .await
+        }
+    };
+    let share = created.map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(grant) = browser_grant {
+        if state
+            .extensions
+            .public_browser(req.id, Some(grant))
+            .is_none()
+        {
+            let _ = state.shares.remove(share.id).await;
+            return Err(api_error(StatusCode::CONFLICT, "Public sharing ended"));
+        }
+    }
     info!(kind = ?share.kind, target = %share.target, control = share.control, "Shared publicly");
     Ok(Json(state.share_view(share)))
 }
@@ -598,6 +656,8 @@ pub(crate) async fn share_resource(
         (ShareKind::Recording, "frames") => recording_frames(&state, share.target).await,
         (ShareKind::Recording, "audio") => recording_audio(&state, share.target, req).await,
         (ShareKind::Recording, "favicon") => recording_favicon(&state, share.target).await,
+        (ShareKind::Session, "tabs") => public_tabs(&state, &share).await,
+        (ShareKind::Session, "audio") => live_audio(&state, &share, req.headers()).await,
         (ShareKind::Session, "frame") => {
             if let Some(viewer) = req
                 .headers()
@@ -607,7 +667,18 @@ pub(crate) async fn share_resource(
             {
                 state.shares.note_watcher(share.target, viewer);
             }
-            live_frame(&state, share.target).await
+            if share.browser_grant.is_some() {
+                extension_frame(
+                    &state,
+                    &share,
+                    req.headers()
+                        .get("x-share-tab")
+                        .and_then(|v| v.to_str().ok()),
+                )
+                .await
+            } else {
+                live_frame(&state, share.target).await
+            }
         }
         _ => not_found(),
     };
@@ -652,7 +723,12 @@ async fn forward(
     }
     .header(FORWARDED, "1")
     .timeout(wait.timeout());
-    for name in [header::RANGE.as_str(), VIEWER] {
+    for name in [
+        header::RANGE.as_str(),
+        VIEWER,
+        "x-share-tab",
+        "x-share-audio-since",
+    ] {
         if let Some(v) = headers.get(name) {
             req = req.header(name, v.clone());
         }
@@ -719,6 +795,16 @@ async fn info(state: &AppState, share: &Share) -> Response {
                 "expires_at": share.expires_at,
             })
         }
+        ShareKind::Session if share.browser_grant.is_some() => {
+            let Some((browser, _)) = state
+                .extensions
+                .public_browser(share.target, share.browser_grant)
+            else {
+                return not_found();
+            };
+            serde_json::json!({"kind": share.kind, "name": browser.name, "engine": browser.browser,
+                "control": share.control, "audio": browser.audio, "extension": true, "expires_at": share.expires_at})
+        }
         ShareKind::Session => {
             let Some(session) = state.sessions.read().await.get(&share.target).cloned() else {
                 return not_found();
@@ -729,6 +815,7 @@ async fn info(state: &AppState, share: &Share) -> Response {
                 "name": name,
                 "engine": session.engine,
                 "control": share.control && session.bidi.is_none(),
+                "audio": session.audio_sink.is_some(),
                 "expires_at": share.expires_at,
             })
         }
@@ -894,15 +981,262 @@ async fn live_frame(state: &AppState, id: Uuid) -> Response {
     res
 }
 
+async fn live_audio(state: &AppState, share: &Share, headers: &HeaderMap) -> Response {
+    if let Some(grant) = share.browser_grant {
+        let Some((browser, _)) = state.extensions.public_browser(share.target, Some(grant)) else {
+            return not_found();
+        };
+        if !browser.audio {
+            return refuse(StatusCode::FORBIDDEN, "The owner disabled audio");
+        }
+        let selected = share
+            .control
+            .then(|| {
+                headers
+                    .get("x-share-tab")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u32>().ok())
+            })
+            .flatten();
+        let tab = selected
+            .and_then(|id| browser.tabs.iter().find(|t| t.id == id))
+            .or_else(|| browser.tabs.iter().find(|t| t.active))
+            .or_else(|| browser.tabs.first());
+        let Some(tab) = tab else {
+            return StatusCode::NO_CONTENT.into_response();
+        };
+        let since = headers
+            .get("x-share-audio-since")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        return match state
+            .extensions
+            .public_command(
+                share.target,
+                grant,
+                tab.id,
+                "publicAudio",
+                serde_json::json!({"since":since}),
+            )
+            .await
+        {
+            Ok(result) => ([(header::CACHE_CONTROL, "no-store")], Json(result)).into_response(),
+            Err(error) => error.into_response(),
+        };
+    }
+    let Some(session) = state.sessions.read().await.get(&share.target).cloned() else {
+        return not_found();
+    };
+    let (Some(cfg), Some(sink)) = (state.config.audio.as_ref(), session.audio_sink.as_ref()) else {
+        return refuse(StatusCode::FORBIDDEN, "The owner disabled audio");
+    };
+    static LISTENERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
+    let Ok(permit) = LISTENERS.try_acquire() else {
+        return refuse(StatusCode::TOO_MANY_REQUESTS, "Too many audio listeners");
+    };
+    let Ok(mut child) = audio::encoder(cfg, sink) else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    let Some(stdout) = child.stdout.take() else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    let state = state.clone();
+    let share = share.clone();
+    let stream = futures_util::stream::unfold(
+        (child, stdout, state, share, permit),
+        |(child, mut stdout, state, share, permit)| async move {
+            use tokio::io::AsyncReadExt;
+            if state.shares.by_token(&share.token).is_none()
+                || !state.sessions.read().await.contains_key(&share.target)
+            {
+                return None;
+            }
+            let mut data = vec![0u8; 16 * 1024];
+            let size = tokio::time::timeout(Duration::from_secs(5), stdout.read(&mut data))
+                .await
+                .ok()?
+                .ok()?;
+            if size == 0 || state.shares.by_token(&share.token).is_none() {
+                return None;
+            }
+            data.truncate(size);
+            Some((
+                Ok::<_, std::io::Error>(data),
+                (child, stdout, state, share, permit),
+            ))
+        },
+    );
+    (
+        [
+            (header::CONTENT_TYPE, "audio/webm"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+async fn public_tabs(state: &AppState, share: &Share) -> Response {
+    if !share.control {
+        return refuse(StatusCode::FORBIDDEN, "This link is view only");
+    }
+    if let Some(grant) = share.browser_grant {
+        let Some((browser, _)) = state.extensions.public_browser(share.target, Some(grant)) else {
+            return not_found();
+        };
+        return Json(serde_json::json!({"tabs": browser.tabs.iter().map(|t| serde_json::json!({
+            "id": t.id.to_string(), "title": t.title, "url": t.url, "control": t.control, "active": t.active})).collect::<Vec<_>>(), "can_open": browser.can_open})).into_response();
+    }
+    let Some(session) = state.sessions.read().await.get(&share.target).cloned() else {
+        return not_found();
+    };
+    let Ok(response) = state
+        .http_client
+        .get(format!("http://127.0.0.1:{}/json/list", session.port))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+    else {
+        return not_found();
+    };
+    let Ok(pages) = response.json::<Vec<serde_json::Value>>().await else {
+        return not_found();
+    };
+    let front = recorder::pick_visible(recorder::page_candidates(pages.clone())).await;
+    let active = front.as_ref().and_then(|p| p["id"].as_str());
+    Json(serde_json::json!({"tabs": pages.iter().filter(|p| p["type"] == "page").map(|p| serde_json::json!({
+        "id":p["id"], "title":p["title"], "url":p["url"], "control":true, "active": p["id"].as_str() == active})).collect::<Vec<_>>(), "can_open": true})).into_response()
+}
+
+async fn extension_frame(state: &AppState, share: &Share, selected: Option<&str>) -> Response {
+    let Some((browser, grant)) = state
+        .extensions
+        .public_browser(share.target, share.browser_grant)
+    else {
+        return not_found();
+    };
+    let tab = if share.control {
+        selected
+            .and_then(|s| s.parse::<u32>().ok())
+            .and_then(|id| browser.tabs.iter().find(|t| t.id == id))
+    } else {
+        None
+    }
+    .or_else(|| browser.tabs.iter().find(|t| t.active))
+    .or_else(|| browser.tabs.first());
+    let Some(tab) = tab else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    let Ok(result) = state
+        .extensions
+        .public_command(
+            share.target,
+            grant,
+            tab.id,
+            "screenshot",
+            serde_json::json!({}),
+        )
+        .await
+    else {
+        return not_found();
+    };
+    let Some(data) = result["data"].as_str() else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    let Ok(jpeg) = base64::engine::general_purpose::STANDARD.decode(data) else {
+        return StatusCode::NO_CONTENT.into_response();
+    };
+    let content_type = if result["format"] == "png" {
+        "image/png"
+    } else {
+        "image/jpeg"
+    };
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        jpeg,
+    )
+        .into_response();
+    for (key, value) in [
+        ("x-page-url", site_of(&tab.url)),
+        ("x-page-title", Some(tab.title.clone())),
+    ] {
+        if let Some(value) = value.and_then(|v| {
+            HeaderValue::from_str(
+                &url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>(),
+            )
+            .ok()
+        }) {
+            response.headers_mut().insert(key, value);
+        }
+    }
+    response
+}
+
+async fn extension_input(
+    state: &AppState,
+    share: &Share,
+    grant: Uuid,
+    selected: Option<&str>,
+    ev: &Input,
+) -> Response {
+    let Some((browser, _)) = state.extensions.public_browser(share.target, Some(grant)) else {
+        return not_found();
+    };
+    let requested = match ev {
+        Input::Focus { tab } | Input::Close { tab } => Some(tab.as_str()),
+        _ => selected,
+    };
+    let tab = requested
+        .and_then(|s| s.parse::<u32>().ok())
+        .and_then(|id| browser.tabs.iter().find(|t| t.id == id))
+        .or_else(|| {
+            if requested.is_none() {
+                browser
+                    .tabs
+                    .iter()
+                    .find(|t| t.active)
+                    .or_else(|| browser.tabs.first())
+            } else {
+                None
+            }
+        });
+    let Some(tab) = tab else {
+        return refuse(StatusCode::FORBIDDEN, "Tab is not shared");
+    };
+    let (action, params) = match ev {
+        Input::Navigate { url } => ("navigate", serde_json::json!({"url":url})),
+        Input::Open { url } => ("open", serde_json::json!({"url":url})),
+        Input::Focus { .. } => ("focus", serde_json::json!({})),
+        Input::Close { .. } => ("close", serde_json::json!({})),
+        _ => ("publicInput", serde_json::to_value(ev).unwrap_or_default()),
+    };
+    match state
+        .extensions
+        .public_command(share.target, grant, tab.id, action, params)
+        .await
+    {
+        Ok(_) => Json(serde_json::json!({"ok":true})).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
 /// What a controlling viewer sends: positions are fractions (0..1) of the live
 /// picture, which shows the tab's viewport.
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Input {
     Click { x: f64, y: f64 },
     Scroll { x: f64, y: f64, dx: f64, dy: f64 },
     Key { key: String },
     Text { text: String },
+    Navigate { url: String },
+    Open { url: String },
+    Focus { tab: String },
+    Close { tab: String },
 }
 
 /// The keys a controlling viewer may press, with their Windows key codes; no
@@ -948,6 +1282,25 @@ async fn input(state: &AppState, share: &Share, body: &[u8]) -> Response {
         Ok(ev) => ev,
         Err(_) => return refuse(StatusCode::BAD_REQUEST, "Not an input"),
     };
+    if let Input::Navigate { url } | Input::Open { url } = &ev {
+        if url.len() > 8192
+            || !(url == "about:blank"
+                || url::Url::parse(url).is_ok_and(|u| {
+                    matches!(u.scheme(), "http" | "https")
+                        && u.host_str().is_some()
+                        && u.username().is_empty()
+                        && u.password().is_none()
+                }))
+        {
+            return refuse(StatusCode::BAD_REQUEST, "Use an HTTP or HTTPS URL");
+        }
+    }
+    let selected = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["selected_tab"].as_str().map(str::to_owned));
+    if let Some(grant) = share.browser_grant {
+        return extension_input(state, share, grant, selected.as_deref(), &ev).await;
+    }
     let Some(session) = state.sessions.read().await.get(&share.target).cloned() else {
         return not_found();
     };
@@ -1011,6 +1364,38 @@ async fn chromium_input(http: &reqwest::Client, port: u16, ev: &Input) -> Result
         );
         let at = |x: f64, y: f64| (x.clamp(0.0, 1.0) * w, y.clamp(0.0, 1.0) * h);
         match ev {
+            Input::Navigate { url } => {
+                cdp.call("Page.navigate", serde_json::json!({"url":url}))
+                    .await?;
+            }
+            Input::Open { url } => {
+                cdp.call("Target.createTarget", serde_json::json!({"url":url}))
+                    .await?;
+            }
+            Input::Focus { tab } | Input::Close { tab } => {
+                // Only page targets of this session, never workers or another browser.
+                let pages: Vec<serde_json::Value> = http
+                    .get(format!("http://127.0.0.1:{port}/json/list"))
+                    .send()
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .json()
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !pages
+                    .iter()
+                    .any(|p| p["type"] == "page" && p["id"].as_str() == Some(tab))
+                {
+                    return Err("Tab is not part of this session".into());
+                }
+                let method = if matches!(ev, Input::Close { .. }) {
+                    "Target.closeTarget"
+                } else {
+                    "Target.activateTarget"
+                };
+                cdp.call(method, serde_json::json!({"targetId":tab}))
+                    .await?;
+            }
             Input::Click { x, y } => {
                 let (x, y) = at(*x, *y);
                 for (kind, buttons) in

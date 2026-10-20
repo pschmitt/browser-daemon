@@ -17,7 +17,7 @@ globalThis.NodePolicy = (() => {
     'Page.captureScreenshot', 'Page.getLayoutMetrics', 'Page.getNavigationHistory', 'Page.getFrameTree',
     'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
   ]);
-  const steering = new Set(['Page.reload', 'Page.navigateToHistoryEntry', 'Page.handleJavaScriptDialog']);
+  const steering = new Set(['Page.startFiles', 'Page.stopFiles', 'Page.fileTarget', 'Page.beginFile', 'Page.fileChunk', 'Page.cancelFile', 'Page.applyFiles', 'Page.listDownloads', 'Page.readDownload', 'Page.removeDownload', 'Page.reload', 'Page.navigateToHistoryEntry', 'Page.handleJavaScriptDialog']);
   function webURL(value) {
     try {
       const u = new URL(value);
@@ -49,11 +49,11 @@ globalThis.NodePolicy = (() => {
     if (!command || !Number.isSafeInteger(command.tab) || !command.params ||
         typeof command.params !== 'object' || Array.isArray(command.params) ||
         JSON.stringify(command.params).length > 128 * 1024) return false;
-    if (['screenshot', 'snapshot'].includes(command.action)) return true;
+    if (['screenshot', 'snapshot', 'publicAudio'].includes(command.action)) return true;
     if (!control) return false;
     if (command.action === 'navigate' || command.action === 'open') return pageURL(command.params.url);
     if (command.action === 'cdp') return methods.has(command.params.method);
-    return ['click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate', 'frames', 'fill'].includes(command.action);
+    return ['publicInput', 'click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate', 'frames', 'fill'].includes(command.action);
   }
   function relayAllowed(method, params, control) {
     if (typeof method !== 'string' || !params || typeof params !== 'object' || Array.isArray(params) ||

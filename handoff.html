@@ -120,6 +120,7 @@
   .rec-pill.paused { color: var(--muted); border-color: var(--line); background: var(--btn); }
   .rec-pill.paused .rec-dot { background: var(--muted); animation: none; border-radius: 1px; width: 7px; box-shadow: none; }
   #sessMenu, #profMenu { position: fixed; z-index: 60; top: 56px; right: 8px; width: 300px; max-width: calc(100vw - 16px); padding: 6px;
+    max-height: max(0px, calc(100dvh - var(--menu-top, 56px) - 8px)); overflow-y: auto; overscroll-behavior: contain;
     background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
   #sessMenu[hidden], #profMenu[hidden] { display: none; }
   #profMenu { right: auto; left: 8px; width: 290px; }
@@ -367,6 +368,11 @@
   .sm-item:hover { background: var(--btn); }
   .sm-search { white-space: nowrap; }
   .sm-search input[type=range] { margin-left: auto; width: 45%; accent-color: var(--accent-btn); }
+  #smQualityRow input[type=range] { width: 32%; min-width: 0; }
+  #smQualityRow input[type=range]:disabled { opacity: .4; }
+  .quality-auto { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; cursor: pointer; }
+  .quality-auto input { margin: 0; accent-color: var(--accent-btn); }
+  #smQualityRow output { min-width: 2.2em; }
   .sm-search output { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted, inherit); }
   .tab-strip-item.pending .tab-strip-title { font-style: italic; }
   .sm-search select { margin-left: auto; min-width: 0; max-width: 55%; padding: 4px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--btn); color: inherit; font: inherit; }
@@ -558,12 +564,12 @@
   <button class="sm-item" id="touchesBtn" role="menuitemcheckbox" aria-checked="false" title="Mark where you tap and click, as on a phone's screen recording"></button>
   <button class="sm-item" id="smCapture" hidden><svg viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg><span id="smCaptureText">Capture keyboard (fullscreen)</span></button>
   <label class="sm-item sm-search" id="smStreamRow" hidden><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/></svg>Picture<select id="smStream" aria-label="Picture"><option value="video">Video (H.264)</option><option value="jpeg">Images (JPEG)</option></select></label>
-  <label class="sm-item sm-search" id="smQualityRow" title="JPEG quality of the picture: lower is faster on slow links. Auto: 65 (80 in Native)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15l3-3 3 3 2-2 2 2"/></svg>Quality<input type="range" id="smQuality" min="15" max="100" step="5" aria-label="Picture quality"><output id="smQualityVal"></output></label>
+  <div class="sm-item sm-search" id="smQualityRow" title="JPEG quality of the picture: lower is faster on slow links. Auto: 65 (80 in Native)"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15l3-3 3 3 2-2 2 2"/></svg><span>Quality</span><input type="range" id="smQuality" min="15" max="100" step="5" aria-label="Picture quality"><output id="smQualityVal"></output><label class="quality-auto"><input type="checkbox" id="smQualityAuto">Auto</label></div>
   <div class="sm-label">Browser</div>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search<select id="smSearch" aria-label="Search engine"></select></label>
   <button class="sm-item" id="smDownloads" hidden><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span id="smDownloadsText">Downloads</span></button>
-  <button class="sm-item" id="smShare" title="A link anyone can open to see this session, without signing in"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span id="smShareText">Share…</span></button>
+  <button class="sm-item" id="smShare" title="A link anyone can open to see this session, without signing in"><svg viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/></svg><span id="smShareText">Share…</span></button>
   <button class="sm-item" id="smNotes"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></svg><span id="smNotesText">Notes…</span></button>
  <button class="sm-item" id="smSave" hidden title="Keep this session's logins, cookies and storage as a new profile"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
@@ -947,9 +953,9 @@ const PASSKEY_HOOK = `(() => {
 })()`;
 
 // JPEG quality of the picture, chosen here per viewer (null: automatic).
-// 100 on the slider means automatic; 15 to 95 a fixed quality.
+// Auto is a separate choice; the manual slider spans 15 through 100.
 let jpegQuality = (() => {
-  try { const v = Number(localStorage.getItem("bd-jpeg-quality")); return v >= 15 && v <= 95 ? v : null; } catch { return null; }
+  try { const v = Number(localStorage.getItem("bd-jpeg-quality")); return v >= 15 && v <= 100 ? v : null; } catch { return null; }
 })();
 const castQuality = (mode) => jpegQuality ?? (mode === "native" ? 80 : 65);
 
@@ -958,7 +964,7 @@ class CdpDriver {
   // agent and pages belong to that person: no resizing, emulation or hooks.
   constructor(url, h, { shared = false } = {}) {
     this.h = h; this.shared = shared;
-    this.cdp = new Cdp(url, { event: (m, p) => this.onEvent(m, p), close: () => { if (audio.sharedDriver === this) stopAudio(); h.close(this); } });
+    this.cdp = new Cdp(url, { event: (m, p) => this.onEvent(m, p), close: () => { if (audio.sharedDriver === this) stopAudio(); if (downloads.owner === this) clearSharedDownloads(); h.close(this); } });
     this.ready = this.cdp.ready;
   }
   isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
@@ -992,6 +998,7 @@ class CdpDriver {
       this.passkeyBeatNow = beat;
       beat();
       this.passkeyBeat = setInterval(() => { if (this.isOpen()) beat(); else clearInterval(this.passkeyBeat); }, 3000);
+      await this.ensureFiles();
       return;
     }
     // Toolbar height, measured before any emulation: where the page starts on the
@@ -1155,6 +1162,8 @@ class CdpDriver {
       return;
     }
     if (method === "Runtime.bindingCalled" && p.name === "__bdPasskey") { passkeyRequested(this, p.payload); return; }
+    if (method === "Page.downloadProgress") { if (this === drv && this.filesActive) downloadEvent(p); return; }
+    if (method === "Page.filesStopped") { this.filesActive = false; if (downloads.owner === this) clearSharedDownloads(); fileAsk?.finish(null); return; }
     if (method === "Page.audioChunk") { playSharedAudio(this, p); return; }
     if (method === "Page.audioStopped") { if (audio.sharedDriver === this) stopAudio(); return; }
     if (method === "Page.windowOpen") { h.popup(p.url); return; }
@@ -1202,6 +1211,12 @@ class CdpDriver {
   // The page opened a file chooser (intercepted, see start): what is picked here goes
   // into its file input.
   async fileChooser(p) {
+    if (this.shared && p.fileRequest) {
+      await sendFilesToPage({multiple: p.mode === "selectMultiple", accept: p.accept || "", recent: this.inputRecent(), uploadTarget: p.fileRequest},
+        files => this.cdp.call("Page.applyFiles", {target: p.fileRequest, files}));
+      return;
+    }
+    if (this.shared) return;
     if (!p.backendNodeId) { toast("The page asks for files, but not through a file input", 4000); return; }
     const attrs = await this.cdp.call("DOM.describeNode", { backendNodeId: p.backendNodeId })
       .then((r) => r?.node?.attributes || []).catch(() => []);
@@ -1209,6 +1224,48 @@ class CdpDriver {
     for (let i = 0; i + 1 < attrs.length; i += 2) if (attrs[i] === "accept") accept = attrs[i + 1];
     await sendFilesToPage({ multiple: p.mode === "selectMultiple", accept, recent: this.inputRecent() },
       (files) => this.cdp.call("DOM.setFileInputFiles", { files, backendNodeId: p.backendNodeId }));
+  }
+  async ensureFiles() {
+    if (!this.shared) return;
+    const allowed = sharedBrowser?.files && sharedBrowser.tabs.some(t => String(t.id) === pageId && t.control);
+    if (!allowed) {
+      if (this.filesActive) this.cdp.send("Page.stopFiles");
+      this.filesActive = false; this.filesFailed = false;
+      if (downloads.owner === this) clearSharedDownloads();
+      return;
+    }
+    if (this.filesActive || this.filesStarting || this.filesFailed) return;
+    this.filesStarting = true;
+    try {
+      await this.cdp.call("Page.startFiles");
+      if (drv !== this) { this.cdp.send("Page.stopFiles"); return; }
+      this.filesActive = true;
+      await loadDownloads(target?.sessionId);
+    } catch { this.filesFailed = true; toast("File transfer needs site access. Enable it again in the browser extension.", 4000); }
+    finally { this.filesStarting = false; }
+  }
+  async fileTarget(x, y) {
+    if (!sharedBrowser?.tabs.some(t => String(t.id) === pageId && t.control)) throw new Error("File transfer needs a tab shared with control");
+    if (!this.filesActive) throw new Error("Enable File transfer in the browser extension");
+    return (await this.cdp.call("Page.fileTarget", {x, y})).target;
+  }
+  async uploadFile(file, uploadTarget) {
+    if (!this.filesActive || !uploadTarget) throw new Error("File transfer is not active");
+    if (file.size > 1024 * 1024 * 1024) throw new Error("Files are limited to 1 GiB");
+    const {id} = await this.cdp.call("Page.beginFile", {target: uploadTarget, name: file.name, type: file.type, size: file.size, lastModified: file.lastModified});
+    try {
+      // Eight bounded chunks in flight keep the round trip from limiting throughput.
+      for (let offset = 0; offset < file.size;) {
+        const pending = [];
+        for (let i = 0; i < 8 && offset < file.size; i++) {
+          const start = offset; offset = Math.min(file.size, offset + 65536);
+          const bytes = new Uint8Array(await file.slice(start, offset).arrayBuffer());
+          pending.push(this.cdp.call("Page.fileChunk", {id, offset: start, data: encodeFileBytes(bytes)}));
+        }
+        await Promise.all(pending);
+      }
+      return id;
+    } catch (error) { this.cdp.send("Page.cancelFile", {id}); throw error; }
   }
   inputRecent(ms = FILE_PICK_WINDOW) { return performance.now() - (this.lastInput || -1e9) < ms; }
   async evaluate(expression) {
@@ -1245,7 +1302,8 @@ class CdpDriver {
   mouseUp(x, y, clickCount, button = 0) {
     this.inputSeen(); this.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: CDP_BUTTONS[button], buttons: 0, clickCount }); }
   // Drop local files (paths on the browser's host) onto the page, like a desktop drag.
-  async dropFiles(x, y, files) {
+  async dropFiles(x, y, files, target) {
+    if (this.shared) return this.cdp.call("Page.applyFiles", {target, files});
     const data = { items: [], files, dragOperationsMask: 1 };
     for (const type of ["dragEnter", "dragOver", "drop"]) await this.cdp.call("Input.dispatchDragEvent", { type, x, y, data });
   }
@@ -1592,6 +1650,7 @@ async function fetchTargets() {
   if (sharedBrowserId) {
     const result = await getJson(`${sharedBase}/extension/nodes`);
     sharedBrowser = result.nodes.find(n => n.id === sharedBrowserId);
+    sharedPublicShare = sharedBrowser?.share || null;
     if (!sharedBrowser || sharedBrowser.online === false) throw new Error("This browser is offline. Reconnect it from the extension.");
     const pages = sharedBrowser.tabs.map(t => ({...t, id: String(t.id), type: "page", sessionId: sharedBrowser.id, engine: sharedBrowser.browser}));
     // No live tab (none shared yet, or the shown one went away): follow the
@@ -2415,6 +2474,35 @@ function zoomAt(cx, cy, z, from = zoom, to = { x: cx, y: cy }) {
   applyZoom();
 }
 $("zoomReset").onclick = () => { zoom.z = 1; applyZoom(); };
+// Desktop shortcuts magnify the local picture; they never reach the remote tab.
+addEventListener("keydown", e => {
+  if (!e.ctrlKey || e.altKey || e.metaKey || !["+", "=", "-", "0"].includes(e.key) ||
+      e.target.closest?.("input:not(#kb), textarea, [contenteditable=true]")) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  const r = E.stage.getBoundingClientRect();
+  zoomAt(r.left + r.width / 2, r.top + r.height / 2,
+    e.key === "0" ? 1 : zoom.z * (e.key === "-" ? 1 / 1.2 : 1.2));
+}, true);
+const viewerOnly = () => !!sharedBrowserId && !sharedBrowser?.tabs.some(t => String(t.id) === pageId && t.control);
+let localPan = null;
+E.view.addEventListener("pointerdown", e => {
+  if (!viewerOnly() || e.button !== 0) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  E.view.setPointerCapture(e.pointerId);
+  localPan = {id: e.pointerId, x: e.clientX, y: e.clientY, from: {...zoom}};
+  E.view.style.cursor = "grabbing";
+}, true);
+E.view.addEventListener("pointermove", e => {
+  if (!localPan || localPan.id !== e.pointerId) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  zoomAt(localPan.x, localPan.y, localPan.from.z, localPan.from, {x: e.clientX, y: e.clientY});
+}, true);
+for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) E.view.addEventListener(type, e => {
+  if (!localPan || localPan.id !== e.pointerId) return;
+  localPan = null; E.view.style.cursor = "";
+  e.stopImmediatePropagation();
+}, true);
+
 E.view.addEventListener("pointerdown", (e) => {
   if (e.pointerType !== "touch") return;
   fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -3632,18 +3720,35 @@ E.stage.addEventListener("drop", async (e) => {
   const label = filesLabel(files);
   try {
     toast(`Sending ${label}…`, 0);
-    const paths = await uploadFiles(files);
-    await drv.dropFiles(Math.round(p.x), Math.round(p.y), paths);
+    const owner = drv;
+    const uploadTarget = owner.shared ? await owner.fileTarget(Math.round(p.x), Math.round(p.y)) : null;
+    const paths = await uploadFiles(files, uploadTarget, owner);
+    if (drv !== owner) throw new Error("The viewed tab changed");
+    try { await owner.dropFiles(Math.round(p.x), Math.round(p.y), paths, uploadTarget); }
+    catch (error) { if (owner.shared) for (const id of paths) owner.cdp.send("Page.cancelFile", {id}); throw error; }
     toast(`Dropped ${label}`);
   } catch (err) {
     toast(`Could not drop ${label}: ${err.message}`, 4000);
   }
 });
 
+function encodeFileBytes(bytes) { let raw = ''; for (let i = 0; i < bytes.length; i += 8192) raw += String.fromCharCode(...bytes.subarray(i, i + 8192)); return btoa(raw); }
 const filesLabel = (files) => (files.length === 1 ? files[0].name : `${files.length} files`);
 // Stored on the browser's host (the session's upload directory, removed with the
 // session): what the page gets are those paths.
-async function uploadFiles(files) {
+async function uploadFiles(files, uploadTarget = null, owner = drv) {
+  if (files.some(file => file.size > 1024 * 1024 * 1024)) throw new Error("Files are limited to 1 GiB");
+  if (owner?.shared) {
+    if (files.length > 32) throw new Error("Select at most 32 files");
+    const ids = [];
+    try {
+      for (const file of files) {
+        if (drv !== owner) throw new Error("The viewed tab changed");
+        ids.push(await owner.uploadFile(file, uploadTarget));
+      }
+      return ids;
+    } catch (error) { for (const id of ids) owner.cdp.send("Page.cancelFile", {id}); throw error; }
+  }
   const paths = [];
   for (const f of files) {
     const res = await fetch(`/api/sessions/${encodeURIComponent(target.sessionId)}/files?name=${encodeURIComponent(f.name)}`,
@@ -3694,12 +3799,14 @@ function openFilePicker(input) {
 $("fileAskChoose").onclick = () => { if (fileAsk && openFilePicker($("pageFiles"))) $("fileAsk").hidden = true; };
 $("fileAskCancel").onclick = () => fileAsk?.finish(null);
 async function sendFilesToPage(opts, put) {
+  const owner = drv, page = pageId;
   const files = await chooseFiles(opts);
-  if (!files || !target?.sessionId) return;
+  if (!files || !target?.sessionId || drv !== owner || pageId !== page) return;
   const label = filesLabel(files);
   try {
     toast(`Sending ${label}…`, 0);
-    await put(await uploadFiles(files));
+    const ids = await uploadFiles(files, opts.uploadTarget, owner);
+    try { await put(ids); } catch (error) { if (owner?.shared) for (const id of ids) owner.cdp.send("Page.cancelFile", {id}); throw error; }
     toast(`Sent ${label}`);
   } catch (err) {
     toast(`Could not send ${label}: ${err.message}`, 4000);
@@ -3788,16 +3895,21 @@ async function sessionApi(method, path) {
 }
 
 {
-  const slider = $("smQuality"), out = $("smQualityVal");
-  const show = () => { out.textContent = jpegQuality ? String(jpegQuality) : "Auto"; };
-  slider.value = String(jpegQuality ?? 100); show();
-  slider.oninput = () => { const v = Number(slider.value); jpegQuality = v >= 100 ? null : v; show(); };
-  // Applied on release: the picture restarts at the new quality.
-  slider.onchange = () => {
-    try { jpegQuality ? localStorage.setItem("bd-jpeg-quality", String(jpegQuality)) : localStorage.removeItem("bd-jpeg-quality"); } catch { /* per session then */ }
+  const slider = $("smQuality"), out = $("smQualityVal"), auto = $("smQualityAuto");
+  const show = () => {
+    auto.checked = jpegQuality === null;
+    slider.disabled = auto.checked;
+    out.textContent = String(auto.checked ? castQuality(layoutMode === "native" ? "native" : undefined) : jpegQuality);
+  };
+  slider.value = String(jpegQuality ?? 65); show();
+  const apply = () => {
+    try { jpegQuality === null ? localStorage.removeItem("bd-jpeg-quality") : localStorage.setItem("bd-jpeg-quality", String(jpegQuality)); } catch { /* per session then */ }
     if (drv?.lastMetrics && drv.applyMetrics) drv.applyMetrics(drv.lastMetrics).catch(() => {});
     else applyMetrics().catch(() => {});
   };
+  slider.oninput = () => { jpegQuality = Number(slider.value); show(); };
+  slider.onchange = apply;
+  auto.onchange = () => { jpegQuality = auto.checked ? null : Number(slider.value); show(); apply(); };
 }
 
 // The node's proxies, for the session menu (not reachable through the public view).
@@ -3867,6 +3979,7 @@ function showProfMenu(open = $("profMenu").hidden) {
   closeSessPop?.();
   const r = E.profChip.getBoundingClientRect();
   menu.style.top = (r.bottom + 6) + "px";
+  menu.style.setProperty("--menu-top", menu.style.top);
   menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + "px";
   const named = !!sess?.profile;
   $("pmProfile").hidden = !named;
@@ -3969,7 +4082,7 @@ $("pmSave").onclick = () => { showProfMenu(false); $("smSave").click(); };
 // signing in, until the session ends, the link expires or it is unshared.
 const SH_GLOBE = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>';
 const shareApi = async (method, path, body) => {
-  const res = await fetch(path, {
+  const res = await fetch(sharedBrowserId ? `${sharedBase}${path.replace(/^\/api/, "")}` : path, {
     method, headers: authHeaders(body ? { "Content-Type": "application/json" } : {}), body: body ? JSON.stringify(body) : undefined,
   });
   const out = await res.json().catch(() => ({}));
@@ -3978,7 +4091,10 @@ const shareApi = async (method, path, body) => {
 };
 const nowSecs = () => Math.floor(Date.now() / 1000);
 const fmtWhen = (secs) => new Date(secs * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-let shBusy = false, shStopArmed = 0;
+let shBusy = false, shStopArmed = 0, sharedPublicShare = null;
+const shareContext = () => sharedBrowserId ? {share: sharedPublicShare} : sess;
+const setCurrentShare = value => { if (sharedBrowserId) sharedPublicShare = value; else sess.share = value; };
+const renderShareSession = () => sharedBrowserId ? renderSharedSession() : renderSession();
 
 async function copyPublicLink(url, btn) {
   try {
@@ -3992,8 +4108,12 @@ async function copyPublicLink(url, btn) {
     toast("Could not copy: long-press the link to copy it", 3000);
   }
 }
-function openShareDialog() {
-  if (!sess || !target?.sessionId) return;
+async function openShareDialog() {
+  if (sharedBrowserId) {
+    if (!sharedBrowser?.public_share) { toast('Enable Allow public links in the browser extension', 4000); return; }
+    try { sharedPublicShare = (await shareApi("GET", "/api/shares")).find(s => s.kind === "session" && s.target === sharedBrowserId) || null; }
+    catch (error) { toast(error.message, 4000); return; }
+  } else if (!sess || !target?.sessionId) return;
   toggleSessMenu(false);
   shStopArmed = 0;
   renderShareDialog();
@@ -4003,8 +4123,8 @@ function openShareDialog() {
 // Also called on every session refresh while it is open (watchers, expiry).
 function renderShareDialog() {
   const dlg = $("shareDialog");
-  const sh = sess?.share;
-  const firefox = (sess?.engine || "chromium") !== "chromium";
+  const sh = shareContext()?.share;
+  const firefox = !sharedBrowserId && (sess?.engine || "chromium") !== "chromium";
   dlg.classList.toggle("shared", !!sh);
   $("shTitle").textContent = sh ? "Shared publicly" : "Share";
   $("shState").hidden = !sh;
@@ -4018,7 +4138,7 @@ function renderShareDialog() {
   const ctl = $("shCtl");
   if (document.activeElement !== ctl && !shBusy) ctl.checked = !!sh?.control;
   ctl.disabled = firefox || shBusy;
-  $("shCtlNote").textContent = firefox ? "Works for Chromium sessions only." : "Visitors can click, scroll and type in the page, as you.";
+  $("shCtlNote").textContent = firefox ? "Works for Chromium sessions only." : "Visitors can navigate, manage tabs, click, scroll and type as you.";
   $("shWarn").hidden = !ctl.checked;
   $("shLinkRow").hidden = !sh;
   if (sh && $("shUrl").getAttribute("href") !== sh.url) { $("shUrl").href = sh.url; $("shUrl").innerHTML = urlHtml(sh.url); }
@@ -4048,36 +4168,36 @@ function renderShareDialog() {
 }
 // Sends the dialog's choices: makes the link, or changes the existing one.
 async function saveShare() {
-  const sh = sess?.share;
+  const sh = shareContext()?.share;
   const choice = $("shExp").value;
   const expires = choice === "keep" ? (sh?.expires_at ? Math.max(1, sh.expires_at - nowSecs()) : null) : Number(choice) || null;
   const control = $("shCtl").checked && !$("shCtl").disabled;
   shBusy = true;
   try {
-    sess.share = await shareApi("POST", "/api/shares", { kind: "session", id: target.sessionId, control, expires_in_secs: expires });
-    if (!sh) copyPublicLink(sess.share.url);
+    setCurrentShare(await shareApi("POST", "/api/shares", { kind: "session", id: sharedBrowserId || target.sessionId, control, expires_in_secs: expires }));
+    if (!sh) copyPublicLink(shareContext().share.url);
     else toast(control ? "Visitors can control the session now" : "The link is updated", 2000);
   } catch (err) {
     toast(`Could not ${sh ? "change" : "create"} the link: ${err.message}`, 5000);
   } finally {
     shBusy = false;
-    renderSession();
+    renderShareSession();
     renderShareDialog();
   }
 }
 $("shCtl").onchange = () => {
   $("shWarn").hidden = !$("shCtl").checked;
   // An existing link changes right away; a new one waits for "Create".
-  if (sess?.share) saveShare();
+  if (shareContext()?.share) saveShare();
 };
-$("shExp").onchange = () => { if (sess?.share) saveShare(); };
+$("shExp").onchange = () => { if (shareContext()?.share) saveShare(); };
 $("shCopy").onclick = () => copyPublicLink($("shUrl").getAttribute("href"), $("shCopy"));
 $("shQrBtn").onclick = () => zoomImage($("shQr").src, "QR code of the public link");
-$("shGo").onclick = () => { if (sess?.share) $("shareDialog").close(); else saveShare(); };
+$("shGo").onclick = () => { if (shareContext()?.share) $("shareDialog").close(); else saveShare(); };
 $("shClose").onclick = () => $("shareDialog").close();
 // Two taps: the first arms the button, the second stops sharing.
 $("shStop").onclick = async () => {
-  if (!sess?.share) return;
+  if (!shareContext()?.share) return;
   if (shStopArmed < Date.now()) {
     shStopArmed = Date.now() + 4000;
     renderShareDialog();
@@ -4085,9 +4205,9 @@ $("shStop").onclick = async () => {
     return;
   }
   try {
-    await shareApi("DELETE", `/api/shares/${encodeURIComponent(sess.share.id)}`);
-    sess.share = undefined;
-    renderSession();
+    await shareApi("DELETE", `/api/shares/${encodeURIComponent(shareContext().share.id)}`);
+    setCurrentShare(undefined);
+    renderShareSession();
     $("shareDialog").close();
     toast("No longer shared: the link stopped working", 2500);
   } catch (err) {
@@ -4428,8 +4548,67 @@ renderAudioButton();
 // own click or tap is saved to this device by itself once it is done; any other
 // waits in the tray (and the Downloads menu) for Save.
 const DL_WANT_WINDOW = 5000;
-const downloads = { session: null, list: new Map(), wanted: new Set(), shown: null };
-const dlUrl = (id) => `/api/sessions/${encodeURIComponent(downloads.session)}/downloads/${encodeURIComponent(id)}`;
+const downloads = { session: null, list: new Map(), wanted: new Set(), shown: null, owner: null, blobs: new Map() };
+const dlUrl = (id) => downloads.owner ? (downloads.blobs.get(id)?.url || "#") : `/api/sessions/${encodeURIComponent(downloads.session)}/downloads/${encodeURIComponent(id)}`;
+function clearSharedDownloads() {
+  for (const item of downloads.blobs.values()) if (item.url) { URL.revokeObjectURL(item.url); prefetchedFiles.delete(item.url); }
+  Object.assign(downloads, {session: null, list: new Map(), wanted: new Set(), shown: null, owner: null, blobs: new Map()});
+  $("dlTray").hidden = true;
+  renderDownloadsMenu();
+}
+function sharedDownloadUrl(d) {
+  const existing = downloads.blobs.get(d.id);
+  if (existing) return existing.promise;
+  const owner = downloads.owner;
+  if (!owner || d.state !== "completed" || d.received_bytes > 1024 * 1024 * 1024) return Promise.reject(new Error("Download is not ready"));
+  let reserved = [...downloads.blobs.values()].reduce((sum, item) => sum + (item.size || 0), 0);
+  for (const [id, item] of downloads.blobs) {
+    if (reserved + d.received_bytes <= 2 * 1024 * 1024 * 1024) break;
+    if (!item.url) continue;
+    URL.revokeObjectURL(item.url); prefetchedFiles.delete(item.url); downloads.blobs.delete(id); reserved -= item.size || 0;
+  }
+  if (reserved + d.received_bytes > 2 * 1024 * 1024 * 1024) return Promise.reject(new Error("Finish or remove another shared file first"));
+  const entry = {url: null, promise: null, size: d.received_bytes, received: 0};
+  entry.promise = (async () => {
+    const parts = [];
+    let offset = 0;
+    do {
+      if (downloads.owner !== owner || drv !== owner) throw new Error("The viewed tab changed");
+      const count = Math.min(8, Math.max(1, Math.ceil((d.received_bytes - offset) / 65536)));
+      const batch = await Promise.all(Array.from({length: count}, (_, index) => owner.cdp.call("Page.readDownload", {id: d.id, offset: offset + index * 65536})));
+      for (const chunk of batch) {
+        if (typeof chunk.data !== "string" || chunk.data.length > 87384) throw new Error("Invalid download chunk");
+        const bytes = Uint8Array.from(atob(chunk.data), c => c.charCodeAt(0));
+        if ((!bytes.length && !chunk.eof) || (bytes.length !== 65536 && offset + bytes.length !== d.received_bytes)) throw new Error("Incomplete download");
+        parts.push(bytes); offset += bytes.length;
+        if (offset > d.received_bytes) throw new Error("Invalid download size");
+      }
+      entry.received = offset;
+      if (downloads.shown === d.id) $("dlTraySub").textContent = `Receiving ${fmtBytes(offset)} of ${fmtBytes(d.received_bytes)}`;
+    } while (offset < d.received_bytes);
+    if (offset !== d.received_bytes || downloads.owner !== owner || !downloads.list.has(d.id)) throw new Error("Download is no longer available");
+    entry.url = URL.createObjectURL(new Blob(parts, {type: /\.pdf$/i.test(d.name) ? "application/pdf" : "application/octet-stream"}));
+    if (saveNeedsHelp(d.name)) prefetchFile(entry.url, d.name).catch(() => {});
+    renderDownloadsList();
+    if (downloads.shown === d.id) showTray(d);
+    return entry.url;
+  })();
+  entry.promise.catch(() => { if (downloads.blobs.get(d.id) === entry) downloads.blobs.delete(d.id); });
+  downloads.blobs.set(d.id, entry);
+  return entry.promise;
+}
+function downloadLink(a, d) {
+  a.href = dlUrl(d.id);
+  if (downloads.owner && a.href.endsWith("#")) {
+    const preparing = downloads.blobs.has(d.id);
+    a.textContent = preparing ? "Preparing…" : "Save"; a.removeAttribute("download");
+    a.removeAttribute("aria-disabled");
+    a.onclick = e => { e.preventDefault(); saveDownload(d); };
+  } else {
+    a.textContent = "Save"; a.download = d.name; a.removeAttribute("aria-disabled"); a.onclick = null;
+  }
+}
+
 function fmtBytes(n) {
   if (n == null) return "";
   if (n < 1024) return `${n} B`;
@@ -4443,6 +4622,19 @@ function dlStatus(d) {
   return d.received_bytes ? `${fmtBytes(d.received_bytes)}…` : "Downloading…";
 }
 async function loadDownloads(sessionId) {
+  if (drv?.shared) {
+    const owner = drv;
+    const key = `extension:${sharedBrowserId}:${pageId}`;
+    if (downloads.session !== key || downloads.owner !== owner) { clearSharedDownloads(); downloads.session = key; downloads.owner = owner; }
+    try {
+      const result = await owner.cdp.call("Page.listDownloads");
+      if (drv !== owner || downloads.owner !== owner) return;
+      for (const d of result.downloads || []) downloads.list.set(d.id, d);
+    } catch { /* A revoked or disconnected view cannot read the cache. */ }
+    renderDownloadsMenu();
+    return;
+  }
+  if (downloads.owner) clearSharedDownloads();
   if (downloads.session !== sessionId) Object.assign(downloads, { session: sessionId, list: new Map(), wanted: new Set(), shown: null });
   $("dlTray").hidden = true;
   try {
@@ -4453,25 +4645,30 @@ async function loadDownloads(sessionId) {
   renderDownloadsMenu();
 }
 function downloadEvent(d) {
-  if (d.removed) { downloads.list.delete(d.id); if (downloads.shown === d.id) $("dlTray").hidden = true; renderDownloadsMenu(); return; }
+  if (d.removed) { const item = downloads.blobs.get(d.id); if (item?.url) { URL.revokeObjectURL(item.url); prefetchedFiles.delete(item.url); } downloads.blobs.delete(d.id); downloads.list.delete(d.id); if (downloads.shown === d.id) $("dlTray").hidden = true; renderDownloadsMenu(); return; }
   const fresh = !downloads.list.has(d.id);
   downloads.list.set(d.id, d);
+  if (downloads.owner && d.state === "completed") sharedDownloadUrl(d).catch(() => {});
   if (fresh && d.state === "in_progress" && drv?.inputRecent?.(DL_WANT_WINDOW)) downloads.wanted.add(d.id);
   if (d.state === "completed" && saveNeedsHelp(d.name)) {
     // No saving without a tap here (see saveNeedsHelp): the tray's Save shares it.
     downloads.wanted.delete(d.id);
-    prefetchFile(dlUrl(d.id), d.name).catch(() => {});
-  } else if (d.state === "completed" && downloads.wanted.delete(d.id)) { saveDownload(d); toast(`Saved ${d.name}`, 2500); }
+    if (!downloads.owner) prefetchFile(dlUrl(d.id), d.name).catch(() => {});
+  } else if (d.state === "completed" && downloads.wanted.delete(d.id)) { saveDownload(d).then(saved => { if (saved) toast(`Saved ${d.name}`, 2500); }); }
   showTray(d);
   renderDownloadsMenu();
 }
-function saveDownload(d) {
+async function saveDownload(d) {
+  if (downloads.owner) {
+    try { await sharedDownloadUrl(d); } catch (error) { toast(`Could not save ${d.name}: ${error.message}`, 4000); return false; }
+  }
   const a = document.createElement("a");
   a.href = dlUrl(d.id);
   a.download = d.name;
   document.body.append(a);
   a.click();
   a.remove();
+  return true;
 }
 function showTray(d) {
   downloads.shown = d.id;
@@ -4479,8 +4676,7 @@ function showTray(d) {
   $("dlTraySub").textContent = dlStatus(d);
   const save = $("dlTraySave");
   save.hidden = d.state !== "completed";
-  save.href = dlUrl(d.id);
-  save.download = d.name;
+  if (d.state === "completed") downloadLink(save, d);
   $("dlTray").hidden = false;
   clearTimeout(showTray.timer);
   // Finished ones go away after a while; Save stays reachable in the menu.
@@ -4516,17 +4712,19 @@ function renderDownloadsList() {
       const a = document.createElement("a");
       a.className = "btn-xs";
       a.textContent = "Save";
-      a.href = dlUrl(d.id);
-      a.download = d.name;
+      downloadLink(a, d);
       li.append(a);
     }
     const del = document.createElement("button");
     del.type = "button";
     del.className = "btn-xs quiet";
     del.textContent = "Remove";
-    del.title = "Delete it from the browser's node";
+    del.title = downloads.owner ? "Remove the shared copy" : "Delete it from the browser's node";
     del.onclick = async () => {
-      const res = await fetch(dlUrl(d.id), { method: "DELETE", headers: authHeaders() }).catch(() => null);
+      const entry = downloads.blobs.get(d.id);
+      const res = downloads.owner ? await downloads.owner.cdp.call("Page.removeDownload", {id: d.id}).then(() => ({ok: true}), () => null)
+        : await fetch(dlUrl(d.id), { method: "DELETE", headers: authHeaders() }).catch(() => null);
+      if (res?.ok && entry) { if (entry.url) URL.revokeObjectURL(entry.url); downloads.blobs.delete(d.id); }
       if (res?.ok) { downloads.list.delete(d.id); renderDownloadsMenu(); renderDownloadsList(); } else toast("Could not remove it", 2500);
     };
     li.append(del);
@@ -4958,10 +5156,17 @@ function renderSharedSession() {
   $('smTitle').onclick = null; $('smTitle').removeAttribute('role'); $('smTitle').removeAttribute('tabindex');
   $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Key expiry disabled' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}`;
   setEngineIcon($('smEngine'), sharedBrowser.browser);
-  for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smDownloads', 'smShare', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow']) $(id).hidden = true;
+  for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow']) $(id).hidden = true;
+  $('smShare').disabled = !sharedBrowser.public_share;
+  $('smShare').title = sharedBrowser.public_share ? 'Create or manage a public link' : 'Enable Allow public links in the browser extension';
+  $('pubPill').hidden = !sharedPublicShare || !sharedBrowser.public_share;
+  $('smShareText').textContent = sharedPublicShare ? 'Public link…' : 'Share…';
+  if ($('shareDialog').open) renderShareDialog();
   E.audioBtn.hidden = !sharedBrowser.audio;
   if (audio.context && (!sharedBrowser.audio || audio.sharedPage !== pageId || audio.sharedDriver !== drv)) stopAudio();
   if (sharedBrowser.audio && audioWanted && !audio.context && drv?.shared) startSharedAudio();
+  if (drv?.shared) void drv.ensureFiles();
+  renderDownloadsMenu();
   // The vault fills logins into tabs the owner lets viewers control.
   $('vaultBtn').hidden = !control;
   // New tabs need control (they are shared with it); recording needs none.
@@ -5003,7 +5208,7 @@ E.sessMenu.addEventListener("click", (e) => {
   if (!item || item.disabled || item.id === "smStop" || item.dataset.rec === "sound" || item.dataset.rec === "record-audio" || item.id === "smTitle") return;
   setTimeout(() => toggleSessMenu(false), 0);
 });
-E.sessMenu.addEventListener("change", () => setTimeout(() => toggleSessMenu(false), 0));
+E.sessMenu.addEventListener("change", e => { if (!e.target.closest("#smQualityRow")) setTimeout(() => toggleSessMenu(false), 0); });
 addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || E.sessMenu.hidden) return;
   e.preventDefault();
@@ -5019,6 +5224,7 @@ function toggleSessMenu(open = E.sessMenu.hidden) {
     $("profMenu").hidden = true;
     const r = E.sessBtn.getBoundingClientRect();
     E.sessMenu.style.top = (r.bottom + 6) + "px";
+    E.sessMenu.style.setProperty("--menu-top", E.sessMenu.style.top);
     $("smFwd").disabled = E.fwd.disabled;
     refreshSession();
   }

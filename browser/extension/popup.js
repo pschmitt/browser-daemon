@@ -143,6 +143,8 @@ async function refresh() {
     if (document.activeElement !== $('autoShare')) $('autoShare').checked = state.sharing.autoShare;
     if (document.activeElement !== $('shareAll')) $('shareAll').checked = state.sharing.all;
     if (document.activeElement !== $('follow')) $('follow').checked = state.sharing.follow;
+    if (document.activeElement !== $('shareFiles')) $('shareFiles').checked = state.sharing.files;
+    if (document.activeElement !== $('sharePublic')) $('sharePublic').checked = state.sharing.public;
     if (document.activeElement !== $('shareAudio')) $('shareAudio').checked = state.sharing.audio;
     $('autoShareRow').hidden = state.sharing.all;
     $('serverHost').textContent = new URL(reg.server).host;
@@ -306,4 +308,18 @@ $('shareAudio').addEventListener('click', () => {
     if (!allowed) throw new Error('Site access is needed to share media sound.');
     return message({type: 'shareAudio', enabled});
   }).then(refresh, error => { $('shareAudio').checked = !enabled; showError(error); });
+});
+
+$('shareFiles').addEventListener('click', () => {
+  const enabled = $('shareFiles').checked;
+  const permission = enabled ? api.permissions.request({origins: state.chromium ? ['http://*/*', 'https://*/*'] : ['<all_urls>'],
+    ...(!state.chromium ? {permissions: ['webRequest', 'webRequestBlocking', 'webRequestFilterResponse']} : {})}) : Promise.resolve(true);
+  void permission.then(allowed => {
+    if (!allowed) throw new Error('Site access is needed for file transfer.');
+    return message({type: 'shareFiles', enabled});
+  }).then(refresh, error => { $('shareFiles').checked = !enabled; showError(error); });
+});
+
+$('sharePublic').addEventListener('change', () => {
+  void message({type: 'sharePublic', enabled: $('sharePublic').checked}).then(refresh, showError);
 });

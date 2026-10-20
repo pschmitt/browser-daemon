@@ -71,7 +71,7 @@ async function saveWithHelp(url, name) {
     }
   }
   const u = new URL(url, location.href);
-  u.searchParams.set("inline", "1");
+  if (u.protocol !== "blob:") u.searchParams.set("inline", "1");
   location.href = u.href;
 }
 document.addEventListener("click", (e) => {

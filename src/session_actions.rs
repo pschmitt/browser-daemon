@@ -355,7 +355,7 @@ pub(crate) async fn api_session_set_proxy(
 }
 
 /// Largest file handoff can drop into a page.
-pub(crate) const MAX_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
+pub(crate) const MAX_UPLOAD_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Files dropped into a session's pages, removed when the session stops.
 pub(crate) fn upload_dir(session: &Uuid) -> PathBuf {

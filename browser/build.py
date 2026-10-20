@@ -28,7 +28,7 @@ def main():
             "version": VERSION,
             "description": "Temporarily share selected tabs with your browser daemon, with optional remote control.",
             "permissions": ["tabs", "storage", "scripting", "alarms"],
-            "optional_host_permissions": ["http://*/*", "https://*/*"],
+            "host_permissions": ["http://*/*", "https://*/*"],
             "action": {"default_popup": "popup.html", "default_title": "Browser node", "default_icon": "icon.png"},
             "icons": {"192": "icon.png"},
             "commands": {"stop-sharing": {
@@ -46,9 +46,9 @@ def main():
             manifest["permissions"].append("debugger")
             manifest["background"] = {"service_worker": "background.js"}
         else:
-            manifest["optional_permissions"] = ["nativeMessaging"]
-            manifest["optional_host_permissions"] = ["<all_urls>"]
-            manifest["background"] = {"scripts": ["policy.js", "audio.js", "background.js"]}
+            manifest["optional_permissions"] = ["nativeMessaging", "webRequest", "webRequestBlocking", "webRequestFilterResponse"]
+            manifest["host_permissions"] = ["<all_urls>"]
+            manifest["background"] = {"scripts": ["policy.js", "audio.js", "files-page.js", "files.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
                 "id": "browser-daemon-node@pschmitt.dev",
                 "strict_min_version": "142.0",
