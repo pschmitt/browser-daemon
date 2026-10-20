@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-10-20
+
+### Added
+
+* Extension live views can play audio/video media sound from the viewed tab,
+  including permitted embedded frames. Enable **Share sound** in the owner’s
+  extension. View-only clients can listen; capture stops when sharing or the
+  last listener ends. Standalone Web Audio and protected media are not captured.
+* Extension-backed nodes and sessions carry an **Addon** badge with a puzzle icon.
+
 ### Changed
 
 * The live view’s vault and passkey dialogs follow the rbw extension’s neutral
