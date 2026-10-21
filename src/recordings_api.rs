@@ -59,6 +59,7 @@ pub(crate) async fn api_get_recording_favicon(
 #[derive(Deserialize)]
 pub(crate) struct SiteFaviconParams {
     pub(crate) url: String,
+    pub(crate) icon: Option<String>,
 }
 
 /// The icon of the site a page belongs to, fetched by this node (see `favicon.rs`).
@@ -70,7 +71,12 @@ pub(crate) async fn api_site_favicon(
     if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
-    match favicon::lookup(&params.url).await {
+    let icon = match params.icon.as_deref() {
+        Some(icon_url) if icon_url.len() <= 2048 => favicon::lookup_icon(icon_url).await,
+        Some(_) => None,
+        None => favicon::lookup(&params.url).await,
+    };
+    match icon {
         Some(icon) => (
             [
                 (header::CONTENT_TYPE, icon.mime.to_string()),

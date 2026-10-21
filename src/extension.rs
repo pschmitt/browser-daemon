@@ -225,6 +225,9 @@ pub struct Tab {
     pub id: u32,
     pub title: String,
     pub url: String,
+    /// The tab's browser-reported favicon URL, proxied by the daemon for viewers.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub favicon: String,
     pub control: bool,
     /// Position in the browser window; used to preserve the owner's tab order.
     #[serde(default)]
@@ -1112,7 +1115,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                             Some("heartbeat") => send(ws, json!({"type": "heartbeat", "client_connected": node.client_connected()})).await?,
                             Some("tabs") => {
                                 let tabs: Vec<Tab> = serde_json::from_value(value["tabs"].clone()).map_err(|_| ())?;
-                                if tabs.len() > MAX_TABS || tabs.iter().any(|t| !page_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024)
+                                if tabs.len() > MAX_TABS || tabs.iter().any(|t| !page_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024 || t.favicon.len() > 2048 || (!t.favicon.is_empty() && !page_url(&t.favicon)))
                                     || tabs.iter().map(|t| t.id).collect::<std::collections::HashSet<_>>().len() != tabs.len() { return Err(()); }
                                 let was_connected = node.client_connected();
                                 node.channels.lock().unwrap().retain(|_, c| tabs.iter().any(|t| t.id == c.tab));

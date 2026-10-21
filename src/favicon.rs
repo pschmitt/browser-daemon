@@ -89,6 +89,14 @@ pub async fn lookup(page_url: &str) -> Option<Icon> {
     found
 }
 
+/// Fetch a browser-reported favicon URL through the same public-address checks as
+/// page-derived icons. Extension tab metadata is untrusted, so validate it here too.
+pub async fn lookup_icon(icon_url: &str) -> Option<Icon> {
+    let url = parse_public_url(icon_url)?;
+    let _permit = gate().acquire().await.ok()?;
+    fetch_icon(&url).await
+}
+
 fn origin_key(url: &Url) -> String {
     format!(
         "{}://{}:{}",

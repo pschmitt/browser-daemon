@@ -6,8 +6,9 @@
 
 ### Changed
 
-* Handoff tab strips show favicon-only tabs. Pin and unpin controls are in the
-  Tabs list, and pinned state is labeled there.
+* Handoff tab strips show the browser's real favicon and no longer crowd each
+  tab with a pin icon. Right-click a controllable extension tab to pin or unpin
+  it; pinned state is labeled in the Tabs list.
 
 ### Fixed
 

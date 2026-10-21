@@ -121,9 +121,17 @@ const hueOf = (name) => Math.round((hashOf(String(name || '').toLowerCase()) * 1
 // Site icons come from the node (/api/favicon): neither the sites nor an icon service
 // ever see this browser. Local and single-label hosts are not on the public web:
 // nothing to look up ('').
-function faviconSrc(url) {
+function faviconSrc(url, iconUrl = '') {
   let u;
   try { u = new URL(url, location.href); } catch { return ""; }
+  if (iconUrl) {
+    try {
+      const icon = new URL(iconUrl);
+      if (/^https?:$/.test(icon.protocol)) {
+        return `/api/favicon?url=${encodeURIComponent(u.origin)}&icon=${encodeURIComponent(icon.href)}`;
+      }
+    } catch { /* use the node's site-icon lookup below */ }
+  }
   const host = /^https?:$/.test(u.protocol) ? u.hostname : "";
   const lookable = host && host.includes(".") && !/^[\d.]+$/.test(host) && !host.includes(":");
   return lookable ? `/api/favicon?url=${encodeURIComponent(u.origin)}` : "";

@@ -338,7 +338,7 @@ async function publish() {
       if (grant.paused) continue;
       grant.origin = new URL(tab.url).origin;
       if (!chromium && grant.control) void hookPasskeys(id).catch(() => hooked.delete(id));
-      if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), control: grant.control, active: tab.active === true, index: tab.index, window_id: tab.windowId, pinned: tab.pinned === true});
+      if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), favicon: /^https?:\/\//i.test(tab.favIconUrl || '') ? tab.favIconUrl.slice(0, 2048) : '', control: grant.control, active: tab.active === true, index: tab.index, window_id: tab.windowId, pinned: tab.pinned === true});
     } catch { shared.delete(id); await detach(id); }
   }
   if (generation !== currentGeneration) return;
@@ -1542,7 +1542,7 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
   if (change.status === 'complete' && mediaAudio.has(id)) void renewTabAudio(id);
   if (change.status === 'complete' && !chromium && grant.control && !grant.paused) void hookPasskeys(id).catch(() => hooked.delete(id));
   if (change.status === 'complete' && fileTabs.get(id)?.channels.size) void installFilePages(id);
-  if (change.url || change.title || change.status === 'complete' || change.pinned !== undefined) publishSoon();
+  if (change.url || change.title || change.favIconUrl || change.status === 'complete' || change.pinned !== undefined) publishSoon();
 });
 api.tabs.onMoved.addListener(() => { if (registration) publishSoon(); });
 // Which shared tab is in front: recordings follow it.
