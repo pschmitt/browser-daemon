@@ -81,6 +81,8 @@ try {
   await message({type: 'setDaemonAllowlist', origins: [base]});
   await message({type: 'shareAll', enabled: false});
   await message({type: 'shareFiles', enabled: true});
+  // This scenario checks explicit follow-focus behavior; the product default is off.
+  await message({type: 'follow', enabled: true});
   const pairing = await (await fetch(`${base}/api/extension/pair`, {method: 'POST', headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json'}, body: JSON.stringify({origin})})).json();
   await message({type: 'connect', server: base, code: pairing.code, name: 'notab'});
   const state = await until(async () => { const s = await message({type: 'state'}); return s.registration && s; });
