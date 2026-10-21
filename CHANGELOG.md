@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.15] - 2026-10-21
+
 ### Added
 
 * Vault fills also fill the entry's text custom fields, as the rbw extension
