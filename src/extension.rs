@@ -1031,7 +1031,14 @@ pub async fn connect(
         .max_frame_size(MAX_FRAME)
         .on_upgrade(move |mut ws| async move {
             let _permit = permit;
-            let _ = serve(&state, &origin, &mut ws).await;
+            let _ = serve(
+                &state.extensions,
+                &state.extension_origins,
+                &state.peers,
+                &origin,
+                &mut ws,
+            )
+            .await;
             let _ = ws.close().await;
         }))
 }
@@ -1046,16 +1053,24 @@ async fn send(ws: &mut WebSocket, value: Value) -> Result<(), ()> {
     .map_err(|_| ())
 }
 
-async fn current_extension_origins(state: &AppState) -> Result<Vec<String>, ()> {
-    let mut origins = state.extension_origins.clone();
-    origins.extend(state.peers.read().await.values().cloned());
+async fn current_extension_origins(
+    extension_origins: &[String],
+    peers: &tokio::sync::RwLock<HashMap<String, String>>,
+) -> Result<Vec<String>, ()> {
+    let mut origins = extension_origins.to_vec();
+    origins.extend(peers.read().await.values().cloned());
     let mut origins = normalize_origins(origins).map_err(|_| ())?;
     origins.sort();
     Ok(origins)
 }
 
-async fn serve(state: &AppState, origin: &str, ws: &mut WebSocket) -> Result<(), ()> {
-    let broker = &state.extensions;
+async fn serve(
+    broker: &Arc<Broker>,
+    extension_origins: &[String],
+    peers: &tokio::sync::RwLock<HashMap<String, String>>,
+    origin: &str,
+    ws: &mut WebSocket,
+) -> Result<(), ()> {
     // The code never appears in a URL, a cookie, or a log. No reconnect credential
     // is issued: losing the socket ends the grant, and pairing must be repeated.
     let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(5), ws.recv())
@@ -1200,7 +1215,7 @@ async fn serve(state: &AppState, origin: &str, ws: &mut WebSocket) -> Result<(),
     }
     let _registration = Registration(broker.clone(), id, node.clone());
     broker.touch(id);
-    let origins = current_extension_origins(state).await?;
+    let origins = current_extension_origins(extension_origins, peers).await?;
     send(
         ws,
         json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key, "origins": origins}),
@@ -1227,7 +1242,7 @@ async fn serve(state: &AppState, origin: &str, ws: &mut WebSocket) -> Result<(),
                         match value["type"].as_str() {
                             Some("forget") => { broker.forget(id)?; break; }
                             Some("heartbeat") => {
-                                let origins = current_extension_origins(state).await?;
+                                let origins = current_extension_origins(extension_origins, peers).await?;
                                 send(ws, json!({"type": "heartbeat", "client_connected": node.client_connected(), "origins": origins})).await?;
                             }
                             Some("tabs") => {
@@ -1680,7 +1695,8 @@ mod tests {
                 async move {
                     let origin = headers.get("origin").unwrap().to_str().unwrap().to_string();
                     upgrade.on_upgrade(move |mut ws| async move {
-                        let _ = serve(&broker, &origin, &mut ws).await;
+                        let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
+                        let _ = serve(&broker, &[], &peers, &origin, &mut ws).await;
                         let _ = ws.close().await;
                     })
                 }
