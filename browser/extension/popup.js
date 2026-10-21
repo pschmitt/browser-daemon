@@ -28,7 +28,6 @@ $('code').addEventListener('input', () => {
   void (code ? api.storage.session.set({pairingDraft: {code, expires: Date.now() + 300000}})
     : api.storage.session.remove('pairingDraft')).catch(showError);
 });
-$('openSettings').addEventListener('click', () => void api.tabs.create({url: api.runtime.getURL('popup.html?tab')}));
 const permissionPattern = address => { const u = new URL(address); return `${u.protocol}//${u.hostname}/*`; };
 
 async function message(value) {

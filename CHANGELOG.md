@@ -10,6 +10,7 @@
   controls instead of a plain text area.
 * The Firefox companion status uses the same pill styling as the browser
   connection status.
+* Removed the redundant **Open in a tab** button from the popup.
 
 ## [0.3.22] - 2026-10-21
 
