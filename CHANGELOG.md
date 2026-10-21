@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-10-21
+
 ### Changed
 
 * Handoff and the dashboard warn when a Firefox browser is missing its native
