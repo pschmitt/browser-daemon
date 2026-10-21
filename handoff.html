@@ -586,7 +586,7 @@
   <form method="dialog"><button class="settings-close" aria-label="Close settings">✕</button></form>
   <h2>Settings</h2>
   <div class="sm-label">Browser</div>
-  <button class="sm-item" id="followBtn" role="menuitemcheckbox" aria-checked="true" hidden title="The tab you switch to here comes to the front in the owner's browser"></button>
+  <button class="sm-item" id="followBtn" role="menuitemcheckbox" aria-checked="false" hidden title="The tab you switch to here comes to the front in the owner's browser"></button>
   <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search provider<select id="smSearch" aria-label="Search provider"></select></label>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <div class="sm-label">Screen</div>
@@ -2658,7 +2658,7 @@ $("smReopen").addEventListener("click", async () => {
 const followKey = () => `handoff.follow.${sharedBrowserId}`;
 function followFocus() {
   if (sharedBrowserId && typeof sharedBrowser?.follow === "boolean") return sharedBrowser.follow;
-  try { return localStorage.getItem(followKey()) !== "0"; } catch { return true; }
+  try { return localStorage.getItem(followKey()) === "1"; } catch { return false; }
 }
 function renderFollow() {
   const b = $("followBtn"), on = followFocus();
@@ -3658,18 +3658,7 @@ document.querySelectorAll("#keys button[data-key]").forEach((b) => b.addEventLis
 async function copyRemoteSelection() {
   if (!drv) return '';
   try {
-    const text = await drv.evaluate(`(() => {
-        let sel = window.getSelection()?.toString() || '';
-        if (!sel && document.activeElement) {
-          let el = document.activeElement;
-          if ((el.tagName === 'INPUT' && el.type !== 'password') || el.tagName === 'TEXTAREA') {
-            try {
-              sel = el.value.substring(el.selectionStart, el.selectionEnd);
-            } catch(e) {}
-          }
-        }
-        return sel;
-      })()`);
+    const text = await drv.evaluate(SEL_EXPR);
     if (text) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(text);

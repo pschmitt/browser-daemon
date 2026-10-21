@@ -258,7 +258,8 @@ class Bidi:
 
     def actions(self, context, source):
         try:
-            return self.call("input.performActions", {"context": context, "actions": [source]})
+            sources = source if isinstance(source, list) else [source]
+            return self.call("input.performActions", {"context": context, "actions": sources})
         finally:
             self.call("input.releaseActions", {"context": context})
 
@@ -359,13 +360,55 @@ class Companion:
             if not isinstance(path, list) or len(path) > 128:
                 raise ValueError("Invalid pointer path")
             points = [{"x": round(finite(point["x"])), "y": round(finite(point["y"]))} for point in path]
-            actions = [{"type": "pointerMove", "duration": 0, "origin": "viewport", "x": round(finite(params["x"])), "y": round(finite(params["y"]))}, {"type": "pointerDown", "button": button}]
-            actions.extend({"type": "pointerMove", "duration": 16, "origin": "viewport", **point} for point in points)
-            actions.append({"type": "pointerUp", "button": button})
-            d.actions(context, {"type": "pointer", "id": "browser-daemon", "parameters": {"pointerType": "mouse"}, "actions": actions})
+            click_count = params.get("clickCount", 1)
+            if type(click_count) is not int or click_count not in (1, 2, 3):
+                raise ValueError("Invalid click count")
+            modifiers = params.get("modifiers", 0)
+            if type(modifiers) is not int or modifiers < 0 or modifiers > 15:
+                raise ValueError("Invalid pointer modifiers")
+            held = [value for bit, value in ((2, "\ue009"), (8, "\ue008"), (1, "\ue00a"), (4, "\ue03d")) if modifiers & bit]
+            pointer_actions = [{"type": "pointerMove", "duration": 0, "origin": "viewport", "x": round(finite(params["x"])), "y": round(finite(params["y"]))}]
+            # Keep modifier keys held for the whole pointer gesture.
+            pointer_actions.extend({"type": "pause", "duration": 0} for _ in range(max(0, len(held) - 1)))
+            pointer_actions.append({"type": "pointerDown", "button": button})
+            pointer_actions.extend({"type": "pointerMove", "duration": 16, "origin": "viewport", **point} for point in points)
+            pointer_actions.append({"type": "pointerUp", "button": button})
+            for _ in range(click_count - 1):
+                pointer_actions.extend([{"type": "pause", "duration": 100}, {"type": "pointerDown", "button": button}, {"type": "pointerUp", "button": button}])
+            sources = [{"type": "pointer", "id": "browser-daemon", "parameters": {"pointerType": "mouse"}, "actions": pointer_actions}]
+            if held:
+                key_actions = [{"type": "keyDown", "value": value} for value in held]
+                key_actions.extend({"type": "pause", "duration": 0} for _ in range(len(pointer_actions) - len(key_actions)))
+                key_actions.extend({"type": "keyUp", "value": value} for value in reversed(held))
+                sources.append({"type": "key", "id": "browser-daemon-modifiers", "actions": key_actions})
+            d.actions(context, sources)
             return {"ok": True}
         if action == "scroll":
-            d.actions(context, {"type": "wheel", "id": "browser-daemon-wheel", "actions": [{"type": "scroll", "duration": 100, "origin": "viewport", "x": 0, "y": 0, "deltaX": round(finite(params["x"])), "deltaY": round(finite(params["y"]))}]})
+            if "deltaX" in params or "deltaY" in params:
+                x, y = round(finite(params["x"])), round(finite(params["y"]))
+                dx, dy = round(finite(params.get("deltaX", 0))), round(finite(params.get("deltaY", 0)))
+                modifiers = params.get("modifiers", 0)
+            else:
+                x, y = 0, 0
+                dx, dy = round(finite(params["x"])), round(finite(params["y"]))
+                modifiers = 0
+            if type(modifiers) is not int or modifiers < 0 or modifiers > 15:
+                raise ValueError("Invalid wheel modifiers")
+            held = [value for bit, value in ((2, "\ue009"), (8, "\ue008"), (1, "\ue00a"), (4, "\ue03d")) if modifiers & bit]
+            wheel_actions = ([{"type": "pause", "duration": 0} for _ in held] if held else []) + [{"type": "scroll", "duration": 100, "origin": "viewport", "x": x, "y": y, "deltaX": dx, "deltaY": dy}]
+            sources = [{"type": "wheel", "id": "browser-daemon-wheel", "actions": wheel_actions}]
+            if held:
+                key_actions = [{"type": "keyDown", "value": value} for value in held]
+                key_actions.extend({"type": "pause", "duration": 0} for _ in range(len(wheel_actions) - len(key_actions)))
+                key_actions.extend({"type": "keyUp", "value": value} for value in reversed(held))
+                sources.append({"type": "key", "id": "browser-daemon-wheel-modifiers", "actions": key_actions})
+            d.actions(context, sources)
+            return {"ok": True}
+
+        if action == "move":
+            d.actions(context, {"type": "pointer", "id": "browser-daemon-hover", "parameters": {"pointerType": "mouse"}, "actions": [
+                {"type": "pointerMove", "duration": 0, "origin": "viewport", "x": round(finite(params["x"])), "y": round(finite(params["y"]))},
+            ]})
             return {"ok": True}
         keys = {"Enter": "\ue007", "Tab": "\ue004", "Escape": "\ue00c", "Backspace": "\ue003", "Delete": "\ue017", "ArrowLeft": "\ue012", "ArrowRight": "\ue014", "ArrowUp": "\ue013", "ArrowDown": "\ue015", "Home": "\ue011", "End": "\ue010", "PageUp": "\ue00e", "PageDown": "\ue00f"}
         if action == "key":

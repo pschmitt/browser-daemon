@@ -101,6 +101,9 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .chip.proxy { background: var(--accent-soft); color: var(--accent); gap: 4px; }
 .chip.proxy .i { width: 12px; height: 12px; }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
+.node-warning-icon { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; border-radius: 50%; color: var(--warn); cursor: help; }
+.node-warning-icon .i { width: 18px; height: 18px; }
+.node-warning-icon:hover, .node-warning-icon:focus-visible { background: var(--warn-soft); outline: none; }
 .chip.bad { background: var(--bad-soft); color: var(--bad); }
 .chip.accent { background: var(--accent-soft); color: var(--accent); }
 .chip.chromium { background: color-mix(in oklab, var(--chromium) 15%, transparent); color: var(--chromium); }
@@ -840,7 +843,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
   <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
-  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.01"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="m10.3 4.9-7.5 13a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3l-7.5-13a2 2 0 0 0-3.4 0zM12 9v4M12 16.5v.01"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
   <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
   <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></symbol>
@@ -962,7 +965,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 <!-- New session -->
 <dialog class="modal" id="addNodeModal" aria-labelledby="addNodeTitle">
   <div class="sheet">
-    <div class="sheet-head"><h2 id="addNodeTitle">Add a node</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="addNodeTitle">Add a browser</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="add-grid">
         <div class="add-card">
@@ -975,12 +978,20 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
             <label class="switch add-check"><input id="rememberBrowser" type="checkbox" checked><span class="track"></span>Disable key expiry</label></div>
           <p id="pairBrowserStatus" class="add-status" role="status"></p>
         </div>
-        <form id="addPeerForm" class="add-card">
-          <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-server"/></svg></span>
-            <div><h3>Another daemon</h3><p>Join a browser-daemon host to this mesh.</p></div></div>
-          <div class="add-row"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.host.example" aria-label="Daemon URL"><button class="btn primary" type="submit"><svg class="i sm"><use href="#i-plus"/></svg>Add</button></div>
-        </form>
       </div>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="addPeerModal" aria-labelledby="addPeerTitle">
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="addPeerTitle">Add daemon peer</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <form id="addPeerForm" class="add-card">
+        <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-server"/></svg></span>
+          <div><h3>Another daemon</h3><p>Connect this daemon to another browser-daemon host's mesh.</p></div></div>
+        <div class="add-row"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.host.example" aria-label="Daemon URL"><button class="btn primary" type="submit"><svg class="i sm"><use href="#i-plus"/></svg>Add daemon</button></div>
+      </form>
     </div>
   </div>
 </dialog>
@@ -2418,7 +2429,8 @@ function renderViewActions(recordings = listedRecordings()) {
   const actions = $('viewActions');
   actions.classList.toggle('recording-actions', view === 'recordings');
   if (view === 'nodes') {
-    const html = `<button class="btn sm" data-act="add-node" title="Pair this browser or add another daemon">${icon('plus', 'sm')}<span class="lbl">Add node</span></button>`;
+    const html = `<button class="btn sm" data-act="add-node" title="Pair a browser extension">${icon('link', 'sm')}<span class="lbl">Add browser</span></button>
+      <button class="btn sm" data-act="add-peer" title="Join another daemon to this mesh">${icon('server', 'sm')}<span class="lbl">Add daemon</span></button>`;
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
@@ -2525,6 +2537,7 @@ const ACT = {
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
   'add-node': () => openModal('addNodeModal'),
+  'add-peer': () => openModal('addPeerModal'),
   'vacuum': () => vacuum(),
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
@@ -4110,7 +4123,7 @@ function extensionNodeCard(n) {
   const days = !online && n.forget_at ? Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400)) : null;
   return `<div class="node-card" style="--node:${nodeColor(key)}">
     <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
-      <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span>${addonBadge()}${online && n.browser === 'firefox' && !n.native_control ? `<span class="chip warn" role="status" title="Firefox companion is not connected. Some clicks and keyboard input may not work; enable the companion in the browser extension." aria-label="Firefox companion is not connected">${icon('alert', 'sm')}</span>` : ''}${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
+      <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span>${addonBadge()}${online && n.browser === 'firefox' && !n.native_control ? `<span class="node-warning-icon" role="img" tabindex="0" title="Firefox companion is disconnected. Some clicks, text selection, right-clicks and keyboard input may not work reliably. Enable the companion in the browser extension for trusted input." aria-label="Firefox companion is disconnected; some remote input may not work reliably">${icon('alert')}</span>` : ''}${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
         <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
       </div>
       <button class="btn icon sm ghost gear" data-settings="browser" data-key="${esc(key)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}</button>
@@ -4308,7 +4321,7 @@ $('addPeerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const url = $('peerUrl').value.trim();
   const r = await act('Adding peer', () => request('POST', '/api/peers', { url }), 'Peer added');
-  if (r !== undefined) { $('peerUrl').value = ''; setTimeout(renderNodes, 600); }
+  if (r !== undefined) { $('peerUrl').value = ''; closeModal('addPeerModal'); setTimeout(renderNodes, 600); }
 });
 
 async function openConnect() {
@@ -5853,7 +5866,7 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-// #nodes/add: the Add node sheet (the extension's "Pair from the dashboard" opens it).
+// #nodes/add: the browser-pairing sheet (the extension's "Pair from the dashboard" opens it).
 const addNodeLink = () => { if (location.hash !== '#nodes/add') return false; setView('nodes'); openModal('addNodeModal'); return true; };
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+* Daemon peers have a separate entry point from browser extension pairing.
+
+### Changed
+
+* Follow focus is disabled by default for newly connected browsers.
+* Firefox's toolbar icon fills its slot more clearly, and the dashboard shows
+  the companion warning as a hoverable icon beside the browser status badges.
+
+### Fixed
+
+* Firefox remote input now forwards hover, click counts, modifiers, and
+  pointer-positioned scrolling. Extension-only sessions can select page text,
+  select words on double-click, and dispatch page context-menu events when
+  trusted input is unavailable. Copying a remote selection also works without
+  the Firefox companion.
+
 ## [0.3.25] - 2026-10-21
 
 ### Changed

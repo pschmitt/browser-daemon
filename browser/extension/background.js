@@ -27,10 +27,10 @@ function castState(tab) {
 // By default every tab is shared (all: true), with the remote control choice.
 // Without that, chosen tabs are, and new ones join if autoShare.
 // follow: the tab a live view switches to comes to the front here as well.
-let sharing = {all: true, autoShare: true, control: false, follow: true, audio: true, files: false, public: false};
+let sharing = {all: true, autoShare: true, control: false, follow: false, audio: true, files: false, public: false};
 let publicGrant = crypto.randomUUID();
 const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio', 'shareFiles', 'sharePublic']).then(async saved => {
-  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView !== false, audio: saved.shareAudio !== false, files: saved.shareFiles === true, public: saved.sharePublic === true};
+  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView === true, audio: saved.shareAudio !== false, files: saved.shareFiles === true, public: saved.sharePublic === true};
   if (sharing.files && !(await api.permissions.contains({origins: chromium ? ['http://*/*', 'https://*/*'] : ['<all_urls>'],
       ...(!chromium ? {permissions: ['webRequest', 'webRequestBlocking', 'webRequestFilterResponse']} : {})}))) {
     sharing.files = false;
@@ -340,7 +340,7 @@ function publishSafely() { void publish().catch(() => stop('Could not update sha
 
 let published = [];
 let approvalPending = 0;
-const connectionIcon = {bitmaps: null, timer: null, frame: 0};
+const connectionIcon = {bitmaps: null};
 async function toolbarBitmaps() {
   const icon = api.runtime.getManifest().action?.default_icon;
   connectionIcon.bitmaps ||= Promise.all([16, 32, 48].map(async size => {
@@ -350,25 +350,13 @@ async function toolbarBitmaps() {
   }));
   return connectionIcon.bitmaps;
 }
-function connectionFrame(bitmap, size, state, phase) {
+function connectionFrame(bitmap, size, state) {
   const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext('2d');
   ctx.drawImage(bitmap, 0, 0, size, size);
-  const r = size * 0.3, cx = size - r - 0.5, cy = r + 0.5;
-  ctx.fillStyle = state === 'offline' ? '#e11d48' : '#34a853';
-  ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = Math.max(1, size / 20);
-  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  if (state === 'connected') {
-    const pulse = (Math.sin(phase) + 1) / 2;
-    ctx.fillStyle = `rgba(255, 255, 255, ${0.75 + pulse * 0.25})`;
-    ctx.beginPath(); ctx.arc(cx, cy - r * 0.27, r * 0.2, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = Math.max(1, size / 14);
-    ctx.beginPath(); ctx.arc(cx, cy + r * 0.45, r * 0.38, Math.PI, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = `rgba(52, 168, 83, ${0.45 + pulse * 0.55})`;
-    ctx.lineWidth = Math.max(1, size / 16);
-    ctx.beginPath(); ctx.arc(cx, cy, r * (1.05 + pulse * 0.2), 0, Math.PI * 2); ctx.stroke();
-  }
+  const r = size * 0.2, cx = size - r - 0.5, cy = r + 0.5;
+  ctx.fillStyle = state === 'offline' ? '#e11d48' : '#3b82f6';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
   return ctx.getImageData(0, 0, size, size);
 }
 async function drawConnectionIcon(state) {
@@ -376,20 +364,14 @@ async function drawConnectionIcon(state) {
     const bitmaps = await toolbarBitmaps();
     if (!registration && state !== 'offline') return;
     if (registration && state === 'offline') return;
-    const phase = connectionIcon.frame++ * Math.PI / 6;
     await api.action.setIcon({imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) =>
-      [size, connectionFrame(bitmap, size, state, phase)]))});
+      [size, connectionFrame(bitmap, size, state)]))});
   } catch { /* Cosmetic only. */ }
-}
-function stopConnectionPulse() {
-  if (connectionIcon.timer) clearInterval(connectionIcon.timer);
-  connectionIcon.timer = null;
 }
 // The top-right icon mark follows rbw's canvas-drawn toolbar badge. A "?"
 // remains the approval prompt when a dashboard is waiting to pair.
 async function badge() {
   if (approvalPending > Date.now() && !registration) {
-    stopConnectionPulse();
     await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'});
     await api.action.setBadgeText({text: '?'});
     await api.action.setBadgeBackgroundColor({color: '#6d4aff'});
@@ -402,13 +384,10 @@ async function badge() {
   await api.action.setBadgeBackgroundColor({color: [0, 0, 0, 0]});
   await api.action.setBadgeTextColor({color: '#e11d48'});
   if (!registration) {
-    stopConnectionPulse();
     await drawConnectionIcon('offline');
   } else if (connected) {
     await drawConnectionIcon('connected');
-    if (!connectionIcon.timer) connectionIcon.timer = setInterval(() => { void drawConnectionIcon('connected'); }, 500);
   } else {
-    stopConnectionPulse();
     await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'});
   }
   await api.action.setTitle({title: !registration ? 'Browser node: not connected to the daemon'
@@ -787,6 +766,16 @@ async function cdp(tab, method, params = {}) {
 function pageAction(action, params, expectedOrigin) {
   if (location.origin !== expectedOrigin) throw new Error('Page changed site.');
   const finite = x => typeof x === 'number' && Number.isFinite(x);
+  const hit = (x, y) => {
+    let target = document.elementFromPoint(x, y);
+    // Keep hit testing working through nested open shadow roots (common in SPAs).
+    while (target?.shadowRoot) {
+      const inner = target.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === target) break;
+      target = inner;
+    }
+    return target;
+  };
   if (action === 'snapshot') {
     return {title: document.title, url: location.href,
       text: (document.body?.innerText || '').slice(0, 100000),
@@ -796,33 +785,158 @@ function pageAction(action, params, expectedOrigin) {
       }))};
   }
   if (action === 'scroll') {
-    if (!finite(params.x) || !finite(params.y)) throw new Error('Expected scroll offsets.');
-    window.scrollBy(params.x, params.y);
+    if (finite(params.deltaX) && finite(params.deltaY) && finite(params.x) && finite(params.y)) {
+      const target = hit(params.x, params.y);
+      const modifiers = params.modifiers || 0;
+      const wheel = new WheelEvent('wheel', {bubbles: true, cancelable: true, composed: true, view: window,
+        clientX: params.x, clientY: params.y, deltaX: params.deltaX, deltaY: params.deltaY,
+        altKey: !!(modifiers & 1), ctrlKey: !!(modifiers & 2), metaKey: !!(modifiers & 4), shiftKey: !!(modifiers & 8)});
+      const allowed = (target || document).dispatchEvent(wheel);
+      if (allowed) {
+        let scroller = target;
+        while (scroller && scroller !== document.documentElement) {
+          const style = getComputedStyle(scroller);
+          const canX = params.deltaX < 0 ? scroller.scrollLeft > 0 : scroller.scrollLeft + scroller.clientWidth < scroller.scrollWidth;
+          const canY = params.deltaY < 0 ? scroller.scrollTop > 0 : scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight;
+          if ((params.deltaX && canX && /(auto|scroll|overlay)/.test(style.overflowX)) ||
+              (params.deltaY && canY && /(auto|scroll|overlay)/.test(style.overflowY))) break;
+          scroller = scroller.parentElement || scroller.getRootNode()?.host || null;
+        }
+        (scroller && scroller !== document.documentElement ? scroller : window).scrollBy(params.deltaX, params.deltaY);
+      }
+    } else {
+      if (!finite(params.x) || !finite(params.y)) throw new Error('Expected scroll offsets.');
+      window.scrollBy(params.x, params.y);
+    }
+  } else if (action === 'move') {
+    if (!finite(params.x) || !finite(params.y)) throw new Error('Expected pointer coordinates.');
+    const target = hit(params.x, params.y);
+    if (target) {
+      const init = {bubbles: true, cancelable: true, composed: true, view: window,
+        clientX: params.x, clientY: params.y, button: -1, buttons: 0};
+      if (typeof PointerEvent === 'function') target.dispatchEvent(new PointerEvent('pointermove', {
+        ...init, pointerId: 1, pointerType: 'mouse', isPrimary: true}));
+      target.dispatchEvent(new MouseEvent('mousemove', init));
+    }
   } else if (action === 'click') {
-    let e = params.selector ? document.querySelector(params.selector) : document.elementFromPoint(params.x, params.y);
-    if (!params.selector) {
-      // Apps such as Home Assistant and Argo CD put their controls inside nested
-      // shadow roots. Hit testing the document alone stops at the outer host.
-      while (e?.shadowRoot) {
-        const inner = e.shadowRoot.elementFromPoint(params.x, params.y);
-        if (!inner || inner === e) break;
-        e = inner;
+    const button = Number.isInteger(params.button) && params.button >= 0 && params.button <= 2 ? params.button : 0;
+    const mask = button === 0 ? 1 : button === 1 ? 4 : 2;
+    let target = params.selector ? document.querySelector(params.selector)
+      : finite(params.x) && finite(params.y) ? hit(params.x, params.y) : null;
+    if (!target) throw new Error('Element not found.');
+    const rect = target.getBoundingClientRect();
+    const start = {x: finite(params.x) ? params.x : rect.left + rect.width / 2,
+      y: finite(params.y) ? params.y : rect.top + rect.height / 2};
+    const path = Array.isArray(params.path) ? params.path.filter(p => finite(p?.x) && finite(p?.y)).slice(0, 128) : [];
+    const end = path.at(-1) || start;
+    const dragged = Math.hypot(end.x - start.x, end.y - start.y) > 2;
+    const clickCount = Number.isInteger(params.clickCount) ? Math.max(1, Math.min(3, params.clickCount)) : 1;
+    const modifiers = params.modifiers || 0;
+    const selectWord = () => {
+      const position = document.caretPositionFromPoint?.(end.x, end.y);
+      const range = position ? null : document.caretRangeFromPoint?.(end.x, end.y);
+      const node = position?.offsetNode || range?.startContainer;
+      const offset = position?.offset ?? range?.startOffset;
+      const field = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ? node : null;
+      const text = field ? field.value : node?.nodeType === Node.TEXT_NODE ? node.data : null;
+      if (typeof text !== 'string' || !Number.isInteger(offset)) return;
+      const words = typeof Intl.Segmenter === 'function'
+        ? [...new Intl.Segmenter(undefined, {granularity: 'word'}).segment(text)].filter(part => part.isWordLike)
+        : [];
+      const word = words.find(part => offset >= part.index && offset <= part.index + part.segment.length);
+      if (!word) return;
+      const from = word.index, to = from + word.segment.length;
+      if (field) { field.focus(); field.setSelectionRange(from, to); }
+      else {
+        const selection = window.getSelection();
+        if (selection?.setBaseAndExtent) selection.setBaseAndExtent(node, from, node, to);
+        else if (selection) {
+          const wordRange = document.createRange();
+          wordRange.setStart(node, from); wordRange.setEnd(node, to);
+          selection.removeAllRanges(); selection.addRange(wordRange);
+        }
+      }
+    };
+    const event = (type, point, buttons, detail = 0) => {
+      const current = hit(point.x, point.y) || target;
+      const init = {bubbles: true, cancelable: true, composed: true, view: window, detail,
+        screenX: point.x + window.screenX, screenY: point.y + window.screenY,
+        clientX: point.x, clientY: point.y, button, buttons,
+        altKey: !!(modifiers & 1), ctrlKey: !!(modifiers & 2), metaKey: !!(modifiers & 4), shiftKey: !!(modifiers & 8)};
+      if (type.startsWith('pointer') && typeof PointerEvent === 'function') {
+        current.dispatchEvent(new PointerEvent(type, {...init, pointerId: 1, pointerType: 'mouse', isPrimary: true}));
+      } else current.dispatchEvent(new MouseEvent(type, init));
+      return current;
+    };
+    if (button === 0 && (!dragged || target.matches('input,textarea,[contenteditable="true"]'))) target.focus();
+    event('pointerover', start, 0);
+    event('mouseover', start, 0);
+    event('pointerdown', start, mask, 1);
+    event('mousedown', start, mask, 1);
+    for (const point of path) {
+      event('pointermove', point, mask);
+      event('mousemove', point, mask, 0);
+    }
+    target = event('pointerup', end, 0);
+    target = event('mouseup', end, 0);
+    if (button === 0 && dragged) {
+      // Synthetic mouse events cannot ask Firefox to select text. Create the
+      // equivalent DOM selection at the drag endpoints for normal page text.
+      const caret = (point) => {
+        const position = document.caretPositionFromPoint?.(point.x, point.y);
+        if (position) return {node: position.offsetNode, offset: position.offset};
+        const range = document.caretRangeFromPoint?.(point.x, point.y);
+        return range ? {node: range.startContainer, offset: range.startOffset} : null;
+      };
+      const first = caret(start), last = caret(end), selection = window.getSelection();
+      if (first && last && (first.node instanceof HTMLInputElement || first.node instanceof HTMLTextAreaElement)) {
+        const field = first.node;
+        if (field === last.node && typeof field.setSelectionRange === 'function') {
+          field.focus();
+          field.setSelectionRange(first.offset, last.offset);
+        }
+      } else if (first && last && selection) {
+        selection.removeAllRanges();
+        if (selection.setBaseAndExtent) selection.setBaseAndExtent(first.node, first.offset, last.node, last.offset);
+        else { selection.collapse(first.node, first.offset); selection.extend(last.node, last.offset); }
       }
     }
-    if (!e) throw new Error('Element not found.');
-    const rect = e.getBoundingClientRect();
-    const clientX = finite(params.x) ? params.x : rect.left + rect.width / 2;
-    const clientY = finite(params.y) ? params.y : rect.top + rect.height / 2;
-    const button = Number.isInteger(params.button) && params.button >= 0 && params.button <= 2 ? params.button : 0;
-    const buttons = button === 0 ? 1 : button === 1 ? 4 : 2;
-    const init = {bubbles: true, cancelable: true, composed: true, view: window, detail: 1,
-      screenX: clientX + window.screenX, screenY: clientY + window.screenY, clientX, clientY, button, buttons};
-    e.focus();
-    if (typeof PointerEvent === 'function') e.dispatchEvent(new PointerEvent('pointerdown', {...init, pointerId: 1, pointerType: 'mouse', isPrimary: true}));
-    e.dispatchEvent(new MouseEvent('mousedown', init));
-    if (typeof PointerEvent === 'function') e.dispatchEvent(new PointerEvent('pointerup', {...init, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 0}));
-    e.dispatchEvent(new MouseEvent('mouseup', {...init, buttons: 0}));
-    e.click();
+    if (button === 0 && !dragged) {
+      for (let count = 1; count <= clickCount; count++) {
+        if (count > 1) {
+          event('pointerdown', end, mask, 1);
+          event('mousedown', end, mask, count);
+          event('pointerup', end, 0, 1);
+          event('mouseup', end, 0, count);
+        }
+        target.dispatchEvent(new MouseEvent('click', {
+          bubbles: true, cancelable: true, composed: true, view: window, detail: count,
+          screenX: end.x + window.screenX, screenY: end.y + window.screenY,
+          clientX: end.x, clientY: end.y, button: 0, buttons: 0,
+          altKey: !!(modifiers & 1), ctrlKey: !!(modifiers & 2), metaKey: !!(modifiers & 4), shiftKey: !!(modifiers & 8),
+        }));
+        if (count === 2) target.dispatchEvent(new MouseEvent('dblclick', {
+          bubbles: true, cancelable: true, composed: true, view: window, detail: 2,
+          clientX: end.x, clientY: end.y, button: 0, buttons: 0,
+        }));
+      }
+      if (clickCount >= 2) selectWord();
+    } else if (button === 1 && !dragged) target.dispatchEvent(new MouseEvent('auxclick', {
+      bubbles: true, cancelable: true, composed: true, view: window, detail: clickCount,
+      clientX: end.x, clientY: end.y, button: 1, buttons: 0,
+    }));
+    else if (button === 2 && !dragged) {
+      target.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, composed: true, view: window, detail: 1,
+        screenX: end.x + window.screenX, screenY: end.y + window.screenY,
+        clientX: end.x, clientY: end.y, button: 2, buttons: 0,
+        altKey: !!(modifiers & 1), ctrlKey: !!(modifiers & 2), metaKey: !!(modifiers & 4), shiftKey: !!(modifiers & 8),
+      }));
+      target.dispatchEvent(new MouseEvent('auxclick', {
+        bubbles: true, cancelable: true, composed: true, view: window, detail: clickCount,
+        clientX: end.x, clientY: end.y, button: 2, buttons: 0,
+      }));
+    }
   } else if (action === 'type') {
     const e = params.selector ? document.querySelector(params.selector) : document.activeElement;
     if (!e || typeof params.text !== 'string') throw new Error('Expected a field and text.');
@@ -993,7 +1107,7 @@ async function execute(command) {
     await grantFor(command);
     return execute({...command, action: actual, params: values});
   }
-  if (!chromium && nativeReady && ['screenshot', 'snapshot', 'click', 'type', 'key', 'scroll', 'evaluate'].includes(action)) {
+  if (!chromium && nativeReady && ['screenshot', 'snapshot', 'click', 'move', 'type', 'key', 'scroll', 'evaluate'].includes(action)) {
     return nativeRequest({tab, action, params});
   }
   if (action === 'evaluate') throw new Error('Evaluation requires the Firefox companion; use CDP Runtime.evaluate on Chromium.');
@@ -1319,8 +1433,19 @@ async function shim(tab, channel, method, params) {
     case 'Runtime.evaluate': {
       if (!nativeReady) {
         // A live view uses this exact expression to answer the extension-backed
-        // passkey hook, or its heartbeat. Run only these operations in the page
-        // world; general evaluation still requires the native companion.
+        // passkey hook, its heartbeat, or read a remote selection. Run only these
+        // operations in the page; general evaluation still requires the companion.
+        if (params.expression === REMOTE_SELECTION_EXPR) {
+          const selection = await api.scripting.executeScript({target: {tabId: tab}, func: () => {
+            let active = document.activeElement;
+            while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+            if (active && ((active.tagName === 'INPUT' && active.type !== 'password') || active.tagName === 'TEXTAREA')) {
+              try { if (active.selectionEnd > active.selectionStart) return active.value.substring(active.selectionStart, active.selectionEnd); } catch {}
+            }
+            return window.getSelection()?.toString() || '';
+          }});
+          return {result: {value: selection[0]?.result || ''}};
+        }
         if (params.expression === 'globalThis.__bdPasskeyRepair?.(); globalThis.__bdPasskeyAlive = Date.now()' ||
             params.expression === 'globalThis.__bdPasskeyRepair?.(); globalThis.__bdPasskeyAlive = Date.now(); globalThis.__bdPasskeyOffer = true') {
           const offer = params.expression.endsWith('__bdPasskeyOffer = true');
@@ -1348,13 +1473,26 @@ async function shim(tab, channel, method, params) {
     default: throw new ShimError(`${method} is not available in Firefox.`);
   }
 }
+
+const REMOTE_SELECTION_EXPR = `(() => {
+  let a = document.activeElement;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+  if (a && ((a.tagName === "INPUT" && a.type !== "password") || a.tagName === "TEXTAREA")) {
+    try { if (a.selectionEnd > a.selectionStart) return a.value.substring(a.selectionStart, a.selectionEnd); } catch (e) {}
+  }
+  return window.getSelection()?.toString() || "";
+})()`;
 // A press, its drag path and the release become one trusted pointer action.
 const pointers = new Map();
 async function pointer(tab, params, run) {
   const button = ['left', 'middle', 'right'].indexOf(params.button);
-  if (params.type === 'mouseWheel') { touchCast(tab); return run('scroll', {x: params.deltaX || 0, y: params.deltaY || 0}); }
-  if (params.type === 'mousePressed') { pointers.set(tab, {x: params.x, y: params.y, button: Math.max(0, button), path: []}); return {}; }
+  if (params.type === 'mouseWheel') {
+    touchCast(tab);
+    return run('scroll', {x: params.x || 0, y: params.y || 0, deltaX: params.deltaX || 0, deltaY: params.deltaY || 0, modifiers: params.modifiers || 0});
+  }
+  if (params.type === 'mousePressed') { pointers.set(tab, {x: params.x, y: params.y, button: Math.max(0, button), clickCount: params.clickCount, modifiers: params.modifiers || 0, path: []}); return {}; }
   const down = pointers.get(tab);
+  if (!down && params.type === 'mouseMoved') return run('move', {x: params.x, y: params.y});
   if (!down) return {};
   if (params.type === 'mouseMoved') {
     down.path.push({x: params.x, y: params.y});
@@ -1365,7 +1503,8 @@ async function pointer(tab, params, run) {
   if (params.type !== 'mouseReleased') return {};
   pointers.delete(tab);
   touchCast(tab);
-  return run('click', {x: down.x, y: down.y, button: down.button, path: [...down.path, {x: params.x, y: params.y}]});
+  return run('click', {x: down.x, y: down.y, button: down.button, clickCount: down.clickCount, modifiers: down.modifiers,
+    path: [...down.path, {x: params.x, y: params.y}]});
 }
 // The browser's own capture: a JPEG at CSS pixels, quick and small. The
 // companion's PNG screenshot only without access to the tab's site.
