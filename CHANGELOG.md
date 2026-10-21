@@ -4,6 +4,11 @@
 
 ## [0.3.19] - 2026-10-21
 
+### Changed
+
+* Handoff tab strips show favicon-only tabs. Pin and unpin controls are in the
+  Tabs list, and pinned state is labeled there.
+
 ### Fixed
 
 * The connected toolbar indicator is a visible red dot, not a thin badge bar.

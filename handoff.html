@@ -33,26 +33,19 @@
   #tabStrip { touch-action: manipulation; user-select: none; display: flex; align-items: center; gap: 4px; padding: 4px 6px 0; background: color-mix(in oklab, var(--bar) 75%, var(--bg)); border-bottom: 1px solid var(--line); flex: none; min-height: 38px; }
   #tabsScroll { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   #tabsScroll::-webkit-scrollbar { display: none; }
-  .tab-strip-item { height: 33px; padding: 0 8px 0 10px; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 1 220px; min-width: 96px; max-width: 240px; overflow: hidden; text-decoration: none; user-select: none; }
+  .tab-strip-item { height: 33px; width: 36px; padding: 0; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 0 36px; min-width: 36px; max-width: 36px; overflow: hidden; text-decoration: none; user-select: none; }
   .tab-strip-item:hover { background: color-mix(in oklab, var(--bar) 75%, var(--btn)); color: var(--fg); }
   .tab-strip-item.active { background: var(--bar); color: var(--fg); font-weight: 600; border-color: var(--line); border-bottom: 1px solid var(--bar); margin-bottom: -1px; }
   .tab-strip-item.dragging { opacity: .4; }
   .tab-strip-item.drop-before { box-shadow: inset 2px 0 var(--accent); }
   .tab-strip-item.drop-after { box-shadow: inset -2px 0 var(--accent); }
-  .site-ic { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 14px; height: 14px; border-radius: 3px; overflow: hidden; }
+  .site-ic { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; border-radius: 3px; overflow: hidden; }
   .site-ic img { width: 100%; height: 100%; object-fit: contain; }
   .site-ic.letter { font: 700 9px/1 system-ui, sans-serif; color: hsl(var(--h, 0) 65% var(--node-l)); background: hsl(var(--h, 0) 65% 50% / .18); }
   .site-ic svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
-  .tab-strip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
   /* Playing sound, like a desktop browser's tab speaker. */
   .audible { display: inline-flex; flex: none; color: var(--accent, currentColor); margin-right: 4px; vertical-align: -2px; }
   .audible svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .tab-strip-close { width: 20px; height: 20px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; padding: 0; margin-left: 2px; flex: none; }
-  .tab-strip-close:hover { background: color-mix(in oklab, var(--bad) 25%, transparent); color: var(--bad); }
-  .tab-strip-pin { width: 19px; height: 20px; border: 0; border-radius: 50%; padding: 0; flex: none; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
-  .tab-strip-pin:hover, .tab-strip-pin.pinned { color: var(--accent); background: color-mix(in oklab, var(--accent) 18%, transparent); }
-  .tab-strip-pin:not(.pinned) { opacity: .55; }
-  .tab-strip-pin[hidden] { display: none; }
   .tab-strip-add { width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none; margin-bottom: 3px; }
   .tab-strip-add:hover { background: var(--btn); color: var(--fg); }
   .tab-strip-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -394,7 +387,6 @@
   .quality-auto input { margin: 0; accent-color: var(--accent-btn); }
   #smQualityRow output { min-width: 2.2em; }
   .sm-search output { min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted, inherit); }
-  .tab-strip-item.pending .tab-strip-title { font-style: italic; }
   .sm-search select { margin-left: auto; min-width: 0; max-width: 55%; padding: 4px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--btn); color: inherit; font: inherit; }
   .sm-item:disabled { opacity: .4; }
   .sm-navrow { gap: 4px; }
@@ -490,6 +482,10 @@
   .tab-tag.current { background: var(--accent-btn); color: #fff; }
   .tab-close { width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; color: var(--muted);
     cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; flex: none; }
+  .tab-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+  .tab-pin { min-width: 48px; height: 28px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; }
+  .tab-pin:hover { border-color: var(--accent); color: var(--fg); }
+  .tab-pin[hidden] { display: none; }
   .tab-close:hover { background: var(--line); color: var(--bad); }
   /* The page asks for files: the bar when the chooser can't open by itself. */
   #pageFiles { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -3291,6 +3287,10 @@ function renderTabStrip(pages) {
     item.className = "tab-strip-item" + (isCurrent ? " active" : "");
     if (sharedBrowserId && p.control && Number.isInteger(p.index)) item.draggable = true;
     if (p.pinned) item.classList.add("pinned");
+    const fallback = p.url ? (() => { try { return new URL(p.url, location.href).hostname || p.url; } catch { return p.url; } })() : "New Tab";
+    const tabLabel = p.title || fallback;
+    item.title = `${tabLabel}${p.url ? ` (${p.url})` : ""}${p.pinned ? " — Pinned" : ""}`;
+    item.setAttribute("aria-label", `${tabLabel}${p.pinned ? ", pinned" : ""}`);
     const itemUrl = new URL(location.href);
     itemUrl.searchParams.set("page", p.id);
     item.href = itemUrl.toString();
@@ -3342,53 +3342,8 @@ function renderTabStrip(pages) {
       });
     }
 
-    const iconWrap = siteIcon(p.url, 14);
+    const iconWrap = siteIcon(p.url, 16);
     item.appendChild(iconWrap);
-
-    const title = document.createElement("span");
-    title.className = "tab-strip-title";
-    let fallback = "New Tab";
-    if (p.url) {
-      try { fallback = new URL(p.url, location.href).hostname || p.url; } catch { fallback = p.url; }
-    }
-    title.textContent = p.title || fallback;
-    title.title = p.title ? (p.title + " (" + p.url + ")") : p.url;
-    let pin = null;
-    if (p.pinned) {
-      pin = document.createElement("button");
-      pin.className = "tab-strip-pin pinned";
-      pin.type = "button";
-      pin.textContent = "📌";
-      pin.title = p.control ? "Unpin tab" : "Pinned tab";
-      pin.setAttribute("aria-label", pin.title);
-      pin.disabled = !p.control;
-      pin.onclick = (e) => { e.stopPropagation(); e.preventDefault(); if (p.control) void setSharedTabPinned(p.id, false); };
-    } else if (sharedBrowserId && p.control) {
-      pin = document.createElement("button");
-      pin.className = "tab-strip-pin";
-      pin.type = "button";
-      pin.textContent = "📌";
-      pin.title = "Pin tab";
-      pin.setAttribute("aria-label", "Pin tab");
-      pin.onclick = (e) => { e.stopPropagation(); e.preventDefault(); void setSharedTabPinned(p.id, true); };
-    }
-    if (p.audible) item.appendChild(speakerIcon());
-    item.appendChild(title);
-    if (pin) item.appendChild(pin);
-
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "tab-strip-close";
-    closeBtn.innerHTML = "✕";
-    closeBtn.title = "Close tab";
-    closeBtn.setAttribute("aria-label", "Close tab");
-    closeBtn.onclick = (e) => {
-      e.stopPropagation();
-      e.preventDefault();
-      closeTab(p.id);
-    };
-    closeBtn.hidden = !!sharedBrowserId && !p.control;
-    item.appendChild(closeBtn);
-
     E.tabsScroll.appendChild(item);
   }
   // The tab being opened in a shared browser: shown until its address is
@@ -3396,16 +3351,9 @@ function renderTabStrip(pages) {
   if (sharedNewTab) {
     const item = document.createElement("span");
     item.className = "tab-strip-item active pending";
-    const title = document.createElement("span");
-    title.className = "tab-strip-title";
-    title.textContent = "New Tab";
-    const close = document.createElement("button");
-    close.className = "tab-strip-close";
-    close.textContent = "✕";
-    close.title = "Cancel";
-    close.setAttribute("aria-label", "Cancel new tab");
-    close.onclick = (e) => { e.preventDefault(); e.stopPropagation(); dismissUrlBar(); };
-    item.append(title, close);
+    item.title = "New Tab";
+    item.setAttribute("aria-label", "New Tab");
+    item.appendChild(siteIcon("", 16));
     E.tabsScroll.appendChild(item);
     item.scrollIntoView({ inline: "nearest", block: "nearest" });
   }
@@ -3473,6 +3421,13 @@ function renderTabsModal(pages) {
       metaWrap.appendChild(curTag);
     }
 
+    if (p.pinned) {
+      const pinnedTag = document.createElement("span");
+      pinnedTag.className = "tab-tag";
+      pinnedTag.textContent = "Pinned";
+      metaWrap.appendChild(pinnedTag);
+    }
+
     if (p.profile) {
       const profTag = document.createElement("span");
       profTag.className = "tab-tag";
@@ -3490,6 +3445,21 @@ function renderTabsModal(pages) {
     if (metaWrap.children.length > 0) info.appendChild(metaWrap);
     card.appendChild(info);
 
+    const actions = document.createElement("div");
+    actions.className = "tab-actions";
+
+    const pinBtn = document.createElement("button");
+    pinBtn.className = "tab-pin";
+    pinBtn.type = "button";
+    pinBtn.textContent = p.pinned ? "Unpin" : "Pin";
+    pinBtn.title = p.pinned ? "Unpin tab" : "Pin tab";
+    pinBtn.hidden = !sharedBrowserId || !p.control;
+    pinBtn.onclick = (e) => {
+      e.stopPropagation();
+      void setSharedTabPinned(p.id, !p.pinned);
+    };
+    actions.appendChild(pinBtn);
+
     const closeBtn = document.createElement("button");
     closeBtn.className = "tab-close";
     closeBtn.title = "Close tab";
@@ -3500,7 +3470,8 @@ function renderTabsModal(pages) {
       closeTab(p.id);
     };
     closeBtn.hidden = !!sharedBrowserId && !p.control;
-    card.appendChild(closeBtn);
+    actions.appendChild(closeBtn);
+    card.appendChild(actions);
 
     card.onclick = () => {
       closeTabsModal();
