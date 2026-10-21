@@ -4,6 +4,10 @@
 
 ## [0.3.19] - 2026-10-21
 
+### Fixed
+
+* The connected toolbar indicator is a visible red dot, not a thin badge bar.
+
 ## [0.3.18] - 2026-10-21
 
 ### Added
