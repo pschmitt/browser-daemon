@@ -64,6 +64,7 @@ let busy = 0;
 let tabSerial = Promise.resolve();
 let nativePort = null;
 let nativeReady = false;
+let nativeConnecting = null;
 let pendingConnection = null;
 let pendingTimer = null;
 let history = [];
@@ -206,9 +207,10 @@ function disconnectNative() {
 async function enableNative() {
   if (chromium) throw new Error('The companion is for Firefox.');
   if (nativeReady) return;
-  const port = api.runtime.connectNative('dev.pschmitt.browser_daemon');
-  nativePort = port;
-  await new Promise((resolve, reject) => {
+  if (nativeConnecting) return nativeConnecting;
+  const connecting = new Promise((resolve, reject) => {
+    const port = api.runtime.connectNative('dev.pschmitt.browser_daemon');
+    nativePort = port;
     const timer = setTimeout(() => { disconnectNative(); reject(new Error('Firefox companion did not start.')); }, 18000);
     port.onMessage.addListener(message => {
       if (nativePort !== port) return;
@@ -244,6 +246,9 @@ async function enableNative() {
       }
     });
   });
+  nativeConnecting = connecting;
+  try { await connecting; }
+  finally { if (nativeConnecting === connecting) nativeConnecting = null; }
 }
 
 async function connectNativeForRegistration() {

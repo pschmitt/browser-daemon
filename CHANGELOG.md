@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Firefox shares one in-flight native companion connection when automatic
+  startup and a manual enable happen at the same time.
+
 ## [0.3.22] - 2026-10-21
 
 ### Changed
