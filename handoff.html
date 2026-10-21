@@ -2185,8 +2185,8 @@ function checkPopups(delay = 200) {
 // A menu entry may have put another tab in front (View page source, Open link in new
 // window, ...): the page here went hidden. Follow the tab that came up meanwhile, as for
 // a popup the page opened. Tabs opened in the background leave this one visible.
-async function followFrontTab() {
-  const before = xPop.tabsBefore, opener = pageId;
+async function followFrontTab(before = xPop.tabsBefore) {
+  const opener = pageId;
   if (!drv || !before) return;
   if ((await drv.evaluate("document.visibilityState").catch(() => null)) !== "hidden") return;
   const tabs = await fetchTargets().catch(() => []);
@@ -3740,12 +3740,15 @@ E.stage.addEventListener("drop", async (e) => {
   try {
     toast(`Sending ${label}…`, 0);
     const owner = drv;
+    // A page without a drop handler makes the browser open the file in a new tab.
+    const tabsBefore = new Set((await fetchTargets().catch(() => [])).map((t) => t.id));
     const uploadTarget = owner.shared ? await owner.fileTarget(Math.round(p.x), Math.round(p.y)) : null;
     const paths = await uploadFiles(files, uploadTarget, owner);
     if (drv !== owner) throw new Error("The viewed tab changed");
     try { await owner.dropFiles(Math.round(p.x), Math.round(p.y), paths, uploadTarget); }
     catch (error) { if (owner.shared) for (const id of paths) owner.cdp.send("Page.cancelFile", {id}); throw error; }
     toast(`Dropped ${label}`);
+    setTimeout(() => followFrontTab(tabsBefore), 600);
   } catch (err) {
     toast(`Could not drop ${label}: ${err.message}`, 4000);
   }
