@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The handoff tab strip shows labels for unpinned tabs and favicons only for
+  pinned tabs. The tab context menu can reload a tab.
+
 ## [0.3.19] - 2026-10-21
 
 ### Changed

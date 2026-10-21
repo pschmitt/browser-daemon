@@ -34,6 +34,8 @@
   #tabsScroll { display: flex; align-items: flex-end; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: 1; min-width: 0; }
   #tabsScroll::-webkit-scrollbar { display: none; }
   .tab-strip-item { height: 33px; width: 36px; padding: 0; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 0 36px; min-width: 36px; max-width: 36px; overflow: hidden; text-decoration: none; user-select: none; }
+  .tab-strip-item:not(.pinned) { width: auto; min-width: 84px; max-width: 220px; flex: 0 1 170px; justify-content: flex-start; gap: 7px; padding: 0 9px; }
+  .tab-strip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
   .tab-strip-item:hover { background: color-mix(in oklab, var(--bar) 75%, var(--btn)); color: var(--fg); }
   .tab-strip-item.active { background: var(--bar); color: var(--fg); font-weight: 600; border-color: var(--line); border-bottom: 1px solid var(--bar); margin-bottom: -1px; }
   .tab-strip-item.dragging { opacity: .4; }
@@ -472,7 +474,8 @@
   .tabs-list { overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
   #tabContextMenu { position: fixed; z-index: 100; min-width: 150px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--bar); box-shadow: 0 8px 24px #0008; }
   #tabContextMenu[hidden] { display: none; }
-  #tabContextMenu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); text-align: left; font: inherit; font-size: 13px; cursor: pointer; }
+  #tabContextMenu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); text-align: left; font: inherit; font-size: 13px; cursor: pointer; }
+  #tabContextMenu button svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   #tabContextMenu button:hover { background: var(--btn); }
   .tab-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line);
     background: var(--bg); cursor: pointer; transition: border-color .15s, background .15s; }
@@ -767,7 +770,7 @@
     <div id="tabsList" class="tabs-list"></div>
   </div>
 </div>
-<div id="tabContextMenu" role="menu" hidden><button id="tabContextPin" role="menuitem" type="button"></button></div>
+<div id="tabContextMenu" role="menu" hidden><button id="tabContextReload" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 1-2.3-5.7L20 9"/></svg><span>Reload tab</span></button><button id="tabContextPin" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m16 3 5 5-4 1-4 4v5l-2 2-2-7-5-5 2-2h5z"/></svg><span id="tabContextPinLabel"></span></button></div>
 <script>
 "use strict";
 
@@ -785,7 +788,7 @@ const E = {
   tabStrip: $("tabStrip"), profChip: $("profChip"), agentChip: $("agentChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
-  tabsModal: $("tabsModal"), tabsList: $("tabsList"), tabsSearch: $("tabsSearch"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"), tabContextMenu: $("tabContextMenu"), tabContextPin: $("tabContextPin"),
+  tabsModal: $("tabsModal"), tabsList: $("tabsList"), tabsSearch: $("tabsSearch"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"), tabContextMenu: $("tabContextMenu"), tabContextReload: $("tabContextReload"), tabContextPin: $("tabContextPin"), tabContextPinLabel: $("tabContextPinLabel"),
   audioBtn: $("audioBtn"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), kbbtn: $("kbbtn"),
   sessBtn: $("sessBtn"), sessMenu: $("sessMenu")
@@ -3295,9 +3298,9 @@ function showTabContextMenu(event, tab) {
   if (!sharedBrowserId || !tab.control) return;
   event.preventDefault();
   contextTab = tab;
-  E.tabContextPin.textContent = tab.pinned ? "Unpin tab" : "Pin tab";
-  const width = 170;
-  const height = 42;
+  E.tabContextPinLabel.textContent = tab.pinned ? "Unpin tab" : "Pin tab";
+  const width = 190;
+  const height = 92;
   E.tabContextMenu.style.left = `${Math.max(4, Math.min(event.clientX, innerWidth - width - 4))}px`;
   E.tabContextMenu.style.top = `${Math.max(4, Math.min(event.clientY, innerHeight - height - 4))}px`;
   E.tabContextMenu.hidden = false;
@@ -3372,6 +3375,12 @@ function renderTabStrip(pages) {
 
     const iconWrap = siteIcon(p.url, 16, p.favicon);
     item.appendChild(iconWrap);
+    if (!p.pinned) {
+      const label = document.createElement("span");
+      label.className = "tab-strip-label";
+      label.textContent = tabLabel;
+      item.appendChild(label);
+    }
     E.tabsScroll.appendChild(item);
   }
   // The tab being opened in a shared browser: shown until its address is
@@ -3382,6 +3391,10 @@ function renderTabStrip(pages) {
     item.title = "New Tab";
     item.setAttribute("aria-label", "New Tab");
     item.appendChild(siteIcon("", 16));
+    const label = document.createElement("span");
+    label.className = "tab-strip-label";
+    label.textContent = "New Tab";
+    item.appendChild(label);
     E.tabsScroll.appendChild(item);
     item.scrollIntoView({ inline: "nearest", block: "nearest" });
   }
@@ -3406,6 +3419,10 @@ async function setSharedTabPinned(id, pinned) {
   try { await sharedTabCommand(id, "pin", {pinned}); }
   catch (err) { toast("Could not update pinned tab: " + err.message, 5000); }
   finally { setTimeout(() => loadTabs(), 250); }
+}
+async function reloadSharedTab(id) {
+  try { await sharedTabCommand(id, "reload", {}); }
+  catch (err) { toast("Could not reload tab: " + err.message, 5000); }
 }
 
 function renderTabsModal(pages) {
@@ -3520,6 +3537,10 @@ E.tabAddBtn.onclick = () => openNewTab();
 E.tabsDrawerBtn.onclick = () => openTabsModal();
 E.newTabBtn.onclick = () => openNewTab();
 E.tabsSearch.addEventListener("input", () => renderTabsModal(tabsAll));
+E.tabContextReload.addEventListener("click", () => {
+  if (contextTab) void reloadSharedTab(contextTab.id);
+  closeTabContextMenu();
+});
 E.tabContextPin.addEventListener("click", () => {
   if (contextTab) void setSharedTabPinned(contextTab.id, !contextTab.pinned);
   closeTabContextMenu();
