@@ -179,7 +179,9 @@ async function refresh() {
 // Firefox captures tabs without its companion only with access to all sites.
 async function capturePermission() {
   if (state.chromium) return;
-  if (!(await api.permissions.request({origins: ['<all_urls>']}))) throw new Error('Firefox needs access to your sites to show shared tabs.');
+  const sitePermission = {origins: ['<all_urls>']};
+  if (!(await api.permissions.contains(sitePermission))
+      && !(await api.permissions.request(sitePermission))) throw new Error('Firefox needs access to your sites to show shared tabs.');
 }
 async function share(ids, control = $('control').checked) {
   if (busy) return;
@@ -253,7 +255,9 @@ $('pill').addEventListener('click', async () => {
 $('native').addEventListener('click', async () => {
   clearError();
   try {
-    if (!state.nativeReady && !(await api.permissions.request({permissions: ['nativeMessaging']}))) throw new Error('Native messaging permission was denied.');
+    const nativePermission = {permissions: ['nativeMessaging']};
+    if (!state.nativeReady && !(await api.permissions.contains(nativePermission))
+        && !(await api.permissions.request(nativePermission))) throw new Error('Native messaging permission was denied.');
     await message({type: 'native', enable: !state.nativeReady});
     await refresh();
   } catch (error) { showError(error); }
@@ -318,8 +322,10 @@ $('shareAudio').addEventListener('click', () => {
 
 $('shareFiles').addEventListener('click', () => {
   const enabled = $('shareFiles').checked;
-  const permission = enabled ? api.permissions.request({origins: state.chromium ? ['http://*/*', 'https://*/*'] : ['<all_urls>'],
-    ...(!state.chromium ? {permissions: ['webRequest', 'webRequestBlocking', 'webRequestFilterResponse']} : {})}) : Promise.resolve(true);
+  const requested = {origins: state.chromium ? ['http://*/*', 'https://*/*'] : ['<all_urls>'],
+    ...(!state.chromium ? {permissions: ['webRequest', 'webRequestBlocking', 'webRequestFilterResponse']} : {})};
+  const permission = enabled ? api.permissions.contains(requested).then(granted =>
+    granted || api.permissions.request(requested)) : Promise.resolve(true);
   void permission.then(allowed => {
     if (!allowed) throw new Error('Site access is needed for file transfer.');
     return message({type: 'shareFiles', enabled});
@@ -332,7 +338,9 @@ $('sharePublic').addEventListener('change', () => {
 
 $('addressSuggestions').addEventListener('click', () => {
   const enabled = $('addressSuggestions').checked;
-  const permission = enabled ? api.permissions.request({permissions: ['history', 'bookmarks']}) : Promise.resolve(true);
+  const requested = {permissions: ['history', 'bookmarks']};
+  const permission = enabled ? api.permissions.contains(requested).then(granted =>
+    granted || api.permissions.request(requested)) : Promise.resolve(true);
   void permission.then(allowed => {
     if (!allowed) throw new Error('History and bookmark access is needed for address suggestions.');
     return message({type: 'addressSuggestions', enabled}).then(refresh);

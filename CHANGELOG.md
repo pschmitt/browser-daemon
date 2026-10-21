@@ -4,6 +4,12 @@
 
 ## [0.3.21] - 2026-10-21
 
+### Changed
+
+* Firefox installs the node's native messaging, history, bookmarks, and file
+  transfer API permissions as required permissions. The popup checks existing
+  grants before asking for optional permissions, preserving Chromium behavior.
+
 ## [0.3.20] - 2026-10-21
 
 ### Changed

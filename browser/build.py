@@ -47,7 +47,12 @@ def main():
             manifest["permissions"].append("debugger")
             manifest["background"] = {"service_worker": "background.js"}
         else:
-            manifest["optional_permissions"] = ["nativeMessaging", "webRequest", "webRequestBlocking", "webRequestFilterResponse", "history", "bookmarks"]
+            # These are core node features, so managed installs should not
+            # require separate per-permission approvals after installation.
+            manifest["permissions"].extend([
+                "nativeMessaging", "webRequest", "webRequestBlocking",
+                "webRequestFilterResponse", "history", "bookmarks",
+            ])
             manifest["host_permissions"] = ["<all_urls>"]
             manifest["background"] = {"scripts": ["policy.js", "audio.js", "files-page.js", "files.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
