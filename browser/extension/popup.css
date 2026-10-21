@@ -29,8 +29,10 @@ header img { border-radius: 10px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
 .card.accent { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 #rememberedStatus { white-space: pre-line; }
-.banner { padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; }
+.banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; }
 .banner.bad { background: var(--bad-soft); color: var(--bad); }
+.banner > span { flex: 1; min-width: 0; }
+.banner > button { flex: none; border: 0; background: transparent; color: inherit; padding: 0 2px; line-height: 1; font-size: 18px; }
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }
 .center { text-align: center; padding: 16px 0; }

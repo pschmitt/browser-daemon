@@ -202,14 +202,18 @@ async function discoverDaemonOrigins(discoveryOrigin) {
     discoveryCache = {origin: discoveryOrigin, origins, fetchedAt: Date.now(), expires: Number.POSITIVE_INFINITY};
     return origins;
   } catch (error) {
-    discoveryCache = {origin: discoveryOrigin, error: error.message, expires: Number.POSITIVE_INFINITY};
+    discoveryCache = {origin: discoveryOrigin, error: error.message, expires: Date.now() + 30000};
     throw error;
   }
 }
 // Read once per change, not per request: live views send many small messages.
 function cachedPolicy() {
   if (!policyCache) {
-    policyCache = daemonPolicy().then(policy => { daemons = new Set(policy.origins); return policy; },
+    policyCache = daemonPolicy().then(policy => {
+      daemons = new Set(policy.origins);
+      if (policy.error) policyCache = null;
+      return policy;
+    },
       error => { policyCache = null; throw error; });
   }
   return policyCache;

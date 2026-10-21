@@ -7,7 +7,8 @@
 ### Changed
 
 * Firefox shows the remembered-connection failure in the popup and distinguishes
-  a different extension installation from a missing daemon permission.
+  a different extension installation from a missing daemon permission. Errors
+  remain visible until dismissed, and failed origin discovery retries.
 * The toolbar uses a clear red dot while offline and a separate pulsing client
   indicator while a remote client is connected.
 

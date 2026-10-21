@@ -10,6 +10,8 @@ let state;
 let initialized = false;
 let setupRemembered;
 let busy = false;
+let popupError = '';
+let dismissedConnectionStatus = '';
 let renderedTabs = '';
 let renderedAllowlist = '';
 let approvalIdentity = '';
@@ -35,8 +37,13 @@ async function message(value) {
   if (response?.error) throw new Error(response.error);
   return response;
 }
-function showError(error) { $('error').textContent = error.message; $('error').hidden = false; }
-function clearError() { $('error').hidden = true; }
+function renderError(connectionStatus = '') {
+  const status = connectionStatus === dismissedConnectionStatus ? '' : connectionStatus;
+  $('errorText').textContent = popupError || status;
+  $('error').hidden = !popupError && !status;
+}
+function showError(error) { popupError = error.message; renderError(); }
+function clearError() { popupError = ''; renderError(); }
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function renderHeader() {
@@ -50,11 +57,17 @@ function renderHeader() {
   $('pill').disabled = state.connecting || (!reg && !state.rememberedBrowser);
   $('pill').title = reg ? 'Disconnect this browser' : state.connecting ? 'Connecting'
     : state.rememberedBrowser ? 'Reconnect this browser' : 'Offline';
-  const showConnectionError = !reg && !!state.rememberedBrowser && !state.connecting &&
-    !!state.status && state.status !== 'Disconnected';
-  $('error').textContent = showConnectionError ? state.status : '';
-  $('error').hidden = !showConnectionError;
+  const connectionStatus = !reg && !!state.rememberedBrowser && !state.connecting &&
+    state.status && state.status !== 'Disconnected' ? state.status : '';
+  if (connectionStatus !== dismissedConnectionStatus) dismissedConnectionStatus = '';
+  renderError(connectionStatus);
 }
+
+$('dismissError').addEventListener('click', () => {
+  popupError = '';
+  if (!state?.registration && state?.rememberedBrowser && !state.connecting) dismissedConnectionStatus = state.status;
+  renderHeader();
+});
 
 function favicon(tab) {
   const box = document.createElement('span');
