@@ -13,6 +13,8 @@
 ### Fixed
 
 * The connected toolbar indicator is a visible red dot, not a thin badge bar.
+* Address suggestions in extension-backed sessions query the browser's history
+  and bookmarks instead of the managed-session history endpoint.
 
 ## [0.3.18] - 2026-10-21
 

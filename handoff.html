@@ -2866,15 +2866,16 @@ async function suggestFetch(q) {
   if (!sid && !sharedBrowserId) return;
   const seq = ++sgSeq;
   try {
-    const res = sid
-      ? await fetch(`/api/sessions/${encodeURIComponent(sid)}/history?limit=8&q=${encodeURIComponent(q)}`, { headers: authHeaders() })
-      : await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {
+    const extensionSession = !!sharedBrowserId;
+    const res = extensionSession
+      ? await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {
         method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({tab: Number(pageId), action: "suggest", params: {query: q}}),
-      });
+      })
+      : await fetch(`/api/sessions/${encodeURIComponent(sid)}/history?limit=8&q=${encodeURIComponent(q)}`, { headers: authHeaders() });
     if (!res.ok) return;
     const body = await res.json();
-    const items = sid ? body : body.result || [];
+    const items = extensionSession ? body.result || [] : body;
     // A newer question, or the bar was left meanwhile.
     if (seq !== sgSeq || document.activeElement !== E.urlInput) return;
     sgItems = items;
