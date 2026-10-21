@@ -180,6 +180,8 @@ struct Node {
 struct Channel {
     tab: u32,
     tx: mpsc::Sender<String>,
+    // Internal recording channels are not interactive clients.
+    client: bool,
     // A CDP client's session (see automation.rs): all of the tab's events, not
     // only the live view's.
     automation: bool,
@@ -200,6 +202,21 @@ impl Node {
         let info = self.info.lock().unwrap();
         info.tabs.iter().find(|t| t.id == tab).map(|t| t.control)
     }
+    fn client_connected(&self) -> bool {
+        let channel = self
+            .channels
+            .lock()
+            .unwrap()
+            .values()
+            .any(|channel| channel.client);
+        channel || !self.pending.lock().unwrap().is_empty()
+    }
+    fn notify_client_presence(&self) {
+        let _ = self.outbound.try_send(json!({
+            "type": "client_presence",
+            "connected": self.client_connected(),
+        }));
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -209,6 +226,15 @@ pub struct Tab {
     pub title: String,
     pub url: String,
     pub control: bool,
+    /// Position in the browser window; used to preserve the owner's tab order.
+    #[serde(default)]
+    pub index: Option<u32>,
+    /// Window identity is only used to keep handoff drag-and-drop within a window.
+    #[serde(default)]
+    pub window_id: Option<i32>,
+    /// Firefox/Chromium pinned-tab state.
+    #[serde(default)]
+    pub pinned: bool,
     /// In front of its window: what the owner sees, and what a recording shows.
     #[serde(default)]
     pub active: bool,
@@ -448,6 +474,10 @@ fn valid_command(command: &Command, control: bool) -> bool {
         "navigate" | "open" => command.params["url"].as_str().is_some_and(page_url),
         "click" | "type" | "key" | "scroll" | "reload" | "back" | "forward" | "focus" | "close"
         | "evaluate" => true,
+        "move" => command.params["index"]
+            .as_u64()
+            .is_some_and(|i| i <= u32::MAX as u64),
+        "pin" => command.params["pinned"].is_boolean(),
         "cdp" => command.params["method"].as_str().is_some_and(cdp_allowed),
         _ => false,
     }
@@ -669,11 +699,13 @@ async fn ask_granted(
         }
         pending.insert(request, tx);
     }
+    node.notify_client_presence();
     // A cancelled HTTP request must not leave entries behind.
     struct Pending(Arc<Node>, Uuid);
     impl Drop for Pending {
         fn drop(&mut self) {
             self.0.pending.lock().unwrap().remove(&self.1);
+            self.0.notify_client_presence();
         }
     }
     let _pending = Pending(node.clone(), request);
@@ -1077,12 +1109,16 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                         last_seen = Instant::now();
                         match value["type"].as_str() {
                             Some("forget") => { broker.forget(id)?; break; }
-                            Some("heartbeat") => send(ws, json!({"type": "heartbeat"})).await?,
+                            Some("heartbeat") => send(ws, json!({"type": "heartbeat", "client_connected": node.client_connected()})).await?,
                             Some("tabs") => {
                                 let tabs: Vec<Tab> = serde_json::from_value(value["tabs"].clone()).map_err(|_| ())?;
                                 if tabs.len() > MAX_TABS || tabs.iter().any(|t| !page_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024)
                                     || tabs.iter().map(|t| t.id).collect::<std::collections::HashSet<_>>().len() != tabs.len() { return Err(()); }
+                                let was_connected = node.client_connected();
                                 node.channels.lock().unwrap().retain(|_, c| tabs.iter().any(|t| t.id == c.tab));
+                                if was_connected != node.client_connected() {
+                                    node.notify_client_presence();
+                                }
                                 let mut info = node.info.lock().unwrap();
                                 info.tabs = tabs;
                                 info.native_control = value["native_control"].as_bool().unwrap_or(false);
@@ -1235,13 +1271,16 @@ async fn relay(node: &Arc<Node>, tab: u32, ws: &mut WebSocket) {
         Channel {
             tab,
             tx,
+            client: true,
             automation: false,
         },
     );
+    node.notify_client_presence();
     struct Open(Arc<Node>, Uuid, u32);
     impl Drop for Open {
         fn drop(&mut self) {
             self.0.channels.lock().unwrap().remove(&self.1);
+            self.0.notify_client_presence();
             let _ = self
                 .0
                 .outbound
@@ -1363,7 +1402,7 @@ async fn feed(
                     }
                     tab = want;
                     if let Some(t) = tab {
-                        node.channels.lock().unwrap().insert(channel, Channel { tab: t, tx: tx.clone(), automation: false });
+                        node.channels.lock().unwrap().insert(channel, Channel { tab: t, tx: tx.clone(), client: false, automation: false });
                         request(t, next, "Page.enable", json!({}));
                         request(t, next + 1, "Page.startScreencast", screencast.clone());
                         next += 2;

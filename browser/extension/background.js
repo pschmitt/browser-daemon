@@ -5,6 +5,7 @@ const chromium = typeof api.runtime.getBrowserInfo !== 'function';
 void api.storage.local.setAccessLevel?.({accessLevel: 'TRUSTED_CONTEXTS'});
 let socket = null;
 let registration = null;
+let clientConnected = false;
 let shared = new Map();
 const attached = new Set();
 const attaching = new Map();
@@ -256,8 +257,8 @@ function publishSafely() { void publish().catch(() => stop('Could not update sha
 
 let published = [];
 let approvalPending = 0;
-// The number of shared tabs: red when any may be controlled, green when view only.
-// A "?" asks for a decision: a dashboard waits for pairing approval.
+// A red dot means a real client is using this browser. A "?" asks for a
+// decision: a dashboard waits for pairing approval.
 async function badge() {
   if (approvalPending > Date.now() && !registration) {
     await api.action.setBadgeText({text: '?'});
@@ -265,12 +266,12 @@ async function badge() {
     await api.action.setTitle({title: 'Browser node: a dashboard asks to connect — click to answer'});
     return;
   }
-  const count = registration ? published.length : 0;
-  const control = published.some(t => t.control);
-  await api.action.setBadgeText({text: registration ? String(count) : ''});
-  await api.action.setBadgeBackgroundColor({color: !count ? '#6b7280' : control ? '#c73545' : '#23745d'});
+  const connected = !!registration && clientConnected;
+  await api.action.setBadgeText({text: connected ? ' ' : ''});
+  await api.action.setBadgeBackgroundColor({color: '#c73545'});
   await api.action.setTitle({title: !registration ? 'Browser node: disconnected'
-    : `Browser node: ${count} shared tab${count === 1 ? '' : 's'}${count ? (control ? ', remote control allowed' : ', view only') : ''}`});
+    : connected ? 'Browser node: connected — a client is using this browser'
+      : 'Browser node: connected — waiting for a client'});
 }
 
 async function detach(tab) {
@@ -287,6 +288,7 @@ async function stop(reason = 'Disconnected', retry = false) {
   const clearedAlarm = api.alarms.clear('node-reconnect');
   status = reason;
   record(reason);
+  clientConnected = false;
   pendingConnection = null;
   clearTimeout(pendingTimer);
   const old = socket;
@@ -334,7 +336,7 @@ async function publish() {
       if (grant.paused) continue;
       grant.origin = new URL(tab.url).origin;
       if (!chromium && grant.control) void hookPasskeys(id).catch(() => hooked.delete(id));
-      if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), control: grant.control, active: tab.active === true});
+      if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), control: grant.control, active: tab.active === true, index: tab.index, window_id: tab.windowId, pinned: tab.pinned === true});
     } catch { shared.delete(id); await detach(id); }
   }
   if (generation !== currentGeneration) return;
@@ -357,6 +359,46 @@ function safeURL(url) {
 }
 function safeTab(tab) { return !tab.incognito && safeURL(tab.url); }
 
+async function wakeDiscardedTab(id, tab) {
+  if (chromium || !tab.discarded) return;
+  const previous = sharing.follow ? null
+    : (await api.tabs.query({active: true, windowId: tab.windowId}))[0]?.id ?? null;
+  let finish;
+  let timer;
+  let cleanup = () => {};
+  let settled = false;
+  const loaded = new Promise((resolve, reject) => {
+    finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      error ? reject(error) : resolve();
+    };
+    const onUpdated = (updatedId, change) => {
+      if (updatedId !== id || change.status !== 'complete') return;
+      void api.tabs.get(id).then(current => {
+        if (!current.discarded) finish();
+      }, finish);
+    };
+    api.tabs.onUpdated.addListener(onUpdated);
+    timer = setTimeout(() => finish(new Error('Firefox did not load the discarded tab.')), 30000);
+    void api.tabs.get(id).then(current => {
+      if (!current.discarded && current.status === 'complete') finish();
+    }, finish);
+    cleanup = () => api.tabs.onUpdated.removeListener(onUpdated);
+  });
+  try {
+    await api.tabs.update(id, {active: true});
+    const current = await api.tabs.get(id);
+    if (!current.discarded && current.status === 'complete') finish();
+    await loaded;
+    if (previous !== null && previous !== id) await api.tabs.update(previous, {active: true});
+  } finally {
+    clearTimeout(timer);
+    cleanup();
+  }
+}
+
 async function grantFor(command) {
   if (command.public_grant && (!sharing.public || command.public_grant !== publicGrant)) throw new Error("Public sharing ended.");
   if (registration) await requireDaemon(registration.server);
@@ -365,7 +407,10 @@ async function grantFor(command) {
       !grant || !NodePolicy.allowed(command, grant.control)) throw new Error('Tab grant does not permit this action.');
   const tab = await api.tabs.get(command.tab);
   if (!safeTab(tab) || shared.get(command.tab) !== grant) throw new Error('Tab is paused or sharing ended.');
-  grant.origin = new URL(tab.url).origin;
+  if (!['move', 'pin', 'close', 'suggest'].includes(command.action)) await wakeDiscardedTab(command.tab, tab);
+  const current = await api.tabs.get(command.tab);
+  if (!safeTab(current) || shared.get(command.tab) !== grant || grant.paused) throw new Error('Tab is paused or sharing ended.');
+  grant.origin = new URL(current.url).origin;
   return grant;
 }
 
@@ -783,6 +828,15 @@ async function execute(command) {
   else if (action === 'forward') { await api.tabs.goForward(tab); return {ok: true}; }
   else if (action === 'focus') { await api.tabs.update(tab, {active: true}); return {ok: true}; }
   else if (action === 'close') { await api.tabs.remove(tab); return {ok: true}; }
+  else if (action === 'move') {
+    if (!Number.isSafeInteger(params.index) || params.index < 0) throw new Error('Expected a tab index.');
+    await api.tabs.move(tab, {index: params.index});
+    return {ok: true};
+  } else if (action === 'pin') {
+    if (typeof params.pinned !== 'boolean') throw new Error('Expected pinned state.');
+    await api.tabs.update(tab, {pinned: params.pinned});
+    return {ok: true};
+  }
   else if (action === 'cdp') {
     if (!chromium) throw new Error('CDP is available only on Chromium.');
     return cdp(tab, params.method, params.params || {});
@@ -830,6 +884,8 @@ async function relayCdp(message, connection, currentGeneration, queued = false) 
         !(NodePolicy.relayAllowed(method, params, grant.control) || (automation && grant.control && NodePolicy.automationAllowed(method, params)))) {
       throw new ShimError('Not permitted for this shared tab.');
     }
+    await wakeDiscardedTab(tab, await api.tabs.get(tab));
+    if (shared.get(tab) !== grant || grant.paused || !safeTab(await api.tabs.get(tab))) throw new ShimError('Tab is paused or sharing ended.');
     channels.set(channel, tab);
     if (fileMethods.has(method)) {
       const result = await fileCommand(tab, channel, method, params);
@@ -1212,6 +1268,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
         }
       }
       registration = {...grant, server};
+      clientConnected = false;
       status = 'Connected';
       record(status);
       void api.storage.session.remove('pairingDraft');
@@ -1227,7 +1284,16 @@ async function connect({server, code = '', key = '', name, remember = false}) {
     } else if (message.type === 'authorization_revoked') {
       await api.storage.local.remove('rememberedNode');
       await stop('Browser authorization was revoked — pair again to reconnect');
-    } else if (message.type === 'heartbeat') lastAnswer = Date.now();
+    } else if (message.type === 'heartbeat') {
+      lastAnswer = Date.now();
+      if (typeof message.client_connected === 'boolean' && clientConnected !== message.client_connected) {
+        clientConnected = message.client_connected;
+        await badge();
+      }
+    } else if (message.type === 'client_presence' && registration) {
+      clientConnected = message.connected === true;
+      await badge();
+    }
     else if (message.type === 'command' && registration) void handleCommand(message, connection, myGeneration);
     else if (message.type === 'cdp' && registration) void relayCdp(message, connection, myGeneration);
     else if (message.type === 'cdp_close') closeChannel(message.channel);
@@ -1474,8 +1540,9 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
   if (change.status === 'complete' && mediaAudio.has(id)) void renewTabAudio(id);
   if (change.status === 'complete' && !chromium && grant.control && !grant.paused) void hookPasskeys(id).catch(() => hooked.delete(id));
   if (change.status === 'complete' && fileTabs.get(id)?.channels.size) void installFilePages(id);
-  if (change.url || change.title || change.status === 'complete') publishSoon();
+  if (change.url || change.title || change.status === 'complete' || change.pinned !== undefined) publishSoon();
 });
+api.tabs.onMoved.addListener(() => { if (registration) publishSoon(); });
 // Which shared tab is in front: recordings follow it.
 api.tabs.onActivated.addListener(() => { if (registration) publishSoon(); });
 api.tabs.onCreated.addListener(tab => {

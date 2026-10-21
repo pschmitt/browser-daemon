@@ -321,9 +321,11 @@ impl Facade {
             Channel {
                 tab: t.id,
                 tx,
+                client: true,
                 automation: true,
             },
         );
+        self.node.notify_client_presence();
         let tagged = self.tagged.clone();
         let name = session.clone();
         tokio::spawn(async move {
@@ -347,6 +349,7 @@ impl Facade {
     fn close_session(&mut self, session: &str) {
         if let Some(s) = self.sessions.remove(session) {
             self.node.channels.lock().unwrap().remove(&s.channel);
+            self.node.notify_client_presence();
             let _ = self
                 .node
                 .outbound

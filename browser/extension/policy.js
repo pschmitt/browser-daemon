@@ -52,6 +52,8 @@ globalThis.NodePolicy = (() => {
     if (['screenshot', 'snapshot', 'publicAudio'].includes(command.action)) return true;
     if (!control) return false;
     if (command.action === 'navigate' || command.action === 'open') return pageURL(command.params.url);
+    if (command.action === 'move') return Number.isSafeInteger(command.params.index) && command.params.index >= 0;
+    if (command.action === 'pin') return typeof command.params.pinned === 'boolean';
     if (command.action === 'cdp') return methods.has(command.params.method);
     if (command.action === 'suggest') return typeof command.params.query === 'string' && command.params.query.length <= 200;
     return ['publicInput', 'click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate', 'frames', 'fill'].includes(command.action);

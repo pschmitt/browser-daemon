@@ -36,6 +36,9 @@
   .tab-strip-item { height: 33px; padding: 0 8px 0 10px; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 1 220px; min-width: 96px; max-width: 240px; overflow: hidden; text-decoration: none; user-select: none; }
   .tab-strip-item:hover { background: color-mix(in oklab, var(--bar) 75%, var(--btn)); color: var(--fg); }
   .tab-strip-item.active { background: var(--bar); color: var(--fg); font-weight: 600; border-color: var(--line); border-bottom: 1px solid var(--bar); margin-bottom: -1px; }
+  .tab-strip-item.dragging { opacity: .4; }
+  .tab-strip-item.drop-before { box-shadow: inset 2px 0 var(--accent); }
+  .tab-strip-item.drop-after { box-shadow: inset -2px 0 var(--accent); }
   .site-ic { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 14px; height: 14px; border-radius: 3px; overflow: hidden; }
   .site-ic img { width: 100%; height: 100%; object-fit: contain; }
   .site-ic.letter { font: 700 9px/1 system-ui, sans-serif; color: hsl(var(--h, 0) 65% var(--node-l)); background: hsl(var(--h, 0) 65% 50% / .18); }
@@ -46,6 +49,10 @@
   .audible svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .tab-strip-close { width: 20px; height: 20px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 11px; padding: 0; margin-left: 2px; flex: none; }
   .tab-strip-close:hover { background: color-mix(in oklab, var(--bad) 25%, transparent); color: var(--bad); }
+  .tab-strip-pin { width: 19px; height: 20px; border: 0; border-radius: 50%; padding: 0; flex: none; display: inline-flex; align-items: center; justify-content: center; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
+  .tab-strip-pin:hover, .tab-strip-pin.pinned { color: var(--accent); background: color-mix(in oklab, var(--accent) 18%, transparent); }
+  .tab-strip-pin:not(.pinned) { opacity: .55; }
+  .tab-strip-pin[hidden] { display: none; }
   .tab-strip-add { width: 30px; height: 30px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; flex: none; margin-bottom: 3px; }
   .tab-strip-add:hover { background: var(--btn); color: var(--fg); }
   .tab-strip-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -215,8 +222,12 @@
   #vaultPop .vp-entry.armed { background: color-mix(in srgb, var(--warn-fg) 14%, transparent); }
   #vaultPop .vp-entry.armed .sp-t span { color: var(--warn-fg); }
   @media (pointer: coarse) { #vaultPop .vp-search { font-size: 16px; } #vaultPop .vp-entry { min-height: 50px; } }
-  #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; padding: 7px 14px; border-radius: 99px;
-    background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
+  #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; display: flex; align-items: flex-start; gap: 10px;
+    width: min(480px, calc(100vw - 24px)); padding: 8px 10px 8px 14px; border-radius: 14px;
+    background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; line-height: 1.4; font-weight: 600; text-align: left; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
+  #clipToast .toast-message { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  #clipToast .toast-dismiss { flex: none; border: 0; padding: 0 2px; background: transparent; color: var(--muted); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; pointer-events: auto; }
+  #clipToast .toast-dismiss:hover { color: var(--fg); }
   #view:focus { outline: none; }
   #passkeyDialog { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 0; width: min(400px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow-y: auto; box-shadow: 0 24px 70px #0008; }
   #passkeyDialog::backdrop { background: #0007; backdrop-filter: blur(3px); }
@@ -1668,7 +1679,7 @@ async function fetchTargets() {
     sharedBrowser = result.nodes.find(n => n.id === sharedBrowserId);
     sharedPublicShare = sharedBrowser?.share || null;
     if (!sharedBrowser || sharedBrowser.online === false) throw new Error("This browser is offline. Reconnect it from the extension.");
-    const pages = sharedBrowser.tabs.map(t => ({...t, id: String(t.id), type: "page", sessionId: sharedBrowser.id, engine: sharedBrowser.browser}));
+    const pages = sharedBrowser.tabs.map(t => ({...t, id: String(t.id), type: "page", sessionId: sharedBrowser.id, engine: sharedBrowser.browser})).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
     // No live tab (none shared yet, or the shown one went away): follow the
     // shared tab in front, once there is one.
     const next = pages.find(p => p.active) || pages[0];
@@ -3243,7 +3254,7 @@ async function loadTabs() {
     for (const x of all) knownTabs.add(x.id);
     tabsAll = all;
     // Redrawn only when something shown changed: this also runs on a timer.
-    const sig = JSON.stringify([target?.id, all.map((x) => [x.id, x.title, x.url, x.audible])]);
+    const sig = JSON.stringify([target?.id, all.map((x) => [x.id, x.title, x.url, x.audible, x.index, x.pinned])]);
     if (sig === tabsSig) return;
     tabsSig = sig;
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
@@ -3267,6 +3278,7 @@ if (sharedBrowserId) (async () => {
 setInterval(() => { if (document.visibilityState === "visible" && (target || sharedBrowserId)) loadTabs(); }, 2500);
 
 let lastStripPages = [];
+let tabDragJustEnded = false;
 function renderTabStrip(pages) {
   if (!E.tabsScroll) return;
   noteClosedTabs(lastStripPages, pages);
@@ -3277,15 +3289,58 @@ function renderTabStrip(pages) {
     const isCurrent = p.id === pageId && !sharedNewTab;
     const item = document.createElement("a");
     item.className = "tab-strip-item" + (isCurrent ? " active" : "");
+    if (sharedBrowserId && p.control && Number.isInteger(p.index)) item.draggable = true;
+    if (p.pinned) item.classList.add("pinned");
     const itemUrl = new URL(location.href);
     itemUrl.searchParams.set("page", p.id);
     item.href = itemUrl.toString();
     item.onclick = (e) => {
       // Ctrl/middle click keeps opening it in a new browser tab.
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+      if (tabDragJustEnded) { e.preventDefault(); tabDragJustEnded = false; return; }
       e.preventDefault();
       if (!isCurrent) switchTab(p.id);
     };
+    if (item.draggable) {
+      item.addEventListener("dragstart", (e) => {
+        item.dataset.dragged = "true";
+        item.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", p.id);
+      });
+      item.addEventListener("dragend", () => {
+        item.classList.remove("dragging");
+        tabDragJustEnded = true;
+        setTimeout(() => { tabDragJustEnded = false; }, 250);
+        E.tabsScroll.querySelectorAll(".drop-before,.drop-after").forEach(el => el.classList.remove("drop-before", "drop-after"));
+      });
+      item.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        const before = e.clientX < item.getBoundingClientRect().left + item.getBoundingClientRect().width / 2;
+        item.classList.toggle("drop-before", before);
+        item.classList.toggle("drop-after", !before);
+        e.dataTransfer.dropEffect = "move";
+      });
+      item.addEventListener("dragleave", (e) => {
+        if (!item.contains(e.relatedTarget)) item.classList.remove("drop-before", "drop-after");
+      });
+      item.addEventListener("drop", (e) => {
+        e.preventDefault();
+        item.classList.remove("drop-before", "drop-after");
+        const source = e.dataTransfer.getData("text/plain");
+        if (!source || source === p.id) return;
+        const before = e.clientX < item.getBoundingClientRect().left + item.getBoundingClientRect().width / 2;
+        const sourcePage = lastStripPages.find(tab => tab.id === source);
+        if (!sourcePage) return;
+        if (sourcePage.window_id !== p.window_id) { toast("Tabs can only be reordered within the same browser window.", 3500); return; }
+        if (!Number.isInteger(sourcePage.index) || !Number.isInteger(p.index)) return;
+        const sourceBefore = sourcePage.index < p.index;
+        const index = before
+          ? p.index - (sourceBefore ? 1 : 0)
+          : p.index + (sourceBefore ? 0 : 1);
+        void moveSharedTab(source, index);
+      });
+    }
 
     const iconWrap = siteIcon(p.url, 14);
     item.appendChild(iconWrap);
@@ -3298,8 +3353,28 @@ function renderTabStrip(pages) {
     }
     title.textContent = p.title || fallback;
     title.title = p.title ? (p.title + " (" + p.url + ")") : p.url;
+    let pin = null;
+    if (p.pinned) {
+      pin = document.createElement("button");
+      pin.className = "tab-strip-pin pinned";
+      pin.type = "button";
+      pin.textContent = "📌";
+      pin.title = p.control ? "Unpin tab" : "Pinned tab";
+      pin.setAttribute("aria-label", pin.title);
+      pin.disabled = !p.control;
+      pin.onclick = (e) => { e.stopPropagation(); e.preventDefault(); if (p.control) void setSharedTabPinned(p.id, false); };
+    } else if (sharedBrowserId && p.control) {
+      pin = document.createElement("button");
+      pin.className = "tab-strip-pin";
+      pin.type = "button";
+      pin.textContent = "📌";
+      pin.title = "Pin tab";
+      pin.setAttribute("aria-label", "Pin tab");
+      pin.onclick = (e) => { e.stopPropagation(); e.preventDefault(); void setSharedTabPinned(p.id, true); };
+    }
     if (p.audible) item.appendChild(speakerIcon());
     item.appendChild(title);
+    if (pin) item.appendChild(pin);
 
     const closeBtn = document.createElement("button");
     closeBtn.className = "tab-strip-close";
@@ -3334,6 +3409,27 @@ function renderTabStrip(pages) {
     E.tabsScroll.appendChild(item);
     item.scrollIntoView({ inline: "nearest", block: "nearest" });
   }
+}
+
+async function sharedTabCommand(id, action, params) {
+  const res = await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {
+    method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({tab: Number(id), action, params}),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || "The browser rejected the tab change");
+  }
+}
+async function moveSharedTab(id, index) {
+  try { await sharedTabCommand(id, "move", {index}); }
+  catch (err) { toast("Could not reorder tab: " + err.message, 5000); }
+  finally { setTimeout(() => loadTabs(), 250); }
+}
+async function setSharedTabPinned(id, pinned) {
+  try { await sharedTabCommand(id, "pin", {pinned}); }
+  catch (err) { toast("Could not update pinned tab: " + err.message, 5000); }
+  finally { setTimeout(() => loadTabs(), 250); }
 }
 
 function renderTabsModal(pages) {
@@ -3424,6 +3520,7 @@ async function openTabsModal() {
   E.tabsModal.classList.add("open");
   E.tabsSearch.value = "";
   renderTabsModal(tabsAll);
+  requestAnimationFrame(() => E.tabsSearch.focus({ preventScroll: true }));
   loadTabs();
 }
 
@@ -3703,9 +3800,25 @@ function toast(text, ms = 1100) {
   if (!el) {
     el = document.createElement("div");
     el.id = "clipToast";
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    const message = document.createElement("span");
+    message.className = "toast-message";
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "toast-dismiss";
+    dismiss.setAttribute("aria-label", "Dismiss notification");
+    dismiss.textContent = "×";
+    dismiss.onclick = (event) => {
+      event.stopPropagation();
+      clearTimeout(toastTimer);
+      toastTimer = 0;
+      el.classList.remove("show");
+    };
+    el.append(message, dismiss);
     document.body.appendChild(el);
   }
-  el.textContent = text;
+  el.querySelector(".toast-message").textContent = text;
   el.classList.add("show");
   clearTimeout(toastTimer);
   if (ms) toastTimer = setTimeout(() => el.classList.remove("show"), ms);
