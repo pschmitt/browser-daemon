@@ -828,6 +828,7 @@ impl Controlled {
             "username": creds.username,
             "password": creds.password,
             "totp": creds.totp,
+            "custom": creds.custom,
         });
         let filled = answer(ask(&self.node, self.tab, "fill", params).await?)?;
         Ok(filled["filled"]

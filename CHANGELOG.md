@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+* Vault fills also fill the entry's text custom fields, as the rbw extension
+  does: an input whose id or name is the field's name, else one whose
+  autocomplete, aria-label, placeholder or label matches it. Hidden, boolean and
+  linked fields are never filled.
+
+### Changed
+
+* Ctrl+wheel zoom in the handoff view: a mouse wheel notch is a gentle, eased
+  step instead of a jump between a few levels (a touchpad pinch still follows
+  one to one); Ctrl+plus/minus are eased too.
+* The handoff view follows the tab a dropped file opens when the page has no
+  drop handler.
+
 ## [0.3.14] - 2026-10-20
 
 ### Changed

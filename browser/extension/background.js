@@ -528,9 +528,10 @@ function pageAction(action, params, expectedOrigin) {
 // Only in a frame still at an address the daemon checked (`urls`).
 const fillLogin = (c, urls) => {
   if (!urls.includes(location.href)) return null;
-  const inputs = [];
+  const inputs = [], areas = [];
   const walk = (root) => root.querySelectorAll("*").forEach((el) => {
     if (el.tagName === "INPUT") inputs.push(el);
+    if (el.tagName === "TEXTAREA") areas.push(el);
     if (el.shadowRoot) walk(el.shadowRoot);
   });
   walk(document);
@@ -550,6 +551,8 @@ const fillLogin = (c, urls) => {
   const texty = visible.filter((el) => textTypes.has(type(el)));
   const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const areaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+  const used = new Set();
   const guard = (el, css) => {
   el.setAttribute("data-bd-secret", "");
   const root = el.getRootNode();
@@ -565,10 +568,11 @@ const fillLogin = (c, urls) => {
     (root.head || root).appendChild(st);
   }
 };
-  const put = (el, v) => {
-    guard(el, c.css);
+  const put = (el, v, mask = true) => {
+    if (mask) guard(el, c.css);
+    used.add(el);
     el.focus();
-    setter.call(el, v);
+    (el.tagName === "TEXTAREA" ? areaSetter : setter).call(el, v);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data: v }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
@@ -599,6 +603,27 @@ const fillLogin = (c, urls) => {
   if (otp.length === 1) put(otp[0], c.totp);
   else otp.forEach((el, i) => put(el, c.totp[i]));
   if (otp.length) filled.push("totp");
+  // Custom fields (text ones only; hidden, boolean and linked never come here), as
+  // rbw's extension: an input whose id or name is the field's name, else one not
+  // yet filled whose id, name, autocomplete, aria-label, placeholder or label
+  // text matches it.
+  const norm = (t) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const labelText = (el) => {
+    const ids = el.getAttribute("aria-labelledby");
+    if (ids) return ids.split(/\s+/).map((i) => el.getRootNode().getElementById?.(i)?.textContent).filter(Boolean).join(" ");
+    if (el.labels?.length) return [...el.labels].map((l) => l.textContent).join(" ");
+    return "";
+  };
+  const keys = (el) => [el.id, el.name, el.getAttribute("autocomplete"), el.getAttribute("aria-label"), el.getAttribute("placeholder"), labelText(el)].map(norm).filter(Boolean);
+  const targets = [...texty, ...areas.filter(shown)];
+  let customs = 0;
+  for (const f of c.custom || []) {
+    if (!f.name || !f.value) continue;
+    const el = targets.find((e) => e.id === f.name || e.name === f.name)
+      || targets.find((e) => !used.has(e) && keys(e).includes(norm(f.name)));
+    if (el) { put(el, f.value, false); customs++; }
+  }
+  if (customs) filled.push("custom");
   return { filled };
 };
 
@@ -659,7 +684,7 @@ async function execute(command) {
     const frames = (Array.isArray(params.frames) ? params.frames : [])
       .filter(f => (chromium ? typeof f?.frame === 'string' : Number.isSafeInteger(f?.frame)) && typeof f.url === 'string');
     if (!frames.length) return {filled: []};
-    const creds = {css: String(params.css || ''), username: params.username ?? null, password: params.password ?? null, totp: params.totp ?? null};
+    const creds = {css: String(params.css || ''), username: params.username ?? null, password: params.password ?? null, totp: params.totp ?? null, custom: Array.isArray(params.custom) ? params.custom.filter(f => typeof f?.name === 'string' && typeof f?.value === 'string') : []};
     const urls = frames.map(f => f.url);
     if (chromium) {
       const filled = new Set();

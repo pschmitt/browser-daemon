@@ -23,6 +23,16 @@ pub struct Creds {
     pub password: Option<String>,
     #[serde(default)]
     pub totp: Option<String>,
+    /// Text custom fields of the entry, matched to the form's inputs by name.
+    #[serde(default)]
+    pub custom: Vec<CustomField>,
+}
+
+/// A custom field to fill. No Debug, as for Creds.
+#[derive(Deserialize, Default, Clone, serde::Serialize)]
+pub struct CustomField {
+    pub name: String,
+    pub value: String,
 }
 
 /// Style that shows a filled field's value as dots (Chromium) whatever its
@@ -63,9 +73,10 @@ pub(crate) const GUARD: &str = r#"(el, css) => {
 /// without one (a username-first sign-in) only the username field is filled. A
 /// one-time code goes into a field marked for it (or a row of one-digit boxes).
 const FILL: &str = r#"(c) => {
-  const inputs = [];
+  const inputs = [], areas = [];
   const walk = (root) => root.querySelectorAll("*").forEach((el) => {
     if (el.tagName === "INPUT") inputs.push(el);
+    if (el.tagName === "TEXTAREA") areas.push(el);
     if (el.shadowRoot) walk(el.shadowRoot);
   });
   walk(document);
@@ -85,11 +96,14 @@ const FILL: &str = r#"(c) => {
   const texty = visible.filter((el) => textTypes.has(type(el)));
   const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  const areaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+  const used = new Set();
   const guard = /*GUARD*/;
-  const put = (el, v) => {
-    guard(el, c.css);
+  const put = (el, v, mask = true) => {
+    if (mask) guard(el, c.css);
+    used.add(el);
     el.focus();
-    setter.call(el, v);
+    (el.tagName === "TEXTAREA" ? areaSetter : setter).call(el, v);
     el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data: v }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
@@ -120,6 +134,27 @@ const FILL: &str = r#"(c) => {
   if (otp.length === 1) put(otp[0], c.totp);
   else otp.forEach((el, i) => put(el, c.totp[i]));
   if (otp.length) filled.push("totp");
+  // Custom fields (text ones only; hidden, boolean and linked never come here), as
+  // rbw's extension: an input whose id or name is the field's name, else one not
+  // yet filled whose id, name, autocomplete, aria-label, placeholder or label
+  // text matches it.
+  const norm = (t) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const labelText = (el) => {
+    const ids = el.getAttribute("aria-labelledby");
+    if (ids) return ids.split(/\s+/).map((i) => el.getRootNode().getElementById?.(i)?.textContent).filter(Boolean).join(" ");
+    if (el.labels?.length) return [...el.labels].map((l) => l.textContent).join(" ");
+    return "";
+  };
+  const keys = (el) => [el.id, el.name, el.getAttribute("autocomplete"), el.getAttribute("aria-label"), el.getAttribute("placeholder"), labelText(el)].map(norm).filter(Boolean);
+  const targets = [...texty, ...areas.filter(shown)];
+  let customs = 0;
+  for (const f of c.custom || []) {
+    if (!f.name || !f.value) continue;
+    const el = targets.find((e) => e.id === f.name || e.name === f.name)
+      || targets.find((e) => !used.has(e) && keys(e).includes(norm(f.name)));
+    if (el) { put(el, f.value, false); customs++; }
+  }
+  if (customs) filled.push("custom");
   return JSON.stringify({ filled });
 }"#;
 
@@ -129,6 +164,7 @@ fn expression(creds: &Creds, firefox: bool) -> String {
         "username": creds.username,
         "password": creds.password,
         "totp": creds.totp,
+        "custom": creds.custom,
     });
     format!("({})({c})", FILL.replace("/*GUARD*/", GUARD))
 }
@@ -332,7 +368,7 @@ mod tests {
         let e = expression(&Creds::default(), false);
         assert!(!e.contains("/*GUARD*/"), "the guard is spliced in");
         assert!(
-            e.find("guard(el, c.css)").unwrap() < e.find("setter.call").unwrap(),
+            e.find("guard(el, c.css)").unwrap() < e.find(".call(el, v)").unwrap(),
             "marked before the value is set"
         );
         assert!(e.contains("-webkit-text-security:disc"));
@@ -351,9 +387,14 @@ mod tests {
                 username: Some("me\"); alert(1); (\"".into()),
                 password: Some("p\\w".into()),
                 totp: None,
+                custom: vec![CustomField {
+                    name: "n\"); x(); (\"".into(),
+                    value: "v".into(),
+                }],
             },
             false,
         );
+        assert!(e.contains(r#""custom":[{"name":"n\"); x(); (\"","value":"v"}]"#));
         assert!(e.ends_with(r#""password":"p\\w","totp":null,"username":"me\"); alert(1); (\""})"#));
         assert_eq!(
             filled(Some(r#"{"filled":["username","password"]}"#)),

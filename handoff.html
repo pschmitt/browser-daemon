@@ -2455,7 +2455,13 @@ E.view.addEventListener("wheel", (e) => {
   if (e.deltaMode === 1) { dx *= 33; dy *= 33; }
   else if (e.deltaMode === 2) { dx *= 100; dy *= 100; }
   // Ctrl+wheel (and a touchpad pinch) zooms this view, like two fingers on a phone.
-  if (e.ctrlKey) { zoomAt(e.clientX, e.clientY, zoom.z * Math.exp(-dy * 0.01)); return; }
+  // A touchpad pinch sends small deltas: followed one to one. A mouse wheel notch
+  // (a hundred or so) would jump by a factor of 2.7, so it is a gentle, eased step.
+  if (e.ctrlKey) {
+    if (e.deltaMode === 0 && Math.abs(dy) < 40) { zoomStop(); zoomAt(e.clientX, e.clientY, zoom.z * Math.exp(-dy * 0.01)); }
+    else zoomEase(e.clientX, e.clientY, (zoomAnim?.to ?? zoom.z) * Math.exp(-Math.sign(dy) * Math.min(Math.abs(dy), 150) * 0.0016));
+    return;
+  }
   queueWheel(p.x, p.y, dx * p.scale, dy * p.scale);
 }, { passive: false });
 
@@ -2486,15 +2492,28 @@ function zoomAt(cx, cy, z, from = zoom, to = { x: cx, y: cy }) {
   zoom.z = z;
   applyZoom();
 }
-$("zoomReset").onclick = () => { zoom.z = 1; applyZoom(); };
+// Eased towards `z` around (cx, cy); a further step while it runs continues from its target.
+let zoomAnim = null;
+function zoomStop() { if (zoomAnim) cancelAnimationFrame(zoomAnim.raf); zoomAnim = null; }
+function zoomEase(cx, cy, z) {
+  const to = Math.min(5, Math.max(1, z)), from = zoom.z, t0 = performance.now();
+  zoomStop();
+  const step = (now) => {
+    const p = Math.min(1, (now - t0) / 120);
+    zoomAt(cx, cy, from * (to / from) ** (1 - (1 - p) ** 3));
+    zoomAnim = p < 1 ? { raf: requestAnimationFrame(step), to } : null;
+  };
+  zoomAnim = { raf: requestAnimationFrame(step), to };
+}
+$("zoomReset").onclick = () => { zoomStop(); zoom.z = 1; applyZoom(); };
 // Desktop shortcuts magnify the local picture; they never reach the remote tab.
 addEventListener("keydown", e => {
   if (!e.ctrlKey || e.altKey || e.metaKey || !["+", "=", "-", "0"].includes(e.key) ||
       e.target.closest?.("input:not(#kb), textarea, [contenteditable=true]")) return;
   e.preventDefault(); e.stopImmediatePropagation();
   const r = E.stage.getBoundingClientRect();
-  zoomAt(r.left + r.width / 2, r.top + r.height / 2,
-    e.key === "0" ? 1 : zoom.z * (e.key === "-" ? 1 / 1.2 : 1.2));
+  zoomEase(r.left + r.width / 2, r.top + r.height / 2,
+    e.key === "0" ? 1 : (zoomAnim?.to ?? zoom.z) * (e.key === "-" ? 1 / 1.2 : 1.2));
 }, true);
 const viewerOnly = () => !!sharedBrowserId && !sharedBrowser?.tabs.some(t => String(t.id) === pageId && t.control);
 let localPan = null;
@@ -5040,7 +5059,7 @@ async function vaultFill(entry, fields, anySite = false) {
   let shown = "";
   try {
     const res = await vaultCall({ entry: entry.id, fields, any_site: anySite }, (note) => { if (note !== shown) { shown = note; toast(note, 0); } });
-    const names = (res?.filled || []).map((f) => (f === "totp" ? "one-time code" : f));
+    const names = (res?.filled || []).map((f) => (f === "totp" ? "one-time code" : f === "custom" ? "custom fields" : f));
     toast(`Filled ${names.join(" and ") || "the login"}`, 2000);
   } catch (err) {
     toast(`Not filled: ${err.message}`, 5000);

@@ -581,6 +581,21 @@ async fn fill(
     } else {
         None
     };
+    // Text custom fields go along with a login fill (not a one-time-code-only one).
+    let custom: Vec<serde_json::Value> = if want("username") || want("password") {
+        raw["fields"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|f| matches!(f["type"].as_str(), None | Some("text")))
+            .filter_map(|f| {
+                let (n, v) = (f["name"].as_str()?, f["value"].as_str()?);
+                (!n.is_empty() && !v.is_empty()).then(|| serde_json::json!({"name": n, "value": v}))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let body = serde_json::json!({
         "request": req.id,
         "host": req.rp_id,
@@ -589,8 +604,13 @@ async fn fill(
         "username": field("username"),
         "password": field("password"),
         "totp": totp,
+        "custom": custom,
     });
-    if body["username"].is_null() && body["password"].is_null() && body["totp"].is_null() {
+    if body["username"].is_null()
+        && body["password"].is_null()
+        && body["totp"].is_null()
+        && custom.is_empty()
+    {
         return Err("The entry has nothing to fill".into());
     }
     let res = client
