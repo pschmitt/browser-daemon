@@ -37,6 +37,9 @@ if (info.incognito) throw new Error('Private tab');
 const browser = tab.nativeTab.linkedBrowser;
 const uri = browser.currentURI;
 if (!['http', 'https'].includes(uri.scheme) || uri.prePath !== origin) throw new Error('Origin changed');
+// Firefox can discard a tab while keeping its extension tab ID and URL. Such
+// tabs have no browsing context until they are activated and loaded again.
+if (!browser.browsingContext?.currentWindowGlobal) return null;
 return {handle: NavigableManager.getIdForBrowser(browser), document: String(browser.browsingContext.currentWindowGlobal.innerWindowId)};
 }"""
 
@@ -293,6 +296,10 @@ class Companion:
             if expires <= time.time() or expires > time.time() + 28800:
                 raise ValueError("Invalid expiry")
             identity = self.driver.resolve(grant["tab"], grant["origin"])
+            if identity is None:
+                # Keep the rest of the shared tabs available. A later publish
+                # retries this grant after Firefox loads the discarded tab.
+                continue
             updated[grant["tab"]] = {**grant, "document": identity["document"]}
         self.grants = updated
         return {"ok": True}

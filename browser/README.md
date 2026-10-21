@@ -190,9 +190,10 @@ enabled:
 MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222
 ```
 
-Pair the extension, then click **Enable installed companion** before sharing
-tabs. Firefox asks for the optional native messaging permission. The popup and
-remote node list report whether native control is connected.
+Pair the extension. It connects to the installed companion automatically and
+uses it for trusted control when Firefox was started with the Remote Agent
+enabled. The popup can also enable or retry the companion manually. The popup
+and remote node list report whether native control is connected.
 
 The companion speaks WebDriver BiDi to Firefox's Remote Agent (standard
 library Python, its own minimal WebSocket client). This startup setting enables
@@ -341,9 +342,10 @@ vault and GitHub repository secrets, outside Nix and the source tree.
 For trusted Firefox control, fully exit Firefox, then launch it with
 `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222` using
 the same profile. Launching against an already-running ordinary Firefox reuses
-that process and does not enable the Remote Agent. Installation does not connect or share any tabs:
-pair the extension, enable the companion, then explicitly select tabs and
-whether to allow control.
+that process and does not enable the Remote Agent. The `firefox-browser-node`
+launcher supplies these flags, but it also reuses an already-running Firefox;
+fully quit Firefox before using it. Pairing connects the companion but does not
+share any tabs: explicitly select tabs and whether to allow control.
 
 ## Public links for extension sessions
 

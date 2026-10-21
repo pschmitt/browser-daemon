@@ -8,6 +8,7 @@ $('pairCommand').textContent = `browser-daemon --url https://YOUR-DAEMON --secre
 if (new URLSearchParams(location.search).has('tab')) document.body.classList.add('tab');
 let state;
 let initialized = false;
+let setupRemembered;
 let busy = false;
 let renderedTabs = '';
 let approvalIdentity = '';
@@ -46,8 +47,9 @@ function renderHeader() {
   $('subtitle').title = reg ? '' : state.status;
   $('pill').textContent = reg ? 'Connected' : state.connecting ? 'Connecting' : 'Offline';
   $('pill').className = `pill${reg ? ' on' : state.connecting ? ' wait' : ''}`;
-  $('pill').disabled = !reg;
-  $('pill').title = reg ? 'Disconnect this browser' : state.connecting ? 'Connecting' : 'Offline';
+  $('pill').disabled = state.connecting || (!reg && !state.rememberedBrowser);
+  $('pill').title = reg ? 'Disconnect this browser' : state.connecting ? 'Connecting'
+    : state.rememberedBrowser ? 'Reconnect this browser' : 'Offline';
 }
 
 function favicon(tab) {
@@ -131,9 +133,15 @@ async function refresh() {
     initialized = true;
   }
   $('remembered').hidden = !state.rememberedBrowser || !!reg;
+  const hasRemembered = !!state.rememberedBrowser;
+  if (setupRemembered !== hasRemembered) {
+    $('newConnection').open = !hasRemembered;
+    setupRemembered = hasRemembered;
+  }
+  $('newConnectionTitle').textContent = hasRemembered ? 'Connect a different browser' : 'Connect this browser';
   if (state.rememberedBrowser) {
     $('rememberedStatus').textContent = state.rememberedBrowser.paused
-      ? `${state.rememberedBrowser.name} was disconnected. Reconnect to ${new URL(state.rememberedBrowser.server).host}?`
+      ? `Disconnected.\nReconnect to ${new URL(state.rememberedBrowser.server).host}?`
       : `Reconnecting ${state.rememberedBrowser.name} to ${new URL(state.rememberedBrowser.server).host}…`;
   }
   $('forgetRemembered').hidden = !state.rememberedBrowser;
@@ -248,8 +256,11 @@ $('connect').addEventListener('submit', async event => {
   finally { busy = false; }
 });
 $('pill').addEventListener('click', async () => {
-  if (!state.registration) return;
-  try { await message({type: 'stop'}); await refresh(); }
+  if (!state.registration && !state.rememberedBrowser) return;
+  try {
+    await message({type: state.registration ? 'stop' : 'resumeRemembered'});
+    await refresh();
+  }
   catch (error) { showError(error); }
 });
 $('native').addEventListener('click', async () => {

@@ -235,10 +235,29 @@ async function enableNative() {
     });
     port.onDisconnect.addListener(() => {
       clearTimeout(timer);
-      reject(new Error('Companion unavailable. Install it and restart Firefox with MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 and --remote-debugging-port 9222.'));
-      if (nativePort === port) void stop('Firefox companion disconnected');
+      const detail = api.runtime.lastError?.message;
+      reject(new Error(detail || 'Companion unavailable. Install it and restart Firefox with MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 and --remote-debugging-port 9222.'));
+      if (nativePort === port) {
+        nativePort = null;
+        nativeReady = false;
+        publishSafely();
+      }
     });
   });
+}
+
+async function connectNativeForRegistration() {
+  if (chromium || !registration || nativeReady) return;
+  try {
+    await enableNative();
+    if (!registration) return;
+    await syncNativeGrants();
+    publishSafely();
+  } catch {
+    // The extension session remains useful without trusted Firefox input.
+    // The handoff page reports the missing companion and DOM input stays available.
+    publishSafely();
+  }
 }
 
 async function syncNativeGrants() {
@@ -1361,6 +1380,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
       void badge();
       await sharingReady;
       if (sharing.all) await shareEverything(); else publishSafely();
+      void connectNativeForRegistration();
     } else if (message.type === 'authorization_revoked') {
       await api.storage.local.remove('rememberedNode');
       await stop('Browser authorization was revoked — pair again to reconnect');
@@ -1492,7 +1512,7 @@ async function localMessage(message, sender) {
   if (message.type === 'native') {
     if (!registration) throw new Error('Pair this browser first.');
     if (message.enable) { await enableNative(); if (registration) await syncNativeGrants(); }
-    else { await stop('Firefox companion disabled'); }
+    else { disconnectNative(); publishSafely(); }
     return {ok: true};
   }
   if (message.type === 'share') {

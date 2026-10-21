@@ -53,21 +53,21 @@
     <p id="rememberedStatus"></p>
     <div class="actions"><button id="resumeRemembered" type="button" class="primary">Reconnect</button></div>
   </section>
-  <section class="card">
-    <h2>Connect this browser</h2>
+  <details id="newConnection" class="card">
+    <summary id="newConnectionTitle">Connect this browser</summary>
     <label class="field">Daemon<select id="serverChoice"></select><input id="server" type="url" placeholder="https://browser.example.org"></label>
     <label class="field">Browser name<input id="name" maxlength="80" placeholder="My laptop"></label>
     <button id="enableDashboard" type="button" class="primary wide">Pair from the dashboard</button>
     <p class="muted small">Opens the dashboard's <b>Add node</b> sheet. Click <b>Pair browser</b> there, then approve here.</p>
-  </section>
-  <details class="card">
-    <summary>Pair with a code instead</summary>
-    <form id="connect">
-      <label class="field">Pairing code<input id="code" type="password" autocomplete="off" spellcheck="false" required pattern="[a-f0-9]{64}"></label>
-      <label class="row"><span><b>Disable key expiry</b><small>Reconnects after a browser restart</small></span><input id="rememberKey" type="checkbox" class="switch"></label>
-      <button type="submit" class="primary wide">Connect</button>
-      <p class="muted small">From a trusted machine:</p><code id="pairCommand"></code>
-    </form>
+    <details class="card">
+      <summary>Pair with a code instead</summary>
+      <form id="connect">
+        <label class="field">Pairing code<input id="code" type="password" autocomplete="off" spellcheck="false" required pattern="[a-f0-9]{64}"></label>
+        <label class="row"><span><b>Disable key expiry</b><small>Reconnects after a browser restart</small></span><input id="rememberKey" type="checkbox" class="switch"></label>
+        <button type="submit" class="primary wide">Connect</button>
+        <p class="muted small">From a trusted machine:</p><code id="pairCommand"></code>
+      </form>
+    </details>
   </details>
 </main>
 
