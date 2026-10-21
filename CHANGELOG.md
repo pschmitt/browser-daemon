@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-10-21
+
 ### Changed
 
 * The allowed-daemon list uses themed rows with per-daemon add and remove
