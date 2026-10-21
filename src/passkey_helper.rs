@@ -581,18 +581,11 @@ async fn fill(
     } else {
         None
     };
-    // Text custom fields go along with a login fill (not a one-time-code-only one).
+    // Custom fields go along with a login fill (not a one-time-code-only one): text
+    // ones as they are, linked ones as the login field they stand for. Hidden and
+    // boolean ones never.
     let custom: Vec<serde_json::Value> = if want("username") || want("password") {
-        raw["fields"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|f| matches!(f["type"].as_str(), None | Some("text")))
-            .filter_map(|f| {
-                let (n, v) = (f["name"].as_str()?, f["value"].as_str()?);
-                (!n.is_empty() && !v.is_empty()).then(|| serde_json::json!({"name": n, "value": v}))
-            })
-            .collect()
+        custom_fields(&raw)
     } else {
         Vec::new()
     };
@@ -630,6 +623,31 @@ async fn fill(
     }
     info!(host = %req.rp_id, fields = %answer["filled"], "Login filled");
     Ok(answer)
+}
+
+/// The custom fields of an entry (`rbw get --raw`) worth filling, as name and
+/// value. A linked field (rbw 2.22.13 and later say which, as `linked_id`) takes
+/// the login's username (100) or password (101); other links are skipped.
+fn custom_fields(raw: &serde_json::Value) -> Vec<serde_json::Value> {
+    raw["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            let name = f["name"].as_str().filter(|n| !n.is_empty())?;
+            let value = match f["type"].as_str() {
+                None | Some("text") => f["value"].as_str(),
+                Some("linked") => match f["linked_id"].as_u64() {
+                    Some(100) => raw["data"]["username"].as_str(),
+                    Some(101) => raw["data"]["password"].as_str(),
+                    _ => None,
+                },
+                _ => None,
+            }
+            .filter(|v| !v.is_empty())?;
+            Some(serde_json::json!({"name": name, "value": value}))
+        })
+        .collect()
 }
 
 /// Tells the user (webhook) that an entry went into a site it is not saved for.
@@ -685,6 +703,36 @@ mod tests {
             "fields": ["username", "password"],
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn custom_fields_are_text_and_linked_logins() {
+        let raw = serde_json::json!({
+            "data": { "username": "me", "password": "pw" },
+            "fields": [
+                { "name": "a", "value": "1", "type": "text" },
+                { "name": "b", "value": "2" },
+                { "name": "h", "value": "3", "type": "hidden" },
+                { "name": "c", "value": "4", "type": "boolean" },
+                { "name": "u", "value": null, "type": "linked", "linked_id": 100 },
+                { "name": "p", "value": null, "type": "linked", "linked_id": 101 },
+                { "name": "x", "value": null, "type": "linked", "linked_id": 305 },
+                { "name": "old", "value": null, "type": "linked" },
+                { "name": "", "value": "5", "type": "text" },
+                { "name": "e", "value": "", "type": "text" }
+            ]
+        });
+        let names: Vec<(String, String)> = custom_fields(&raw)
+            .iter()
+            .map(|f| {
+                (
+                    f["name"].as_str().unwrap().into(),
+                    f["value"].as_str().unwrap().into(),
+                )
+            })
+            .collect();
+        let want = [("a", "1"), ("b", "2"), ("u", "me"), ("p", "pw")];
+        assert_eq!(names, want.map(|(n, v)| (n.to_string(), v.to_string())));
     }
 
     #[test]

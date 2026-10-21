@@ -41,6 +41,7 @@ async function shareEverything() {
   for (const tab of await api.tabs.query({})) {
     if (!tab.incognito && !shared.has(tab.id)) shared.set(tab.id, {origin: null, control: sharing.control, paused: true});
   }
+  if (!chromium) for (const [id, grant] of shared) if (grant.control && !grant.paused) void hookPasskeys(id).catch(() => hooked.delete(id));
   publishSoon();
 }
 async function openTab(url, windowId) {
@@ -332,6 +333,7 @@ async function publish() {
       grant.paused = !safeTab(tab);
       if (grant.paused) continue;
       grant.origin = new URL(tab.url).origin;
+      if (!chromium && grant.control) void hookPasskeys(id).catch(() => hooked.delete(id));
       if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), control: grant.control, active: tab.active === true});
     } catch { shared.delete(id); await detach(id); }
   }
@@ -367,17 +369,15 @@ async function grantFor(command) {
   return grant;
 }
 
-// Passkeys in a live view (Chromium): the page's navigator.credentials.get() asks the
-// view while one is watching with control (it keeps __bdPasskeyAlive fresh), which has
-// the vault sign the challenge; unwatched, the browser's own passkey dialog opens as
-// usual. The same hook as in the daemon's own sessions (handoff.html).
-const PASSKEY_HOOK = `(() => {
+// The page asks a live view with control to use the vault while it is watching
+// (__bdPasskeyAlive stays fresh); otherwise the browser handles the request.
+function passkeyHook() {
   const c = navigator.credentials;
   if (!c || globalThis.__bdPasskeyRepair) return;
   const waiting = new Map();
   let current;
   const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf)))
-    .replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const bytes = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4); return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0)).buffer; };
   // A signed assertion (from the vault, signed outside the browser) as the
   // PublicKeyCredential the page asked for.
@@ -444,12 +444,38 @@ const PASSKEY_HOOK = `(() => {
   };
   globalThis.__bdPasskeyRepair = repair;
   repair();
-})()`;
-// Only tabs shared with control (a view-only tab gets nothing but page events), once per attachment.
+}
+const PASSKEY_HOOK = `(${passkeyHook.toString()})();`;
+// Only tabs shared with control; reinjected after each top-level navigation.
 const hooked = new Set();
 async function hookPasskeys(tab) {
-  if (!chromium || hooked.has(tab) || !attached.has(tab) || !shared.get(tab)?.control) return;
+  if (hooked.has(tab) || !shared.get(tab)?.control || shared.get(tab)?.paused) return;
   hooked.add(tab);
+  if (!chromium) {
+    try {
+      await api.scripting.executeScript({target: {tabId: tab}, world: 'MAIN', func: () => {
+        if (globalThis.__bdExtensionPasskeyBridge) return;
+        globalThis.__bdExtensionPasskeyBridge = true;
+        globalThis.__bdPasskey = payload => window.dispatchEvent(new CustomEvent('browser-daemon-passkey-request', {detail: payload}));
+        window.addEventListener('browser-daemon-passkey-answer', event => {
+          globalThis.__bdPasskeyAnswer?.(event.detail.id, event.detail.answer);
+        });
+      }});
+      await api.scripting.executeScript({target: {tabId: tab}, func: () => {
+        if (globalThis.__bdExtensionPasskeyRelay) return;
+        globalThis.__bdExtensionPasskeyRelay = true;
+        window.addEventListener('browser-daemon-passkey-request', event => {
+          void (globalThis.browser || globalThis.chrome).runtime.sendMessage({type: 'passkeyHook', payload: event.detail});
+        });
+      }});
+      await api.scripting.executeScript({target: {tabId: tab}, world: 'MAIN', func: passkeyHook});
+    } catch (error) {
+      hooked.delete(tab);
+      throw error;
+    }
+    return;
+  }
+  if (!attached.has(tab)) { hooked.delete(tab); return; }
   const send = (method, params = {}) => api.debugger.sendCommand({tabId: tab}, method, params);
   await send('Runtime.enable');
   await send('Runtime.addBinding', {name: '__bdPasskey'});
@@ -495,7 +521,16 @@ function pageAction(action, params, expectedOrigin) {
     if (!finite(params.x) || !finite(params.y)) throw new Error('Expected scroll offsets.');
     window.scrollBy(params.x, params.y);
   } else if (action === 'click') {
-    const e = params.selector ? document.querySelector(params.selector) : document.elementFromPoint(params.x, params.y);
+    let e = params.selector ? document.querySelector(params.selector) : document.elementFromPoint(params.x, params.y);
+    if (!params.selector) {
+      // Apps such as Home Assistant and Argo CD put their controls inside nested
+      // shadow roots. Hit testing the document alone stops at the outer host.
+      while (e?.shadowRoot) {
+        const inner = e.shadowRoot.elementFromPoint(params.x, params.y);
+        if (!inner || inner === e) break;
+        e = inner;
+      }
+    }
     if (!e) throw new Error('Element not found.');
     e.focus(); e.click();
   } else if (action === 'type') {
@@ -976,7 +1011,21 @@ async function shim(tab, channel, method, params) {
       return {};
     }
     case 'Runtime.evaluate': {
-      if (!nativeReady) throw new ShimError('Evaluation in Firefox requires the companion.');
+      if (!nativeReady) {
+        // A live view uses this exact expression to answer the extension-backed
+        // passkey hook. Run only that operation in the page world; general
+        // evaluation still requires the native companion.
+        const match = params.expression?.match(/^globalThis\.__bdPasskeyAnswer\?\.\(("(?:\\.|[^"\\])*"), (.+)\)$/);
+        if (!match) throw new ShimError('Evaluation in Firefox requires the companion.');
+        const passkeyId = JSON.parse(match[1]);
+        const answer = JSON.parse(match[2]);
+        if (typeof passkeyId !== 'string') throw new ShimError('Invalid passkey response.');
+        await api.scripting.executeScript({target: {tabId: tab}, world: 'MAIN', func: (id, value) => {
+          globalThis.__bdPasskeyAnswer?.(id, value);
+          return {ok: true};
+        }, args: [passkeyId, answer]});
+        return {result: {value: {ok: true}}};
+      }
       return {result: {value: await run('evaluate', {script: `return (${params.expression});`, args: []})}};
     }
     default: throw new ShimError(`${method} is not available in Firefox.`);
@@ -1279,6 +1328,7 @@ async function localMessage(message, sender) {
     sharing.control = message.control === true;
     await api.storage.local.set({shareControl: sharing.control});
     if (chromium) for (const id of shared.keys()) void attach(id).catch(() => {});
+    else for (const id of shared.keys()) void hookPasskeys(id).catch(() => hooked.delete(id));
     await Promise.all([...attached].filter(id => !shared.has(id)).map(detach));
     await publish();
     return {ok: true};
@@ -1332,7 +1382,7 @@ async function localMessage(message, sender) {
     sharing.control = message.control === true;
     await api.storage.local.set({shareControl: sharing.control});
     for (const grant of shared.values()) grant.control = sharing.control;
-    for (const id of attached) void hookPasskeys(id).catch(() => hooked.delete(id));
+    for (const id of shared.keys()) void hookPasskeys(id).catch(() => hooked.delete(id));
     await publish();
     return {ok: true};
   }
@@ -1340,19 +1390,33 @@ async function localMessage(message, sender) {
 }
 
 api.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.type === 'passkeyHook') {
+    const tab = sender.tab?.id;
+    const grant = shared.get(tab);
+    void (async () => {
+      if (sender.id !== api.runtime.id || sender.frameId !== 0 || !registration || !grant?.control || grant.paused ||
+          !message.payload || typeof message.payload !== 'string') throw new Error('Passkey request is not allowed for this tab.');
+      const current = await api.tabs.get(tab);
+      if (!safeTab(current) || new URL(current.url).origin !== grant.origin) throw new Error('The shared page changed.');
+      sendEvent(tab, 'Runtime.bindingCalled', {name: '__bdPasskey', payload: message.payload});
+      respond({ok: true});
+    })().catch(error => respond({error: error.message}));
+    return true;
+  }
   // Keep the response channel open in both Chromium and Firefox.
   // Serialize grant updates so Stop cannot race an in-flight Share.
   tabSerial = tabSerial.then(() => localMessage(message, sender)).then(
     value => respond(value), error => respond({error: error.message}));
   return true;
 });
-api.tabs.onRemoved.addListener(id => { shared.delete(id); void detach(id); publishSafely(); });
+api.tabs.onRemoved.addListener(id => { shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
 let publishTimer = null;
 function publishSoon() { clearTimeout(publishTimer); publishTimer = setTimeout(publishSafely, 150); }
 api.tabs.onUpdated.addListener((id, change, tab) => {
   const grant = shared.get(id);
   if (!grant) return;
   if (change.url) {
+    hooked.delete(id);
     // Sharing follows the tab. A page that must not be shared pauses it at once,
     // before anything of that page is captured or relayed.
     grant.paused = !safeTab({incognito: tab?.incognito, url: change.url});
@@ -1363,6 +1427,7 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
   if (!chromium && change.status === 'complete') { sendEvent(id, 'Page.loadEventFired', {timestamp: Date.now() / 1000}); touchCast(id); }
   if (grant.paused) { stopTabAudio(id); stopFileTab(id); }
   if (change.status === 'complete' && mediaAudio.has(id)) void renewTabAudio(id);
+  if (change.status === 'complete' && !chromium && grant.control && !grant.paused) void hookPasskeys(id).catch(() => hooked.delete(id));
   if (change.status === 'complete' && fileTabs.get(id)?.channels.size) void installFilePages(id);
   if (change.url || change.title || change.status === 'complete') publishSoon();
 });

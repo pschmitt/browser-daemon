@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+* Vault fills also fill linked custom fields that stand for the login's
+  username or password (needs rbw 2.22.13 or later, which reports the link).
+
 ## [0.3.15] - 2026-10-21
 
 ### Added

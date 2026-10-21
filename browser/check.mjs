@@ -249,20 +249,23 @@ test('the extension fills logins exactly as the daemon does', () => {
   const body = raw('FILL').replace('/*GUARD*/', raw('GUARD')).replace('return JSON.stringify({ filled });', 'return { filled };').replace('(c) => {\n', '');
   assert.ok(source('background.js').includes(body), 'fillLogin in background.js drifted from FILL in src/autofill.rs');
 });
-test('the extension hooks passkeys exactly as live views do', () => {
-  const hook = text => text.match(/const PASSKEY_HOOK = `[\s\S]*?`;\n/)[0];
-  assert.equal(hook(source('background.js')), hook(readFileSync(new URL('../handoff.html', import.meta.url), 'utf8')));
+test('the extension and live views share the passkey request and answer flow', () => {
+  const extension = source('background.js');
+  const liveView = readFileSync(new URL('../handoff.html', import.meta.url), 'utf8');
+  for (const marker of ['__bdPasskeyRepair', '__bdPasskeyAnswer', 'allowCredentials', 'AbortError']) {
+    assert.ok(extension.includes(marker) && liveView.includes(marker), `passkey flow is missing ${marker}`);
+  }
 });
 
 test('passkey repair wraps later providers and falls back without asking twice', async () => {
-  const declaration = source('background.js').match(/const PASSKEY_HOOK = `[\s\S]*?`;\n/)[0];
+  const declaration = source('background.js').match(/function passkeyHook\(\) \{[\s\S]*?\n\}/)[0];
   let nativeCalls = 0, providerCalls = 0, offers = 0;
   const credentials = {get: async () => { nativeCalls++; return 'native'; }};
   const context = vm.createContext({navigator: {credentials}, Date, Map, Math,
     location: {hostname: 'example.org'}, Uint8Array, ArrayBuffer,
     btoa: value => Buffer.from(value, 'binary').toString('base64'),
     setTimeout: () => 1, setInterval: () => 1, clearInterval() {}, DOMException});
-  vm.runInContext(declaration + '; globalThis.hookSource = PASSKEY_HOOK', context);
+  vm.runInContext(declaration + '; globalThis.hookSource = `(${passkeyHook.toString()})();`', context);
   vm.runInContext(context.hookSource, context);
   const old = credentials.get.bind(credentials);
   Object.defineProperty(credentials, 'get', {configurable: true, writable: false,

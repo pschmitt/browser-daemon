@@ -464,6 +464,8 @@
     .tabs-modal-card { border-radius: 18px; }
   }
   .tabs-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--line); flex: none; }
+  .tabs-search { display: block; width: calc(100% - 28px); margin: 12px 14px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); font: inherit; font-size: 14px; outline: none; }
+  .tabs-search:focus { border-color: var(--accent); }
   .tabs-list { overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
   .tab-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line);
     background: var(--bg); cursor: pointer; transition: border-color .15s, background .15s; }
@@ -524,7 +526,7 @@
   <button class="tab-strip-add" id="tabAddBtn" title="New Tab" aria-label="New Tab">
     <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
   </button>
-  <button class="tab-strip-drawer" id="tabsDrawerBtn" title="Switch Tabs &amp; Sessions" aria-label="Tabs">
+  <button class="tab-strip-drawer" id="tabsDrawerBtn" title="Tabs" aria-label="Tabs">
     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
     <span class="tab-strip-badge" id="tabCountBadge">1</span>
   </button>
@@ -746,13 +748,14 @@
     <div class="tabs-modal-header">
       <div style="display:flex;align-items:center;gap:8px;">
         <svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:var(--accent);fill:none;stroke-width:2;"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
-        <span style="font-weight:700;font-size:16px;">Tabs &amp; Sessions</span>
+        <span style="font-weight:700;font-size:16px;">Tabs</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <button class="btn-xs" id="newTabBtn" title="Open new tab in this browser">+ New Tab</button>
         <button class="btn-close" id="closeTabsBtn" title="Close">✕</button>
       </div>
     </div>
+    <input id="tabsSearch" class="tabs-search" type="search" placeholder="Search tabs" aria-label="Search tabs">
     <div id="tabsList" class="tabs-list"></div>
   </div>
 </div>
@@ -773,7 +776,7 @@ const E = {
   tabStrip: $("tabStrip"), profChip: $("profChip"), agentChip: $("agentChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
-  tabsModal: $("tabsModal"), tabsList: $("tabsList"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
+  tabsModal: $("tabsModal"), tabsList: $("tabsList"), tabsSearch: $("tabsSearch"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"),
   audioBtn: $("audioBtn"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), kbbtn: $("kbbtn"),
   sessBtn: $("sessBtn"), sessMenu: $("sessMenu")
@@ -3328,12 +3331,14 @@ function renderTabStrip(pages) {
 
 function renderTabsModal(pages) {
   if (!E.tabsModal.classList.contains("open")) return;
-  if (pages.length === 0) {
-    E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">No open tabs found.</div>`;
+  const query = E.tabsSearch.value.trim().toLocaleLowerCase();
+  const visible = pages.filter((p) => !query || `${p.title || ""} ${p.url || ""}`.toLocaleLowerCase().includes(query));
+  if (visible.length === 0) {
+    E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">${pages.length ? "No matching tabs." : "No open tabs found."}</div>`;
     return;
   }
   E.tabsList.innerHTML = "";
-  for (const p of pages) {
+  for (const p of visible) {
     const isCurrent = p.id === pageId;
     const card = document.createElement("div");
     card.className = "tab-card" + (isCurrent ? " active" : "");
@@ -3410,6 +3415,7 @@ async function openTabsModal() {
     E.keys.classList.remove("show");
   }
   E.tabsModal.classList.add("open");
+  E.tabsSearch.value = "";
   renderTabsModal(tabsAll);
   loadTabs();
 }
@@ -3421,6 +3427,7 @@ function closeTabsModal() {
 E.tabAddBtn.onclick = () => openNewTab();
 E.tabsDrawerBtn.onclick = () => openTabsModal();
 E.newTabBtn.onclick = () => openNewTab();
+E.tabsSearch.addEventListener("input", () => renderTabsModal(tabsAll));
 // Double click (or double tap) on the empty part of the tab bar opens a new tab, like a
 // desktop browser. Taps are counted here: phones do not reliably fire dblclick.
 let stripTap = { t: 0, x: 0, y: 0 };
