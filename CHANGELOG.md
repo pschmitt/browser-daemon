@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.26] - 2026-10-22
+
 ### Added
 
 * Daemon peers have a separate entry point from browser extension pairing.
