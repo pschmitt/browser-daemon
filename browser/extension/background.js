@@ -351,17 +351,19 @@ function connectionFrame(bitmap, size, state, phase) {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(bitmap, 0, 0, size, size);
   const r = size * 0.3, cx = size - r - 0.5, cy = r + 0.5;
-  ctx.fillStyle = '#1e1e1e'; ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = Math.max(1, size / 20);
+  ctx.fillStyle = state === 'offline' ? '#e11d48' : '#34a853';
+  ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = Math.max(1, size / 20);
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  if (state === 'offline') {
-    ctx.strokeStyle = '#fb7185'; ctx.lineWidth = Math.max(1.5, size / 9); ctx.lineCap = 'round';
-    const mark = r * 0.42;
-    ctx.beginPath(); ctx.moveTo(cx - mark, cy - mark); ctx.lineTo(cx + mark, cy + mark);
-    ctx.moveTo(cx + mark, cy - mark); ctx.lineTo(cx - mark, cy + mark); ctx.stroke();
-  } else {
+  if (state === 'connected') {
     const pulse = (Math.sin(phase) + 1) / 2;
-    ctx.fillStyle = `rgba(225, 29, 72, ${0.76 + pulse * 0.24})`;
-    ctx.beginPath(); ctx.arc(cx, cy, r * (0.52 + pulse * 0.2), 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.75 + pulse * 0.25})`;
+    ctx.beginPath(); ctx.arc(cx, cy - r * 0.27, r * 0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = Math.max(1, size / 14);
+    ctx.beginPath(); ctx.arc(cx, cy + r * 0.45, r * 0.38, Math.PI, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = `rgba(52, 168, 83, ${0.45 + pulse * 0.55})`;
+    ctx.lineWidth = Math.max(1, size / 16);
+    ctx.beginPath(); ctx.arc(cx, cy, r * (1.05 + pulse * 0.2), 0, Math.PI * 2); ctx.stroke();
   }
   return ctx.getImageData(0, 0, size, size);
 }
@@ -446,7 +448,6 @@ async function stop(reason = 'Disconnected', retry = false) {
   if (retry) {
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
     if (rememberedNode && !rememberedNode.paused) {
-      status = 'Disconnected — reconnecting automatically within a minute'; record(status);
       await api.alarms.create('node-reconnect', {delayInMinutes: 1});
     }
   }
@@ -1548,14 +1549,17 @@ async function restoreRemembered(force = false) {
     const {rememberedNode: saved} = await api.storage.local.get('rememberedNode');
     if (!saved || saved.paused && !force) return;
     await requireDaemon(saved.server);
-    if (saved.origin !== api.runtime.getURL('').replace(/\/$/, '') ||
-        !(await api.permissions.contains({origins: [permissionPattern(saved.server)]}))) {
+    if (saved.origin !== api.runtime.getURL('').replace(/\/$/, '')) {
+      status = 'This extension installation differs from the one that was paired — pair this browser again';
+      record(status); return;
+    }
+    if (!(await api.permissions.contains({origins: [permissionPattern(saved.server)]}))) {
       status = 'Remembered browser needs daemon site permission — open setup';
       record(status); return;
     }
     if (force) await api.storage.local.set({rememberedNode: {...saved, paused: false}});
     await connect({server: saved.server, key: saved.key, name: saved.name});
-  } catch { await stop('Remembered browser could not reconnect', true); }
+  } catch (error) { await stop(error?.message || 'Remembered browser could not reconnect', true); }
   finally { restoring = false; }
 }
 

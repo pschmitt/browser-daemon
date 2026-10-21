@@ -50,6 +50,10 @@ function renderHeader() {
   $('pill').disabled = state.connecting || (!reg && !state.rememberedBrowser);
   $('pill').title = reg ? 'Disconnect this browser' : state.connecting ? 'Connecting'
     : state.rememberedBrowser ? 'Reconnect this browser' : 'Offline';
+  const showConnectionError = !reg && !!state.rememberedBrowser && !state.connecting &&
+    !!state.status && state.status !== 'Disconnected';
+  $('error').textContent = showConnectionError ? state.status : '';
+  $('error').hidden = !showConnectionError;
 }
 
 function favicon(tab) {
@@ -200,9 +204,10 @@ async function refresh() {
   }
   $('newConnectionTitle').textContent = hasRemembered ? 'Connect a different browser' : 'Connect this browser';
   if (state.rememberedBrowser) {
-    $('rememberedStatus').textContent = state.rememberedBrowser.paused
-      ? `Disconnected.\nReconnect to ${new URL(state.rememberedBrowser.server).host}?`
-      : `Reconnecting ${state.rememberedBrowser.name} to ${new URL(state.rememberedBrowser.server).host}…`;
+    const host = new URL(state.rememberedBrowser.server).host;
+    $('rememberedStatus').textContent = state.connecting
+      ? `Reconnecting ${state.rememberedBrowser.name} to ${host}…`
+      : `Disconnected.\nReconnect to ${host}?`;
   }
   $('forgetRemembered').hidden = !state.rememberedBrowser;
 

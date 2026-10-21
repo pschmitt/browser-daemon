@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-10-21
+
+### Changed
+
+* Firefox shows the remembered-connection failure in the popup and distinguishes
+  a different extension installation from a missing daemon permission.
+* The toolbar uses a clear red dot while offline and a separate pulsing client
+  indicator while a remote client is connected.
+
 ## [0.3.24] - 2026-10-21
 
 ### Added
