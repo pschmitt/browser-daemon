@@ -261,6 +261,8 @@ pub struct NodeInfo {
     /// Its owner lets controllers open tabs (they are shared with control).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub can_open: bool,
+    /// Whether the owner lets live views activate the tab they are showing.
+    pub follow: bool,
     /// Owner enabled media-element sound sharing.
     pub audio: bool,
     /// Owner enabled viewer file transfers under a control grant.
@@ -391,6 +393,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<R
                 version: String::new(),
                 forget_at: forget_after.map(|a| record.last_seen + a.as_secs()),
                 can_open: false,
+                follow: true,
                 audio: false,
                 files: false,
                 public_share: false,
@@ -481,6 +484,7 @@ fn valid_command(command: &Command, control: bool) -> bool {
             .as_u64()
             .is_some_and(|i| i <= u32::MAX as u64),
         "pin" => command.params["pinned"].is_boolean(),
+        "follow" => command.tab == 0 && command.params["enabled"].is_boolean(),
         "cdp" => command.params["method"].as_str().is_some_and(cdp_allowed),
         _ => false,
     }
@@ -650,9 +654,11 @@ pub async fn command(
         return Err(failure(StatusCode::GONE, "Browser grant expired"));
     }
     // Tab 0: open the browser's first tab, where its owner allows that.
-    let tabless = command.action == "open" && command.tab == 0;
-    let control = if tabless {
+    let tabless = command.tab == 0 && matches!(command.action.as_str(), "open" | "follow");
+    let control = if command.action == "open" && tabless {
         node.info.lock().unwrap().can_open
+    } else if command.action == "follow" && tabless {
+        true
     } else {
         node.control(command.tab)
             .ok_or_else(|| failure(StatusCode::FORBIDDEN, "Tab is not shared"))?
@@ -1048,6 +1054,7 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
             version: hello.version,
             forget_at: None,
             can_open: false,
+            follow: true,
             audio: false,
             files: false,
             public_share: false,
@@ -1126,6 +1133,9 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 info.tabs = tabs;
                                 info.native_control = value["native_control"].as_bool().unwrap_or(false);
                                 info.can_open = value["can_open"].as_bool().unwrap_or(false);
+                                if let Some(follow) = value["follow"].as_bool() {
+                                    info.follow = follow;
+                                }
                                 info.audio = value["audio"].as_bool().unwrap_or(false);
                                 info.files = value["files"].as_bool().unwrap_or(false);
                                 let grant = value["public_grant"].as_str().and_then(|s| Uuid::parse_str(s).ok());

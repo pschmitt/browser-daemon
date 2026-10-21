@@ -4,6 +4,10 @@
 
 ### Changed
 
+* Handoff and the dashboard warn when a Firefox browser is missing its native
+  companion. Firefox's fallback input now dispatches pointer and mouse press
+  and release events before activating a target.
+* The handoff page and Firefox extension share one Follow in the browser setting.
 * The handoff tab strip shows labels for unpinned tabs and favicons only for
   pinned tabs. The tab context menu can reload and close tabs, with an icon for
   each action.

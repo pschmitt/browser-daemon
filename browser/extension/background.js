@@ -347,7 +347,7 @@ async function publish() {
   published = tabs;
   for (const tab of mediaAudio.keys()) if (!tabs.some(t => t.id === tab)) stopTabAudio(tab);
   for (const tab of fileTabs.keys()) if (!tabs.some(t => t.id === tab && t.control)) stopFileTab(tab);
-  send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen(), audio: sharing.audio, files: sharing.files, public_grant: sharing.public ? publicGrant : null});
+  send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen(), follow: sharing.follow, audio: sharing.audio, files: sharing.files, public_grant: sharing.public ? publicGrant : null});
   await badge();
 }
 
@@ -601,7 +601,19 @@ function pageAction(action, params, expectedOrigin) {
       }
     }
     if (!e) throw new Error('Element not found.');
-    e.focus(); e.click();
+    const rect = e.getBoundingClientRect();
+    const clientX = finite(params.x) ? params.x : rect.left + rect.width / 2;
+    const clientY = finite(params.y) ? params.y : rect.top + rect.height / 2;
+    const button = Number.isInteger(params.button) && params.button >= 0 && params.button <= 2 ? params.button : 0;
+    const buttons = button === 0 ? 1 : button === 1 ? 4 : 2;
+    const init = {bubbles: true, cancelable: true, composed: true, view: window, detail: 1,
+      screenX: clientX + window.screenX, screenY: clientY + window.screenY, clientX, clientY, button, buttons};
+    e.focus();
+    if (typeof PointerEvent === 'function') e.dispatchEvent(new PointerEvent('pointerdown', {...init, pointerId: 1, pointerType: 'mouse', isPrimary: true}));
+    e.dispatchEvent(new MouseEvent('mousedown', init));
+    if (typeof PointerEvent === 'function') e.dispatchEvent(new PointerEvent('pointerup', {...init, pointerId: 1, pointerType: 'mouse', isPrimary: true, buttons: 0}));
+    e.dispatchEvent(new MouseEvent('mouseup', {...init, buttons: 0}));
+    e.click();
   } else if (action === 'type') {
     const e = params.selector ? document.querySelector(params.selector) : document.activeElement;
     if (!e || typeof params.text !== 'string') throw new Error('Expected a field and text.');
@@ -1198,6 +1210,13 @@ async function handleCommand(command, connection, currentGeneration) {
   busy++;
   try {
     if (command.public_grant && (!sharing.public || command.public_grant !== publicGrant)) throw new Error('Public sharing ended.');
+    if (command.tab === 0 && command.action === 'follow') {
+      sharing.follow = command.params?.enabled === true;
+      await api.storage.local.set({followView: sharing.follow});
+      await publish();
+      if (socket === connection && currentGeneration === generation) connection.send(JSON.stringify({type: 'result', id: command.id, result: {ok: true}}));
+      return;
+    }
     // Tab 0: the browser's first tab, where the owner lets controllers open tabs.
     if (command.tab === 0 && command.action === 'open') {
       if (!registration || !canOpen() || !NodePolicy.pageURL(command.params?.url)) throw new Error('Opening tabs is not allowed.');
@@ -1481,6 +1500,7 @@ async function localMessage(message, sender) {
   if (message.type === 'follow') {
     sharing.follow = message.enabled === true;
     await api.storage.local.set({followView: sharing.follow});
+    publishSoon();
     return {ok: true};
   }
   if (message.type === 'shareAll') {

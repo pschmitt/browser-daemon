@@ -4120,6 +4120,7 @@ function extensionNodeCard(n) {
       ${stat(controls ? esc(controls) : 'View', controls ? 'with control' : 'only')}
       ${days !== null ? stat(days ? `${days}d` : 'today', 'until forgotten', 'warn') : stat(n.remembered ? 'Off' : n.expires_at ? untilShort(n.expires_at) : 'None', n.remembered ? 'key expiry' : 'key expires in')}
     </div>
+    ${online && n.browser === 'firefox' && !n.native_control ? `<div class="node-warn" role="status">${icon('alert', 'sm')}<span>Firefox companion is not connected. Some clicks and keyboard input may not work; enable the companion in the browser extension.</span></div>` : ''}
     ${!n.tabs.length ? `<p class="node-note">${online ? 'Switch tabs on in the browser extension to share them here.' : 'This browser reconnects when it starts; its tabs stay private until shared again.'}</p>` : ''}
     <div class="node-buttons">
       <button class="btn sm${filter === key ? ' primary' : ''}" data-act="filter" data-node="${esc(key)}" aria-pressed="${filter === key}">${icon('filter', 'sm')}${filter === key ? 'Filtered' : 'Filter'}</button>
