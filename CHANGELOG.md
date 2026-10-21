@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-10-21
+
 ### Added
 
 * Vault fills also fill linked custom fields that stand for the login's
