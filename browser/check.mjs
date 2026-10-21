@@ -47,7 +47,7 @@ function harness(firefox = false, stored = {shareAll: false}) {
   }
   const api = {
     runtime: {id: 'test', getURL: s => `chrome-extension://test/${s}`, getManifest: () => ({version: '0.3.1'}), onMessage: event('message')},
-    tabs: {get: async id => { if (!tabs.has(id)) throw Error('No tab'); return tabs.get(id); }, query: async () => [...tabs.values()], onRemoved: event('removed'), onUpdated: event('updated'), onCreated: event('created'), onActivated: event('activated'),
+    tabs: {get: async id => { if (!tabs.has(id)) throw Error('No tab'); return tabs.get(id); }, query: async () => [...tabs.values()], onRemoved: event('removed'), onUpdated: event('updated'), onCreated: event('created'), onActivated: event('activated'), onMoved: event('moved'),
       update: async (...args) => { calls.push(['update', ...args]); }, remove: async id => tabs.delete(id),
       captureTab: async () => { calls.push(['capture']); return 'data:image/jpeg;base64,/9jframe'; },
       create: async props => { const id = 100 + tabs.size; tabs.set(id, {id, title: '', url: props.url, incognito: false, windowId: 1}); calls.push(['create', props]); return tabs.get(id); }},
