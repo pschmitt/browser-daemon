@@ -2471,7 +2471,6 @@ function renderViewActions(recordings = listedRecordings()) {
 async function removeOfflineNodes() {
   let targets = offlineNodeTargets();
   if (!targets.length) return;
-  const names = targets.map(({ node }) => node.name);
   const ok = await ask({
     title: `Remove ${plural(targets.length, 'offline node')}?`,
     text: 'Unreachable daemon peers will be dropped from this mesh, and offline browsers will be forgotten with their remembered keys revoked. Configured daemon peers return after a restart.',
@@ -2481,6 +2480,7 @@ async function removeOfflineNodes() {
   if (!ok) return;
   targets = offlineNodeTargets();
   if (!targets.length) { toast('No offline nodes remain'); return; }
+  const names = targets.map(({ node }) => node.name);
   const progress = createProgressToast('remove-offline-nodes', 'Removing offline nodes', `Removing ${targets.length} node${targets.length === 1 ? '' : 's'}…`);
   const results = await Promise.allSettled(targets.map(({ kind, node }) => kind === 'peer'
     ? request('DELETE', `/api/peers/${enc(node.name)}`)
