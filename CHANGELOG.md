@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.3.24] - 2026-10-21
+
+### Added
+
+* Managed extensions can discover daemon origins from a configured server,
+  with updates pushed over their existing WebSocket connection.
+
+### Changed
+
+* Extension-backed tabs send the browser's exact favicons to handoff, including
+  private URLs, in bounded batches.
+
 ## [0.3.23] - 2026-10-21
 
 ### Changed
