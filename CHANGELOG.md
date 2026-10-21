@@ -2,10 +2,12 @@
 
 ## [Unreleased]
 
-### Fixed
+### Changed
 
-* Firefox shares one in-flight native companion connection when automatic
-  startup and a manual enable happen at the same time.
+* The allowed-daemon list uses themed rows with per-daemon add and remove
+  controls instead of a plain text area.
+* The Firefox companion status uses the same pill styling as the browser
+  connection status.
 
 ## [0.3.22] - 2026-10-21
 
@@ -23,6 +25,7 @@
   replace the selection instead of replacing the entire field value.
 * Firefox companion grant updates defer discarded tabs until they have a
   browsing context, keeping the other shared tabs connected.
+* Automatic and manual Firefox companion startup share one connection attempt.
 
 ## [0.3.21] - 2026-10-21
 

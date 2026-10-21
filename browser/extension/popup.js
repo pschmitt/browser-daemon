@@ -11,6 +11,7 @@ let initialized = false;
 let setupRemembered;
 let busy = false;
 let renderedTabs = '';
+let renderedAllowlist = '';
 let approvalIdentity = '';
 const draftReady = api.storage.session.get('pairingDraft').then(saved => {
   if (saved.pairingDraft?.expires > Date.now()) $('code').value = saved.pairingDraft.code;
@@ -99,6 +100,58 @@ function renderTabs() {
   }));
 }
 
+function renderDaemonAllowlist(origins) {
+  const managed = state.allowlist.managed;
+  const signature = JSON.stringify({origins, managed});
+  if (signature === renderedAllowlist) return;
+  renderedAllowlist = signature;
+  $('daemonAllowlist').replaceChildren(...origins.map(value => {
+    const url = new URL(value);
+    const row = document.createElement('div');
+    row.className = 'daemon-origin';
+    row.setAttribute('role', 'listitem');
+
+    const icon = document.createElement('span');
+    icon.className = 'daemon-origin-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.5 3.1 7.8 7.5 9.5 4.4-1.7 7.5-5 7.5-9.5V6L12 3Z"/><path d="m9 12 2 2 4-4"/></svg>';
+
+    const text = document.createElement('span');
+    text.className = 'daemon-origin-text';
+    const host = document.createElement('b');
+    host.textContent = url.host;
+    const address = document.createElement('small');
+    address.textContent = value;
+    text.append(host, address);
+    row.append(icon, text);
+
+    if (!managed) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'daemon-origin-remove';
+      remove.setAttribute('aria-label', `Remove ${value}`);
+      remove.title = 'Remove daemon';
+      remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>';
+      remove.addEventListener('click', async () => {
+        try {
+          await message({type: 'setDaemonAllowlist', origins: origins.filter(origin => origin !== value)});
+          await refresh();
+        } catch (error) { showError(error); }
+      });
+      row.append(remove);
+    }
+    return row;
+  }));
+
+  if (!origins.length) {
+    const empty = document.createElement('p');
+    empty.className = 'daemon-origin-empty muted small';
+    empty.textContent = managed ? 'No daemon origins are configured.' : 'Add a daemon origin to pair this browser.';
+    $('daemonAllowlist').append(empty);
+  }
+  $('addDaemonOrigin').hidden = managed;
+}
+
 async function refresh() {
   await draftReady;
   state = await message({type: 'state'});
@@ -166,15 +219,15 @@ async function refresh() {
 
   // Advanced
   $('allowlistStatus').textContent = state.allowlist.error || (state.allowlist.managed
-    ? 'Set by your system configuration.' : 'Exact origins, one per line. Nothing else is trusted.');
-  $('daemonAllowlist').readOnly = state.allowlist.managed;
-  $('saveDaemonAllowlist').hidden = state.allowlist.managed;
-  if (document.activeElement !== $('daemonAllowlist')) $('daemonAllowlist').value = origins.join('\n');
+    ? 'Set by your system configuration.' : 'Only exact daemon origins are trusted.');
+  renderDaemonAllowlist(origins);
   if (!origins.length && !state.allowlist.managed) $('advanced').open = true;
   $('companion').hidden = state.chromium;
   $('native').textContent = state.nativeReady ? 'Disable companion' : 'Enable companion';
   $('native').disabled = !reg;
-  $('nativeStatus').textContent = state.nativeReady ? 'Connected' : '';
+  $('nativeStatus').hidden = !reg;
+  $('nativeStatus').textContent = state.nativeReady ? 'Connected' : 'Unavailable';
+  $('nativeStatus').className = `pill${state.nativeReady ? ' on' : ''}`;
   $('diagnosticStatus').textContent = reg
     ? `Node ${reg.id}${reg.expires_at ? `, until ${new Date(reg.expires_at * 1000).toLocaleTimeString()}` : ', no time limit'}.` : state.status;
   $('connectionHistory').replaceChildren(...state.history.slice().reverse().map(event => {
@@ -308,10 +361,14 @@ $('forgetRemembered').addEventListener('click', async () => {
   try { await message({type: 'forgetRemembered'}); await refresh(); }
   catch (error) { showError(error); }
 });
-$('saveDaemonAllowlist').addEventListener('click', async () => {
+$('addDaemonOrigin').addEventListener('submit', async event => {
+  event.preventDefault();
   try {
-    const origins = $('daemonAllowlist').value.split('\n').map(v => v.trim()).filter(Boolean);
+    const value = $('daemonOriginInput').value.trim();
+    if (!value) throw new Error('Enter a daemon origin.');
+    const origins = NodePolicy.daemonOrigins([...state.allowlist.origins, value]);
     await message({type: 'setDaemonAllowlist', origins});
+    $('daemonOriginInput').value = '';
     await refresh();
   } catch (error) { showError(error); }
 });

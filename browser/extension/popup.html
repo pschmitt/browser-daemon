@@ -76,13 +76,19 @@
   <section id="companion" hidden>
     <h3>Firefox companion</h3>
     <p class="muted small">Trusted mouse and keyboard input. Install with <code>python3 browser/install.py</code>, then start Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222</code>.</p>
-    <button id="native" type="button">Enable companion</button> <span id="nativeStatus" class="muted small"></span>
+    <div class="companion-actions">
+      <button id="native" type="button">Enable companion</button>
+      <span id="nativeStatus" class="pill" role="status" aria-live="polite"></span>
+    </div>
   </section>
   <section>
     <h3>Allowed daemons</h3>
     <p id="allowlistStatus" class="muted small"></p>
-    <textarea id="daemonAllowlist" rows="4" spellcheck="false" aria-label="Allowed daemon origins, one per line"></textarea>
-    <button id="saveDaemonAllowlist" type="button">Save</button>
+    <div id="daemonAllowlist" class="daemon-origins" role="list" aria-label="Allowed daemon origins"></div>
+    <form id="addDaemonOrigin" class="daemon-origin-form">
+      <label class="field">Daemon origin<input id="daemonOriginInput" type="url" placeholder="https://browser.example.org" spellcheck="false"></label>
+      <button type="submit" class="primary wide">Add daemon</button>
+    </form>
   </section>
   <section>
     <h3>Connection</h3>
