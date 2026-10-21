@@ -4,6 +4,23 @@
 
 ## [0.3.18] - 2026-10-21
 
+### Added
+
+* Extension-backed tabs in the handoff view can be reordered by dragging and
+  pinned or unpinned. Existing pinned state is shown in the tab strip.
+* Handoff notifications can be dismissed and wrap to two lines. Opening the
+  Tabs view focuses its search field.
+
+### Changed
+
+* The extension toolbar shows a red dot while a connected client is using the
+  browser. The popup tab list has a chevron, and **Sharing settings** is now
+  **Settings**.
+
+### Fixed
+
+* Selecting a discarded Firefox tab through remote control wakes and loads it.
+
 ## [0.3.17] - 2026-10-21
 
 ### Added
