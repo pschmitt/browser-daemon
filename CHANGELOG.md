@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-10-21
+
+### Added
+
+* Extension-backed browser sessions can suggest destinations from browser
+  history and bookmarks on the handoff page. The owner must enable address
+  suggestions and grant the optional browser permissions.
+
+### Changed
+
+* The tab picker is now called **Tabs** and includes a title and URL search.
+
+### Fixed
+
+* Firefox extension-backed sessions can complete passkey requests through the
+  live view, including when a page replaces the WebAuthn handler after load.
+* Remote clicks reach controls inside nested shadow roots, including complex
+  Home Assistant and Argo CD interfaces.
+
 ## [0.3.16] - 2026-10-21
 
 ### Added
