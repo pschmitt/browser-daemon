@@ -4,10 +4,20 @@
 
 ## [0.3.22] - 2026-10-21
 
+### Changed
+
+* Firefox pairs with its native companion automatically, and disconnecting the
+  companion no longer stops browser sharing. The popup reconnect flow is clearer
+  when a browser was previously paired.
+* Handoff settings now group browser, input, view, audio, and picture controls
+  under their own headings.
+
 ### Fixed
 
 * Firefox extension-only sessions now insert typed characters at the caret or
   replace the selection instead of replacing the entire field value.
+* Firefox companion grant updates defer discarded tabs until they have a
+  browsing context, keeping the other shared tabs connected.
 
 ## [0.3.21] - 2026-10-21
 
