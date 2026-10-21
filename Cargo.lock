@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "browser-daemon"
-version = "0.3.17"
+version = "0.3.18"
 dependencies = [
  "axum",
  "base64 0.23.1",
