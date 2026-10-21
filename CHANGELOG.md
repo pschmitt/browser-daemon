@@ -5,7 +5,8 @@
 ### Changed
 
 * The handoff tab strip shows labels for unpinned tabs and favicons only for
-  pinned tabs. The tab context menu can reload a tab.
+  pinned tabs. The tab context menu can reload and close tabs, with an icon for
+  each action.
 
 ## [0.3.19] - 2026-10-21
 

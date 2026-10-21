@@ -770,7 +770,7 @@
     <div id="tabsList" class="tabs-list"></div>
   </div>
 </div>
-<div id="tabContextMenu" role="menu" hidden><button id="tabContextReload" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 1-2.3-5.7L20 9"/></svg><span>Reload tab</span></button><button id="tabContextPin" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m16 3 5 5-4 1-4 4v5l-2 2-2-7-5-5 2-2h5z"/></svg><span id="tabContextPinLabel"></span></button></div>
+<div id="tabContextMenu" role="menu" hidden><button id="tabContextReload" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 1-2.3-5.7L20 9"/></svg><span>Reload tab</span></button><button id="tabContextPin" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m16 3 5 5-4 1-4 4v5l-2 2-2-7-5-5 2-2h5z"/></svg><span id="tabContextPinLabel"></span></button><button id="tabContextClose" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m18 6-12 12M6 6l12 12"/></svg><span>Close tab</span></button></div>
 <script>
 "use strict";
 
@@ -788,7 +788,7 @@ const E = {
   tabStrip: $("tabStrip"), profChip: $("profChip"), agentChip: $("agentChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
-  tabsModal: $("tabsModal"), tabsList: $("tabsList"), tabsSearch: $("tabsSearch"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"), tabContextMenu: $("tabContextMenu"), tabContextReload: $("tabContextReload"), tabContextPin: $("tabContextPin"), tabContextPinLabel: $("tabContextPinLabel"),
+  tabsModal: $("tabsModal"), tabsList: $("tabsList"), tabsSearch: $("tabsSearch"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"), tabContextMenu: $("tabContextMenu"), tabContextReload: $("tabContextReload"), tabContextPin: $("tabContextPin"), tabContextPinLabel: $("tabContextPinLabel"), tabContextClose: $("tabContextClose"),
   audioBtn: $("audioBtn"),
   kb: $("kb"), keys: $("keys"), dash: $("dash"), back: $("back"), fwd: $("fwd"), reload: $("reload"), kbbtn: $("kbbtn"),
   sessBtn: $("sessBtn"), sessMenu: $("sessMenu")
@@ -3300,7 +3300,7 @@ function showTabContextMenu(event, tab) {
   contextTab = tab;
   E.tabContextPinLabel.textContent = tab.pinned ? "Unpin tab" : "Pin tab";
   const width = 190;
-  const height = 92;
+  const height = 130;
   E.tabContextMenu.style.left = `${Math.max(4, Math.min(event.clientX, innerWidth - width - 4))}px`;
   E.tabContextMenu.style.top = `${Math.max(4, Math.min(event.clientY, innerHeight - height - 4))}px`;
   E.tabContextMenu.hidden = false;
@@ -3424,6 +3424,11 @@ async function reloadSharedTab(id) {
   try { await sharedTabCommand(id, "reload", {}); }
   catch (err) { toast("Could not reload tab: " + err.message, 5000); }
 }
+async function closeSharedTab(id) {
+  try { await sharedTabCommand(id, "close", {}); }
+  catch (err) { toast("Could not close tab: " + err.message, 5000); }
+  finally { setTimeout(() => loadTabs(), 250); }
+}
 
 function renderTabsModal(pages) {
   if (!E.tabsModal.classList.contains("open")) return;
@@ -3539,6 +3544,10 @@ E.newTabBtn.onclick = () => openNewTab();
 E.tabsSearch.addEventListener("input", () => renderTabsModal(tabsAll));
 E.tabContextReload.addEventListener("click", () => {
   if (contextTab) void reloadSharedTab(contextTab.id);
+  closeTabContextMenu();
+});
+E.tabContextClose.addEventListener("click", () => {
+  if (contextTab) void closeSharedTab(contextTab.id);
   closeTabContextMenu();
 });
 E.tabContextPin.addEventListener("click", () => {
