@@ -13,6 +13,8 @@
 * Follow focus is disabled by default for newly connected browsers.
 * Firefox's toolbar icon fills its slot more clearly, and the dashboard shows
   the companion warning as a hoverable icon beside the browser status badges.
+* Handoff notifications show a leading icon for clipboard, navigation, files,
+  keyboard, passkey, success, and error messages.
 
 ### Fixed
 

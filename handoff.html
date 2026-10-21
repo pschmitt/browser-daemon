@@ -220,6 +220,9 @@
   #clipToast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 8px); z-index: 80; display: flex; align-items: flex-start; gap: 10px;
     width: min(480px, calc(100vw - 24px)); padding: 8px 10px 8px 14px; border-radius: 14px;
     background: var(--bar); border: 1px solid var(--line); color: var(--fg); font-size: 13px; line-height: 1.4; font-weight: 600; text-align: left; opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
+  #clipToast .toast-icon { width: 18px; height: 18px; flex: none; margin-top: 1px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  #clipToast[data-kind="success"] .toast-icon { color: #34d399; }
+  #clipToast[data-kind="error"] .toast-icon { color: #f87171; }
   #clipToast .toast-message { flex: 1; min-width: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
   #clipToast .toast-dismiss { flex: none; border: 0; padding: 0 2px; background: transparent; color: var(--muted); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; pointer-events: auto; }
   #clipToast .toast-dismiss:hover { color: var(--fg); }
@@ -3843,6 +3846,27 @@ window.addEventListener("paste", (e) => {
   else pasteToRemote();
 });
 let toastTimer = 0;
+const TOAST_ICONS = {
+  clipboard: '<rect x="8" y="4" width="12" height="16" rx="2"/><path d="M16 4V3a2 2 0 0 0-2-2h-5a2 2 0 0 0-2 2v1M4 8v12a2 2 0 0 0 2 2h10"/>',
+  alert: '<path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4m0 4h.01"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m10.8 12.2 8.2-8.2M16 7l3 3m-5-1 2 2"/>',
+  file: '<path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10z"/><path d="M13 3v7h7m-12 4h8m-8 4h8"/>',
+  keyboard: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M8 16h8"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/>',
+};
+function toastKind(text) {
+  const value = text.toLowerCase();
+  if (/could not|blocked|failed|cannot|no passkey|not selected|not connected|needs site access|error/.test(value)) return "error";
+  if (/copied|clipboard|nothing selected/.test(value)) return "clipboard";
+  if (/passkey|signing in/.test(value)) return "key";
+  if (/file|drop|sending|sent |saved /.test(value)) return "file";
+  if (/keyboard/.test(value)) return "keyboard";
+  if (/switched|opened|navigat|now via|reconnect/.test(value)) return "arrow";
+  if (/saved|filled|renamed|stopped|no longer shared|enabled|disabled/.test(value)) return "check";
+  return "info";
+}
 function toast(text, ms = 1100) {
   let el = document.getElementById("clipToast");
   if (!el) {
@@ -3850,6 +3874,10 @@ function toast(text, ms = 1100) {
     el.id = "clipToast";
     el.setAttribute("role", "status");
     el.setAttribute("aria-live", "polite");
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.classList.add("toast-icon");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
     const message = document.createElement("span");
     message.className = "toast-message";
     const dismiss = document.createElement("button");
@@ -3863,9 +3891,12 @@ function toast(text, ms = 1100) {
       toastTimer = 0;
       el.classList.remove("show");
     };
-    el.append(message, dismiss);
+    el.append(icon, message, dismiss);
     document.body.appendChild(el);
   }
+  const kind = toastKind(text);
+  el.dataset.kind = kind === "error" ? "error" : kind === "check" ? "success" : "info";
+  el.querySelector(".toast-icon").innerHTML = TOAST_ICONS[kind] || TOAST_ICONS.info;
   el.querySelector(".toast-message").textContent = text;
   el.classList.add("show");
   clearTimeout(toastTimer);
