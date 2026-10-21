@@ -263,12 +263,14 @@ async function badge() {
   if (approvalPending > Date.now() && !registration) {
     await api.action.setBadgeText({text: '?'});
     await api.action.setBadgeBackgroundColor({color: '#6d4aff'});
+    await api.action.setBadgeTextColor({color: '#ffffff'});
     await api.action.setTitle({title: 'Browser node: a dashboard asks to connect — click to answer'});
     return;
   }
   const connected = !!registration && clientConnected;
-  await api.action.setBadgeText({text: connected ? ' ' : ''});
-  await api.action.setBadgeBackgroundColor({color: '#c73545'});
+  await api.action.setBadgeText({text: connected ? '●' : ''});
+  await api.action.setBadgeBackgroundColor({color: [0, 0, 0, 0]});
+  await api.action.setBadgeTextColor({color: '#e11d48'});
   await api.action.setTitle({title: !registration ? 'Browser node: disconnected'
     : connected ? 'Browser node: connected — a client is using this browser'
       : 'Browser node: connected — waiting for a client'});
