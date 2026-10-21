@@ -369,6 +369,28 @@ async function grantFor(command) {
   return grant;
 }
 
+async function addressSuggestions(query) {
+  const saved = await api.storage.local.get('addressSuggestions');
+  if (saved.addressSuggestions !== true) return [];
+  const text = query.trim().slice(0, 200);
+  const [bookmarks, history] = await Promise.all([
+    api.permissions.contains({permissions: ['bookmarks']})
+      .then(allowed => allowed ? api.bookmarks.search(text) : []).catch(() => []),
+    api.permissions.contains({permissions: ['history']})
+      .then(allowed => allowed ? api.history.search({text, startTime: 0, maxResults: 12}) : []).catch(() => []),
+  ]);
+  const seen = new Set(), items = [];
+  for (const [records, kind] of [[bookmarks, 'bookmark'], [history, 'history']]) {
+    for (const item of records) {
+      if (!item.url || !safeURL(item.url) || seen.has(item.url)) continue;
+      seen.add(item.url);
+      items.push({title: item.title || '', url: item.url, kind});
+      if (items.length === 8) return items;
+    }
+  }
+  return items;
+}
+
 // The page asks a live view with control to use the vault while it is watching
 // (__bdPasskeyAlive stays fresh); otherwise the browser handles the request.
 function passkeyHook() {
@@ -665,6 +687,7 @@ const fillLogin = (c, urls) => {
 async function execute(command) {
   const grant = await grantFor(command);
   const {tab, action, params} = command;
+  if (action === 'suggest') return addressSuggestions(params.query);
   if (action === 'publicAudio') {
     if (!command.public_grant || !sharing.audio) throw new Error('Audio sharing is disabled.');
     let state = mediaAudio.get(tab);
@@ -1013,8 +1036,19 @@ async function shim(tab, channel, method, params) {
     case 'Runtime.evaluate': {
       if (!nativeReady) {
         // A live view uses this exact expression to answer the extension-backed
-        // passkey hook. Run only that operation in the page world; general
-        // evaluation still requires the native companion.
+        // passkey hook, or its heartbeat. Run only these operations in the page
+        // world; general evaluation still requires the native companion.
+        if (params.expression === 'globalThis.__bdPasskeyRepair?.(); globalThis.__bdPasskeyAlive = Date.now()' ||
+            params.expression === 'globalThis.__bdPasskeyRepair?.(); globalThis.__bdPasskeyAlive = Date.now(); globalThis.__bdPasskeyOffer = true') {
+          const offer = params.expression.endsWith('__bdPasskeyOffer = true');
+          await api.scripting.executeScript({target: {tabId: tab}, world: 'MAIN', func: showOffer => {
+            globalThis.__bdPasskeyRepair?.();
+            globalThis.__bdPasskeyAlive = Date.now();
+            if (showOffer) globalThis.__bdPasskeyOffer = true;
+            return {ok: true};
+          }, args: [offer]});
+          return {result: {value: {ok: true}}};
+        }
         const match = params.expression?.match(/^globalThis\.__bdPasskeyAnswer\?\.\(("(?:\\.|[^"\\])*"), (.+)\)$/);
         if (!match) throw new ShimError('Evaluation in Firefox requires the companion.');
         const passkeyId = JSON.parse(match[1]);
@@ -1290,7 +1324,10 @@ async function localMessage(message, sender) {
       control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
     const {dashboardPairing} = await api.storage.session.get('dashboardPairing');
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
-    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady};
+    const permissions = await api.permissions.contains({permissions: ['history', 'bookmarks']});
+    const savedSuggestions = await api.storage.local.get('addressSuggestions');
+    const addressSuggestions = permissions && savedSuggestions.addressSuggestions === true;
+    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -1363,6 +1400,14 @@ async function localMessage(message, sender) {
     await api.storage.local.set({shareAudio: sharing.audio});
     if (!sharing.audio) for (const tab of mediaAudio.keys()) stopTabAudio(tab);
     publishSoon();
+    return {ok: true};
+  }
+  if (message.type === 'addressSuggestions') {
+    const enabled = message.enabled === true;
+    if (enabled && !(await api.permissions.contains({permissions: ['history', 'bookmarks']}))) {
+      throw new Error('Grant history and bookmark access first.');
+    }
+    await api.storage.local.set({addressSuggestions: enabled});
     return {ok: true};
   }
   if (message.type === 'follow') {

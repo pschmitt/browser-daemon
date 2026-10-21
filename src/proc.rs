@@ -495,7 +495,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         // Only the orphan tagged with our id: not another daemon's, not an
         // untagged one outside our dirs, not a child, not a kept one.
-        assert_eq!(killed.into_inner(), vec![5001, 5006]);
+        let mut killed = killed.into_inner();
+        killed.sort_unstable();
+        assert_eq!(killed, vec![5001, 5006]);
         assert_eq!(n, 2);
     }
 

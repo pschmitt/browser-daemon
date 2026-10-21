@@ -2840,17 +2840,24 @@ function suggestRender() {
   E.urlSuggest.hidden = !sgItems.length;
   E.urlSuggest.innerHTML = sgItems.map((it, i) => {
     const host = (() => { try { return new URL(it.url).host; } catch { return it.url; } })();
-    return `<div class="sg${i === sgSel ? " on" : ""}" role="option" data-i="${i}"><div class="st"><span>${esc(it.title || host)}</span>${it.kind === "tab" ? '<span class="tag">default tab</span>' : ""}</div><div class="su">${esc(it.url)}</div></div>`;
+    const tag = it.kind === "tab" ? "default tab" : it.kind === "bookmark" ? "bookmark" : "";
+    return `<div class="sg${i === sgSel ? " on" : ""}" role="option" data-i="${i}"><div class="st"><span>${esc(it.title || host)}</span>${tag ? `<span class="tag">${tag}</span>` : ""}</div><div class="su">${esc(it.url)}</div></div>`;
   }).join("");
 }
 async function suggestFetch(q) {
   const sid = target?.sessionId;
-  if (!sid) return;
+  if (!sid && !sharedBrowserId) return;
   const seq = ++sgSeq;
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/history?limit=8&q=${encodeURIComponent(q)}`, { headers: authHeaders() });
+    const res = sid
+      ? await fetch(`/api/sessions/${encodeURIComponent(sid)}/history?limit=8&q=${encodeURIComponent(q)}`, { headers: authHeaders() })
+      : await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, {
+        method: "POST", headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({tab: Number(pageId), action: "suggest", params: {query: q}}),
+      });
     if (!res.ok) return;
-    const items = await res.json();
+    const body = await res.json();
+    const items = sid ? body : body.result || [];
     // A newer question, or the bar was left meanwhile.
     if (seq !== sgSeq || document.activeElement !== E.urlInput) return;
     sgItems = items;

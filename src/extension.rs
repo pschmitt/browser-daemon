@@ -442,6 +442,9 @@ fn valid_command(command: &Command, control: bool) -> bool {
         return false;
     }
     match command.action.as_str() {
+        "suggest" => command.params["query"]
+            .as_str()
+            .is_some_and(|q| q.len() <= 200),
         "navigate" | "open" => command.params["url"].as_str().is_some_and(page_url),
         "click" | "type" | "key" | "scroll" | "reload" | "back" | "forward" | "focus" | "close"
         | "evaluate" => true,

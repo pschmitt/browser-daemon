@@ -225,7 +225,7 @@ test('Firefox emulates the live view: pushed frames, flow control and input', as
   s.receive({type: 'cdp', channel: 'view', tab: 1, id: 2, method: 'Input.insertText', params: {text: 'hi'}});
   s.receive({type: 'cdp', channel: 'view', tab: 1, id: 3, method: 'Target.createTarget', params: {}});
   await h.flush();
-  assert.ok(h.calls.some(c => c[0] === 'script' && c[1].args[0] === 'type' && c[1].args[1].text === 'hi'));
+  assert.ok(h.calls.some(c => c[0] === 'script' && c[1].args?.[0] === 'type' && c[1].args[1].text === 'hi'));
   assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 3).error);
   s.receive({type: 'cdp_close', channel: 'view'});
   const captures = h.calls.filter(c => c[0] === 'capture').length;

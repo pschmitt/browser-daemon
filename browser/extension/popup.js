@@ -148,6 +148,7 @@ async function refresh() {
     if (document.activeElement !== $('shareFiles')) $('shareFiles').checked = state.sharing.files;
     if (document.activeElement !== $('sharePublic')) $('sharePublic').checked = state.sharing.public;
     if (document.activeElement !== $('shareAudio')) $('shareAudio').checked = state.sharing.audio;
+    if (document.activeElement !== $('addressSuggestions')) $('addressSuggestions').checked = state.addressSuggestions;
     $('autoShareRow').hidden = state.sharing.all;
     $('serverHost').textContent = new URL(reg.server).host;
     $('serverHost').title = reg.server;
@@ -327,4 +328,13 @@ $('shareFiles').addEventListener('click', () => {
 
 $('sharePublic').addEventListener('change', () => {
   void message({type: 'sharePublic', enabled: $('sharePublic').checked}).then(refresh, showError);
+});
+
+$('addressSuggestions').addEventListener('click', () => {
+  const enabled = $('addressSuggestions').checked;
+  const permission = enabled ? api.permissions.request({permissions: ['history', 'bookmarks']}) : Promise.resolve(true);
+  void permission.then(allowed => {
+    if (!allowed) throw new Error('History and bookmark access is needed for address suggestions.');
+    return message({type: 'addressSuggestions', enabled}).then(refresh);
+  }).catch(error => { $('addressSuggestions').checked = !enabled; showError(error); });
 });

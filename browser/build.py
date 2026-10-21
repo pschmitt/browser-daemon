@@ -41,12 +41,13 @@ def main():
         if target == "chromium":
             manifest["storage"] = {"managed_schema": "managed-schema.json"}
             manifest["minimum_chrome_version"] = "116"
+            manifest["optional_permissions"] = ["history", "bookmarks"]
             # Chrome excludes debugger from optional permissions. Installation
             # permits the API; actual tab/control grants remain explicit.
             manifest["permissions"].append("debugger")
             manifest["background"] = {"service_worker": "background.js"}
         else:
-            manifest["optional_permissions"] = ["nativeMessaging", "webRequest", "webRequestBlocking", "webRequestFilterResponse"]
+            manifest["optional_permissions"] = ["nativeMessaging", "webRequest", "webRequestBlocking", "webRequestFilterResponse", "history", "bookmarks"]
             manifest["host_permissions"] = ["<all_urls>"]
             manifest["background"] = {"scripts": ["policy.js", "audio.js", "files-page.js", "files.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
