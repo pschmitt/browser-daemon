@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-10-21
+
+### Fixed
+
+* Firefox extension-only sessions now insert typed characters at the caret or
+  replace the selection instead of replacing the entire field value.
+
 ## [0.3.21] - 2026-10-21
 
 ### Changed

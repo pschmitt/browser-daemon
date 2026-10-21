@@ -679,9 +679,13 @@ function pageAction(action, params, expectedOrigin) {
       const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (!setter) throw new Error('Not a text field.');
-      setter.call(e, params.text);
-      e.dispatchEvent(new Event('input', {bubbles: true}));
-      e.dispatchEvent(new Event('change', {bubbles: true}));
+      const value = e.value;
+      let start = e.selectionStart;
+      let end = e.selectionEnd;
+      if (!Number.isInteger(start) || !Number.isInteger(end)) start = end = value.length;
+      setter.call(e, value.slice(0, start) + params.text + value.slice(end));
+      try { e.setSelectionRange(start + params.text.length, start + params.text.length); } catch {}
+      e.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: params.text}));
     }
   } else if (action === 'key') {
     const e = document.activeElement;
