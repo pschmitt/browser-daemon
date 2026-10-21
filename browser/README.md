@@ -19,12 +19,17 @@ not accepted. The allowlist is checked before pairing, dashboard integration,
 registration, automatic reconnect and tab commands. Removing an active daemon
 from policy ends its connection and sharing.
 
-Administrators set `allowedDaemonOrigins` in `storage.managed`: Chromium uses
-the bundled managed-storage schema; Firefox uses a managed-storage manifest.
-Managed policy is read-only in the popup. Once managed policy has been seen,
-missing or broken policy blocks connections rather than falling back to local
-settings. Unmanaged installations can explicitly edit **Allowed daemon URLs**
-in the extension's own setup page. No origins are trusted by default.
+Administrators set `allowedDaemonOriginsMode` in `storage.managed`: `custom`
+uses `allowedDaemonOrigins`, while `auto` bootstraps from the configured
+`daemonDiscoveryOrigin`. The daemon returns its configured cluster endpoints at
+`/api/extension/config`, then sends updated lists over the existing extension
+WebSocket heartbeat. HTTPS and exact origins are still required. Chromium
+uses the bundled managed-storage schema; Firefox uses a managed-storage
+manifest. Managed policy is read-only in the popup, where its current list is
+still shown. Once managed policy has been seen, missing or broken policy blocks
+connections rather than falling back to local settings. Unmanaged installations
+can choose automatic discovery or explicitly edit **Allowed daemons** in the
+extension's setup page. No origins are trusted by default.
 
 ## Pair from the dashboard
 

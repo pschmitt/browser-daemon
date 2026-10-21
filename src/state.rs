@@ -205,6 +205,8 @@ pub struct AppState {
     pub peer_client: reqwest::Client,
     pub node_name: String,
     pub public_url: String,
+    /// Origins an extension may use to connect across this daemon cluster.
+    pub extension_origins: Vec<String>,
     /// Base URL of public share links.
     pub share_url: String,
     /// Public links to recordings and sessions (see shares.rs).

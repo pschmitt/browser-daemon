@@ -101,7 +101,8 @@ function renderTabs() {
 
 function renderDaemonAllowlist(origins) {
   const managed = state.allowlist.managed;
-  const signature = JSON.stringify({origins, managed});
+  const mode = state.allowlist.mode || 'custom';
+  const signature = JSON.stringify({origins, managed, mode, discoveryOrigin: state.allowlist.discoveryOrigin, error: state.allowlist.error});
   if (signature === renderedAllowlist) return;
   renderedAllowlist = signature;
   $('daemonAllowlist').replaceChildren(...origins.map(value => {
@@ -124,7 +125,7 @@ function renderDaemonAllowlist(origins) {
     text.append(host, address);
     row.append(icon, text);
 
-    if (!managed) {
+    if (!managed && mode === 'custom') {
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'daemon-origin-remove';
@@ -145,10 +146,17 @@ function renderDaemonAllowlist(origins) {
   if (!origins.length) {
     const empty = document.createElement('p');
     empty.className = 'daemon-origin-empty muted small';
-    empty.textContent = managed ? 'No daemon origins are configured.' : 'Add a daemon origin to pair this browser.';
+    empty.textContent = mode === 'auto' ? 'The automatic origin list is unavailable.'
+      : managed ? 'No daemon origins are configured.' : 'Add a daemon origin to pair this browser.';
     $('daemonAllowlist').append(empty);
   }
-  $('addDaemonOrigin').hidden = managed;
+  $('addDaemonOrigin').hidden = managed || mode !== 'custom';
+  $('allowlistMode').value = mode;
+  $('allowlistMode').disabled = managed;
+  $('discoveryOriginInput').value = state.allowlist.discoveryOrigin || '';
+  $('discoveryOriginInput').disabled = managed;
+  $('discoveryConfig').hidden = managed || mode !== 'auto';
+  if (state.allowlist.error) $('allowlistStatus').textContent = state.allowlist.error;
 }
 
 async function refresh() {
@@ -217,12 +225,15 @@ async function refresh() {
   } else renderedTabs = '';
 
   // Advanced
-  $('allowlistStatus').textContent = state.allowlist.error || (state.allowlist.managed
-    ? 'Set by your system configuration.' : 'Only exact daemon origins are trusted.');
+  const autoStatus = state.allowlist.mode === 'auto'
+    ? `Loaded from ${new URL(state.allowlist.discoveryOrigin).host}; updates arrive over the daemon connection.`
+    : state.allowlist.managed ? 'Set by your system configuration.' : 'Only exact daemon origins are trusted.';
+  $('allowlistStatus').textContent = state.allowlist.error || (state.allowlist.managed && state.allowlist.mode === 'auto'
+    ? `${autoStatus} Set by your system configuration.` : autoStatus);
   renderDaemonAllowlist(origins);
   if (!origins.length && !state.allowlist.managed) $('advanced').open = true;
   $('companion').hidden = state.chromium;
-  $('native').textContent = state.nativeReady ? 'Disable companion' : 'Enable companion';
+  $('nativeLabel').textContent = state.nativeReady ? 'Disable companion' : 'Enable companion';
   $('native').disabled = !reg;
   $('nativeStatus').hidden = !reg;
   $('nativeStatus').textContent = state.nativeReady ? 'Connected' : 'Unavailable';
@@ -368,6 +379,24 @@ $('addDaemonOrigin').addEventListener('submit', async event => {
     const origins = NodePolicy.daemonOrigins([...state.allowlist.origins, value]);
     await message({type: 'setDaemonAllowlist', origins});
     $('daemonOriginInput').value = '';
+    await refresh();
+  } catch (error) { showError(error); }
+});
+$('allowlistMode').addEventListener('change', async () => {
+  const mode = $('allowlistMode').value;
+  if (mode === 'auto') {
+    $('discoveryConfig').hidden = false;
+    return;
+  }
+  try {
+    await message({type: 'setDaemonOriginMode', mode});
+    await refresh();
+  } catch (error) { showError(error); await refresh(); }
+});
+$('discoveryConfig').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await message({type: 'setDaemonOriginMode', mode: 'auto', discoveryOrigin: $('discoveryOriginInput').value.trim()});
     await refresh();
   } catch (error) { showError(error); }
 });

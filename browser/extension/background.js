@@ -12,6 +12,8 @@ const attaching = new Map();
 // Live views (daemon relay channels) per tab, and Firefox's emulated screencasts.
 const channels = new Map();
 const casts = new Map();
+const faviconCache = new Map();
+const MAX_FAVICON_BYTES = 128 * 1024;
 // Chromium screencasts, per tab: frames are acknowledged here at once, so the
 // browser never waits for a viewer's round trip; viewers get at most
 // CAST_WINDOW in flight (enough for ~50 fps at 80 ms) and, while they are
@@ -54,6 +56,7 @@ async function openTab(url, windowId) {
 // Every allowed daemon origin, so no shared tab can ever show a daemon page.
 let daemons = new Set();
 let policyCache = null;
+let discoveryCache = null;
 let heartbeat = null;
 let expiryTimer = null;
 let lastAnswer = 0;
@@ -158,26 +161,78 @@ async function openApproval(windowId) {
 }
 
 async function daemonPolicy() {
-  const local = await api.storage.local.get(['daemonAllowlist', 'managedAllowlistSeen']);
+  const local = await api.storage.local.get(['daemonAllowlist', 'daemonAllowlistMode', 'daemonDiscoveryOrigin', 'managedAllowlistSeen']);
   let managed = {};
-  try { managed = await api.storage.managed.get('allowedDaemonOrigins'); } catch {
+  try { managed = await api.storage.managed.get(['allowedDaemonOriginsMode', 'allowedDaemonOrigins', 'daemonDiscoveryOrigin']); } catch {
     if (local.managedAllowlistSeen) throw new Error('Managed daemon allowlist is unavailable. Connections are blocked until policy is restored.');
   }
-  if (Object.hasOwn(managed, 'allowedDaemonOrigins')) {
+  const hasManagedPolicy = Object.hasOwn(managed, 'allowedDaemonOriginsMode') ||
+    Object.hasOwn(managed, 'allowedDaemonOrigins') || Object.hasOwn(managed, 'daemonDiscoveryOrigin');
+  if (hasManagedPolicy) {
     if (!local.managedAllowlistSeen) await api.storage.local.set({managedAllowlistSeen: true});
-    return {managed: true, origins: NodePolicy.daemonOrigins(managed.allowedDaemonOrigins)};
+    const mode = managed.allowedDaemonOriginsMode || 'custom';
+    if (mode === 'auto') {
+      const discoveryOrigin = NodePolicy.serverURL(managed.daemonDiscoveryOrigin || '');
+      try { return {managed: true, mode, discoveryOrigin, origins: await discoverDaemonOrigins(discoveryOrigin), refreshedAt: discoveryCache.fetchedAt}; }
+      catch (error) { return {managed: true, mode, discoveryOrigin, origins: [], error: `Could not load daemon origins from ${discoveryOrigin}: ${error.message}`}; }
+    }
+    if (mode !== 'custom') throw new Error('Managed daemon origin mode is invalid.');
+    return {managed: true, mode, origins: NodePolicy.daemonOrigins(managed.allowedDaemonOrigins || [])};
   }
   if (local.managedAllowlistSeen) throw new Error('Managed daemon allowlist was removed. Connections are blocked until policy is restored.');
-  return {managed: false, origins: NodePolicy.daemonOrigins(local.daemonAllowlist || [])};
+  const mode = local.daemonAllowlistMode || 'custom';
+  if (mode === 'auto') {
+    const discoveryOrigin = NodePolicy.serverURL(local.daemonDiscoveryOrigin || '');
+    try { return {managed: false, mode, discoveryOrigin, origins: await discoverDaemonOrigins(discoveryOrigin), refreshedAt: discoveryCache.fetchedAt}; }
+    catch (error) { return {managed: false, mode, discoveryOrigin, origins: [], error: `Could not load daemon origins from ${discoveryOrigin}: ${error.message}`}; }
+  }
+  return {managed: false, mode: 'custom', origins: NodePolicy.daemonOrigins(local.daemonAllowlist || [])};
+}
+async function discoverDaemonOrigins(discoveryOrigin) {
+  if (discoveryCache?.origin === discoveryOrigin && discoveryCache.expires > Date.now()) {
+    if (discoveryCache.error) throw new Error(discoveryCache.error);
+    return discoveryCache.origins;
+  }
+  try {
+    const response = await fetch(`${discoveryOrigin}/api/extension/config`, {cache: 'no-store', credentials: 'omit', redirect: 'error'});
+    if (!response.ok) throw new Error(`server returned HTTP ${response.status}`);
+    const result = await response.json();
+    const origins = NodePolicy.daemonOrigins(result.origins);
+    if (!origins.includes(discoveryOrigin)) throw new Error('the discovery server did not include itself in its origin list');
+    discoveryCache = {origin: discoveryOrigin, origins, fetchedAt: Date.now(), expires: Number.POSITIVE_INFINITY};
+    return origins;
+  } catch (error) {
+    discoveryCache = {origin: discoveryOrigin, error: error.message, expires: Number.POSITIVE_INFINITY};
+    throw error;
+  }
 }
 // Read once per change, not per request: live views send many small messages.
 function cachedPolicy() {
-  policyCache ||= daemonPolicy().then(policy => { daemons = new Set(policy.origins); return policy; },
-    error => { policyCache = null; throw error; });
+  if (!policyCache) {
+    policyCache = daemonPolicy().then(policy => { daemons = new Set(policy.origins); return policy; },
+      error => { policyCache = null; throw error; });
+  }
   return policyCache;
+}
+async function updateAutoOrigins(values) {
+  if (!Array.isArray(values)) return;
+  const policy = await cachedPolicy();
+  if (policy.mode !== 'auto' || !policy.discoveryOrigin) return;
+  const origins = NodePolicy.daemonOrigins(values).sort();
+  if (!registration || !origins.includes(registration.server)) throw new Error('Daemon sent an invalid origin list.');
+  if (discoveryCache?.origin === policy.discoveryOrigin && JSON.stringify(discoveryCache.origins) === JSON.stringify(origins)) return;
+  discoveryCache = {origin: policy.discoveryOrigin, origins, fetchedAt: Date.now(), expires: Number.POSITIVE_INFINITY};
+  policyCache = null;
+  const updated = await cachedPolicy();
+  if (!updated.origins.includes(registration.server)) {
+    await stop('Daemon was removed from the automatic origin list');
+    return;
+  }
+  await installDashboardBridge();
 }
 async function requireDaemon(server) {
   const policy = await cachedPolicy();
+  if (policy.error) throw new Error(policy.error);
   return NodePolicy.approvedServer(server, policy.origins);
 }
 
@@ -401,12 +456,73 @@ function send(value) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value));
 }
 
+function faviconURL(value) {
+  if (typeof value !== 'string') return '';
+  if (value.length <= 176 * 1024 && /^data:image\/(?:png|jpeg|gif|x-icon|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)) return value;
+  const normalized = value.startsWith('moz-anno:favicon:') ? value.slice('moz-anno:favicon:'.length) : value;
+  return /^https?:\/\//i.test(normalized) ? normalized.slice(0, 2048) : '';
+}
+
+function faviconDataURL(bytes) {
+  const starts = (...values) => values.every((value, index) => bytes[index] === value);
+  let mime = '';
+  if (starts(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) mime = 'image/png';
+  else if (starts(0xff, 0xd8, 0xff)) mime = 'image/jpeg';
+  else if (starts(0x47, 0x49, 0x46, 0x38)) mime = 'image/gif';
+  else if (starts(0x00, 0x00, 0x01, 0x00)) mime = 'image/x-icon';
+  else if (bytes.length >= 12 && String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF' &&
+      String.fromCharCode(...bytes.subarray(8, 12)) === 'WEBP') mime = 'image/webp';
+  if (!mime) return '';
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return `data:${mime};base64,${btoa(binary)}`;
+}
+
+async function tabFavicon(value) {
+  const url = faviconURL(value);
+  if (!url) return '';
+  if (url.startsWith('data:')) return url;
+  if (faviconCache.has(url)) return faviconCache.get(url);
+  const pending = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4000);
+    try {
+      const response = await fetch(url, {credentials: 'omit', cache: 'force-cache', redirect: 'follow', signal: controller.signal});
+      if (!response.ok || !response.body) return url;
+      const length = Number(response.headers.get('content-length'));
+      if (Number.isFinite(length) && length > MAX_FAVICON_BYTES) return url;
+      const reader = response.body.getReader();
+      const chunks = [];
+      let size = 0;
+      while (true) {
+        const {done, value: chunk} = await reader.read();
+        if (done) break;
+        size += chunk.length;
+        if (size > MAX_FAVICON_BYTES) { await reader.cancel(); return url; }
+        chunks.push(chunk);
+      }
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+      return faviconDataURL(bytes) || url;
+    } catch { return url; }
+    finally { clearTimeout(timeout); }
+  })();
+  faviconCache.set(url, pending);
+  if (faviconCache.size > 512) faviconCache.delete(faviconCache.keys().next().value);
+  const result = await pending;
+  faviconCache.set(url, result);
+  return result;
+}
+
 async function publish() {
   const currentGeneration = generation;
   if (!registration) return;
   await requireDaemon(registration.server);
   if (generation !== currentGeneration) return;
   const tabs = [];
+  const faviconUpdates = [];
+  const inlineFavicons = [];
   for (const [id, grant] of shared) {
     try {
       const tab = await api.tabs.get(id);
@@ -417,9 +533,17 @@ async function publish() {
       if (grant.paused) continue;
       grant.origin = new URL(tab.url).origin;
       if (!chromium && grant.control) void hookPasskeys(id).catch(() => hooked.delete(id));
-      if (shared.get(id) === grant) tabs.push({id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), favicon: /^https?:\/\//i.test(tab.favIconUrl || '') ? tab.favIconUrl.slice(0, 2048) : '', control: grant.control, active: tab.active === true, index: tab.index, window_id: tab.windowId, pinned: tab.pinned === true});
+      if (shared.get(id) === grant) {
+        const rawFavicon = faviconURL(tab.favIconUrl);
+        const snapshot = {id, title: (tab.title || '').slice(0, 1024), url: tab.url.slice(0, 8192), favicon: rawFavicon.startsWith('data:') ? '' : rawFavicon, control: grant.control, active: tab.active === true, index: tab.index, window_id: tab.windowId, pinned: tab.pinned === true};
+        tabs.push(snapshot);
+        faviconUpdates.push(tabFavicon(tab.favIconUrl).then(favicon => {
+          if (favicon.startsWith('data:')) inlineFavicons.push({id, favicon});
+        }));
+      }
     } catch { shared.delete(id); await detach(id); }
   }
+  await Promise.all(faviconUpdates);
   if (generation !== currentGeneration) return;
   await syncNativeGrants();
   if (generation !== currentGeneration) return;
@@ -427,6 +551,7 @@ async function publish() {
   for (const tab of mediaAudio.keys()) if (!tabs.some(t => t.id === tab)) stopTabAudio(tab);
   for (const tab of fileTabs.keys()) if (!tabs.some(t => t.id === tab && t.control)) stopFileTab(tab);
   send({type: 'tabs', tabs, native_control: nativeReady, can_open: canOpen(), follow: sharing.follow, audio: sharing.audio, files: sharing.files, public_grant: sharing.public ? publicGrant : null});
+  for (let i = 0; i < inlineFavicons.length; i += 4) send({type: 'favicons', favicons: inlineFavicons.slice(i, i + 4)});
   await badge();
 }
 
@@ -1372,6 +1497,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
         }
       }
       registration = {...grant, server};
+      if (Array.isArray(message.origins)) void updateAutoOrigins(message.origins).catch(error => record(`Daemon origin update failed: ${error.message}`));
       clientConnected = false;
       status = 'Connected';
       record(status);
@@ -1391,6 +1517,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
       await stop('Browser authorization was revoked — pair again to reconnect');
     } else if (message.type === 'heartbeat') {
       lastAnswer = Date.now();
+      if (Array.isArray(message.origins)) void updateAutoOrigins(message.origins).catch(error => record(`Daemon origin update failed: ${error.message}`));
       if (typeof message.client_connected === 'boolean' && clientConnected !== message.client_connected) {
         clientConnected = message.client_connected;
         await badge();
@@ -1481,8 +1608,24 @@ async function localMessage(message, sender) {
     const current = await daemonPolicy();
     if (current.managed) throw new Error('The daemon allowlist is managed by your administrator.');
     const origins = NodePolicy.daemonOrigins(message.origins);
-    await api.storage.local.set({daemonAllowlist: origins});
+    await api.storage.local.set({daemonAllowlist: origins, daemonAllowlistMode: 'custom'});
+    policyCache = null;
     if (registration && !origins.includes(registration.server)) await stop('Daemon was removed from the allowlist');
+    return {ok: true};
+  }
+  if (message.type === 'setDaemonOriginMode') {
+    const current = await daemonPolicy();
+    if (current.managed) throw new Error('Daemon origin settings are managed by your administrator.');
+    if (message.mode === 'auto') {
+      const discoveryOrigin = NodePolicy.serverURL(message.discoveryOrigin || '');
+      discoveryCache = null;
+      const origins = await discoverDaemonOrigins(discoveryOrigin);
+      await api.storage.local.set({daemonAllowlistMode: 'auto', daemonDiscoveryOrigin: discoveryOrigin});
+      if (registration && !origins.includes(registration.server)) await stop('Daemon is no longer on the automatic origin list');
+    } else if (message.mode === 'custom') {
+      await api.storage.local.set({daemonAllowlistMode: 'custom', daemonAllowlist: current.origins});
+    } else throw new Error('Choose automatic or custom daemon origins.');
+    policyCache = null;
     return {ok: true};
   }
   if (message.type === 'state') {
@@ -1713,11 +1856,14 @@ api.runtime.onUpdateAvailable?.addListener(() => {
 
 void historyReady.then(installDashboardBridge).catch(() => record('Dashboard integration unavailable — open extension setup to grant site access'));
 
-api.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'node-reconnect') void historyReady.then(() => restoreRemembered()); });
+api.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === 'node-reconnect') void historyReady.then(() => restoreRemembered());
+});
+void api.alarms.clear('daemon-policy-refresh');
 void historyReady.then(() => restoreRemembered());
 
 api.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'managed' && !(area === 'local' && changes.daemonAllowlist)) return;
+  if (area !== 'managed' && !(area === 'local' && (changes.daemonAllowlist || changes.daemonAllowlistMode || changes.daemonDiscoveryOrigin))) return;
   policyCache = null;
   void (async () => {
     const server = registration?.server || pendingConnection?.server || (socket && new URL(socket.url).origin.replace(/^ws/, 'http'));

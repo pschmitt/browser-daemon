@@ -189,6 +189,16 @@ impl Auth {
                 ))
             };
         }
+        if req.method == Method::GET && req.path == "/api/extension/config" {
+            return if req.origin.is_none_or(crate::extension::extension_origin) {
+                Ok(Credential::Open)
+            } else {
+                Err(Refusal::new(
+                    StatusCode::FORBIDDEN,
+                    "Extension origin required",
+                ))
+            };
+        }
         if let Some(origin) = req.origin {
             if !origin_matches_host(origin, req.host) && !self.hosts.allows_origin(origin) {
                 return Err(Refusal::new(StatusCode::FORBIDDEN, "Cross-origin request"));
@@ -292,6 +302,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
             | "/icon-512.png"
             | "/icon-maskable-512.png"
             | "/download-worker.js"
+            | "/api/extension/config"
     ) || path.starts_with("/assets/")
         || is_share(path)
 }

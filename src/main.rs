@@ -197,6 +197,10 @@ pub struct Args {
     #[arg(long = "allowed-host")]
     pub allowed_hosts: Vec<String>,
 
+    /// Exact origins extensions may use to connect to this daemon cluster.
+    #[arg(long = "extension-origin")]
+    pub extension_origins: Vec<String>,
+
     #[arg(long, default_value = "/var/lib/browser-daemon/recordings")]
     pub recordings_dir: PathBuf,
 
@@ -467,6 +471,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             peer_map.insert(trimmed.clone(), trimmed);
         }
     }
+    let extension_origins = extension::normalize_origins(
+        std::iter::once(public_url.clone()).chain(args.extension_origins),
+    )?;
 
     let cluster_secret = if let Some(ref path) = args.cluster_secret_file {
         match fs::read_to_string(path).await {
@@ -639,6 +646,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build()?,
         node_name,
         public_url,
+        extension_origins,
         share_url,
         shares,
         peers: Arc::new(RwLock::new(peer_map)),
@@ -834,6 +842,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/assets/pairing.js", get(extension::pairing_javascript))
         .route("/assets/extension.css", get(extension::stylesheet))
         .route("/api/extension/pair", post(extension::pair))
+        .route("/api/extension/config", get(extension::config))
         .route("/api/extension/connect", get(extension::connect))
         .route("/api/extension/nodes", get(extension::list))
         .route("/api/extension/nodes/{id}", delete(extension::revoke))

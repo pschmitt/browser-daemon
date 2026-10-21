@@ -28,7 +28,7 @@
   <div class="card server">
     <span class="server-dot" aria-hidden="true"></span>
     <span class="server-text"><small>Connected to</small><b id="serverHost"></b></span>
-    <a id="dashboard" class="button" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>Open Dashboard</a>
+    <a id="dashboard" class="button dashboard-button" aria-label="Open dashboard" title="Open dashboard" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h6v6"/><path d="m19 5-9 9"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg></a>
   </div>
   <details id="tabList" class="tab-card">
     <summary><span class="tab-summary-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><span>Tabs <span id="sharedCount" class="count"></span></span></span><button id="shareAllTabs" type="button" class="link">Share all</button></summary>
@@ -77,13 +77,18 @@
     <h3>Firefox companion</h3>
     <p class="muted small">Trusted mouse and keyboard input. Install with <code>python3 browser/install.py</code>, then start Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222</code>.</p>
     <div class="companion-actions">
-      <button id="native" type="button">Enable companion</button>
+      <button id="native" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V3m6 4V3M7 7h10v4a5 5 0 0 1-10 0V7Z"/><path d="M12 16v5"/></svg><span id="nativeLabel">Enable companion</span></button>
       <span id="nativeStatus" class="pill" role="status" aria-live="polite"></span>
     </div>
   </section>
   <section>
     <h3>Allowed daemons</h3>
     <p id="allowlistStatus" class="muted small"></p>
+    <label class="field">Origin source<select id="allowlistMode"><option value="auto">Automatic</option><option value="custom">Custom</option></select></label>
+    <form id="discoveryConfig" class="daemon-origin-form">
+      <label class="field">Discovery daemon<input id="discoveryOriginInput" type="url" placeholder="https://browser.example.org" spellcheck="false"></label>
+      <button type="submit" class="primary wide">Use automatic list</button>
+    </form>
     <div id="daemonAllowlist" class="daemon-origins" role="list" aria-label="Allowed daemon origins"></div>
     <form id="addDaemonOrigin" class="daemon-origin-form">
       <label class="field">Daemon origin<input id="daemonOriginInput" type="url" placeholder="https://browser.example.org" spellcheck="false"></label>

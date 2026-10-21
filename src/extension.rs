@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::Json;
 use futures_util::SinkExt;
@@ -25,9 +25,71 @@ const MAX_NODES: usize = 32;
 const MAX_TABS: usize = 128;
 const MAX_PENDING: usize = 32;
 const MAX_FRAME: usize = 8 * 1024 * 1024;
+const MAX_FAVICON_BYTES: usize = 128 * 1024;
+const MAX_FAVICON_DATA_URL: usize = 176 * 1024;
+const MAX_FAVICON_BATCH: usize = 4;
 // Live views send every input event; the socket applies backpressure beyond this.
 const MAX_OUTBOUND: usize = 256;
 const MAX_CHANNELS: usize = 16;
+
+pub fn normalize_origins(
+    origins: impl IntoIterator<Item = String>,
+) -> Result<Vec<String>, std::io::Error> {
+    let mut normalized = Vec::new();
+    for value in origins {
+        let url = url::Url::parse(&value)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+        let loopback = matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "::1" | "[::1]")
+        );
+        if (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || !matches!(url.path(), "" | "/")
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "extension origins must be HTTPS origins (HTTP is allowed on loopback)",
+            ));
+        }
+        let origin = url.origin().ascii_serialization();
+        if !normalized.contains(&origin) {
+            normalized.push(origin);
+        }
+    }
+    Ok(normalized)
+}
+
+pub async fn config(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Response, StatusCode> {
+    let mut origins = state.extension_origins.clone();
+    origins.extend(state.peers.read().await.values().cloned());
+    let mut origins = normalize_origins(origins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    origins.sort();
+    let mut response = Json(json!({"origins": origins})).into_response();
+    if let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .filter(|origin| extension_origin(origin))
+    {
+        response.headers_mut().insert(
+            header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            HeaderValue::from_str(origin).expect("validated extension origin"),
+        );
+        response
+            .headers_mut()
+            .insert(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
 
 pub struct Broker {
     pairs: Mutex<HashMap<[u8; 32], Pair>>,
@@ -225,7 +287,7 @@ pub struct Tab {
     pub id: u32,
     pub title: String,
     pub url: String,
-    /// The tab's browser-reported favicon URL, proxied by the daemon for viewers.
+    /// The browser-reported favicon, embedded separately or proxied by the daemon.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub favicon: String,
     pub control: bool,
@@ -241,6 +303,13 @@ pub struct Tab {
     /// In front of its window: what the owner sees, and what a recording shows.
     #[serde(default)]
     pub active: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FaviconUpdate {
+    id: u32,
+    favicon: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -635,6 +704,34 @@ fn web_url(s: &str) -> bool {
     })
 }
 
+fn valid_favicon(value: &str) -> bool {
+    if web_url(value) {
+        return value.len() <= 2048;
+    }
+    if value.len() > MAX_FAVICON_DATA_URL {
+        return false;
+    }
+    let Some((header, payload)) = value.split_once(',') else {
+        return false;
+    };
+    let Some(mime) = header
+        .strip_prefix("data:")
+        .and_then(|header| header.strip_suffix(";base64"))
+    else {
+        return false;
+    };
+    if !matches!(
+        mime,
+        "image/png" | "image/jpeg" | "image/gif" | "image/x-icon" | "image/webp"
+    ) {
+        return false;
+    }
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .is_ok_and(|bytes| bytes.len() <= MAX_FAVICON_BYTES)
+}
+
 pub async fn command(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -934,7 +1031,7 @@ pub async fn connect(
         .max_frame_size(MAX_FRAME)
         .on_upgrade(move |mut ws| async move {
             let _permit = permit;
-            let _ = serve(&state.extensions, &origin, &mut ws).await;
+            let _ = serve(&state, &origin, &mut ws).await;
             let _ = ws.close().await;
         }))
 }
@@ -949,7 +1046,16 @@ async fn send(ws: &mut WebSocket, value: Value) -> Result<(), ()> {
     .map_err(|_| ())
 }
 
-async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result<(), ()> {
+async fn current_extension_origins(state: &AppState) -> Result<Vec<String>, ()> {
+    let mut origins = state.extension_origins.clone();
+    origins.extend(state.peers.read().await.values().cloned());
+    let mut origins = normalize_origins(origins).map_err(|_| ())?;
+    origins.sort();
+    Ok(origins)
+}
+
+async fn serve(state: &AppState, origin: &str, ws: &mut WebSocket) -> Result<(), ()> {
+    let broker = &state.extensions;
     // The code never appears in a URL, a cookie, or a log. No reconnect credential
     // is issued: losing the socket ends the grant, and pairing must be repeated.
     let Some(Ok(Message::Text(text))) = tokio::time::timeout(Duration::from_secs(5), ws.recv())
@@ -1094,9 +1200,10 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
     }
     let _registration = Registration(broker.clone(), id, node.clone());
     broker.touch(id);
+    let origins = current_extension_origins(state).await?;
     send(
         ws,
-        json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key}),
+        json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key, "origins": origins}),
     )
     .await?;
     let mut last_seen = Instant::now();
@@ -1119,10 +1226,13 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                         last_seen = Instant::now();
                         match value["type"].as_str() {
                             Some("forget") => { broker.forget(id)?; break; }
-                            Some("heartbeat") => send(ws, json!({"type": "heartbeat", "client_connected": node.client_connected()})).await?,
+                            Some("heartbeat") => {
+                                let origins = current_extension_origins(state).await?;
+                                send(ws, json!({"type": "heartbeat", "client_connected": node.client_connected(), "origins": origins})).await?;
+                            }
                             Some("tabs") => {
                                 let tabs: Vec<Tab> = serde_json::from_value(value["tabs"].clone()).map_err(|_| ())?;
-                                if tabs.len() > MAX_TABS || tabs.iter().any(|t| !page_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024 || t.favicon.len() > 2048 || (!t.favicon.is_empty() && !page_url(&t.favicon)))
+                                if tabs.len() > MAX_TABS || tabs.iter().any(|t| !page_url(&t.url) || t.url.len() > 8192 || t.title.len() > 1024 || (!t.favicon.is_empty() && !valid_favicon(&t.favicon)))
                                     || tabs.iter().map(|t| t.id).collect::<std::collections::HashSet<_>>().len() != tabs.len() { return Err(()); }
                                 let was_connected = node.client_connected();
                                 node.channels.lock().unwrap().retain(|_, c| tabs.iter().any(|t| t.id == c.tab));
@@ -1143,6 +1253,22 @@ async fn serve(broker: &Arc<Broker>, origin: &str, ws: &mut WebSocket) -> Result
                                 *node.public_grant.lock().unwrap() = grant;
                                 drop(info);
                                 node.bump();
+                            }
+                            Some("favicons") => {
+                                let favicons: Vec<FaviconUpdate> = serde_json::from_value(value["favicons"].clone()).map_err(|_| ())?;
+                                if favicons.len() > MAX_FAVICON_BATCH
+                                    || favicons.iter().any(|icon| !icon.favicon.starts_with("data:image/") || !valid_favicon(&icon.favicon))
+                                    || favicons.iter().map(|icon| icon.id).collect::<std::collections::HashSet<_>>().len() != favicons.len() { return Err(()); }
+                                let mut info = node.info.lock().unwrap();
+                                let mut changed = false;
+                                for icon in favicons {
+                                    if let Some(tab) = info.tabs.iter_mut().find(|tab| tab.id == icon.id) {
+                                        tab.favicon = icon.favicon;
+                                        changed = true;
+                                    }
+                                }
+                                drop(info);
+                                if changed { node.bump(); }
                             }
                             Some("cdp_result") => {
                                 let channel = value["channel"].as_str().and_then(|s| Uuid::parse_str(s).ok()).ok_or(())?;

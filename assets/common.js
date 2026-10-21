@@ -125,6 +125,7 @@ function faviconSrc(url, iconUrl = '') {
   let u;
   try { u = new URL(url, location.href); } catch { return ""; }
   if (iconUrl) {
+    if (iconUrl.length <= 176 * 1024 && /^data:image\/(?:png|jpeg|gif|x-icon|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(iconUrl)) return iconUrl;
     try {
       const icon = new URL(iconUrl);
       if (/^https?:$/.test(icon.protocol)) {

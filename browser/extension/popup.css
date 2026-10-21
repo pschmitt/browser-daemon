@@ -102,10 +102,13 @@ body.asking #advanced { display: none; }
 .server-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .server-text small { color: var(--muted); font-size: 12px; }
 .server-text b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.server .button { padding: 6px 12px; font-size: 13px; gap: 7px; }
-.server .button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
+.server .dashboard-button { width: 42px; height: 42px; padding: 8px; }
+.server .dashboard-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .tabs.locked .switch { opacity: .55; cursor: default; }
 .companion-actions { display: flex; align-items: center; gap: 8px; }
+.companion-actions button { gap: 8px; }
+.companion-actions button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#nativeStatus { margin-left: auto; }
 .daemon-origins { display: grid; gap: 6px; max-height: 184px; overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .daemon-origin { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
 .daemon-origin-icon { width: 30px; height: 30px; display: grid; place-items: center; flex: none; border-radius: 8px; color: var(--accent); background: var(--accent-soft); }

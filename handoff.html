@@ -3295,7 +3295,7 @@ async function loadTabs() {
     for (const x of all) knownTabs.add(x.id);
     tabsAll = all;
     // Redrawn only when something shown changed: this also runs on a timer.
-    const sig = JSON.stringify([target?.id, sharedBrowser?.follow, all.map((x) => [x.id, x.title, x.url, x.audible, x.index, x.pinned])]);
+    const sig = JSON.stringify([target?.id, sharedBrowser?.follow, all.map((x) => [x.id, x.title, x.url, x.favicon, x.audible, x.index, x.pinned])]);
     if (sig === tabsSig) return;
     tabsSig = sig;
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;

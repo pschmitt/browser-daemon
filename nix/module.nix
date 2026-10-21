@@ -198,6 +198,13 @@ in
       '';
     };
 
+    extensionOrigins = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "https://browser.example.org" ];
+      description = "Exact HTTPS origins advertised to browser extensions in automatic daemon discovery.";
+    };
+
     clusterSecret = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -574,6 +581,10 @@ in
               "--allowed-host"
               h
             ]) cfg.allowedHosts
+            ++ lib.concatMap (origin: [
+              "--extension-origin"
+              origin
+            ]) cfg.extensionOrigins
             ++ lib.optionals (cfg.clusterSecretFile != null) [
               "--cluster-secret-file"
               cfg.clusterSecretFile

@@ -1,6 +1,12 @@
 {
   "type": "object",
   "properties": {
+    "allowedDaemonOriginsMode": {
+      "title": "Daemon origin mode",
+      "description": "Discover daemon origins automatically from a trusted daemon, or use the explicit list.",
+      "type": "string",
+      "enum": ["auto", "custom"]
+    },
     "allowedDaemonOrigins": {
       "title": "Allowed browser daemon origins",
       "description": "Exact HTTPS origins this extension may pair or reconnect with; an empty list denies all daemons.",
@@ -9,6 +15,11 @@
       "items": {
         "type": "string"
       }
+    },
+    "daemonDiscoveryOrigin": {
+      "title": "Daemon discovery origin",
+      "description": "Trusted HTTPS daemon that supplies the automatic origin list.",
+      "type": "string"
     },
     "defaultName": {
       "title": "Default browser name",
