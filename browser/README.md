@@ -328,6 +328,12 @@ The flake exports `firefox-addon`, `chromium-addon` (with `extensionId`), and
 `browser-native-host`. Install the signed Firefox XPI through
 `programs.firefox.policies.ExtensionSettings` with a `file://` install URL; add
 the native host to Home Manager's `programs.firefox.nativeMessagingHosts`.
+For managed profiles, use `installation_mode = "force_installed"`. The Firefox
+manifest declares the node's native messaging, history, bookmark, and file
+transfer API permissions as required; the popup's feature switches still
+control when those APIs are used. Firefox keeps **Access local files on your
+computer** as a separate user-controlled permission, so enable it in Add-ons
+Manager if a workflow needs `file://` access.
 Chromium supports the CRX through `programs.chromium.extensions` with its ID,
 `crxPath` and package version, as in the rbw fork. Signing keys stay in the
 vault and GitHub repository secrets, outside Nix and the source tree.
