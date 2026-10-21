@@ -257,10 +257,55 @@ function publishSafely() { void publish().catch(() => stop('Could not update sha
 
 let published = [];
 let approvalPending = 0;
-// A red dot means a real client is using this browser. A "?" asks for a
-// decision: a dashboard waits for pairing approval.
+const connectionIcon = {bitmaps: null, timer: null, frame: 0};
+async function toolbarBitmaps() {
+  const icon = api.runtime.getManifest().action?.default_icon;
+  connectionIcon.bitmaps ||= Promise.all([16, 32, 48].map(async size => {
+    const path = typeof icon === 'string' ? icon : icon?.[size] || icon?.[32] || 'icon.png';
+    const image = await (await fetch(api.runtime.getURL(path))).blob();
+    return [size, await createImageBitmap(image)];
+  }));
+  return connectionIcon.bitmaps;
+}
+function connectionFrame(bitmap, size, state, phase) {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0, size, size);
+  const r = size * 0.3, cx = size - r - 0.5, cy = r + 0.5;
+  ctx.fillStyle = '#1e1e1e'; ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = Math.max(1, size / 20);
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  if (state === 'offline') {
+    ctx.strokeStyle = '#fb7185'; ctx.lineWidth = Math.max(1.5, size / 9); ctx.lineCap = 'round';
+    const mark = r * 0.42;
+    ctx.beginPath(); ctx.moveTo(cx - mark, cy - mark); ctx.lineTo(cx + mark, cy + mark);
+    ctx.moveTo(cx + mark, cy - mark); ctx.lineTo(cx - mark, cy + mark); ctx.stroke();
+  } else {
+    const pulse = (Math.sin(phase) + 1) / 2;
+    ctx.fillStyle = `rgba(225, 29, 72, ${0.76 + pulse * 0.24})`;
+    ctx.beginPath(); ctx.arc(cx, cy, r * (0.52 + pulse * 0.2), 0, Math.PI * 2); ctx.fill();
+  }
+  return ctx.getImageData(0, 0, size, size);
+}
+async function drawConnectionIcon(state) {
+  try {
+    const bitmaps = await toolbarBitmaps();
+    if (!registration && state !== 'offline') return;
+    if (registration && state === 'offline') return;
+    const phase = connectionIcon.frame++ * Math.PI / 6;
+    await api.action.setIcon({imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) =>
+      [size, connectionFrame(bitmap, size, state, phase)]))});
+  } catch { /* Cosmetic only. */ }
+}
+function stopConnectionPulse() {
+  if (connectionIcon.timer) clearInterval(connectionIcon.timer);
+  connectionIcon.timer = null;
+}
+// The top-right icon mark follows rbw's canvas-drawn toolbar badge. A "?"
+// remains the approval prompt when a dashboard is waiting to pair.
 async function badge() {
   if (approvalPending > Date.now() && !registration) {
+    stopConnectionPulse();
+    await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'});
     await api.action.setBadgeText({text: '?'});
     await api.action.setBadgeBackgroundColor({color: '#6d4aff'});
     await api.action.setBadgeTextColor({color: '#ffffff'});
@@ -268,10 +313,20 @@ async function badge() {
     return;
   }
   const connected = !!registration && clientConnected;
-  await api.action.setBadgeText({text: connected ? '●' : ''});
+  await api.action.setBadgeText({text: ''});
   await api.action.setBadgeBackgroundColor({color: [0, 0, 0, 0]});
   await api.action.setBadgeTextColor({color: '#e11d48'});
-  await api.action.setTitle({title: !registration ? 'Browser node: disconnected'
+  if (!registration) {
+    stopConnectionPulse();
+    await drawConnectionIcon('offline');
+  } else if (connected) {
+    await drawConnectionIcon('connected');
+    if (!connectionIcon.timer) connectionIcon.timer = setInterval(() => { void drawConnectionIcon('connected'); }, 500);
+  } else {
+    stopConnectionPulse();
+    await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'});
+  }
+  await api.action.setTitle({title: !registration ? 'Browser node: not connected to the daemon'
     : connected ? 'Browser node: connected — a client is using this browser'
       : 'Browser node: connected — waiting for a client'});
 }
