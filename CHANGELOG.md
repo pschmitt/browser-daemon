@@ -7,6 +7,8 @@
 ### Added
 
 * Daemon peers have a separate entry point from browser extension pairing.
+* The Nodes view can remove all offline daemon peers and disconnected browsers
+  in one confirmed cleanup action.
 
 ### Changed
 

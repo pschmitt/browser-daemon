@@ -2425,12 +2425,20 @@ function renderRecordings() {
     ? `<button class="btn sm" data-act="more-recordings">Show ${Math.min(REC_PAGE, list.length - recLimit)} more</button><span class="muted">${recLimit} of ${list.length} shown</span>` : '';
 }
 
+function offlineNodeTargets() {
+  return [
+    ...nodes.filter((n) => !n.isLocal && n.status !== 'online').map((node) => ({ kind: 'peer', node })),
+    ...extensionBrowserNodes.filter((n) => n.online === false).map((node) => ({ kind: 'browser', node })),
+  ];
+}
 function renderViewActions(recordings = listedRecordings()) {
   const actions = $('viewActions');
   actions.classList.toggle('recording-actions', view === 'recordings');
   if (view === 'nodes') {
+    const offlineCount = offlineNodeTargets().length;
     const html = `<button class="btn sm" data-act="add-node" title="Pair a browser extension">${icon('link', 'sm')}<span class="lbl">Add browser</span></button>
-      <button class="btn sm" data-act="add-peer" title="Join another daemon to this mesh">${icon('server', 'sm')}<span class="lbl">Add daemon</span></button>`;
+      <button class="btn sm" data-act="add-peer" title="Join another daemon to this mesh">${icon('server', 'sm')}<span class="lbl">Add daemon</span></button>
+      ${offlineCount ? `<button class="btn sm danger-ghost" data-act="remove-offline-nodes" aria-label="Remove ${offlineCount} offline nodes" title="Remove all ${offlineCount} offline or unreachable nodes">${icon('trash', 'sm')}<span class="lbl">Clean offline (${offlineCount})</span></button>` : ''}`;
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
@@ -2458,6 +2466,32 @@ function renderViewActions(recordings = listedRecordings()) {
     <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
     ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button>${selected.length > 1 ? `<button class="btn sm" data-act="merge-selected-recordings" title="Merge the selected recordings into one, in an order you pick">${icon('layers', 'sm')}<span class="lbl">Merge ${selected.length}</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
   if (actions.innerHTML !== html) actions.innerHTML = html;
+}
+
+async function removeOfflineNodes() {
+  let targets = offlineNodeTargets();
+  if (!targets.length) return;
+  const names = targets.map(({ node }) => node.name);
+  const ok = await ask({
+    title: `Remove ${plural(targets.length, 'offline node')}?`,
+    text: 'Unreachable daemon peers will be dropped from this mesh, and offline browsers will be forgotten with their remembered keys revoked. Configured daemon peers return after a restart.',
+    ok: 'Remove offline nodes',
+    danger: true,
+  });
+  if (!ok) return;
+  targets = offlineNodeTargets();
+  if (!targets.length) { toast('No offline nodes remain'); return; }
+  const progress = createProgressToast('remove-offline-nodes', 'Removing offline nodes', `Removing ${targets.length} node${targets.length === 1 ? '' : 's'}…`);
+  const results = await Promise.allSettled(targets.map(({ kind, node }) => kind === 'peer'
+    ? request('DELETE', `/api/peers/${enc(node.name)}`)
+    : request('DELETE', extensionApi(node))));
+  const failed = results.flatMap((result, index) => result.status === 'rejected'
+    ? [`${names[index]}: ${result.reason?.message || result.reason}`] : []);
+  const removed = targets.length - failed.length;
+  if (failed.length) progress.error(`Removed ${removed} of ${targets.length} offline nodes`, failed.join('; '));
+  else progress.done(`${plural(removed, 'offline node')} removed`, '');
+  refreshData();
+  window.dispatchEvent(new Event('browser-daemon-refresh-extensions'));
 }
 
 const recordingTitle = (r) => (r.title !== 'about:blank' && r.title) || shortUrl(r.final_url || r.initial_url || '') || (r.profile ? `Profile ${r.profile}` : 'Untitled session');
@@ -2538,6 +2572,7 @@ const ACT = {
   'new-profile': () => openNewProfile(),
   'add-node': () => openModal('addNodeModal'),
   'add-peer': () => openModal('addPeerModal'),
+  'remove-offline-nodes': () => removeOfflineNodes(),
   'vacuum': () => vacuum(),
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
