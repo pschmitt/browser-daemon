@@ -614,6 +614,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .nodes-list { display: flex; flex-direction: column; gap: 10px; }
 .add-node { margin-top: 22px; }
 .add-node h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
+#addNodeModal .seg { margin-bottom: 12px; }
+#addNodeModal [hidden] { display: none; }
 .add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .add-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 12px; background: var(--surface); border: 1px dashed var(--line-strong); }
 .add-card .add-head { display: flex; align-items: center; gap: 12px; }
@@ -966,9 +968,13 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 <!-- New session -->
 <dialog class="modal" id="addNodeModal" aria-labelledby="addNodeTitle">
   <div class="sheet">
-    <div class="sheet-head"><h2 id="addNodeTitle">Add a browser</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="addNodeTitle">Add a node</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
-      <div class="add-grid">
+      <div class="seg" role="tablist" aria-label="Kind of node">
+        <button type="button" role="tab" id="addTabBrowser" class="on" aria-selected="true" aria-controls="addPaneBrowser" data-add-tab="browser"><svg class="i sm"><use href="#i-globe"/></svg> Browser</button>
+        <button type="button" role="tab" id="addTabDaemon" aria-selected="false" aria-controls="addPeerForm" data-add-tab="daemon"><svg class="i sm"><use href="#i-server"/></svg> Daemon</button>
+      </div>
+      <div class="add-grid" id="addPaneBrowser" role="tabpanel" aria-labelledby="addTabBrowser">
         <div class="add-card">
           <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-globe"/></svg></span>
             <div><h3>This browser</h3><p>Share your own tabs through the extension.</p></div></div>
@@ -977,15 +983,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
           <p id="pairBrowserStatus" class="add-status" role="status"></p>
         </div>
       </div>
-    </div>
-  </div>
-</dialog>
-
-<dialog class="modal" id="addPeerModal" aria-labelledby="addPeerTitle">
-  <div class="sheet">
-    <div class="sheet-head"><h2 id="addPeerTitle">Add daemon peer</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
-    <div class="sheet-body">
-      <form id="addPeerForm" class="add-card">
+      <form id="addPeerForm" class="add-card" role="tabpanel" aria-labelledby="addTabDaemon" hidden>
         <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-server"/></svg></span>
           <div><h3>Another daemon</h3><p>Connect this daemon to another browser-daemon host's mesh.</p></div></div>
         <div class="add-row"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.host.example" aria-label="Daemon URL"><button class="btn primary" type="submit"><svg class="i sm"><use href="#i-plus"/></svg>Add daemon</button></div>
@@ -2446,9 +2444,8 @@ function renderViewActions(recordings = listedRecordings()) {
   actions.classList.toggle('recording-actions', view === 'recordings');
   if (view === 'nodes') {
     const offlineCount = offlineNodeTargets().length;
-    const html = `<button class="btn sm" data-act="add-node" title="Pair a browser extension">${icon('link', 'sm')}<span class="lbl">Add browser</span></button>
-      <button class="btn sm" data-act="add-peer" title="Join another daemon to this mesh">${icon('server', 'sm')}<span class="lbl">Add daemon</span></button>
-      ${offlineCount ? `<button class="btn sm danger-ghost" data-act="remove-offline-nodes" aria-label="Remove ${offlineCount} offline nodes" title="Remove all ${offlineCount} offline or unreachable nodes">${icon('trash', 'sm')}<span class="lbl">Clean offline (${offlineCount})</span></button>` : ''}`;
+    const html = `<button class="btn sm" data-act="add-node" title="Pair a browser or join another daemon">${icon('plus', 'sm')}<span class="lbl">Add node</span></button>
+      ${offlineCount ? `<button class="btn sm danger-ghost" data-act="remove-offline-nodes" aria-label="Remove ${offlineCount} offline nodes" title="Remove all ${offlineCount} offline or unreachable nodes">${icon('trash', 'sm')}<span class="lbl">Prune nodes</span></button>` : ''}`;
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
@@ -2580,8 +2577,7 @@ const ACT = {
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
-  'add-node': () => openModal('addNodeModal'),
-  'add-peer': () => openModal('addPeerModal'),
+  'add-node': () => { showAddTab('browser'); openModal('addNodeModal'); },
   'remove-offline-nodes': () => removeOfflineNodes(),
   'vacuum': () => vacuum(),
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
@@ -4362,11 +4358,20 @@ $('settingsBody').addEventListener('click', async (e) => {
     if (ok) { await act(`Removing ${name}`, () => request('DELETE', `/api/peers/${enc(name)}`), `${name} removed`); closeModal('settingsModal'); renderNodes(); }
   }
 });
+function showAddTab(tab) {
+  for (const b of document.querySelectorAll('[data-add-tab]')) {
+    const on = b.dataset.addTab === tab;
+    b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on));
+  }
+  $('addPaneBrowser').hidden = tab !== 'browser';
+  $('addPeerForm').hidden = tab !== 'daemon';
+}
+for (const b of document.querySelectorAll('[data-add-tab]')) b.addEventListener('click', () => showAddTab(b.dataset.addTab));
 $('addPeerForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const url = $('peerUrl').value.trim();
   const r = await act('Adding peer', () => request('POST', '/api/peers', { url }), 'Peer added');
-  if (r !== undefined) { $('peerUrl').value = ''; closeModal('addPeerModal'); setTimeout(renderNodes, 600); }
+  if (r !== undefined) { $('peerUrl').value = ''; closeModal('addNodeModal'); setTimeout(renderNodes, 600); }
 });
 
 async function openConnect() {
