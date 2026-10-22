@@ -1613,7 +1613,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
   const timeout = setTimeout(() => { if (socket === connection && !registration) void stop('Pairing timed out', true); }, 10000);
   connection.onopen = async () => {
     try { await requireDaemon(server); }
-    catch { if (socket === connection) await stop('Daemon is no longer on the allowlist'); return; }
+    catch { if (socket === connection) await stop('Daemon is no longer on the allowlist', true); return; }
     if (socket !== connection) return;
     status = 'Socket connected — checking pairing code';
     record(status);
@@ -1697,8 +1697,11 @@ async function restoreRemembered(force = false) {
       record(status); return;
     }
     if (!(await api.permissions.contains({origins: [permissionPattern(saved.server)]}))) {
-      status = 'Remembered browser needs daemon site permission — open setup';
-      record(status); return;
+      if (status !== 'Remembered browser needs daemon site permission — open setup') {
+        status = 'Remembered browser needs daemon site permission — open setup';
+        record(status);
+      }
+      return;
     }
     if (force) await api.storage.local.set({rememberedNode: {...saved, paused: false}});
     await connect({server: saved.server, key: saved.key, name: saved.name});
@@ -2003,9 +2006,12 @@ api.runtime.onUpdateAvailable?.addListener(() => {
 
 void historyReady.then(installDashboardBridge).catch(() => record('Dashboard integration unavailable — open extension setup to grant site access'));
 
+// Safety net for a remembered browser: whatever ended the connection (a daemon
+// restart, a failed attempt that scheduled nothing), try again every minute.
 api.alarms.onAlarm.addListener(alarm => {
-  if (alarm.name === 'node-reconnect') void historyReady.then(() => restoreRemembered());
+  if (alarm.name === 'node-reconnect' || alarm.name === 'node-keepalive') void historyReady.then(() => restoreRemembered());
 });
+void api.alarms.create('node-keepalive', {delayInMinutes: 1, periodInMinutes: 1});
 void api.alarms.clear('daemon-policy-refresh');
 void historyReady.then(() => restoreRemembered());
 

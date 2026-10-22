@@ -47,6 +47,20 @@
   void refreshBrowsers(); void identify();
   setInterval(refreshBrowsers, 5000);
   setInterval(identify, 15000);
+  // Close the sheet once the extension reports it is registered, i.e. the popup was approved.
+  async function closeWhenConnected() {
+    const dialog = button.closest('dialog');
+    for (let i = 0; i < 120 && dialog?.open; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      const browser = await extension('discover').catch(() => null);
+      if (browser?.connected) {
+        dialog.close();
+        status.textContent = '';
+        window.dispatchEvent(new Event('browser-daemon-refresh-extensions'));
+        return;
+      }
+    }
+  }
   button.addEventListener('click', async () => {
     button.disabled = true;
     status.textContent = 'Looking for the extension…';
@@ -59,14 +73,14 @@
       }
       const response = await fetch('/api/extension/pair', {
         method: 'POST', credentials: 'same-origin', cache: 'no-store',
-        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({origin: browser.origin, remember: document.getElementById('rememberBrowser')?.checked === true}),
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({origin: browser.origin, remember: true}),
       });
       if (!response.ok) throw new Error(`Pairing failed (${response.status}). Sign in to this dashboard and try again.`);
       const pair = await response.json();
-      const control = document.getElementById('controlBrowser')?.checked !== false;
-      const opened = await extension('approve', {code: pair.code, remember: pair.remember, control});
+      const opened = await extension('approve', {code: pair.code, remember: pair.remember, control: true});
       status.textContent = opened.where === 'popup' ? 'Answer in the extension popup (top right of this window).'
         : 'Answer in the extension tab that just opened.';
+      void closeWhenConnected();
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   });
