@@ -628,8 +628,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .add-node h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
 #askModal .ask-extra { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 40vh; overflow-y: auto; }
 #askModal .ask-extra .node-card { padding: 10px 12px; }
-#askModal .ask-extra:has(.ask-sessions) { max-height: 55vh; }
-.ask-sessions { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+#pruneGrid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 12px; max-height: 55vh; overflow-y: auto; }
 .ask-agent { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center; padding: 12px 14px; border-radius: 12px; background: var(--accent-soft); border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--line)); }
 .ask-agent-ic { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--accent); }
 .ask-agent-ic .i { width: 22px; height: 22px; }
@@ -1240,6 +1239,15 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </form>
 </dialog>
 
+<!-- Prune: the sessions it stops, as live cards (their actions work, and confirms stack on top) -->
+<dialog class="modal" id="pruneModal" aria-labelledby="pruneTitle">
+  <form class="sheet" id="pruneForm" style="max-width:760px">
+    <div class="sheet-head"><h2 id="pruneTitle"></h2></div>
+    <div class="sheet-body"><div id="pruneText" class="muted" style="font-size:13.5px"></div><div id="pruneGrid" class="session-grid"></div></div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn danger" id="pruneOk"><svg class="i"><use href="#i-trash"/></svg>Prune sessions</button></div>
+  </form>
+</dialog>
+
 <!-- Public link of a session or recording: makes it and manages it -->
 <dialog class="modal" id="shareModal" aria-labelledby="shareTitle">
   <div class="sheet share-sheet" style="max-width:480px">
@@ -1831,9 +1839,8 @@ if (window.visualViewport) {
 
 // Promise-based replacement for confirm()/prompt().
 let askResolve = null;
-function ask({ title, text = '', html = '', input = null, ok = 'OK', okIcon = '', danger = false, placeholder = '', wide = false }) {
+function ask({ title, text = '', html = '', input = null, ok = 'OK', okIcon = '', danger = false, placeholder = '' }) {
   $('askTitle').textContent = title;
-  $('askForm').style.maxWidth = wide ? '760px' : '420px';
   $('askExtra').innerHTML = html;
   $('askExtra').hidden = !html;
   $('askText').textContent = text;
@@ -2231,13 +2238,14 @@ $('sessSearch').addEventListener('input', (e) => { sessQuery = e.target.value; r
 const sessHaystack = (s) => [sessName(s), s.profile, nodeLabel(s.node_name), s.engine, s.id,
   ...(s.clients || []).flatMap((c) => [c.agent_name, c.topic, c.conversation, c.cwd, c.machine, c.from]),
   ...pagesOf(s).flatMap((t) => [t.title, t.url]), s.notes?.last].filter(Boolean).join(' ').toLowerCase();
+// The newest session first; tabs shared from a browser have no age and go last.
+const newestFirst = (a, b) => (!!a._extension - !!b._extension) || a.uptime_seconds - b.uptime_seconds;
 function renderSessions() {
+  renderPrune();
   const grid = $('sessionGrid');
   const all = dashboardSessions().filter(inFilter);
   const words = sessQuery.toLowerCase().split(/\s+/).filter(Boolean);
-  // Sessions an agent drives first (that is usually the one you are looking for), then the newest.
-  const list = all.filter((s) => (!agentsOnly || driverOf(s)) && words.every((w) => sessHaystack(s).includes(w)))
-    .sort((a, b) => (!!driverOf(b) - !!driverOf(a)) || a.uptime_seconds - b.uptime_seconds);
+  const list = all.filter((s) => (!agentsOnly || driverOf(s)) && words.every((w) => sessHaystack(s).includes(w))).sort(newestFirst);
   const stale = words.length || agentsOnly ? [] : staleSessions().filter(inFilter);
   $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery;
   $('agentsOnlyBtn').setAttribute('aria-pressed', String(agentsOnly));
@@ -2548,7 +2556,7 @@ function renderViewActions(recordings = listedRecordings()) {
   }
   if (view === 'sessions') {
     const n = ov ? ov.sessions.filter(inFilter).length : 0;
-    const html = n ? `<button class="btn sm danger-ghost keep" data-act="stop-all" title="Stop every session${filter === 'all' ? '' : ` on ${esc(filter)}`}">${icon('power', 'sm')}<span class="lbl">Prune sessions</span></button>` : '';
+    const html = n ? `<button class="btn sm danger-ghost keep" data-act="stop-all" title="Stop every session${filter === 'all' ? '' : ` on ${esc(filter)}`}">${icon('trash', 'sm')}<span class="lbl">Prune sessions</span></button>` : '';
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
@@ -3219,20 +3227,32 @@ async function openBrowserTab(browser) {
 }
 
 // Every session in view (all nodes, or the one the Nodes tab filters on).
-async function stopAllSessions() {
-  const list = ov.sessions.filter(inFilter);
-  if (!list.length) return;
+// The dialog follows the data while it is open: a session stopped from its card leaves it.
+const pruneList = () => (ov ? ov.sessions.filter(inFilter).sort(newestFirst) : []);
+function stopAllSessions() {
+  if (!pruneList().length) return;
+  openModal('pruneModal');
+  renderPrune();
+  setTimeout(() => $('pruneOk').focus(), 30);
+}
+function renderPrune() {
+  if (!$('pruneModal').open) return;
+  const list = pruneList();
+  if (!list.length) { closeModal('pruneModal'); return; }
   const where = filter === 'all' ? '' : ` on ${filter}`;
   const driven = list.filter((s) => driverOf(s));
-  const asked = ask({
-    html: `<div class="session-grid ask-sessions" inert>${list.map(sessionCard).join('')}</div>`, wide: true,
-    title: `Prune ${plural(list.length, 'session')}${where}?`,
-    text: `Every browser session${where} is closed, with whatever is open in it. Profiles stay on disk and recordings are saved.`
-      + (driven.length ? ` ${driven.length} of them ${driven.length === 1 ? 'is' : 'are'} being driven by an agent: ${driven.map((s) => `${sessName(s)} (${driverOf(s)})`).join(', ')}.` : ''),
-    ok: 'Prune sessions', danger: true,
-  });
-  $('askExtra').querySelectorAll('.scard').forEach((el, i) => fillSessionCard(el, list[i]));
-  if (!(await asked)) return;
+  $('pruneTitle').textContent = `Prune ${plural(list.length, 'session')}${where}?`;
+  $('pruneText').textContent = `Every browser session${where} is closed, with whatever is open in it. Profiles stay on disk and recordings are saved.`
+    + (driven.length ? ` ${driven.length} of them ${driven.length === 1 ? 'is' : 'are'} being driven by an agent: ${driven.map((s) => `${sessName(s)} (${driverOf(s)})`).join(', ')}.` : '');
+  reconcile($('pruneGrid'), list, keyOf.session, sessionCard, fillSessionCard);
+}
+$('pruneForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const list = pruneList();
+  closeModal('pruneModal');
+  if (list.length) stopSessions(list);
+});
+function stopSessions(list) {
   act('Stopping sessions', async () => {
     const results = await Promise.allSettled(list.map((s) => request('DELETE', api(s.node_name, `/sessions/${enc(s.id)}`))));
     const failed = results.filter((r) => r.status === 'rejected');
