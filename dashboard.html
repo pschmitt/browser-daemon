@@ -614,6 +614,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .nodes-list { display: flex; flex-direction: column; gap: 10px; }
 .add-node { margin-top: 22px; }
 .add-node h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
+#askModal .ask-extra { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 40vh; overflow-y: auto; }
+#askModal .ask-extra .node-card { padding: 10px 12px; }
 #addNodeModal .seg { margin-bottom: 12px; }
 #addNodeModal [hidden] { display: none; }
 .add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
@@ -1179,7 +1181,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 <dialog class="modal" id="askModal" aria-labelledby="askTitle">
   <form class="sheet" id="askForm" style="max-width:420px">
     <div class="sheet-head"><h2 id="askTitle"></h2></div>
-    <div class="sheet-body"><div id="askText" class="muted" style="font-size:13.5px"></div><input class="input" id="askInput" autocomplete="off" spellcheck="false"></div>
+    <div class="sheet-body"><div id="askText" class="muted" style="font-size:13.5px"></div><div id="askExtra" class="ask-extra" hidden></div><input class="input" id="askInput" autocomplete="off" spellcheck="false"></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="askOk">OK</button></div>
   </form>
 </dialog>
@@ -1761,8 +1763,10 @@ if (window.visualViewport) {
 
 // Promise-based replacement for confirm()/prompt().
 let askResolve = null;
-function ask({ title, text = '', input = null, ok = 'OK', danger = false, placeholder = '' }) {
+function ask({ title, text = '', html = '', input = null, ok = 'OK', danger = false, placeholder = '' }) {
   $('askTitle').textContent = title;
+  $('askExtra').innerHTML = html;
+  $('askExtra').hidden = !html;
   $('askText').textContent = text;
   $('askText').hidden = !text;
   const inp = $('askInput');
@@ -2478,7 +2482,16 @@ function renderViewActions(recordings = listedRecordings()) {
 async function removeOfflineNodes() {
   let targets = offlineNodeTargets();
   if (!targets.length) return;
+  const card = ({ kind, node }) => {
+    const key = kind === 'peer' ? node.name : extensionNodeKey(node);
+    const sub = kind === 'peer' ? `${node.url || 'Daemon'} · unreachable`
+      : `${node.browser === 'firefox' ? 'Firefox' : 'Chromium'} · via ${node.daemon || localName()} · offline`;
+    return `<div class="node-card" style="--node:${nodeColor(key)}"><div class="node-head">
+      <div class="avatar">${icon(kind === 'peer' ? 'server' : node.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
+      <div class="t"><b>${esc(node.name)}</b><span>${esc(sub)}</span></div></div></div>`;
+  };
   const ok = await ask({
+    html: targets.map(card).join(''),
     title: `Remove ${plural(targets.length, 'offline node')}?`,
     text: 'Unreachable daemon peers will be dropped from this mesh, and offline browsers will be forgotten with their remembered keys revoked. Configured daemon peers return after a restart.',
     ok: 'Remove offline nodes',
