@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Browser Daemon</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-<link rel="alternate icon" type="image/x-icon" href="/favicon.ico">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#0b0d12" data-auto="#0b0d12" media="(prefers-color-scheme: dark)">
@@ -611,6 +610,10 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .endpoint { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); }
 .endpoint .lbl { font-size: 12px; font-weight: 700; color: var(--muted); width: 110px; flex: none; }
 .endpoint code { flex: 1; min-width: 0; font: 12px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.about-section { display: flex; flex-direction: column; gap: 10px; }
+.about-section h3 { margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+#endpointsList { display: flex; flex-direction: column; gap: 8px; }
+.about-links { display: flex; flex-wrap: wrap; gap: 8px; }
 .nodes-list { display: flex; flex-direction: column; gap: 10px; }
 .add-node { margin-top: 22px; }
 .add-node h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
@@ -863,6 +866,8 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-takeover" viewBox="0 0 24 24"><path d="M9 9l5 12 1.8-5.2L21 14z"/><path d="M7.2 2.2 8 5.1M5.1 8 2.2 7.2M14 4.1 12 6.2M6.2 12l-2.1 2"/></symbol>
   <symbol id="i-handoff" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></symbol>
   <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M7 17 17 7M8 7h9v9"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.56.1.76-.24.76-.54v-2.08c-3.1.67-3.76-1.32-3.76-1.32-.51-1.29-1.24-1.63-1.24-1.63-1.01-.69.08-.68.08-.68 1.12.08 1.71 1.15 1.71 1.15.99 1.7 2.6 1.21 3.23.93.1-.72.39-1.21.71-1.49-2.47-.28-5.07-1.22-5.07-5.48 0-1.21.43-2.2 1.15-2.97-.12-.28-.5-1.41.11-2.94 0 0 .94-.3 3.05 1.14a10.58 10.58 0 0 1 5.55 0c2.11-1.44 3.05-1.14 3.05-1.14.61 1.53.23 2.66.11 2.94.72.77 1.15 1.76 1.15 2.97 0 4.27-2.6 5.2-5.08 5.47.4.35.76 1.02.76 2.06v3.07c0 .3.2.65.77.54A11.1 11.1 0 0 0 12 .9z"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8l1.1 1.1L12 21l7.8-7.5 1.1-1.1a5.5 5.5 0 0 0-.1-7.8z"/></symbol>
   <symbol id="i-rec" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4.5A1.5 1.5 0 0 1 9.5 3h5A1.5 1.5 0 0 1 16 4.5V6m2.5 0-.8 13.1A2 2 0 0 1 15.7 21H8.3a2 2 0 0 1-2-1.9L5.5 6"/></symbol>
@@ -1125,22 +1130,17 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </dialog>
 
 <!-- Nodes -->
-<!-- Connect / API -->
-<dialog class="modal" id="connectModal" aria-label="Connect and API">
-  <div class="sheet wide">
-    <div class="sheet-head"><h2>Connect &amp; API</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
-    <div class="sheet-body" id="endpointsList"></div>
-  </div>
-</dialog>
-
 <!-- About -->
 <dialog class="modal" id="aboutModal" aria-labelledby="aboutTitle">
-  <div class="sheet">
+  <div class="sheet wide">
     <div class="sheet-head"><h2 id="aboutTitle">About Browser Daemon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
-      <p>Run browser sessions for automation and take over whenever you need to.</p>
-      <dl class="kv" id="aboutNodes"><dt>Version</dt><dd>Unavailable</dd></dl>
-      <a class="btn" href="https://github.com/pschmitt/browser-daemon" target="_blank" rel="noopener noreferrer"><svg class="i"><use href="#i-arrow"/></svg>Source code</a>
+      <div class="about-section"><h3>Nodes</h3><dl class="kv" id="aboutNodes"><dt>Version</dt><dd>Unavailable</dd></dl></div>
+      <div class="about-section"><h3>Connect &amp; API</h3><div id="endpointsList"></div></div>
+      <div class="about-links">
+        <a class="btn" href="https://github.com/pschmitt/browser-daemon" target="_blank" rel="noopener noreferrer"><svg class="i fill"><use href="#i-github"/></svg>Source code</a>
+        <a class="btn" href="https://github.com/sponsors/pschmitt" target="_blank" rel="noopener noreferrer"><svg class="i"><use href="#i-heart"/></svg>Sponsor</a>
+      </div>
     </div>
     <div class="sheet-foot"><button type="button" class="btn primary" data-close>Close</button></div>
   </div>
@@ -2004,7 +2004,7 @@ let view = 'sessions';
 const selectedRecordings = new Set();
 
 // Tab icon with a badge counting the running sessions, drawn over /favicon.svg.
-const favLinks = [...document.querySelectorAll('link[rel="icon"]')].map((l) => ({ l, href: l.href, type: l.type, sizes: l.getAttribute('sizes') }));
+const favLinks = [...document.querySelectorAll('link[rel~="icon"]')].map((l) => ({ l, href: l.href, type: l.type, sizes: l.getAttribute('sizes') }));
 let favBase = null, favBaseLoading = false, favShown = null;
 function updateFavicon(count) {
   if (count === favShown) return;
@@ -2596,20 +2596,16 @@ const ACT = {
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
   'app-menu': (el) => openMenu(el, [
-    { icon: 'plug', label: 'Connect & API', run: openConnect },
     { icon: 'globe', label: 'Public links…', meta: `${publicItems().length || ''}`, run: openPublicLinks },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
     { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], run: () => openMenu(el, [
       { label: 'Theme' },
       ...Object.entries(THEMES).map(([id, name]) => ({ label: name, on: id === theme(), run: () => setTheme(id) })),
     ]) },
-    { icon: 'globe', label: 'Search engine', meta: searchEngine().name, run: () => openMenu(el, [
-      { label: 'Search engine' },
-      ...Object.entries(SEARCH_ENGINES).map(([id, e]) => ({ label: e.name, on: id === searchEngine().id, run: () => setSearchEngine(id) })),
-    ]) },
     !isStandalone && { icon: 'install', label: 'Install app', run: triggerPwaInstall },
     { icon: 'info-c', label: 'About', run: () => {
       renderAbout();
+      renderConnect();
       openModal('aboutModal');
     } },
   ]),
@@ -4387,7 +4383,7 @@ $('addPeerForm').addEventListener('submit', async (e) => {
   if (r !== undefined) { $('peerUrl').value = ''; closeModal('addNodeModal'); setTimeout(renderNodes, 600); }
 });
 
-async function openConnect() {
+async function renderConnect() {
   const ws = location.origin.replace(/^http/, 'ws');
   // Tools that cannot send the cookie take a token in the URL (valid for 30 days).
   let token = null;
@@ -4405,7 +4401,6 @@ async function openConnect() {
   ];
   $('endpointsList').innerHTML = rows.map(([k, v]) => `<div class="endpoint"><span class="lbl">${esc(k)}</span><code title="${esc(v)}">${esc(v)}</code><button class="btn ghost sm" data-copy="${esc(v)}">${icon('copy', 'sm')}Copy</button></div>`).join('')
     + (token ? '<span class="hint">The auth token in the addresses is yours for 30 days: keep them private. The API calls take the cluster secret or that token as a bearer token.</span>' : '');
-  openModal('connectModal');
 }
 $('endpointsList').addEventListener('click', (e) => {
   const b = e.target.closest('[data-copy]');
