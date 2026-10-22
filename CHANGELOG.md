@@ -17,6 +17,8 @@
   allowed" / "View only" is an icon with a tooltip.
 * A browser connected through the extension is labelled "Real browser" instead of
   "Shared browser".
+* The session menu is shorter: auto-stop and proxy moved into a "Settings…"
+  dialog, and "New tab…" is gone.
 
 ## [0.3.27] - 2026-10-22
 
