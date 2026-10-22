@@ -9,6 +9,12 @@
   strip with a capacity bar under the sessions, and uptime drops the seconds
   once a node is a minute old. The per-card "Filter" buttons are gone.
 * The session count badge on the tab icon is red instead of green.
+* Taking over a session an agent is driving shows who: the agent, its topic,
+  machine, project and how long it has been connected. The take-over icon is
+  used on every take-over button, toasts included.
+* Public sessions stand out with a full border, glow and top bar. The clock,
+  shield and control indicators sit next to the session name, and "Control
+  allowed" / "View only" is an icon with a tooltip.
 
 ## [0.3.27] - 2026-10-22
 

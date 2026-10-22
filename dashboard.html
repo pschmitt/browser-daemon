@@ -150,7 +150,8 @@ main { max-width: 1240px; margin: 0 auto; padding: 22px max(20px, env(safe-area-
 .chip.public, .fact.public { background: color-mix(in oklab, var(--public) 16%, transparent); color: var(--public); gap: 4px; }
 .chip.public { cursor: pointer; border: 0; font: inherit; font-size: 11.5px; font-weight: 700; }
 .chip.public .i { width: 12px; height: 12px; }
-.scard.public { box-shadow: inset 3px 0 0 var(--public); }
+.scard.public { position: relative; border-color: color-mix(in oklab, var(--public) 70%, var(--line)); background-image: linear-gradient(to bottom, transparent 35%, color-mix(in oklab, var(--public) 11%, transparent)); box-shadow: 0 0 0 1px color-mix(in oklab, var(--public) 40%, transparent), 0 10px 30px -10px color-mix(in oklab, var(--public) 55%, transparent); }
+.scard.public::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--public); pointer-events: none; z-index: 3; }
 .public-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; padding: 8px 8px 8px 13px; border-radius: var(--radius-sm); background: color-mix(in oklab, var(--public) 12%, transparent); color: var(--public); border: 1px solid color-mix(in oklab, var(--public) 40%, transparent); font-size: 13px; font-weight: 600; }
 .public-banner[hidden] { display: none; }
 .public-banner .i { width: 16px; height: 16px; flex: none; }
@@ -267,7 +268,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .shot { position: relative; margin: 0 14px 10px; aspect-ratio: 16 / 10; border-radius: 8px; overflow: hidden; background: var(--surface-2, color-mix(in oklab, var(--line) 40%, transparent)); border: 1px solid var(--line); }
 .shot[hidden] { display: none; }
 .shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
-.scard-sub { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; min-width: 0; }
+.scard-sub { display: flex; align-items: center; gap: 6px; overflow: hidden; margin-top: 3px; font-size: 12px; color: var(--muted); white-space: nowrap; min-width: 0; }
 /* Facts about the session: uniform pills that wrap as a whole, each with a tooltip. */
 .scard-facts { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 10px; }
 .scard-facts:not(:has(> :not([hidden]))) { display: none; }
@@ -318,7 +319,7 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 button.hb, .hero-top button.chip { cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 700; border: 0; }
 button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .hb.rec .rec-dot { background: #fff; }
-.hb.public { background: color-mix(in oklab, var(--public) 85%, #000); cursor: pointer; }
+.hb.public { background: var(--public); color: #fff; cursor: pointer; box-shadow: 0 0 0 2px color-mix(in oklab, var(--public) 35%, transparent), 0 2px 10px color-mix(in oklab, var(--public) 60%, transparent); }
 .hb.note { background: color-mix(in oklab, var(--accent-btn) 88%, #000); }
 .hb.sound { color: #fff; background: color-mix(in oklab, var(--accent) 85%, #000); padding: 0 6px; }
 .hb-n { display: inline-flex; align-items: center; gap: 3px; padding-left: 5px; margin-left: 1px; border-left: 1px solid #fff6; }
@@ -372,7 +373,10 @@ button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .tab-ico img { width: 16px; height: 16px; border-radius: 4px; object-fit: contain; }
 .tab-ico.more { width: auto; padding: 0 6px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
 .tab-ico-sound { position: absolute; right: 2px; top: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
-.scard-inds { display: flex; align-items: center; gap: 2px; flex: none; }
+.scard-inds { display: inline-flex; align-items: center; gap: 0; flex: none; }
+.scard-sub .scard-inds { margin-left: 4px; }
+.scard-sub .ind { height: 18px; padding: 0 3px; }
+.scard-sub .ind .i { width: 13px; height: 13px; }
 .ind { display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 5px; border-radius: 7px; color: var(--muted); font-size: 11.5px; font-weight: 700; cursor: default; }
 .ind[hidden] { display: none; }
 .ind .i { width: 14px; height: 14px; }
@@ -619,6 +623,15 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .add-node h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
 #askModal .ask-extra { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 40vh; overflow-y: auto; }
 #askModal .ask-extra .node-card { padding: 10px 12px; }
+.ask-agent { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center; padding: 12px 14px; border-radius: 12px; background: var(--accent-soft); border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--line)); }
+.ask-agent-ic { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--accent); }
+.ask-agent-ic .i { width: 22px; height: 22px; }
+.ask-agent-t { display: flex; flex-direction: column; min-width: 0; }
+.ask-agent-t b { font-size: 15px; }
+.ask-agent-t span { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-agent dl { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.ask-agent dt { color: var(--muted); }
+.ask-agent dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 #addNodeModal .seg { margin-bottom: 12px; }
 #addNodeModal [hidden] { display: none; }
 .add-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
@@ -1572,7 +1585,7 @@ function dismissToast(item) {
 }
 function actionHtml(action) {
   if (!action) return '';
-  if (action.url) return `<a class="btn primary sm toast-action-btn" href="${esc(action.url)}">${esc(action.text)}</a>`;
+  if (action.url) return `<a class="btn primary sm toast-action-btn" href="${esc(action.url)}">${action.icon ? icon(action.icon, 'sm') : ''}${esc(action.text)}</a>`;
   return '';
 }
 function showToast(title, type = 'info', durationMs = 4500, action = null, desc = '') {
@@ -1769,7 +1782,7 @@ if (window.visualViewport) {
 
 // Promise-based replacement for confirm()/prompt().
 let askResolve = null;
-function ask({ title, text = '', html = '', input = null, ok = 'OK', danger = false, placeholder = '' }) {
+function ask({ title, text = '', html = '', input = null, ok = 'OK', okIcon = '', danger = false, placeholder = '' }) {
   $('askTitle').textContent = title;
   $('askExtra').innerHTML = html;
   $('askExtra').hidden = !html;
@@ -1780,7 +1793,7 @@ function ask({ title, text = '', html = '', input = null, ok = 'OK', danger = fa
   inp.value = input ?? '';
   inp.placeholder = placeholder;
   const okBtn = $('askOk');
-  okBtn.textContent = ok;
+  okBtn.innerHTML = (okIcon ? icon(okIcon, 'sm') : '') + esc(ok);
   okBtn.className = 'btn ' + (danger ? 'danger' : 'primary');
   openModal('askModal');
   setTimeout(() => (input !== null ? (inp.focus(), inp.select()) : okBtn.focus()), 30);
@@ -1977,15 +1990,29 @@ function profileInfo(p) {
 const profileTargetName = (p, name) => (!p.id && p.engine === 'firefox' ? 'firefox_' + name : name);
 // An agent (Playwright, Puppeteer, ...) that is connected to a session; "" when none is.
 const driverOf = (s) => { const a = (s?.clients || []).find((c) => c.agent); return a ? agentLabel(a) : ''; };
-const drivenAttr = (s) => { const who = driverOf(s); return who ? ` data-driven="${esc(who)}"` : ''; };
-const confirmTakeOver = (who) => ask({
+const drivenAttr = (s) => { const who = driverOf(s); return who ? ` data-driven="${esc(who)}" data-driven-session="${esc(s.id)}"` : ''; };
+// Who is at the wheel: the agent, what it works on, where it runs and for how long.
+function driverCard(s, who) {
+  const c = (s?.clients || []).find((x) => x.agent);
+  if (!c) return `<div class="ask-agent"><div class="ask-agent-ic">${icon('bot')}</div><div class="ask-agent-t"><b>${esc(who)}</b></div></div>`;
+  const row = (label, value, mono = false) => (value ? `<dt>${label}</dt><dd${mono ? ' class="mono"' : ''}>${esc(value)}</dd>` : '');
+  const ago = c.since ? `${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since))).replace(/ \d+s$/, '')} ago` : '';
+  return `<div class="ask-agent">
+    <div class="ask-agent-ic">${agentIcon(c, 'lg')}</div>
+    <div class="ask-agent-t"><b>${esc(agentShort(c) || 'Agent')}</b>${c.topic ? `<span>${esc(c.topic)}</span>` : ''}</div>
+    <dl>${row('Session', s ? sessName(s) : '')}${row('Machine', c.machine || c.from)}${row('Project', c.cwd, true)}${row('Connected', ago)}</dl>
+  </div>`;
+}
+const confirmTakeOver = (who, session) => ask({
   title: 'Take over a session an agent is using?',
-  text: `${who} is driving this browser right now. What you click or type there happens while it works.`,
+  text: 'It is driving this browser right now. What you click or type there happens while it works.',
+  html: driverCard(session, who),
   ok: 'Take over',
+  okIcon: 'takeover',
 });
 async function takeOver(node, opts, session) {
   const who = driverOf(session);
-  if (who && !(await confirmTakeOver(who))) return;
+  if (who && !(await confirmTakeOver(who, session))) return;
   location.href = handoffUrl(node, opts);
 }
 // Links to a driven session ask first (new-tab clicks too).
@@ -1994,7 +2021,7 @@ async function drivenClick(e) {
   if (!a || (e.type === 'auxclick' && e.button !== 1) || (e.type === 'click' && e.button !== 0)) return;
   e.preventDefault();
   const newTab = e.type === 'auxclick' || e.ctrlKey || e.metaKey || e.shiftKey;
-  if (!(await confirmTakeOver(a.dataset.driven))) return;
+  if (!(await confirmTakeOver(a.dataset.driven, dashboardSessions().find((x) => x.id === a.dataset.drivenSession)))) return;
   if (newTab) window.open(a.href, '_blank', 'noopener'); else location.href = a.href;
 }
 document.addEventListener('click', drivenClick);
@@ -2325,12 +2352,15 @@ function sessionCard(s) {
   // Under the name: one muted line.
   const meta = [
     `<span title="${esc(s._extension ? 'Tabs explicitly shared from your browser' : s.profile ? `Profile ${s.profile}: its logins and cookies are kept` : 'No profile: nothing is kept')}">${esc(s._extension ? 'Shared browser' : s.profile || 'Throwaway')}</span>`,
-    s._extension ? `<span>${s._extension.tabs.some(t => t.control) ? 'Control allowed' : 'View only'}</span>` : `<span data-up title="Uptime"></span>`,
-  ].join('<span class="sep">·</span>') + '<span data-idle hidden></span>';
+    !s._extension && `<span data-up title="Uptime"></span>`,
+  ].filter(Boolean).join('<span class="sep">·</span>') + '<span data-idle hidden></span>';
 
   // The rest: small icons with tooltips.
   const ind = (cls, ico, text, title, act = '') => `<span class="ind ${cls}"${act ? ` role="button" tabindex="0" data-act="${act}" data-key="${key}"` : ''} title="${esc(title)}" aria-label="${esc(title)}">${ico}${text ? `<span>${esc(text)}</span>` : ''}</span>`;
   const inds = [
+    s._extension && (s._extension.tabs.some(t => t.control)
+      ? ind('ok', icon('takeover', 'sm'), '', 'Control allowed: you can click and type in the shared tabs')
+      : ind('', icon('eye', 'sm'), '', 'View only: the shared tabs can be watched, not controlled')),
     !s.persistent && ind('', icon('clock', 'sm'), '', 'Ephemeral: stops when its last client disconnects'),
     s.adblock && ind('ok', icon('shield', 'sm'), '', 'Ads and trackers are blocked'),
     s.proxy && ind('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
@@ -2349,14 +2379,13 @@ function sessionCard(s) {
       ${sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`}
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span>${s._extension ? addonBadge() : ''}</div>
-        <div class="scard-sub">${meta}</div>
+        <div class="scard-sub">${meta}${inds ? `<span class="scard-inds">${inds}</span>` : ''}</div>
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
     </div>
     ${agentRow || integRow ? `<div class="scard-who">${agentRow}${integRow}</div>` : ''}
     <div class="scard-foot">
       <div class="tab-strip">${strip}</div>
-      <div class="scard-inds">${inds}</div>
       <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}${s._extension && !s._extension.tabs.some(t => t.control) ? 'View' : 'Take over'}</a>
     </div>
   </article>`;
@@ -3103,7 +3132,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     }
     closeModal('newSessionModal');
     const url = handoffUrl(node, tab?.id ? { page: tab.id } : { session: s.id });
-    t.done('Session started', `${payload.profile || 'Throwaway'} on ${node}`, { text: 'Take over', url });
+    t.done('Session started', `${payload.profile || 'Throwaway'} on ${node}`, { icon: 'takeover', text: 'Take over', url });
     if (shared) {
       // The link first (copy, QR, expiry, control); taking over stays one click away.
       copyText(shared.url);
@@ -3715,7 +3744,7 @@ $('newProfileForm').addEventListener('submit', async (e) => {
 function launchProfile(p, { tabs = true } = {}) {
   act(`Launching ${p.display}`, async () => {
     const s = await request('POST', api(p.node_name, '/sessions'), { profile: p.id || p.display, engine: p.engine, persistent: true, default_tabs: tabs });
-    showToast(`${p.display} is running`, 'success', 6000, { text: 'Take over', url: handoffUrl(p.node_name, { session: s.id }) });
+    showToast(`${p.display} is running`, 'success', 6000, { icon: 'takeover', text: 'Take over', url: handoffUrl(p.node_name, { session: s.id }) });
     return s;
   }, null);
 }
@@ -3725,7 +3754,7 @@ async function saveSessionAsProfile(s) {
   const name = await ask({ title: 'Save as a profile', text: `Keeps the logins, cookies and storage of ${s.name || 'this session'} under a new profile. The browser restarts on the same pages.`, input: '', placeholder: 'e.g. Google (me@example.com)', ok: 'Save' });
   if (!name || !name.trim()) return;
   const r = await act('Saving the profile', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/save-as-profile`), { name: name.trim() }), null);
-  if (r?.session) showToast(`Saved as ${name.trim()}, and running`, 'success', 8000, { text: 'Take over', url: handoffUrl(s.node_name, { session: r.session.id }) });
+  if (r?.session) showToast(`Saved as ${name.trim()}, and running`, 'success', 8000, { icon: 'takeover', text: 'Take over', url: handoffUrl(s.node_name, { session: r.session.id }) });
   else if (r !== undefined) showToast(`Saved as ${name.trim()}`, 'success');
 }
 async function renameProfile(p) {
