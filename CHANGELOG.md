@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The Nodes view has a single "Add node" button that opens one dialog with
+  Browser and Daemon tabs. The pairing step no longer repeats the remote
+  control and key expiry choices, which the extension popup asks for. The
+  dialog closes once the browser connects, and newly connected browsers are
+  announced with a toast and highlighted.
+* The offline cleanup button is labelled "Prune nodes" and its confirmation
+  lists the nodes it will remove.
+
+### Fixed
+
+* A remembered browser is retried every minute until it reconnects, also after
+  a daemon restart or a rejected allowlist check.
+
 ## [0.3.26] - 2026-10-22
 
 ### Added
