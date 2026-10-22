@@ -11,7 +11,7 @@
 //! It travels as the `bd_auth` cookie (the dashboard), as `Bearer <token>`, or
 //! as `?auth=<token>` (CDP endpoints given to tools that cannot set headers).
 //! The secret itself still works as a Bearer or `X-Browser-Cluster-Secret`
-//! (peers, the CLI, the passkey helper) and is never put in a URL or a page.
+//! (peers, the CLI, the secret agent) and is never put in a URL or a page.
 //! Without a cluster secret the daemon is open as before, but the Host and
 //! Origin checks still apply.
 
@@ -39,7 +39,7 @@ pub enum Credential {
     Open,
     /// A token (cookie, Bearer or `?auth=`): a viewer.
     Token,
-    /// The cluster secret itself: a peer, the CLI or the passkey helper.
+    /// The cluster secret itself: a peer, the CLI or the secret agent.
     Secret,
 }
 
@@ -329,7 +329,7 @@ pub fn secret_only(method: &Method, path: &str) -> bool {
     if method == Method::POST && path == "/api/extension/pair" {
         return true;
     }
-    if path.starts_with("/api/passkey-helper/") {
+    if path.starts_with("/api/secret-agent/") {
         return true;
     }
     if method == Method::POST && path.starts_with("/api/pages/") && path.ends_with("/autofill") {
@@ -796,15 +796,15 @@ mod tests {
     }
 
     #[test]
-    fn viewers_cannot_reach_the_helper_or_peer_routes() {
+    fn viewers_cannot_reach_the_agent_or_peer_routes() {
         let a = auth(Some("s3cret"));
         let (t, _) = a.issue(1_000).unwrap();
         for (m, path) in [
             (Method::POST, "/api/extension/pair"),
-            (Method::GET, "/api/passkey-helper/next"),
+            (Method::GET, "/api/secret-agent/next"),
             (
                 Method::POST,
-                "/api/passkey-helper/00000000-0000-0000-0000-000000000000",
+                "/api/secret-agent/00000000-0000-0000-0000-000000000000",
             ),
             (Method::POST, "/api/pages/abc/autofill"),
             (Method::POST, "/api/peers"),
@@ -814,10 +814,10 @@ mod tests {
             viewer.method = m.clone();
             viewer.headers = headers(&[("authorization", &format!("Bearer {t}"))]);
             assert_eq!(decide(&a, &viewer), Err(StatusCode::FORBIDDEN), "{path}");
-            let mut helper = req(path);
-            helper.method = m;
-            helper.headers = headers(&[("x-browser-cluster-secret", "s3cret")]);
-            assert_eq!(decide(&a, &helper), Ok(Credential::Secret), "{path}");
+            let mut agent = req(path);
+            agent.method = m;
+            agent.headers = headers(&[("x-browser-cluster-secret", "s3cret")]);
+            assert_eq!(decide(&a, &agent), Ok(Credential::Secret), "{path}");
         }
         // Reading the peer list and the peer proxy stay open to viewers.
         assert!(!secret_only(&Method::GET, "/api/peers"));

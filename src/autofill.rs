@@ -1,6 +1,6 @@
 //! Logins filled from the vault, as the Bitwarden extension fills them: the live
-//! view's vault button lists the entries for the page's site (via the passkey
-//! helper, which holds the vault) and the helper sends the picked one here
+//! view's vault button lists the entries for the page's site (via the secret
+//! agent, which holds the vault) and the agent sends the picked one here
 //! (`POST /api/pages/{id}/autofill`). The values go into the page's login form
 //! from an isolated world (Chromium) or sandbox (Firefox), only in frames on a
 //! site the entry is saved for. They are never logged and never reach the view.

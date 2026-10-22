@@ -2,7 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+* `services.browser-daemon.secretAgent` runs the secret agent from the NixOS
+  module, as a system service for the vault's `user` (off by default). It
+  gets the cluster secret as a systemd credential, so that user need not be
+  able to read the file, and serves this host's node unless `nodes` says
+  otherwise. It doesn't need the node itself (`enable`).
+* `docs/rbw.md`: how the live view, the secret agent, the MCP server and rbw
+  work together, what is checked where, and how the vault's styles follow rbw.
+
 ### Changed
+
+* `browser-daemon passkey-helper` is now `browser-daemon secret-agent`: it
+  serves the whole vault of the live views (logins as well as passkeys). Its
+  routes moved from `/api/passkey-helper/*` to `/api/secret-agent/*`, and
+  helpers that predate passkey lookups or autofill are no longer handled. Nodes
+  and agents must be updated together; there is no alias for the old name.
 
 * Node cards in the Nodes view are compact: "New session" (or "Take over")
   and "Settings" are buttons in the card header, the stats are one inline

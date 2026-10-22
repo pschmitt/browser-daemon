@@ -72,6 +72,7 @@ live view.
 | [NixOS module](docs/nixos.md) | Options, mesh, resource limits |
 | [Automation](docs/automation.md) | CDP and BiDi endpoints, engines, Playwright on shared browsers |
 | [Live view](docs/live-view.md) | Handoff, downloads, vault logins |
+| [rbw vault](docs/rbw.md) | Secret agent, logins and passkeys from rbw, styling |
 | [Recordings](docs/recordings.md) | Sound, merging, keeping |
 | [Profiles](docs/profiles.md) | What a profile keeps, transfers, proxies, notes |
 | [Public links](docs/sharing.md) | Sharing sessions and recordings |

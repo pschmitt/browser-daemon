@@ -171,42 +171,42 @@ try {
   await dash.evaluate(`(() => { document.getElementById('sessionUrl').value = ${JSON.stringify(`${pageURL}dash`)}; document.getElementById('sessionHandoff').checked = false; document.getElementById('newSessionForm').requestSubmit(); })()`);
   const fromDash = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}dash`));
   assert.ok(fromDash.shared && fromDash.control, 'the dashboard opened a shared, controllable tab');
-  // Vault logins: the live view asks, the passkey helper (played here) fills, the
+  // Vault logins: the live view asks, the secret agent (played here) fills, the
   // extension puts the values into the tab's form.
-  const helper = (path, init = {}) => fetch(`${base}/api${path}`, {...init, headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json', ...init.headers}});
+  const agent = (path, init = {}) => fetch(`${base}/api${path}`, {...init, headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json', ...init.headers}});
   await message({type: 'share', tabs: [typed.id], urls: {[typed.id]: `${pageURL}typed`}, control: true});
   await fetch(`${base}/api/extension/nodes/${state.registration.id}/command`, {method: 'POST', headers: {'X-Browser-Cluster-Secret': secret, 'Content-Type': 'application/json'}, body: JSON.stringify({tab: typed.id, action: 'navigate', params: {url: `${pageURL}login`}})});
   await until(async () => (await message({type: 'state'})).tabs.find(t => t.id === typed.id && t.url === `${pageURL}login` && t.shared));
   await until(async () => (await (await fetch(`${base}/api/extension/nodes`, {headers: {'X-Browser-Cluster-Secret': secret}})).json()).nodes.some(n => n.tabs?.some(t => t.id === typed.id && t.url === `${pageURL}login`)));
-  const taken = helper('/passkey-helper/next?finds=true&autofill=true').then(r => r.json());
+  const taken = agent('/secret-agent/next').then(r => r.json());
   await sleep(300);
-  const asked = await (await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/autofill`, {method: 'POST', body: JSON.stringify({page_id: String(typed.id), entry: 'entry-1', fields: ['username', 'password']})})).json();
+  const asked = await (await agent(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/autofill`, {method: 'POST', body: JSON.stringify({page_id: String(typed.id), entry: 'entry-1', fields: ['username', 'password']})})).json();
   assert.ok(asked.request, `vault request: ${JSON.stringify(asked)}`);
   const job = await taken;
   assert.equal(job.kind, 'fill');
   const loginOrigin = new URL(pageURL).origin;
-  const filled = await (await helper(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'alice', password: 's3cret'})})).json();
+  const filled = await (await agent(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'alice', password: 's3cret'})})).json();
   assert.deepEqual(filled.filled, ['username', 'password'], JSON.stringify(filled));
   const loginTab = (await targets()).find(t => t.url === `${pageURL}login`);
   const login = await CDP.open(loginTab.webSocketDebuggerUrl);
   assert.equal(await login.evaluate(`[document.querySelector('[name=user]').value, document.querySelector('[name=pw]').value].join()`), 'alice,s3cret');
   // A second fill for the same approval is refused.
-  const again = await helper(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'x'})});
+  const again = await agent(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'x'})});
   assert.equal(again.status, 403);
   // The simplified rbw prompt presents accounts as keyboard-selectable cards.
-  // Picking one must pass its exact id to the helper.
+  // Picking one must pass its exact id to the agent.
   await until(() => view.evaluate(`vaultReady() && pageId === ${JSON.stringify(String(typed.id))}`));
   await view.call('Page.bringToFront');
-  await view.evaluate(`window.__savedPasskeyHelper = passkeyHelper; window.__passkeyEntry = null; passkeyHelper = async (_rp, find, _note, entry) => { if (find) return [{id:'personal',name:'Example',user:'alice'}, {id:'work',name:'Example Work',user:'alice-work'}]; window.__passkeyEntry = entry; return {}; }; void askPasskey({rpId:'example.org',challenge:'AQID',allow:[]}); true`);
+  await view.evaluate(`window.__savedPasskeyAgent = passkeyAgent; window.__passkeyEntry = null; passkeyAgent = async (_rp, find, _note, entry) => { if (find) return [{id:'personal',name:'Example',user:'alice'}, {id:'work',name:'Example Work',user:'alice-work'}]; window.__passkeyEntry = entry; return {}; }; void askPasskey({rpId:'example.org',challenge:'AQID',allow:[]}); true`);
   await until(() => view.evaluate(`document.querySelectorAll('#passkeyEntries input[type=radio]').length === 2`));
   assert.equal(await view.evaluate(`document.querySelector('#passkeyEntries input:checked').value`), 'personal');
   await view.evaluate(`document.querySelector('#passkeyEntries input[value=work]').click(); document.querySelector('#passkeyDialog button[value=vault]').click(); true`);
   assert.equal(await view.evaluate(`document.getElementById('passkeyDialog').returnValue`), 'vault');
   await until(() => view.evaluate(`window.__passkeyEntry === 'work'`));
-  await view.evaluate(`passkeyHelper = async () => ({locked:true}); void askPasskey({rpId:'locked.example',challenge:'AQID',allow:[]}); true`);
+  await view.evaluate(`passkeyAgent = async () => ({locked:true}); void askPasskey({rpId:'locked.example',challenge:'AQID',allow:[]}); true`);
   await until(() => view.evaluate(`document.querySelector('#passkeyDialog button[value=vault]').textContent === 'Unlock and continue'`));
   assert.equal(await view.evaluate(`document.querySelectorAll('#passkeyEntries input').length`), 0);
-  await view.evaluate(`document.getElementById('passkeyDialog').close('cancel'); passkeyHelper = window.__savedPasskeyHelper; true`);
+  await view.evaluate(`document.getElementById('passkeyDialog').close('cancel'); passkeyAgent = window.__savedPasskeyAgent; true`);
   // Passkeys: the extension hooks the tab; with the view watching, the page's request
   // reaches the view, and the vault signs for the tab's own origin.
   await until(() => login.evaluate(`typeof globalThis.__bdPasskeyRepair === "function" && Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000`));
@@ -227,13 +227,13 @@ try {
   const seenReq = await until(async () => (await view.evaluate(`window.__seen[0] || null`)));
   assert.equal(seenReq.rpId, new URL(pageURL).hostname);
   assert.equal(await login.evaluate(`window.__providerCalls`), 0, 'the provider must not open its local prompt');
-  const signTaken = helper('/passkey-helper/next?finds=true&autofill=true').then(r => r.json());
+  const signTaken = agent('/secret-agent/next').then(r => r.json());
   await sleep(300);
-  const signAsked = await (await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: String(typed.id), rp_id: seenReq.rpId, find: false, challenge: seenReq.challenge, allow: []})})).json();
+  const signAsked = await (await agent(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: String(typed.id), rp_id: seenReq.rpId, find: false, challenge: seenReq.challenge, allow: []})})).json();
   assert.ok(signAsked.request, JSON.stringify(signAsked));
   const signJob = await signTaken;
   assert.deepEqual([signJob.kind, signJob.origin, signJob.challenge], ['assert', loginOrigin, seenReq.challenge]);
-  const wrongSite = await helper(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: '1', rp_id: 'example.org', find: false, challenge: 'AQID'})});
+  const wrongSite = await agent(`/extension/nodes/${state.registration.id}/tabs/${typed.id}/passkey`, {method: 'POST', body: JSON.stringify({page_id: '1', rp_id: 'example.org', find: false, challenge: 'AQID'})});
   assert.equal(wrongSite.status, 403);
   // The page's own dialogs show as the view's, never as the browser's confirm().
   // (The view is a tab of the shared browser here, behind the tab it follows: bring it up.)

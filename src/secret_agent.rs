@@ -1,6 +1,7 @@
-//! `browser-daemon passkey-helper`: runs as the vault's user and serves the
-//! passkeys approved in live views (see passkeys.rs) with `rbw passkey inject`,
-//! and the logins picked from their vault button (see autofill.rs).
+//! `browser-daemon secret-agent`: runs as the vault's user and serves the
+//! live views' vault from rbw: the passkeys approved in them (see passkeys.rs,
+//! `rbw passkey inject`/`assert`), the logins their vault button lists and the
+//! one picked there (see autofill.rs), unlocking rbw from the phone if needed.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -14,7 +15,7 @@ use crate::passkeys::{Outcome, Request};
 use crate::{secrets, vault_index};
 
 #[derive(clap::Args, Debug)]
-pub struct HelperArgs {
+pub struct SecretAgentArgs {
     /// Base URL of a node to serve (repeat for several), e.g. https://browser.fnuc.nb.brkn.lol
     #[arg(long = "node", required = true)]
     pub nodes: Vec<String>,
@@ -42,7 +43,7 @@ pub struct HelperArgs {
 const RBW_WAIT: Duration = Duration::from_secs(60);
 /// Longest a request may take, the wait for a phone unlock included.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(420);
-/// Request ids remembered, so a node cannot make the helper serve one twice.
+/// Request ids remembered, so a node cannot make the agent serve one twice.
 const SEEN_IDS: usize = 512;
 
 /// Whether the request's fields are plain values the vault tools can take:
@@ -95,7 +96,7 @@ fn valid_request(req: &Request) -> Result<(), String> {
     Ok(())
 }
 
-impl HelperArgs {
+impl SecretAgentArgs {
     /// Notes a request id; false when it was seen before.
     fn remember(&self, id: uuid::Uuid) -> bool {
         let mut seen = self.seen.lock().unwrap();
@@ -110,7 +111,7 @@ impl HelperArgs {
     }
 }
 
-pub async fn run(args: HelperArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: SecretAgentArgs) -> Result<(), Box<dyn std::error::Error>> {
     let secret = tokio::fs::read_to_string(&args.cluster_secret_file)
         .await?
         .trim()
@@ -152,14 +153,12 @@ async fn poll(
     node: String,
     secret: String,
     client: reqwest::Client,
-    args: std::sync::Arc<HelperArgs>,
+    args: std::sync::Arc<SecretAgentArgs>,
 ) {
-    info!(node = %node, "Serving passkeys");
+    info!(node = %node, "Serving the vault");
     loop {
         let res = client
-            .get(format!(
-                "{node}/api/passkey-helper/next?finds=true&autofill=true"
-            ))
+            .get(format!("{node}/api/secret-agent/next"))
             .header("X-Browser-Cluster-Secret", &secret)
             .send()
             .await;
@@ -223,7 +222,7 @@ async fn poll(
                 }
             };
             let _ = client
-                .post(format!("{node}/api/passkey-helper/{}", req.id))
+                .post(format!("{node}/api/secret-agent/{}", req.id))
                 .header("X-Browser-Cluster-Secret", &secret)
                 .json(&outcome)
                 .send()
@@ -234,7 +233,7 @@ async fn poll(
 
 /// Which vault entry would serve `rp_id` (name and user only), or that the vault
 /// is locked. Never asks for an unlock: that only happens once the user approves.
-async fn find(req: &Request, args: &HelperArgs) -> Result<serde_json::Value, String> {
+async fn find(req: &Request, args: &SecretAgentArgs) -> Result<serde_json::Value, String> {
     if !unlocked(&args.rbw).await {
         return Ok(serde_json::json!({ "locked": true }));
     }
@@ -283,7 +282,7 @@ async fn ensure_unlocked(
     secret: &str,
     req: &Request,
     client: &reqwest::Client,
-    args: &HelperArgs,
+    args: &SecretAgentArgs,
 ) -> Result<(), String> {
     if !unlocked(&args.rbw).await {
         let hook = args.unlock_webhook.as_ref().ok_or("The vault is locked")?;
@@ -295,7 +294,7 @@ async fn ensure_unlocked(
             .await
             .map_err(|e| format!("Could not ask for an unlock: {}", e.without_url()))?;
         let _ = client
-            .post(format!("{node}/api/passkey-helper/{}/note", req.id))
+            .post(format!("{node}/api/secret-agent/{}/note", req.id))
             .header("X-Browser-Cluster-Secret", secret)
             .json(&serde_json::json!({ "note": "rbw is locked: confirm the unlock on your phone" }))
             .send()
@@ -322,7 +321,7 @@ async fn assert(
     secret: &str,
     req: &Request,
     client: &reqwest::Client,
-    args: &HelperArgs,
+    args: &SecretAgentArgs,
 ) -> Result<serde_json::Value, String> {
     let origin = req.origin.as_deref().ok_or("No page origin")?;
     let challenge = req.challenge.as_deref().ok_or("No challenge")?;
@@ -367,7 +366,7 @@ async fn serve(
     secret: &str,
     req: &Request,
     client: &reqwest::Client,
-    args: &HelperArgs,
+    args: &SecretAgentArgs,
 ) -> Result<(), String> {
     ensure_unlocked(node, secret, req, client, args).await?;
     // A picked entry (its vault id) narrows the search; otherwise rbw finds the one
@@ -450,7 +449,7 @@ async fn logins(
     secret: &str,
     req: &Request,
     client: &reqwest::Client,
-    args: &HelperArgs,
+    args: &SecretAgentArgs,
 ) -> Result<serde_json::Value, String> {
     if req.unlock {
         ensure_unlocked(node, secret, req, client, args).await?;
@@ -541,7 +540,7 @@ async fn fill(
     secret: &str,
     req: &Request,
     client: &reqwest::Client,
-    args: &HelperArgs,
+    args: &SecretAgentArgs,
 ) -> Result<serde_json::Value, String> {
     let entry = req.entry.as_deref().ok_or("No entry")?;
     if uuid::Uuid::parse_str(entry).is_err() {
@@ -654,7 +653,7 @@ fn custom_fields(raw: &serde_json::Value) -> Vec<serde_json::Value> {
 /// The message names the entry, the site and the fields, never a value.
 async fn notify_any_site(
     client: &reqwest::Client,
-    args: &HelperArgs,
+    args: &SecretAgentArgs,
     node: &str,
     raw: &serde_json::Value,
     req: &Request,
@@ -759,7 +758,7 @@ mod tests {
 
     #[test]
     fn a_request_id_is_served_once() {
-        let args = HelperArgs {
+        let args = SecretAgentArgs {
             nodes: vec![],
             cluster_secret_file: PathBuf::new(),
             rbw: PathBuf::from("rbw"),

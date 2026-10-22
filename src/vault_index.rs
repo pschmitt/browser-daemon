@@ -1,4 +1,4 @@
-//! What the passkey helper knows about the vault's logins without asking rbw
+//! What the secret agent knows about the vault's logins without asking rbw
 //! each time: names, users, folders, URIs and whether a password or TOTP is
 //! there, never the secrets themselves. A lookup through rbw takes seconds
 //! (`rbw search` decrypts every entry's names and URIs, and rbw-agent serves one

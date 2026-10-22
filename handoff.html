@@ -1751,20 +1751,20 @@ $("pkOffer").addEventListener("click", () => {
     () => offer.d.passkeyAnswer(offer.req.id, true));
 });
 let passkeyPending = null;
-// A request to the passkey helper (via the node): started, then polled with short
-// calls. The helper may wait minutes for the phone unlock, and a request held open
+// A passkey request to the secret agent (via the node): started, then polled with
+// short calls. The agent may wait minutes for the phone unlock, and a request held open
 // that long gets dropped (Firefox gave up on it after ~2 s). onNote: progress notes.
-async function passkeyHelper(rpId, find, onNote = () => {}, entry = null, signing = {}, signal = null) {
+async function passkeyAgent(rpId, find, onNote = () => {}, entry = null, signing = {}, signal = null) {
   if (sharedBrowserId) {
-    return helperRequest(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/tabs/${encodeURIComponent(pageId)}/passkey`,
+    return agentRequest(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/tabs/${encodeURIComponent(pageId)}/passkey`,
       { page_id: pageId, rp_id: rpId, find, entry, ...signing }, onNote, signal, sharedBase);
   }
-  return helperRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
+  return agentRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/passkey`,
     { page_id: pageId, rp_id: rpId, find, entry, ...signing }, onNote, signal);
 }
-// Any request for the passkey helper (passkeys, vault logins): started at `url`, then
-// polled until the helper has answered.
-async function helperRequest(url, body, onNote = () => {}, signal = null, base = "/api") {
+// Any request for the secret agent (passkeys, vault logins): started at `url`, then
+// polled until the agent has answered.
+async function agentRequest(url, body, onNote = () => {}, signal = null, base = "/api") {
   const call = async (url, opts = {}) => {
     const res = await fetch(url, { ...opts, headers: authHeaders(opts.body ? { "Content-Type": "application/json" } : {}) });
     const body = await res.json().catch(() => ({}));
@@ -1782,7 +1782,7 @@ async function helperRequest(url, body, onNote = () => {}, signal = null, base =
     if (st.state === "failed") throw new Error(st.error);
     if (st.note) onNote(st.note);
   }
-  throw new Error("The passkey helper did not answer");
+  throw new Error("The secret agent did not answer");
 }
 // Before approving: is rbw locked, and which entry would sign in?
 async function showPasskeyEntry(rpId, dlg) {
@@ -1800,7 +1800,7 @@ async function showPasskeyEntry(rpId, dlg) {
     // The lookup stops with the dialog (closed, or answered).
     const ac = new AbortController();
     dlg.addEventListener("close", () => ac.abort(), { once: true });
-    const found = await passkeyHelper(rpId, true, () => {}, null, {}, ac.signal);
+    const found = await passkeyAgent(rpId, true, () => {}, null, {}, ac.signal);
     if (found?.locked) { set("Your vault is locked. Continue to unlock it from your phone.", "locked"); use.textContent = "Unlock and continue"; use.disabled = false; }
     else if (!Array.isArray(found) || !found.length) {
       // Nothing to approve: say so and get out of the way. The site hears "cancelled"
@@ -1821,8 +1821,8 @@ async function showPasskeyEntry(rpId, dlg) {
   } catch (err) {
     if (err.aborted) return;
     set(err.message, "bad");
-    // The lookup itself failed (e.g. an old helper): rbw may still find the entry.
-    use.disabled = /no passkey|no matching|no entry|No passkey helper/i.test(err.message);
+    // The lookup itself failed: rbw may still find the entry.
+    use.disabled = /no passkey|no matching|no entry|No secret agent/i.test(err.message);
   }
 }
 async function askPasskey({ rpId, challenge, allow }) {
@@ -1845,7 +1845,7 @@ async function askPasskey({ rpId, challenge, allow }) {
     // Firefox: the request is signed outside the browser and the page gets the result.
     // A shared browser: always signed (its own authenticator is never touched).
     const signed = target?.engine === "firefox" || !!sharedBrowserId;
-    const result = await passkeyHelper(rpId, false, onNote, entry, signed ? { challenge, allow } : {});
+    const result = await passkeyAgent(rpId, false, onNote, entry, signed ? { challenge, allow } : {});
     toast(`Signing in to ${rpId} with your passkey`);
     return signed ? result : true;
   } catch (err) {
@@ -5088,7 +5088,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sess
 /* ---------------------------------------------------------------- vault logins */
 // The key button fills logins as the Bitwarden extension does: it lists the vault's
 // entries for the page's site and fills the picked one into the page's login form.
-// The passkey helper holds the vault and the node fills the page (autofill.rs), so
+// The secret agent holds the vault and the node fills the page (autofill.rs), so
 // this view only ever sees entry names and users, never a password or code.
 const vault = { host: "", list: null, at: 0, peeking: null, off: 0 };
 const VAULT_FRESH = 120000;
@@ -5101,8 +5101,8 @@ function pageHost() {
 let vaultAbort = null;
 // A shared browser's tab (with control) is filled by the extension, via its daemon.
 const vaultCall = (body, onNote, signal = null) => sharedBrowserId
-  ? helperRequest(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/tabs/${encodeURIComponent(pageId)}/autofill`, { page_id: pageId, ...body }, onNote, signal, sharedBase)
-  : helperRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/autofill`, { page_id: pageId, ...body }, onNote, signal);
+  ? agentRequest(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/tabs/${encodeURIComponent(pageId)}/autofill`, { page_id: pageId, ...body }, onNote, signal, sharedBase)
+  : agentRequest(`/api/sessions/${encodeURIComponent(target.sessionId)}/autofill`, { page_id: pageId, ...body }, onNote, signal);
 const vaultReady = () => (sharedBrowserId ? !!sharedBrowser?.tabs.some((t) => String(t.id) === String(pageId) && t.control) : !!target?.sessionId);
 function vaultBadge() {
   const n = vault.host === pageHost() && Array.isArray(vault.list) ? vault.list.length : 0;
@@ -5110,7 +5110,7 @@ function vaultBadge() {
   $("vaultCount").hidden = !n;
 }
 // After a page load: how many logins the vault has for the site (the button's badge).
-// Never asks for an unlock; a node without a (new enough) helper is left alone a while.
+// Never asks for an unlock; a node without a secret agent is left alone a while.
 function vaultPeek() {
   const host = pageHost();
   vaultBadge();
@@ -5122,7 +5122,7 @@ function vaultPeek() {
     vault.at = Date.now();
     vault.list = Array.isArray(found) ? found : null; // locked: not known
   }, (err) => {
-    if (/helper/i.test(err.message)) vault.off = Date.now() + 300000;
+    if (/secret agent/i.test(err.message)) vault.off = Date.now() + 300000;
   }).finally(() => { vault.peeking = null; vaultBadge(); });
 }
 function placeVaultPop() {

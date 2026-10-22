@@ -1,13 +1,13 @@
-//! Passkeys approved in a live view. The vault isn't on the node: a helper
-//! running as the vault's user (`browser-daemon passkey-helper`) polls for
+//! Passkeys approved in a live view. The vault isn't on the node: a secret
+//! agent running as the vault's user (`browser-daemon secret-agent`) polls for
 //! approved requests and injects the passkey into the page with
 //! `rbw passkey inject`, unlocking rbw from the phone first if needed.
 //!
 //! The view doesn't wait on one long request (browsers and proxies drop those):
-//! it starts a request and polls its status, which the helper may annotate
+//! it starts a request and polls its status, which the agent may annotate
 //! ("confirm the unlock on your phone") before finishing it.
 //!
-//! The same helper fills logins (autofill.rs): "logins" lists the vault entries
+//! The same agent fills logins (autofill.rs): "logins" lists the vault entries
 //! for the page's site (rp_id holds its host), "fill" fills one into the page.
 
 use std::collections::{HashMap, VecDeque};
@@ -99,7 +99,7 @@ pub enum Status {
 struct Tracked {
     status: Status,
     since: Instant,
-    /// The helper took the request off the queue: only then may it answer it.
+    /// The agent took the request off the queue: only then may it answer it.
     claimed: bool,
     kind: String,
     page_id: String,
@@ -114,17 +114,17 @@ struct Tracked {
 pub struct Broker {
     queue: Mutex<VecDeque<Request>>,
     tracked: Mutex<HashMap<Uuid, Tracked>>,
-    helper_seen: Mutex<Option<Instant>>,
+    agent_seen: Mutex<Option<Instant>>,
     wake: Notify,
 }
 
-/// A helper polls at least this often while running.
-const HELPER_GONE: Duration = Duration::from_secs(90);
+/// An agent polls at least this often while running.
+const AGENT_GONE: Duration = Duration::from_secs(90);
 /// Unlocking from the phone can take a while.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(330);
 
 impl Broker {
-    /// Queue a request for the helper; its progress is read with `status`.
+    /// Queue a request for the agent; its progress is read with `status`.
     pub fn start(
         &self,
         page_id: String,
@@ -182,9 +182,9 @@ impl Broker {
     }
 
     fn enqueue(&self, req: Request, req_session: Option<Uuid>) -> Result<Uuid, String> {
-        let helper = *self.helper_seen.lock().unwrap();
-        if helper.is_none_or(|t| t.elapsed() > HELPER_GONE) {
-            return Err("No passkey helper is running for this node".into());
+        let agent = *self.agent_seen.lock().unwrap();
+        if agent.is_none_or(|t| t.elapsed() > AGENT_GONE) {
+            return Err("No secret agent is running for this node".into());
         }
         let mut tracked = self.tracked.lock().unwrap();
         tracked.retain(|_, t| t.since.elapsed() < 2 * ANSWER_TIMEOUT);
@@ -212,44 +212,25 @@ impl Broker {
         let t = tracked.get_mut(&id)?;
         if matches!(t.status, Status::Pending { .. }) && t.since.elapsed() > ANSWER_TIMEOUT {
             t.status = Status::Failed {
-                error: "The passkey helper did not answer".into(),
+                error: "The secret agent did not answer".into(),
             };
             self.queue.lock().unwrap().retain(|r| r.id != id);
         }
         Some(t.status.clone())
     }
 
-    /// The helper's long poll: the next request, or None after `wait`. A helper
-    /// that predates "find" or autofill requests (it would inject instead) gets
-    /// none of them.
-    pub async fn next(&self, wait: Duration, finds: bool, autofill: bool) -> Option<Request> {
+    /// The agent's long poll: the next request, or None after `wait`.
+    pub async fn next(&self, wait: Duration) -> Option<Request> {
         let deadline = Instant::now() + wait;
         loop {
-            *self.helper_seen.lock().unwrap() = Some(Instant::now());
+            *self.agent_seen.lock().unwrap() = Some(Instant::now());
             let woken = self.wake.notified();
             let popped = self.queue.lock().unwrap().pop_front();
             if let Some(req) = popped {
-                let error = match req.kind.as_str() {
-                    "find" if !finds => "The passkey helper is too old to look entries up",
-                    "logins" | "fill" if !autofill => {
-                        "The passkey helper is too old to fill logins"
-                    }
-                    _ => {
-                        if let Some(t) = self.tracked.lock().unwrap().get_mut(&req.id) {
-                            t.claimed = true;
-                        }
-                        return Some(req);
-                    }
-                };
-                self.finish(
-                    req.id,
-                    Outcome {
-                        ok: false,
-                        error: Some(error.into()),
-                        info: None,
-                    },
-                );
-                continue;
+                if let Some(t) = self.tracked.lock().unwrap().get_mut(&req.id) {
+                    t.claimed = true;
+                }
+                return Some(req);
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() || tokio::time::timeout(left, woken).await.is_err() {
@@ -258,7 +239,7 @@ impl Broker {
         }
     }
 
-    /// The helper tells the user something while the request is pending.
+    /// The agent tells the user something while the request is pending.
     pub fn note(&self, id: Uuid, note: String) -> bool {
         match self.tracked.lock().unwrap().get_mut(&id) {
             Some(Tracked {
@@ -273,18 +254,27 @@ impl Broker {
         }
     }
 
-    /// The helper answers a request it took (and only once).
+    /// The agent answers a request it took (and only once).
     pub fn complete(&self, id: Uuid, outcome: Outcome) -> bool {
-        self.finish_if(id, outcome, true)
-    }
-
-    /// The broker answers a request itself (a helper that cannot serve it).
-    fn finish(&self, id: Uuid, outcome: Outcome) -> bool {
-        self.finish_if(id, outcome, false)
+        match self.tracked.lock().unwrap().get_mut(&id) {
+            Some(t) if matches!(t.status, Status::Pending { .. }) && t.claimed => {
+                t.status = if outcome.ok {
+                    Status::Ready { info: outcome.info }
+                } else {
+                    Status::Failed {
+                        error: outcome
+                            .error
+                            .unwrap_or_else(|| "The secret agent failed".into()),
+                    }
+                };
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Whether the node may put a login into `page_id` on `host` for the "fill"
-    /// request `id`: the helper holds it, it is for that page and host, and
+    /// request `id`: the agent holds it, it is for that page and host, and
     /// nothing was filled for it yet. Allows one fill.
     pub fn authorize_fill(
         &self,
@@ -310,25 +300,6 @@ impl Broker {
             _ => false,
         }
     }
-
-    fn finish_if(&self, id: Uuid, outcome: Outcome, must_be_claimed: bool) -> bool {
-        match self.tracked.lock().unwrap().get_mut(&id) {
-            Some(t)
-                if matches!(t.status, Status::Pending { .. })
-                    && (t.claimed || !must_be_claimed) =>
-            {
-                t.status = if outcome.ok {
-                    Status::Ready { info: outcome.info }
-                } else {
-                    Status::Failed {
-                        error: outcome.error.unwrap_or_else(|| "The helper failed".into()),
-                    }
-                };
-                true
-            }
-            _ => false,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -337,7 +308,7 @@ mod tests {
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn request_reaches_helper_and_back() {
+    async fn request_reaches_agent_and_back() {
         let b = Arc::new(Broker::default());
         assert!(
             b.start(
@@ -348,12 +319,9 @@ mod tests {
                 Signing::default()
             )
             .is_err(),
-            "no helper yet"
+            "no agent yet"
         );
-        assert!(b
-            .next(Duration::from_millis(10), true, true)
-            .await
-            .is_none());
+        assert!(b.next(Duration::from_millis(10)).await.is_none());
         let id = b
             .start(
                 "p".into(),
@@ -363,7 +331,7 @@ mod tests {
                 Signing::default(),
             )
             .unwrap();
-        let req = b.next(Duration::from_secs(1), true, true).await.unwrap();
+        let req = b.next(Duration::from_secs(1)).await.unwrap();
         assert_eq!(req.rp_id, "x.test");
         assert!(
             !b.complete(
@@ -395,39 +363,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn old_helpers_get_no_autofill_requests() {
+    async fn only_a_request_the_agent_took_can_be_answered_or_filled() {
         let b = Broker::default();
-        assert!(b
-            .next(Duration::from_millis(1), true, false)
-            .await
-            .is_none());
-        let id = b
-            .start_autofill("p".into(), "x.test".into(), Autofill::default())
-            .unwrap();
-        assert!(b
-            .next(Duration::from_millis(10), true, false)
-            .await
-            .is_none());
-        assert!(matches!(b.status(id), Some(Status::Failed { .. })));
-        let id = b
-            .start_autofill(
-                "p".into(),
-                "x.test".into(),
-                Autofill {
-                    entry: Some("e".into()),
-                    fields: vec!["password".into()],
-                    ..Autofill::default()
-                },
-            )
-            .unwrap();
-        let req = b.next(Duration::from_secs(1), true, true).await.unwrap();
-        assert_eq!((req.id, req.kind.as_str()), (id, "fill"));
-    }
-
-    #[tokio::test]
-    async fn only_a_request_the_helper_took_can_be_answered_or_filled() {
-        let b = Broker::default();
-        assert!(b.next(Duration::from_millis(1), true, true).await.is_none());
+        assert!(b.next(Duration::from_millis(1)).await.is_none());
         let id = b
             .start_autofill(
                 "page".into(),
@@ -447,7 +385,7 @@ mod tests {
         assert!(!b.complete(id, done()));
         assert!(!b.note(id, "x".into()));
         assert!(!b.authorize_fill(id, "page", "x.test", None));
-        b.next(Duration::from_secs(1), true, true).await.unwrap();
+        b.next(Duration::from_secs(1)).await.unwrap();
         // Another page or host gets nothing, and one fill is all there is.
         assert!(!b.authorize_fill(id, "other", "x.test", None));
         assert!(!b.authorize_fill(id, "page", "evil.test", None));
@@ -466,14 +404,14 @@ mod tests {
                 Signing::default(),
             )
             .unwrap();
-        b.next(Duration::from_secs(1), true, true).await.unwrap();
+        b.next(Duration::from_secs(1)).await.unwrap();
         assert!(!b.authorize_fill(find, "page", "x.test", None));
     }
 
     #[tokio::test]
     async fn a_fill_only_goes_to_the_session_it_was_made_for() {
         let b = Broker::default();
-        assert!(b.next(Duration::from_millis(1), true, true).await.is_none());
+        assert!(b.next(Duration::from_millis(1)).await.is_none());
         let (mine, other) = (Uuid::new_v4(), Uuid::new_v4());
         let id = b
             .start_autofill(
@@ -486,7 +424,7 @@ mod tests {
                 },
             )
             .unwrap();
-        b.next(Duration::from_secs(1), true, true).await.unwrap();
+        b.next(Duration::from_secs(1)).await.unwrap();
         assert!(!b.authorize_fill(id, "page", "x.test", Some(other)));
         assert!(!b.authorize_fill(id, "page", "x.test", None));
         assert!(b.authorize_fill(id, "page", "x.test", Some(mine)));

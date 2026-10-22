@@ -24,6 +24,30 @@ let
   # StateDirectory is relative to /var/lib.
   stateDirectory =
     if lib.hasPrefix "/var/lib/" cfg.dataDir then lib.removePrefix "/var/lib/" cfg.dataDir else null;
+  sa = cfg.secretAgent;
+  # rbw (and the phone unlock) use the rbw-agent in the user's runtime directory,
+  # which a system service is not given.
+  secretAgentStart = pkgs.writeShellScript "browser-daemon-secret-agent" ''
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    exec ${lib.getExe cfg.package} secret-agent \
+      --cluster-secret-file "$CREDENTIALS_DIRECTORY/cluster-secret" \
+      --rbw ${lib.getExe' sa.rbwPackage "rbw"} \
+      --unlock-host ${lib.escapeShellArg sa.unlockHost} \
+      ${lib.escapeShellArgs (
+        lib.concatMap (n: [
+          "--node"
+          n
+        ]) sa.nodes
+        ++ lib.optionals (sa.unlockWebhook != null) [
+          "--unlock-webhook"
+          sa.unlockWebhook
+        ]
+        ++ lib.optionals (sa.notifyWebhook != null) [
+          "--notify-webhook"
+          sa.notifyWebhook
+        ]
+      )}
+  '';
   parkPointer = pkgs.writeShellScript "browser-daemon-park-pointer" ''
     for _ in $(seq 50); do
       DISPLAY=${cfg.display} ${lib.getExe pkgs.xdotool} mousemove ${toString (screenWidth - 1)} ${toString (screenHeight - 1)} && exit 0
@@ -371,284 +395,368 @@ in
       default = null;
       description = "Global systemd CPUQuota limit for browser-daemon service (e.g. '200%').";
     };
-  };
 
-  config = lib.mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = cfg.clusterSecret == null || cfg.clusterSecretFile == null;
-        message = "services.browser-daemon: set only one of clusterSecret and clusterSecretFile.";
-      }
-      {
-        assertion =
-          cfg.clusterSecretFile == null
-          || (
-            lib.hasPrefix "/" cfg.clusterSecretFile
-            && !(lib.hasPrefix "${builtins.storeDir}/" cfg.clusterSecretFile)
-          );
-        message = "services.browser-daemon.clusterSecretFile must be an absolute path outside the Nix store (a string, not a path literal).";
-      }
-      {
-        assertion = builtins.match "([[][0-9a-fA-F:.]+[]]|[0-9.]+):[0-9]{1,5}" cfg.bind != null;
-        message = "services.browser-daemon.bind must be IP:PORT (or [IPv6]:PORT), got `${cfg.bind}`.";
-      }
-      {
-        assertion = cfg.video.enable -> cfg.displayMode == "per-session";
-        message = "services.browser-daemon.video needs displayMode = \"per-session\" (each session's screen is captured on its own).";
-      }
-    ];
-
-    warnings =
-      lib.optional (cfg.clusterSecret != null)
-        "services.browser-daemon.clusterSecret is deprecated: it lands in the Nix store and on the command line. Use clusterSecretFile."
-      ++ lib.optional (
-        cfg.peers != [ ] && cfg.clusterSecret == null && cfg.clusterSecretFile == null
-      ) "services.browser-daemon.peers is set without a cluster secret: the mesh will not authenticate.";
-
-    # A dataDir outside /var/lib cannot be a StateDirectory.
-    systemd.tmpfiles.rules = lib.mkIf (stateDirectory == null) [
-      "d ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group} -"
-    ];
-
-    users.users.${cfg.user} = {
-      isSystemUser = true;
-      inherit (cfg) group;
-      home = cfg.dataDir;
-    };
-    users.groups.${cfg.group} = { };
-
-    fonts.packages = [
-      pkgs.dejavu_fonts
-      pkgs.noto-fonts
-      pkgs.noto-fonts-color-emoji
-      pkgs.noto-fonts-cjk-sans
-    ];
-
-    # `browser-daemon tui` for the people on the host.
-    environment.systemPackages = [ cfg.package ];
-    environment.variables = lib.mkIf (cfg.clusterSecretFile != null) {
-      BROWSER_DAEMON_SECRET_FILE = cfg.clusterSecretFile;
-    };
-
-    systemd.services = {
-      browser-daemon-pulse = lib.mkIf cfg.audio.enable {
-        description = "PulseAudio for browser-daemon sessions";
-        wantedBy = [ "multi-user.target" ];
-        environment = {
-          HOME = pulseDir;
-          PULSE_RUNTIME_PATH = pulseDir;
-          PULSE_STATE_PATH = "${pulseDir}/state";
-        };
-        serviceConfig = {
-          ExecStart = lib.concatStringsSep " " [
-            "${cfg.audio.pulseaudioPackage}/bin/pulseaudio"
-            "--daemonize=no"
-            "--exit-idle-time=-1"
-            "--use-pid-file=no"
-            "--realtime=no"
-            "--high-priority=no"
-            "--log-target=stderr"
-            "-n"
-            "-F"
-            "${pulseConfig}"
-          ];
-          Restart = "always";
-          RestartSec = 2;
-          User = cfg.user;
-          Group = cfg.group;
-          RuntimeDirectory = "browser-daemon-pulse";
-          RuntimeDirectoryMode = "0750";
-        };
+    secretAgent = {
+      enable = lib.mkEnableOption ''
+        the secret agent (`browser-daemon secret-agent`). It serves a user's rbw
+        vault to the live views of `secretAgent.nodes`: the passkeys approved
+        there and the logins of their vault button. Nodes without an agent
+        have no vault'';
+      user = lib.mkOption {
+        type = lib.types.str;
+        example = "alice";
+        description = "User whose rbw vault is served: the agent, rbw and rbw-agent run as them.";
       };
-
-      browser-daemon-xvfb = lib.mkIf (cfg.displayMode == "shared") {
-        description = "Xvfb virtual display for browser-daemon";
-        wantedBy = [ "multi-user.target" ];
-        serviceConfig = {
-          ExecStart = "${cfg.xvfbPackage}/bin/Xvfb ${cfg.display} -screen 0 ${toString screenWidth}x${toString screenHeight}x24 -nolisten tcp -noreset";
-          ExecStartPost = parkPointer;
-          Restart = "always";
-          RestartSec = 2;
-          User = cfg.user;
-          Group = cfg.group;
-        };
+      nodes = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = lib.optional cfg.enable "http://${cfg.bind}";
+        defaultText = lib.literalExpression ''lib.optional config.services.browser-daemon.enable "http://''${config.services.browser-daemon.bind}"'';
+        example = [ "https://browser.example.org" ];
+        description = "Base URLs of the nodes to serve; this host's node by default.";
       };
-
-      browser-daemon = {
-        description = "Native remote browser daemon";
-        wantedBy = [ "multi-user.target" ];
-        wants =
-          lib.optional (cfg.displayMode == "shared") "browser-daemon-xvfb.service"
-          ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
-        after =
-          lib.optional (cfg.displayMode == "shared") "browser-daemon-xvfb.service"
-          ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
-        path = [
-          pkgs.gnutar
-          pkgs.gzip
-        ];
-        serviceConfig = {
-          ExecStart = lib.concatStringsSep " " (
-            [
-              "${cfg.package}/bin/browser-daemon"
-              "run"
-              "--bind"
-              cfg.bind
-              "--chromium"
-              (lib.getExe cfg.chromiumPackage)
-              "--display"
-              cfg.display
-              "--profile-dir"
-              "${cfg.dataDir}/profiles"
-              "--recordings-dir"
-              cfg.recordingsDir
-              "--recording-max-storage-mb"
-              (toString cfg.recordingMaxStorageMB)
-              "--recording-max-age-hours"
-              (toString cfg.recordingMaxAgeHours)
-              "--recording-max-count"
-              (toString cfg.recordingMaxCount)
-              "--record-audio"
-              (lib.boolToString cfg.recordAudio)
-              "--record-sessions"
-              (lib.boolToString cfg.recordSessions)
-              "--browser-forget-after-hours"
-              (toString cfg.browserForgetAfterHours)
-              "--ffmpeg"
-              (lib.getExe cfg.audio.ffmpegPackage)
-              "--max-sessions"
-              (toString cfg.maxSessions)
-              "--default-width"
-              (toString cfg.defaultWidth)
-              "--default-height"
-              (toString cfg.defaultHeight)
-              "--node-name"
-              cfg.nodeName
-              "--idle-timeout-minutes"
-              (toString cfg.idleTimeoutMinutes)
-              "--adblock-default"
-              (lib.boolToString cfg.adblock.default)
-            ]
-            ++ lib.optionals cfg.adblock.enable [
-              "--chromium-adblock"
-              "${cfg.adblock.chromiumExtension}"
-              "--firefox-adblock"
-              "${cfg.adblock.firefoxAddon}"
-            ]
-            ++ lib.optionals (cfg.displayMode == "per-session") [
-              "--display-mode"
-              "per-session"
-              "--xvfb"
-              "${cfg.xvfbPackage}/bin/Xvfb"
-              "--xdotool"
-              (lib.getExe pkgs.xdotool)
-            ]
-            ++ lib.optionals cfg.video.enable [
-              "--video-encoder"
-              cfg.video.encoder
-              "--video-ffmpeg"
-              (lib.getExe cfg.video.ffmpegPackage)
-              "--vaapi-device"
-              cfg.video.vaapiDevice
-            ]
-            ++ lib.optionals cfg.gpu.enable [
-              "--chromium-gpu"
-              "vulkan"
-            ]
-            ++ lib.optionals cfg.audio.enable [
-              "--pulse-server"
-              "${pulseDir}/native"
-              "--pactl"
-              "${cfg.audio.pulseaudioPackage}/bin/pactl"
-            ]
-            ++ lib.optionals (cfg.proxies != [ ]) [
-              "--proxies-file"
-              "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" cfg.proxies}"
-            ]
-            ++ lib.optionals (cfg.publicUrl != null) [
-              "--public-url"
-              cfg.publicUrl
-            ]
-            ++ lib.optionals (cfg.shareUrl != null) [
-              "--share-url"
-              cfg.shareUrl
-            ]
-            ++ lib.concatMap (p: [
-              "--peer"
-              p
-            ]) cfg.peers
-            ++ lib.concatMap (h: [
-              "--allowed-host"
-              h
-            ]) cfg.allowedHosts
-            ++ lib.concatMap (origin: [
-              "--extension-origin"
-              origin
-            ]) cfg.extensionOrigins
-            ++ lib.optionals (cfg.clusterSecretFile != null) [
-              "--cluster-secret-file"
-              cfg.clusterSecretFile
-            ]
-            ++ lib.optionals (cfg.clusterSecret != null) [
-              "--cluster-secret"
-              cfg.clusterSecret
-            ]
-            ++ lib.optionals (cfg.firefoxPackage != null) [
-              "--firefox"
-              (lib.getExe cfg.firefoxPackage)
-            ]
-            ++ lib.optionals (cfg.sessionMemoryMaxMB != null) [
-              "--max-session-memory-mb"
-              (toString cfg.sessionMemoryMaxMB)
-            ]
-          );
-          Restart = "always";
-          RestartSec = 2;
-          KillMode = lib.mkIf cfg.keepSessionsOnRestart "process";
-          User = cfg.user;
-          Group = cfg.group;
-          StateDirectory = lib.mkIf (stateDirectory != null) stateDirectory;
-          StateDirectoryMode = "0700";
-          UMask = "0077";
-          # Hardening. User namespaces stay allowed (the Chromium sandbox needs
-          # them), as does W^X-violating JIT memory. /dev is not restricted, so
-          # the GPU render node (/dev/dri) and audio keep working.
-          NoNewPrivileges = true;
-          ProtectSystem = "strict";
-          ReadWritePaths = [
-            cfg.dataDir
-            "-${cfg.recordingsDir}"
-            "-${pulseDir}"
-            # The real /tmp, not a private one: browsers and their X displays
-            # outlive a daemon restart (keepSessionsOnRestart), and systemd would
-            # empty a private /tmp when the old daemon stops, under their feet
-            # (uploads, throwaway profiles, X locks). The daemon's own files there
-            # are 0700/0600 (UMask) instead.
-            "/tmp"
-            "/var/tmp"
-          ];
-          ProtectHome = true;
-          PrivateTmp = false;
-          ProtectKernelTunables = true;
-          ProtectKernelModules = true;
-          ProtectKernelLogs = true;
-          ProtectControlGroups = true;
-          RestrictAddressFamilies = [
-            "AF_UNIX"
-            "AF_INET"
-            "AF_INET6"
-            "AF_NETLINK"
-          ];
-          LockPersonality = true;
-          RestrictRealtime = true;
-          SystemCallArchitectures = "native";
-          CapabilityBoundingSet = "";
-          WorkingDirectory = cfg.dataDir;
-          MemoryMax = lib.mkIf (cfg.memoryMax != null) cfg.memoryMax;
-          MemoryHigh = lib.mkIf (cfg.memoryHigh != null) cfg.memoryHigh;
-          CPUQuota = lib.mkIf (cfg.cpuQuota != null) cfg.cpuQuota;
-        };
+      clusterSecretFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = cfg.clusterSecretFile;
+        defaultText = lib.literalExpression "config.services.browser-daemon.clusterSecretFile";
+        description = ''
+          File with the cluster secret of the nodes served. systemd hands it to
+          the agent as a credential: it need not be readable by `user`.
+        '';
+      };
+      rbwPackage = lib.mkPackageOption pkgs "rbw" { };
+      unlockWebhook = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "http://homeassistant:8123/api/webhook/rbw_unlock_request";
+        description = ''
+          Webhook asked (POST `{"host", "agent"}`) to unlock rbw on the phone
+          when a request needs the locked vault. Without it, such requests fail.
+        '';
+      };
+      unlockHost = lib.mkOption {
+        type = lib.types.str;
+        default = config.networking.hostName;
+        defaultText = lib.literalExpression "config.networking.hostName";
+        description = "Host name the unlock webhook should unlock rbw on.";
+      };
+      notifyWebhook = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Webhook told (POST `{"message"}`) about every login filled into a site
+          its vault entry is not saved for. The fill goes ahead; this is the notice.
+        '';
       };
     };
   };
+
+  config = lib.mkMerge [
+    (lib.mkIf cfg.enable {
+      assertions = [
+        {
+          assertion = cfg.clusterSecret == null || cfg.clusterSecretFile == null;
+          message = "services.browser-daemon: set only one of clusterSecret and clusterSecretFile.";
+        }
+        {
+          assertion =
+            cfg.clusterSecretFile == null
+            || (
+              lib.hasPrefix "/" cfg.clusterSecretFile
+              && !(lib.hasPrefix "${builtins.storeDir}/" cfg.clusterSecretFile)
+            );
+          message = "services.browser-daemon.clusterSecretFile must be an absolute path outside the Nix store (a string, not a path literal).";
+        }
+        {
+          assertion = builtins.match "([[][0-9a-fA-F:.]+[]]|[0-9.]+):[0-9]{1,5}" cfg.bind != null;
+          message = "services.browser-daemon.bind must be IP:PORT (or [IPv6]:PORT), got `${cfg.bind}`.";
+        }
+        {
+          assertion = cfg.video.enable -> cfg.displayMode == "per-session";
+          message = "services.browser-daemon.video needs displayMode = \"per-session\" (each session's screen is captured on its own).";
+        }
+      ];
+
+      warnings =
+        lib.optional (cfg.clusterSecret != null)
+          "services.browser-daemon.clusterSecret is deprecated: it lands in the Nix store and on the command line. Use clusterSecretFile."
+        ++ lib.optional (
+          cfg.peers != [ ] && cfg.clusterSecret == null && cfg.clusterSecretFile == null
+        ) "services.browser-daemon.peers is set without a cluster secret: the mesh will not authenticate.";
+
+      # A dataDir outside /var/lib cannot be a StateDirectory.
+      systemd.tmpfiles.rules = lib.mkIf (stateDirectory == null) [
+        "d ${cfg.dataDir} 0700 ${cfg.user} ${cfg.group} -"
+      ];
+
+      users.users.${cfg.user} = {
+        isSystemUser = true;
+        inherit (cfg) group;
+        home = cfg.dataDir;
+      };
+      users.groups.${cfg.group} = { };
+
+      fonts.packages = [
+        pkgs.dejavu_fonts
+        pkgs.noto-fonts
+        pkgs.noto-fonts-color-emoji
+        pkgs.noto-fonts-cjk-sans
+      ];
+
+      # `browser-daemon tui` for the people on the host.
+      environment.systemPackages = [ cfg.package ];
+      environment.variables = lib.mkIf (cfg.clusterSecretFile != null) {
+        BROWSER_DAEMON_SECRET_FILE = cfg.clusterSecretFile;
+      };
+
+      systemd.services = {
+        browser-daemon-pulse = lib.mkIf cfg.audio.enable {
+          description = "PulseAudio for browser-daemon sessions";
+          wantedBy = [ "multi-user.target" ];
+          environment = {
+            HOME = pulseDir;
+            PULSE_RUNTIME_PATH = pulseDir;
+            PULSE_STATE_PATH = "${pulseDir}/state";
+          };
+          serviceConfig = {
+            ExecStart = lib.concatStringsSep " " [
+              "${cfg.audio.pulseaudioPackage}/bin/pulseaudio"
+              "--daemonize=no"
+              "--exit-idle-time=-1"
+              "--use-pid-file=no"
+              "--realtime=no"
+              "--high-priority=no"
+              "--log-target=stderr"
+              "-n"
+              "-F"
+              "${pulseConfig}"
+            ];
+            Restart = "always";
+            RestartSec = 2;
+            User = cfg.user;
+            Group = cfg.group;
+            RuntimeDirectory = "browser-daemon-pulse";
+            RuntimeDirectoryMode = "0750";
+          };
+        };
+
+        browser-daemon-xvfb = lib.mkIf (cfg.displayMode == "shared") {
+          description = "Xvfb virtual display for browser-daemon";
+          wantedBy = [ "multi-user.target" ];
+          serviceConfig = {
+            ExecStart = "${cfg.xvfbPackage}/bin/Xvfb ${cfg.display} -screen 0 ${toString screenWidth}x${toString screenHeight}x24 -nolisten tcp -noreset";
+            ExecStartPost = parkPointer;
+            Restart = "always";
+            RestartSec = 2;
+            User = cfg.user;
+            Group = cfg.group;
+          };
+        };
+
+        browser-daemon = {
+          description = "Native remote browser daemon";
+          wantedBy = [ "multi-user.target" ];
+          wants =
+            lib.optional (cfg.displayMode == "shared") "browser-daemon-xvfb.service"
+            ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
+          after =
+            lib.optional (cfg.displayMode == "shared") "browser-daemon-xvfb.service"
+            ++ lib.optional cfg.audio.enable "browser-daemon-pulse.service";
+          path = [
+            pkgs.gnutar
+            pkgs.gzip
+          ];
+          serviceConfig = {
+            ExecStart = lib.concatStringsSep " " (
+              [
+                "${cfg.package}/bin/browser-daemon"
+                "run"
+                "--bind"
+                cfg.bind
+                "--chromium"
+                (lib.getExe cfg.chromiumPackage)
+                "--display"
+                cfg.display
+                "--profile-dir"
+                "${cfg.dataDir}/profiles"
+                "--recordings-dir"
+                cfg.recordingsDir
+                "--recording-max-storage-mb"
+                (toString cfg.recordingMaxStorageMB)
+                "--recording-max-age-hours"
+                (toString cfg.recordingMaxAgeHours)
+                "--recording-max-count"
+                (toString cfg.recordingMaxCount)
+                "--record-audio"
+                (lib.boolToString cfg.recordAudio)
+                "--record-sessions"
+                (lib.boolToString cfg.recordSessions)
+                "--browser-forget-after-hours"
+                (toString cfg.browserForgetAfterHours)
+                "--ffmpeg"
+                (lib.getExe cfg.audio.ffmpegPackage)
+                "--max-sessions"
+                (toString cfg.maxSessions)
+                "--default-width"
+                (toString cfg.defaultWidth)
+                "--default-height"
+                (toString cfg.defaultHeight)
+                "--node-name"
+                cfg.nodeName
+                "--idle-timeout-minutes"
+                (toString cfg.idleTimeoutMinutes)
+                "--adblock-default"
+                (lib.boolToString cfg.adblock.default)
+              ]
+              ++ lib.optionals cfg.adblock.enable [
+                "--chromium-adblock"
+                "${cfg.adblock.chromiumExtension}"
+                "--firefox-adblock"
+                "${cfg.adblock.firefoxAddon}"
+              ]
+              ++ lib.optionals (cfg.displayMode == "per-session") [
+                "--display-mode"
+                "per-session"
+                "--xvfb"
+                "${cfg.xvfbPackage}/bin/Xvfb"
+                "--xdotool"
+                (lib.getExe pkgs.xdotool)
+              ]
+              ++ lib.optionals cfg.video.enable [
+                "--video-encoder"
+                cfg.video.encoder
+                "--video-ffmpeg"
+                (lib.getExe cfg.video.ffmpegPackage)
+                "--vaapi-device"
+                cfg.video.vaapiDevice
+              ]
+              ++ lib.optionals cfg.gpu.enable [
+                "--chromium-gpu"
+                "vulkan"
+              ]
+              ++ lib.optionals cfg.audio.enable [
+                "--pulse-server"
+                "${pulseDir}/native"
+                "--pactl"
+                "${cfg.audio.pulseaudioPackage}/bin/pactl"
+              ]
+              ++ lib.optionals (cfg.proxies != [ ]) [
+                "--proxies-file"
+                "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" cfg.proxies}"
+              ]
+              ++ lib.optionals (cfg.publicUrl != null) [
+                "--public-url"
+                cfg.publicUrl
+              ]
+              ++ lib.optionals (cfg.shareUrl != null) [
+                "--share-url"
+                cfg.shareUrl
+              ]
+              ++ lib.concatMap (p: [
+                "--peer"
+                p
+              ]) cfg.peers
+              ++ lib.concatMap (h: [
+                "--allowed-host"
+                h
+              ]) cfg.allowedHosts
+              ++ lib.concatMap (origin: [
+                "--extension-origin"
+                origin
+              ]) cfg.extensionOrigins
+              ++ lib.optionals (cfg.clusterSecretFile != null) [
+                "--cluster-secret-file"
+                cfg.clusterSecretFile
+              ]
+              ++ lib.optionals (cfg.clusterSecret != null) [
+                "--cluster-secret"
+                cfg.clusterSecret
+              ]
+              ++ lib.optionals (cfg.firefoxPackage != null) [
+                "--firefox"
+                (lib.getExe cfg.firefoxPackage)
+              ]
+              ++ lib.optionals (cfg.sessionMemoryMaxMB != null) [
+                "--max-session-memory-mb"
+                (toString cfg.sessionMemoryMaxMB)
+              ]
+            );
+            Restart = "always";
+            RestartSec = 2;
+            KillMode = lib.mkIf cfg.keepSessionsOnRestart "process";
+            User = cfg.user;
+            Group = cfg.group;
+            StateDirectory = lib.mkIf (stateDirectory != null) stateDirectory;
+            StateDirectoryMode = "0700";
+            UMask = "0077";
+            # Hardening. User namespaces stay allowed (the Chromium sandbox needs
+            # them), as does W^X-violating JIT memory. /dev is not restricted, so
+            # the GPU render node (/dev/dri) and audio keep working.
+            NoNewPrivileges = true;
+            ProtectSystem = "strict";
+            ReadWritePaths = [
+              cfg.dataDir
+              "-${cfg.recordingsDir}"
+              "-${pulseDir}"
+              # The real /tmp, not a private one: browsers and their X displays
+              # outlive a daemon restart (keepSessionsOnRestart), and systemd would
+              # empty a private /tmp when the old daemon stops, under their feet
+              # (uploads, throwaway profiles, X locks). The daemon's own files there
+              # are 0700/0600 (UMask) instead.
+              "/tmp"
+              "/var/tmp"
+            ];
+            ProtectHome = true;
+            PrivateTmp = false;
+            ProtectKernelTunables = true;
+            ProtectKernelModules = true;
+            ProtectKernelLogs = true;
+            ProtectControlGroups = true;
+            RestrictAddressFamilies = [
+              "AF_UNIX"
+              "AF_INET"
+              "AF_INET6"
+              "AF_NETLINK"
+            ];
+            LockPersonality = true;
+            RestrictRealtime = true;
+            SystemCallArchitectures = "native";
+            CapabilityBoundingSet = "";
+            WorkingDirectory = cfg.dataDir;
+            MemoryMax = lib.mkIf (cfg.memoryMax != null) cfg.memoryMax;
+            MemoryHigh = lib.mkIf (cfg.memoryHigh != null) cfg.memoryHigh;
+            CPUQuota = lib.mkIf (cfg.cpuQuota != null) cfg.cpuQuota;
+          };
+        };
+      };
+    })
+
+    (lib.mkIf cfg.secretAgent.enable {
+      assertions = [
+        {
+          assertion = sa.clusterSecretFile != null;
+          message = "services.browser-daemon.secretAgent needs a clusterSecretFile (its own or the node's).";
+        }
+        {
+          assertion = sa.nodes != [ ];
+          message = "services.browser-daemon.secretAgent.nodes is empty: there is no node to serve.";
+        }
+      ];
+
+      systemd.services.browser-daemon-secret-agent = {
+        description = "browser-daemon secret agent (rbw vault of ${sa.user})";
+        wantedBy = [ "multi-user.target" ];
+        wants = [ "network-online.target" ];
+        after = [ "network-online.target" ] ++ lib.optional cfg.enable "browser-daemon.service";
+        # rbw starts rbw-agent when none runs.
+        path = [ sa.rbwPackage ];
+        serviceConfig = {
+          User = sa.user;
+          ExecStart = secretAgentStart;
+          LoadCredential = "cluster-secret:${sa.clusterSecretFile}";
+          Restart = "always";
+          RestartSec = 10;
+        };
+      };
+    })
+  ];
 }

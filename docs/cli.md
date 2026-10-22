@@ -12,7 +12,7 @@ browser-daemon node list|show|set|add|remove (rm)
 browser-daemon completions bash|zsh|fish   shell completions (the package installs them)
 browser-daemon mcp                        MCP server for AI agents (see below)
 browser-daemon tui                        terminal UI (see above)
-browser-daemon passkey-helper             serve approved passkeys and vault logins from rbw
+browser-daemon secret-agent               serve the live views' vault (passkeys, logins) from rbw (docs/rbw.md)
 ```
 
 Sessions, profiles and recordings are named by id or, for sessions and profiles, by name. An exact id wins over an exact name, which wins over the start of an id (at least 4 characters); `--node` narrows a name that exists on several nodes. Commands with several targets (`session stop`, `recording rm|keep|unkeep`) try each one and report the ones that failed. Commands that destroy data (`profile rm|clear`, `profile backup restore|rm`, `profile import --overwrite`, `profile transfer --move|--overwrite`, `recording rm`, `session stop-all`) ask first, or take `-y`. Exports (`profile export`, `recording export`) stream into a temporary file that replaces the target when complete, and refuse to overwrite an existing file without `--force`.

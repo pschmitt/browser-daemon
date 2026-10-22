@@ -229,7 +229,7 @@ pub struct AppState {
     pub audible_pages: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
     /// Live views per session, for the size Native viewers share.
     pub viewers: Arc<viewers::Viewers>,
-    /// Passkeys approved in live views, on their way to the passkey helper.
+    /// Passkeys approved in live views, on their way to the secret agent.
     pub passkeys: Arc<passkeys::Broker>,
     /// This node's settings (Nodes tab of the dashboard).
     pub settings: Arc<settings::Store>,

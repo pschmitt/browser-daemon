@@ -1,4 +1,4 @@
-//! Passkey, autofill and passkey-helper handlers.
+//! Passkey, autofill and secret-agent handlers.
 
 use super::*;
 
@@ -20,7 +20,7 @@ pub(crate) struct PasskeyRequest {
     pub(crate) allow: Vec<String>,
 }
 
-/// A passkey approved in the live view: the helper puts it into the page.
+/// A passkey approved in the live view: the secret agent puts it into the page.
 /// Answers right away with the request's id; its progress is at /api/passkey/{id}.
 pub(crate) async fn api_session_passkey(
     AxumPath(id): AxumPath<Uuid>,
@@ -78,7 +78,7 @@ pub(crate) async fn api_session_passkey(
 }
 
 /// A passkey approved in the live view of a shared browser's tab (with control):
-/// the helper signs the page's challenge and the page's hook answers with it (the
+/// the secret agent signs the page's challenge and the page's hook answers with it (the
 /// browser's own authenticator is never touched). The origin and site come from the
 /// tab's address as the browser reports it.
 pub(crate) async fn api_extension_passkey(
@@ -258,7 +258,7 @@ pub(crate) async fn api_extension_autofill(
     ))
 }
 
-/// The helper's fill for a shared browser's tab (see `api_page_autofill`).
+/// The secret agent's fill for a shared browser's tab (see `api_page_autofill`).
 async fn extension_page_autofill(
     state: &AppState,
     page_id: &str,
@@ -313,14 +313,14 @@ async fn extension_page_autofill(
 
 #[derive(Deserialize)]
 pub(crate) struct PageAutofill {
-    /// The "fill" request this answers: only one the helper took, for this page and
+    /// The "fill" request this answers: only one the agent took, for this page and
     /// host, and only once.
     pub(crate) request: Uuid,
     /// The page must still be on this host (the one the entry was checked for).
     pub(crate) host: String,
     /// The entry's URIs: only frames on these sites are filled.
     pub(crate) uris: Vec<secrets::Uri>,
-    /// The entry is not saved for the site and was picked anyway (the helper
+    /// The entry is not saved for the site and was picked anyway (the agent
     /// told the user): only the page's own site is filled, then.
     #[serde(default)]
     pub(crate) any_site: bool,
@@ -328,7 +328,7 @@ pub(crate) struct PageAutofill {
     pub(crate) creds: autofill::Creds,
 }
 
-/// The passkey helper fills a vault entry into a page (see autofill.rs). The
+/// The secret agent fills a vault entry into a page (see autofill.rs). The
 /// values are never logged.
 pub(crate) async fn api_page_autofill(
     AxumPath(page_id): AxumPath<String>,
@@ -434,7 +434,7 @@ pub(crate) struct PasskeyNote {
     pub(crate) note: String,
 }
 
-pub(crate) async fn api_passkey_helper_note(
+pub(crate) async fn api_secret_agent_note(
     AxumPath(req): AxumPath<Uuid>,
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -448,35 +448,18 @@ pub(crate) async fn api_passkey_helper_note(
     })
 }
 
-#[derive(Deserialize)]
-pub(crate) struct HelperPoll {
-    /// The helper handles "find" requests (newer helpers say so).
-    #[serde(default)]
-    pub(crate) finds: bool,
-    /// The helper handles "logins" and "fill" requests.
-    #[serde(default)]
-    pub(crate) autofill: bool,
-}
-
-pub(crate) async fn api_passkey_helper_next(
+pub(crate) async fn api_secret_agent_next(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(poll): Query<HelperPoll>,
 ) -> Result<Response, ApiError> {
     state.check_auth(&headers)?;
-    Ok(
-        match state
-            .passkeys
-            .next(Duration::from_secs(25), poll.finds, poll.autofill)
-            .await
-        {
-            Some(req) => Json(req).into_response(),
-            None => StatusCode::NO_CONTENT.into_response(),
-        },
-    )
+    Ok(match state.passkeys.next(Duration::from_secs(25)).await {
+        Some(req) => Json(req).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
 }
 
-pub(crate) async fn api_passkey_helper_done(
+pub(crate) async fn api_secret_agent_done(
     AxumPath(req): AxumPath<Uuid>,
     State(state): State<AppState>,
     headers: HeaderMap,

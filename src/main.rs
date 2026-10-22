@@ -24,7 +24,6 @@ mod notes;
 mod overview;
 mod page_input;
 mod pages;
-mod passkey_helper;
 mod passkeys;
 mod passkeys_api;
 mod peerproc;
@@ -41,6 +40,7 @@ mod rec_export;
 mod recorder;
 mod recordings_api;
 mod relay;
+mod secret_agent;
 mod secrets;
 mod session_actions;
 mod sessions;
@@ -361,8 +361,8 @@ pub enum Command {
     Mcp(mcp::McpArgs),
     /// Print a shell completion script (bash, zsh, fish, ...).
     Completions { shell: clap_complete::Shell },
-    /// Serve passkeys and vault logins approved in live views from the local rbw vault.
-    PasskeyHelper(passkey_helper::HelperArgs),
+    /// Serve the live views' vault (passkeys, logins) from the local rbw vault.
+    SecretAgent(secret_agent::SecretAgentArgs),
 }
 
 fn default_true() -> bool {
@@ -428,14 +428,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // The TUI owns the terminal: no log output.
         Command::Tui(conn) => return ctl_exit(tui::run(conn).await),
-        Command::PasskeyHelper(helper_args) => {
+        Command::SecretAgent(agent_args) => {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
                         .unwrap_or_else(|_| "browser_daemon=info".into()),
                 )
                 .init();
-            return passkey_helper::run(helper_args).await;
+            return secret_agent::run(agent_args).await;
         }
     };
 
@@ -945,12 +945,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/x-input", post(api_session_x_input))
         .route("/api/agent-topic", post(api_agent_topic))
         .route("/api/passkey/{req}", get(api_passkey_status))
-        .route("/api/passkey-helper/next", get(api_passkey_helper_next))
-        .route("/api/passkey-helper/{req}", post(api_passkey_helper_done))
-        .route(
-            "/api/passkey-helper/{req}/note",
-            post(api_passkey_helper_note),
-        )
+        .route("/api/secret-agent/next", get(api_secret_agent_next))
+        .route("/api/secret-agent/{req}", post(api_secret_agent_done))
+        .route("/api/secret-agent/{req}/note", post(api_secret_agent_note))
         .route("/api/sessions/{id}/record", post(api_session_start_record))
         .route(
             "/api/sessions/{id}/files",
