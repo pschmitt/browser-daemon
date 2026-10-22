@@ -7,6 +7,12 @@
     # Builds the dependencies in their own derivation, so CI caches and hosts
     # reuse them instead of recompiling every crate on each change.
     crane.url = "github:ipetkov/crane";
+    # The live view's vault styles follow the rbw extension's theme.css
+    # (tools/rbw-theme.mjs); only its source is needed.
+    rbw = {
+      url = "github:pschmitt/rbw";
+      flake = false;
+    };
   };
 
   outputs =
@@ -15,6 +21,7 @@
       nixpkgs,
       flake-utils,
       crane,
+      rbw,
     }:
     let
       # Uncommitted builds report "<sha>-dirty".
@@ -55,6 +62,16 @@
                 ''
                   cd ${self}
                   nixfmt --check flake.nix nix/*.nix
+                  touch $out
+                '';
+            # handoff.html matches the locked rbw theme (`just rbw-theme` after a bump).
+            rbw-theme =
+              pkgs.runCommand "browser-daemon-rbw-theme"
+                {
+                  nativeBuildInputs = [ pkgs.nodejs ];
+                }
+                ''
+                  node ${self}/tools/rbw-theme.mjs check ${rbw}
                   touch $out
                 '';
           };

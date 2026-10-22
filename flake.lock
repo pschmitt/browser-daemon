@@ -49,11 +49,28 @@
         "type": "github"
       }
     },
+    "rbw": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1792679925,
+        "narHash": "sha256-oKptU21stWoN4Qh52NvYGi9TdWEltafDhr60jqoxyUA=",
+        "owner": "pschmitt",
+        "repo": "rbw",
+        "rev": "7f7128d1ed8a58e9b648ea1f65b5ae1946854124",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pschmitt",
+        "repo": "rbw",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "crane": "crane",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "rbw": "rbw"
       }
     },
     "systems": {

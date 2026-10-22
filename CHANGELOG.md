@@ -9,6 +9,12 @@
   strip with a capacity bar under the sessions, and uptime drops the seconds
   once a node is a minute old. The per-card "Filter" buttons are gone.
 * The session count badge on the tab icon is red instead of green.
+* The live view's vault popover and passkey dialog follow the rbw
+  extension's new look: its violet palette, shield icon, uppercase section
+  headings with counts and rounder login cards with key icons. The palette
+  and icon now come from rbw's `theme.css` through the new `rbw` flake input:
+  `just rbw-theme` restyles the live view after a bump, and `nix flake check`
+  fails while `handoff.html` and the locked rbw differ.
 * Taking over a session an agent is driving shows who: the agent, its topic,
   machine, project and how long it has been connected. The take-over icon is
   used on every take-over button, toasts included.
