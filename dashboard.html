@@ -1196,6 +1196,18 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </div>
 </dialog>
 
+<!-- Session settings -->
+<dialog class="modal" id="sessSettingsModal" aria-labelledby="sessSettingsTitle">
+  <form class="sheet" id="sessSettingsForm" style="max-width:440px">
+    <div class="sheet-head"><h2 id="sessSettingsTitle">Settings</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <div class="field"><label for="sessIdle">Auto-stop when idle</label><select class="input" id="sessIdle"></select><span class="hint">Time without any use (automation commands, or input in a live view) before this browser is stopped.</span></div>
+      <div class="field" id="sessProxyField"><label for="sessProxy">Proxy</label><select class="input" id="sessProxy"></select><span class="hint">Takes effect right away.</span></div>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
+  </form>
+</dialog>
+
 <!-- Confirm / prompt -->
 <dialog class="modal" id="askModal" aria-labelledby="askTitle">
   <form class="sheet" id="askForm" style="max-width:420px">
@@ -2669,19 +2681,13 @@ const ACT = {
         : { icon: 'rec', label: s.audio ? 'Start recording…' : 'Start recording', run: () => (s.audio ? openRecordModal(s) : toggleRecording(s)) },
       '-',
       { icon: 'takeover', label: 'Take over', run: () => takeOver(s.node_name, { session: s.id }, s) },
-      { icon: 'plus', label: 'New tab…', run: () => newTab(s) },
       { label: 'Browser' },
-      nodeProxies(s.node_name).length && { icon: 'route', label: 'Proxy', meta: s.proxy ? proxyName(s.node_name, s.proxy) : 'Direct', run: () => openMenu(el, [
-        { label: 'Proxy (switches now)' },
-        { label: 'Direct', on: !s.proxy, run: () => setSessionProxy(s, 'none') },
-        ...nodeProxies(s.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: s.proxy === x.id, run: () => setSessionProxy(s, x.id) })),
-      ]) },
       { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
       { icon: 'share', label: s.share ? 'Public link…' : 'Share…', run: () => openShare('session', s) },
       !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },
       { label: 'Session' },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
-      { icon: 'clock', label: 'Auto-stop when idle', meta: idleLabel(s.idle_timeout_seconds), run: () => setIdleTimeout(s) },
+      { icon: 'gear', label: 'Settings…', run: () => openSessionSettings(s) },
       { icon: 'note', label: 'Notes…', meta: s.notes ? String(s.notes.count) : '', run: () => openNotes('session', s) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
       '-',
@@ -3637,19 +3643,30 @@ async function renameSession(s) {
   act('Renaming', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/name`), { name: v.trim() }), 'Renamed');
 }
 
-async function setIdleTimeout(s) {
+// Auto-stop and proxy of a running session, applied together.
+let sessSettingsFor = null;
+function openSessionSettings(s) {
+  sessSettingsFor = s;
   const cur = s.idle_timeout_seconds ? Math.round(s.idle_timeout_seconds / 60) : 0;
-  const v = await ask({
-    title: 'Auto-stop when idle',
-    text: 'Minutes without any use (automation commands, or input in handoff) before this browser is stopped. 0 keeps it running.',
-    input: String(cur), ok: 'Save',
-  });
-  if (v === null || v === undefined) return;
-  const min = parseInt(v, 10);
-  if (!(min >= 0)) { showToast('Enter a number of minutes', 'danger'); return; }
-  act('Saving', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/idle-timeout?minutes=${min}`)),
-    min ? `Stops after ${idleLabel(min * 60)} without use` : 'Never stopped for inactivity');
+  // The usual choices, the current one among them, "never" last.
+  const presets = [...new Set([5, 15, 30, 60, 120, 360, cur].filter(Boolean))].sort((x, y) => x - y).concat(0);
+  $('sessIdle').innerHTML = presets.map((m) => `<option value="${m}"${m === cur ? ' selected' : ''}>${m ? idleLabel(m * 60) : 'Never'}</option>`).join('');
+  const list = nodeProxies(s.node_name);
+  $('sessProxyField').hidden = !list.length;
+  $('sessProxy').innerHTML = `<option value="none">Direct</option>` + list.map((x) => `<option value="${esc(x.id)}"${s.proxy === x.id ? ' selected' : ''}>${esc(x.name)} (${esc(x.host)}:${esc(x.port)})</option>`).join('');
+  $('sessSettingsTitle').textContent = `Settings of ${sessName(s)}`;
+  openModal('sessSettingsModal');
 }
+$('sessSettingsForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const s = sessSettingsFor; if (!s) return;
+  const min = parseInt($('sessIdle').value, 10), proxy = $('sessProxy').value;
+  const curMin = s.idle_timeout_seconds ? Math.round(s.idle_timeout_seconds / 60) : 0;
+  closeModal('sessSettingsModal');
+  if (min !== curMin) await act('Saving', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/idle-timeout?minutes=${min}`)),
+    min ? `Stops after ${idleLabel(min * 60)} without use` : 'Never stopped for inactivity');
+  if (!$('sessProxyField').hidden && proxy !== (s.proxy || 'none')) setSessionProxy(s, proxy);
+});
 
 function setRecordingPaused(s, paused) {
   return act(paused ? 'Pausing recording' : 'Resuming recording',
