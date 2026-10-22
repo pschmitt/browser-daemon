@@ -291,6 +291,17 @@ pub(crate) async fn api_vacuum_recordings(
     Ok(Json(stats))
 }
 
+/// What the cleanup would remove now, without removing it. A GET of its own: an
+/// older node refuses it instead of taking it for the cleanup itself.
+pub(crate) async fn api_vacuum_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    state.check_auth(&headers)?;
+    let stats = recorder::vacuum_recordings_with(&state.recorder_config, true).await;
+    Ok(Json(stats))
+}
+
 #[derive(Deserialize)]
 pub(crate) struct RecordParams {
     /// Take the session's sound too (default: the node's --record-audio).

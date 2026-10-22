@@ -175,6 +175,7 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("DELETE", ["profiles", _, "backups", _]) => (false, Short),
         ("POST", ["profiles", _, "backups", _, "restore"]) => (false, Long),
         ("GET", ["recordings"]) => (false, Short),
+        ("GET", ["recordings", "vacuum"]) => (false, Long),
         ("POST", ["recordings", "vacuum" | "merge"]) => (false, Long),
         ("GET" | "DELETE", ["recordings", _]) => (false, Short),
         ("GET", ["recordings", _, "frames" | "audio" | "export.webm"]) => (false, Long),

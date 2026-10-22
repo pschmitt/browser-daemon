@@ -1035,7 +1035,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/recordings/{id}/favicon",
             get(api_get_recording_favicon),
         )
-        .route("/api/recordings/vacuum", post(api_vacuum_recordings))
+        .route(
+            "/api/recordings/vacuum",
+            get(api_vacuum_plan).post(api_vacuum_recordings),
+        )
         // Peer-to-Peer Mesh APIs
         .route("/api/mesh/node", get(api_mesh_node))
         .route("/api/mesh/overview", get(api_mesh_overview))

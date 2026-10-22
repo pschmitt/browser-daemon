@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+
+* `GET /api/recordings/vacuum` lists what the retention policy would remove
+  now, without removing it; the cleanup's answer names the recordings too
+  (`ids`).
+
+### Changed
+
+* Dashboard: "Stop all" is now "Prune sessions", and its dialog shows the
+  sessions it stops as their cards, which work there as in the grid.
+* Dashboard: "Clean up" is now "Prune recordings", and its dialog lists the
+  recordings the retention policy removes before it does.
+* Dashboard: sessions are listed newest first; agent-driven ones are no
+  longer pinned to the top.
+* Dashboard: the recordings list selects all with a checkbox in its header
+  (the button stays on phones, which have no header).
+
 ## [0.4.0] - 2026-10-22
 
 ### Added

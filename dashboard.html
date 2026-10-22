@@ -628,6 +628,18 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .add-node h2 { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 0 0 10px; }
 #askModal .ask-extra { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 40vh; overflow-y: auto; }
 #askModal .ask-extra .node-card { padding: 10px 12px; }
+/* Prune recordings: the list's rows, without the selection. */
+#pruneRecList { margin-top: 12px; max-height: 55vh; overflow-y: auto; }
+#pruneRecList .row { grid-template-columns: 0 40px minmax(0, 1fr) 100px 90px 70px 44px; }
+#pruneRecList .row > [role="cell"]:first-child { visibility: hidden; }
+#pruneRecList .c-started, #pruneRecList .c-size { display: block; }
+#pruneRecList .c-dur { display: none; }
+@media (max-width: 760px) {
+  #pruneRecList .row { grid-template-columns: 0 40px minmax(0, 1fr) 44px; }
+  #pruneRecList .c-started, #pruneRecList .c-size { display: none; }
+}
+/* The header's checkbox selects them all; a phone has no header and keeps the button. */
+@media (min-width: 761px) { .view-actions .sel-all { display: none; } }
 #pruneGrid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-top: 12px; max-height: 55vh; overflow-y: auto; }
 .ask-agent { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; align-items: center; padding: 12px 14px; border-radius: 12px; background: var(--accent-soft); border: 1px solid color-mix(in oklab, var(--accent) 30%, var(--line)); }
 .ask-agent-ic { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--accent); }
@@ -973,7 +985,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="stat nav" data-view="recordings">
       <button class="stat-hit" data-act="view" data-view="recordings" title="Show recordings" aria-label="Show recordings"></button>
       <div class="stat-label"><svg class="i sm"><use href="#i-db"/></svg>Recordings</div>
-      <button class="btn ghost icon sm stat-action" data-act="vacuum" title="Clean up now: apply the retention policy" aria-label="Clean up recordings now"><svg class="i sm"><use href="#i-broom"/></svg></button>
+      <button class="btn ghost icon sm stat-action" data-act="vacuum" title="Prune recordings: apply the retention policy now" aria-label="Prune recordings"><svg class="i sm"><use href="#i-trash"/></svg></button>
       <div class="stat-value" id="statStorage">0 B</div>
       <div class="stat-sub" id="statStorageSub">of 0 B</div>
       <div class="meter"><span id="statStorageBar"></span></div>
@@ -1245,6 +1257,15 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-head"><h2 id="pruneTitle"></h2></div>
     <div class="sheet-body"><div id="pruneText" class="muted" style="font-size:13.5px"></div><div id="pruneGrid" class="session-grid"></div></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn danger" id="pruneOk"><svg class="i"><use href="#i-trash"/></svg>Prune sessions</button></div>
+  </form>
+</dialog>
+
+<!-- Prune recordings: what the retention policy removes now, as the list's rows -->
+<dialog class="modal" id="pruneRecModal" aria-labelledby="pruneRecTitle">
+  <form class="sheet" id="pruneRecForm" style="max-width:760px">
+    <div class="sheet-head"><h2 id="pruneRecTitle"></h2></div>
+    <div class="sheet-body"><div id="pruneRecText" class="muted" style="font-size:13.5px"></div><div id="pruneRecList" class="list recordings" hidden><div class="rows"></div></div></div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn danger" id="pruneRecOk"><svg class="i"><use href="#i-trash"/></svg>Prune recordings</button></div>
   </form>
 </dialog>
 
@@ -2509,6 +2530,7 @@ function selectedListed() {
 }
 
 function renderRecordings() {
+  renderPruneRec();
   const sec = $('view-recordings');
   const all = visibleRecordings();
   const list = listedRecordings().sort((a, b) => b.started_at_secs - a.started_at_secs);
@@ -2521,9 +2543,15 @@ function renderRecordings() {
   }
   if (sec._static !== undefined || !sec.querySelector('.list')) {
     clearStatic(sec);
-    sec.innerHTML = `<div class="list" role="table" aria-label="Recordings"><div class="list-head" role="row"><span role="columnheader" aria-label="Select"></span><span role="columnheader" aria-label="Play"></span><span role="columnheader">Recording</span><span role="columnheader">Node</span><span role="columnheader" class="c-started">Started</span><span role="columnheader" class="c-dur">Length</span><span role="columnheader" class="c-size">Size</span><span role="columnheader" aria-label="Actions"></span></div><div class="rows" role="rowgroup"></div><div class="list-nomatch" hidden></div><div class="list-more" hidden></div></div>`;
+    sec.innerHTML = `<div class="list" role="table" aria-label="Recordings"><div class="list-head" role="row"><span role="columnheader"><input class="recording-select rec-select-all" type="checkbox" aria-label="Select all visible recordings"></span><span role="columnheader" aria-label="Play"></span><span role="columnheader">Recording</span><span role="columnheader">Node</span><span role="columnheader" class="c-started">Started</span><span role="columnheader" class="c-dur">Length</span><span role="columnheader" class="c-size">Size</span><span role="columnheader" aria-label="Actions"></span></div><div class="rows" role="rowgroup"></div><div class="list-nomatch" hidden></div><div class="list-more" hidden></div></div>`;
   }
   reconcile(sec.querySelector('.rows'), list.slice(0, recLimit), keyOf.recording, recordingRow);
+  const picked = list.filter((r) => selectedRecordings.has(keyOf.recording(r))).length;
+  const master = sec.querySelector('.rec-select-all');
+  master.checked = list.length > 0 && picked === list.length;
+  master.indeterminate = picked > 0 && picked < list.length;
+  master.disabled = !list.length;
+  master.title = master.checked ? 'Deselect visible recordings' : 'Select visible recordings';
   const none = sec.querySelector('.list-nomatch');
   none.hidden = list.length > 0;
   if (!list.length) none.textContent = `No recordings match “${recQuery.trim()}”.`;
@@ -2569,8 +2597,8 @@ function renderViewActions(recordings = listedRecordings()) {
   const allSelected = keys.length > 0 && visibleSelected.length === keys.length;
   const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
   const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected${hidden > 0 ? ` (${hidden} more hidden by the search)` : ''}</span>` : ''}
-    ${selected.length ? '' : `<button class="btn sm" data-act="vacuum" title="Apply the retention policy now: removes old recordings that are not kept">${icon('broom', 'sm')}<span class="lbl">Clean up</span></button>`}
-    <button class="btn sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
+    ${selected.length ? '' : `<button class="btn sm" data-act="vacuum" title="Apply the retention policy now: removes old recordings that are not kept">${icon('trash', 'sm')}<span class="lbl">Prune recordings</span></button>`}
+    <button class="btn sm sel-all" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
     ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button>${selected.length > 1 ? `<button class="btn sm" data-act="merge-selected-recordings" title="Merge the selected recordings into one, in an order you pick">${icon('layers', 'sm')}<span class="lbl">Merge ${selected.length}</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
   if (actions.innerHTML !== html) actions.innerHTML = html;
 }
@@ -2830,6 +2858,7 @@ document.addEventListener('click', (e) => {
   fn(el, e);
 });
 document.addEventListener('change', (e) => {
+  if (e.target.matches('.rec-select-all')) { ACT['select-all-recordings'](); return; }
   const input = e.target.closest('input[type="checkbox"][data-act="select-recording"]');
   if (!input) return;
   if (input.checked) selectedRecordings.add(input.dataset.key);
@@ -4600,19 +4629,52 @@ function renderOffline() {
 }
 setInterval(renderOffline, 5000);
 
+// Prune: first asks each node what its retention policy would remove (null while
+// that runs), then lists those recordings; the rows follow the data while it is open.
+let prunePlan = null, pruneTargets = [], prunePlanError = '';
 async function vacuum() {
   if (extensionNodeOf(filter)) { showToast('Shared browsers do not store recordings on the daemon.', 'info'); return; }
   const targets = filter === 'all' ? nodes.filter((n) => n.status === 'online').map((n) => n.name) : [filter];
-  const ok = await ask({ title: 'Vacuum recordings?', text: `Applies the retention policy (age, count and size limits) on ${targets.join(', ')} now.`, ok: 'Vacuum' });
-  if (!ok) return;
-  act('Vacuuming recordings', async () => {
+  pruneTargets = targets; prunePlan = null; prunePlanError = '';
+  openModal('pruneRecModal');
+  renderPruneRec();
+  const plans = await Promise.allSettled(targets.map((n) => request('GET', api(n, '/recordings/vacuum'))
+    .then((s) => (s.ids || []).map((id) => `${n}|${id}`))));
+  if (pruneTargets !== targets) return;   // reopened meanwhile
+  const failed = targets.filter((_, i) => plans[i].status === 'rejected');
+  prunePlanError = failed.length ? `Could not ask ${failed.join(', ')} (an older version?); pruning still applies its policy there.` : '';
+  prunePlan = new Set(plans.flatMap((p) => (p.status === 'fulfilled' ? p.value : [])));
+  renderPruneRec();
+  setTimeout(() => $('pruneRecOk').focus(), 30);
+}
+function renderPruneRec() {
+  if (!$('pruneRecModal').open) return;
+  const where = pruneTargets.join(', ');
+  const list = prunePlan ? [...prunePlan].map((k) => byKey.recordings.get(k)).filter(Boolean).sort((a, b) => b.started_at_secs - a.started_at_secs) : [];
+  const size = list.reduce((sum, r) => sum + (r.size_bytes || 0), 0);
+  $('pruneRecTitle').textContent = !prunePlan ? 'Prune recordings?' : list.length ? `Prune ${plural(list.length, 'recording')}?` : 'Nothing to prune';
+  $('pruneRecText').textContent = (!prunePlan ? `Checking what the retention policy (age, count and size limits) removes on ${where}…`
+    : list.length ? `The retention policy (age, count and size limits) removes these on ${where} now, ${formatBytes(size)} in all. Kept and live recordings are never removed.`
+    : `Everything on ${where} is within the retention limits.`) + (prunePlanError ? ` ${prunePlanError}` : '');
+  $('pruneRecList').hidden = !list.length;
+  $('pruneRecOk').disabled = !prunePlan || (!list.length && !prunePlanError);
+  reconcile($('pruneRecList').querySelector('.rows'), list, keyOf.recording, recordingRow);
+}
+$('pruneRecForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const targets = pruneTargets;
+  closeModal('pruneRecModal');
+  pruneRecordings(targets);
+});
+function pruneRecordings(targets) {
+  act('Pruning recordings', async () => {
     let freed = 0, count = 0;
     for (const n of targets) {
       const s = await request('POST', api(n, '/recordings/vacuum'));
       freed += s.freed_bytes || 0; count += s.vacuumed_count || 0;
     }
-    showToast(count ? `Removed ${count} recordings` : 'Nothing to vacuum', 'success', 5000, null, count ? `${formatBytes(freed)} freed` : 'Everything is within the limits');
-  }, 'Vacuum finished');
+    showToast(count ? `Removed ${plural(count, 'recording')}` : 'Nothing to prune', 'success', 5000, null, count ? `${formatBytes(freed)} freed` : 'Everything is within the limits');
+  }, 'Recordings pruned');
 }
 
 /* ================================================================ recordings: merge */

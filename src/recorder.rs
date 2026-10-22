@@ -1714,6 +1714,8 @@ pub async fn merge_recordings(
 #[derive(Serialize, Debug)]
 pub struct VacuumStats {
     pub vacuumed_count: usize,
+    /// The recordings removed, or on a dry run the ones that would be.
+    pub ids: Vec<Uuid>,
     pub freed_bytes: u64,
     pub current_storage_bytes: u64,
     pub max_storage_bytes: u64,
@@ -1775,6 +1777,11 @@ fn select_for_removal(
 }
 
 pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
+    vacuum_recordings_with(config, false).await
+}
+
+/// The cleanup; with `dry_run` it only says what it would remove.
+pub async fn vacuum_recordings_with(config: &RecorderConfig, dry_run: bool) -> VacuumStats {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1811,22 +1818,27 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
 
     let mut vacuumed_count = 0;
     let mut freed_bytes = 0;
+    let mut ids = Vec::new();
 
     for i in to_delete {
         // Busy (or active) since the listing: the next round.
-        let id = paths[i]
+        let Some(id) = paths[i]
             .file_name()
-            .and_then(|n| Uuid::parse_str(&n.to_string_lossy()).ok());
-        if id.is_some_and(|id| is_active(id) || is_busy(id)) {
+            .and_then(|n| Uuid::parse_str(&n.to_string_lossy()).ok())
+        else {
+            continue;
+        };
+        if is_active(id) || is_busy(id) {
             continue;
         }
-        if fs::remove_dir_all(&paths[i]).await.is_ok() {
+        if dry_run || fs::remove_dir_all(&paths[i]).await.is_ok() {
             vacuumed_count += 1;
             freed_bytes += items[i].size_bytes;
+            ids.push(id);
         }
     }
 
-    if vacuumed_count > 0 {
+    if vacuumed_count > 0 && !dry_run {
         info!(
             vacuumed = vacuumed_count,
             freed_mb = freed_bytes / 1024 / 1024,
@@ -1837,6 +1849,7 @@ pub async fn vacuum_recordings(config: &RecorderConfig) -> VacuumStats {
 
     VacuumStats {
         vacuumed_count,
+        ids,
         freed_bytes,
         current_storage_bytes: current_total_bytes.saturating_sub(freed_bytes),
         max_storage_bytes: config.max_storage_bytes,
@@ -1980,8 +1993,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![ids[0]]
         );
+        let plan = vacuum_recordings_with(&config, true).await;
+        assert_eq!(plan.ids, vec![ids[1]], "a dry run names what would go");
+        assert!(dir.join(ids[1].to_string()).exists(), "and removes nothing");
         let stats = vacuum_recordings(&config).await;
         assert_eq!(stats.vacuumed_count, 1);
+        assert_eq!(stats.ids, vec![ids[1]]);
         assert!(dir.join(ids[0].to_string()).exists(), "the kept one stays");
         assert!(!dir.join(ids[1].to_string()).exists(), "the other one goes");
         // Not kept any more: the next cleanup takes it.
