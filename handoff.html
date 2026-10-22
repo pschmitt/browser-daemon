@@ -459,13 +459,6 @@
   #kb { position: fixed; left: 0; bottom: 0; width: 2px; height: 2px; padding: 0; border: 0; opacity: 0; font-size: 16px; /* >=16px: no iOS zoom */
     color: transparent; background: transparent; caret-color: transparent; -webkit-user-select: text; user-select: text; }
 
-  /* page picker */
-  #list { width: 100%; max-width: 560px; margin: 0 auto; padding: 14px; overflow: auto; align-self: flex-start; }
-  #list h1 { font-size: 17px; margin: 4px 2px 12px; }
-  #list .notice { margin: 0 2px 12px; padding: 9px 12px; border-radius: 10px; background: var(--btn); color: var(--muted); font-size: 13.5px; }
-  #list button { display: block; width: 100%; text-align: left; margin-bottom: 8px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--bar); color: var(--fg); font-size: 15px; }
-  #list small { display: block; margin-top: 2px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
   /* tabs modal */
   #tabCountBadge { position: absolute; font-size: 10px; font-weight: 700; color: currentColor; line-height: 1; pointer-events: none; }
   .tabs-modal-overlay { position: fixed; inset: 0; z-index: 50; display: none; align-items: flex-end; justify-content: center;
@@ -4068,49 +4061,11 @@ async function sendFilesToPage(opts, put) {
 }
 
 /* ---------------------------------------------------------------- page picker (no ?page=) */
-async function pickPage({ notice = "" } = {}) {
-  E.sessBtn.hidden = E.kbbtn.hidden = E.reload.hidden = E.back.hidden = E.fwd.hidden = true;
-  if (E.tabStrip) E.tabStrip.hidden = true;
-  if (E.urlBar) E.urlBar.hidden = true;
-  E.overlay.classList.remove("show");
-  E.view.hidden = true;
-  const box = document.createElement("div");
-  box.id = "list";
-  let list;
-  try { list = await getJson("/json/list"); } catch (err) {
-    box.innerHTML = '<h1>Could not list the pages</h1><p class="notice"></p><a href="/" class="btn" style="display:inline-block;text-decoration:none">Dashboard</a>';
-    box.querySelector(".notice").textContent = err.message;
-    E.stage.appendChild(box);
-    return;
-  }
-  const pages = list.filter((x) => x.type === "page");
-  if (pages.length === 0) {
-    box.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <h1 style="margin:0;">No active pages</h1>
-        <a href="/" style="font-size:13.5px;color:var(--accent);text-decoration:none;font-weight:600;">Dashboard ↗</a>
-      </div>
-      <p style="color:var(--muted);font-size:13.5px;margin-bottom:16px;">There are no open pages in running browser sessions right now.</p>
-      <a href="/" class="btn" style="display:inline-block;text-decoration:none;text-align:center;">Go to Dashboard</a>`;
-  } else {
-    box.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <h1 style="margin:0;">Which page?</h1>
-        <a href="/" style="font-size:13.5px;color:var(--accent);text-decoration:none;font-weight:600;">Dashboard ↗</a>
-      </div>`;
-    if (notice) { const n = document.createElement("p"); n.className = "notice"; n.textContent = notice; box.appendChild(n); }
-    for (const p of pages) {
-      const b = document.createElement("button");
-      b.textContent = p.title || "(untitled)";
-      const s = document.createElement("small");
-      s.textContent = p.url;
-      b.appendChild(s);
-      b.onclick = () => { location.search = "?page=" + encodeURIComponent(p.id); };
-      box.appendChild(b);
-    }
-  }
-  E.stage.appendChild(box);
-  E.dot.className = "";
+function pickPage({ reason = "choose" } = {}) {
+  const url = new URL(location.href);
+  url.search = new URLSearchParams({ sessions: reason }).toString();
+  url.hash = "";
+  location.replace(url);
 }
 
 /* ---------------------------------------------------------------- session menu: recording + stop */
@@ -5593,6 +5548,9 @@ async function boot() {
   if (!pageId && sessionId) {
     setState("wait");
     connectStep("waiting for the session's first tab");
+    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
+    if (response.status === 404) return pickPage({ reason: "not-found" });
+    if (!response.ok) throw new Error(`Could not check the session (${response.status})`);
     for (let i = 0; i < 20; i++) {
       const page = (await fetchTargets().catch(() => [])).find((t) => t.sessionId === sessionId);
       if (page) {
@@ -5604,8 +5562,7 @@ async function boot() {
       }
       await sleep(500);
     }
-    // 10 s without a tab: say so, rather than showing a list that looks unrelated.
-    return pickPage({ notice: "This session has no tabs yet. Pick one of the open pages instead." }).catch((e) => setState("bad", String(e)));
+    return pickPage({ reason: "unavailable" });
   }
   if (params.has("newtab")) {
     const u = new URL(location.href);
@@ -5615,9 +5572,9 @@ async function boot() {
     E.urlInput.focus();
   }
   if (pageId) connect();
-  else pickPage().catch((e) => setState("bad", String(e)));
+  else pickPage();
 }
-boot();
+boot().catch((error) => setState("bad", error.message));
 </script>
 </body>
 </html>

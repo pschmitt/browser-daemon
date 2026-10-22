@@ -214,8 +214,17 @@ pub(crate) async fn dashboard_page(State(state): State<AppState>, headers: Heade
     login_page(&state, &headers, DASHBOARD_HTML)
 }
 
-pub(crate) async fn handoff_page(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    login_page(&state, &headers, HANDOFF_HTML)
+pub(crate) async fn handoff_page(
+    State(state): State<AppState>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    let html = if query.contains_key("sessions") {
+        DASHBOARD_HTML
+    } else {
+        HANDOFF_HTML
+    };
+    login_page(&state, &headers, html)
 }
 
 /// A token for tools that cannot send the cookie or a header (`?auth=` on a

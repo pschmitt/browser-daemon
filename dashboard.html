@@ -17,6 +17,11 @@
 <link rel="apple-touch-icon" href="/icon-192.png">
 <link rel="stylesheet" href="/assets/common.css">
 <script src="/assets/common.js"></script>
+<script>
+if (new URLSearchParams(location.search).has('sessions') && location.pathname.startsWith('/handoff')) {
+  document.documentElement.dataset.handoffPicker = '';
+}
+</script>
 <style>
 [hidden] { display: none !important; }
 :root {
@@ -856,6 +861,17 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .dl-rows li:first-child { border-top: 0; }
 .dl-rows .dl-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .dl-rows .dl-t b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The handoff's recovery view uses the dashboard's live session cards. */
+#handoffPicker { display: none; }
+[data-handoff-picker] .top, [data-handoff-picker] main > .stats,
+[data-handoff-picker] main > .toolbar { display: none; }
+[data-handoff-picker] main { padding-top: clamp(24px, 6vh, 64px); }
+[data-handoff-picker] #handoffPicker { display: block; margin-bottom: 28px; }
+.handoff-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+#handoffPicker h1 { margin: 0; font-size: clamp(26px, 4vw, 34px); letter-spacing: -.03em; }
+#handoffPicker h1.error { color: var(--bad); }
+#handoffPicker p { color: var(--muted); margin: 12px 0 24px; max-width: 65ch; line-height: 1.6; }
+#handoffPicker h2 { font-size: 17px; margin: 0; }
 </style>
 </head>
 <body>
@@ -939,6 +955,11 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </header>
 
 <main>
+  <section id="handoffPicker" aria-labelledby="handoffPickerTitle">
+    <div class="handoff-picker-head"><h1 id="handoffPickerTitle"></h1><a class="btn sm" href="/">Dashboard ↗</a></div>
+    <p id="handoffPickerMessage"></p>
+    <h2>Available sessions</h2>
+  </section>
   <div class="offline-banner" id="offlineBanner" role="status" hidden></div>
   <div class="public-banner" id="publicBanner" role="status" hidden></div>
   <section class="stats">
@@ -1377,6 +1398,20 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 "use strict";
 
 /* ================================================================ basics */
+const handoffPicker = document.documentElement.hasAttribute('data-handoff-picker');
+if (handoffPicker) {
+  const reason = new URLSearchParams(location.search).get('sessions');
+  const missing = reason === 'not-found';
+  const unavailable = reason === 'unavailable';
+  const title = missing ? 'Session not found' : unavailable ? 'Session unavailable' : 'Choose a session';
+  document.title = title + ' · Browser Handoff';
+  document.getElementById('handoffPickerTitle').textContent = title;
+  document.getElementById('handoffPickerTitle').classList.toggle('error', missing || unavailable);
+  document.getElementById('handoffPickerMessage').textContent = missing
+    ? 'This session no longer exists. It may have ended or been removed. Choose another session below.'
+    : unavailable ? 'This session did not become ready. Choose another session below or open the dashboard to manage it.'
+    : 'Choose a session to continue in your browser.';
+}
 const enc = encodeURIComponent;
 
 
@@ -2592,6 +2627,7 @@ function syncTabHint() {
 document.querySelector('.views').addEventListener('scroll', syncTabHint, { passive: true });
 addEventListener('resize', syncTabHint);
 function setView(v) {
+  if (handoffPicker) v = 'sessions';
   view = v;
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
@@ -5978,7 +6014,8 @@ document.addEventListener('visibilitychange', () => {
 const addNodeLink = () => { if (location.hash !== '#nodes/add') return false; setView('nodes'); openModal('addNodeModal'); return true; };
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
-if (!addNodeLink()) setView(VIEWS.includes(initialView) ? initialView : 'sessions');
+if (handoffPicker) setView('sessions');
+else if (!addNodeLink()) setView(VIEWS.includes(initialView) ? initialView : 'sessions');
 addEventListener('hashchange', () => {
   if (addNodeLink()) return;
   const v = location.hash.slice(1);
