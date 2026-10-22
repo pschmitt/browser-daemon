@@ -2351,7 +2351,7 @@ function sessionCard(s) {
 
   // Under the name: one muted line.
   const meta = [
-    `<span title="${esc(s._extension ? 'Tabs explicitly shared from your browser' : s.profile ? `Profile ${s.profile}: its logins and cookies are kept` : 'No profile: nothing is kept')}">${esc(s._extension ? 'Shared browser' : s.profile || 'Throwaway')}</span>`,
+    `<span title="${esc(s._extension ? 'Tabs explicitly shared from your browser' : s.profile ? `Profile ${s.profile}: its logins and cookies are kept` : 'No profile: nothing is kept')}">${esc(s._extension ? 'Real browser' : s.profile || 'Throwaway')}</span>`,
     !s._extension && `<span data-up title="Uptime"></span>`,
   ].filter(Boolean).join('<span class="sep">·</span>') + '<span data-idle hidden></span>';
 

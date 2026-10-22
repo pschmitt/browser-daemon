@@ -5404,12 +5404,12 @@ function renderSharedSession() {
   const tab = sharedBrowser.tabs.find(t => String(t.id) === pageId), control = tab?.control === true;
   const companionMissing = sharedBrowser.browser === 'firefox' && !sharedBrowser.native_control;
   E.sessBtn.hidden = false; E.profChip.hidden = false; E.agentChip.hidden = true;
-  E.sessBtn.title = 'Shared browser';
+  E.sessBtn.title = 'Real browser';
   renderFollow();
   $('profChipText').textContent = sharedBrowser.name + (control ? '' : ' · View only') + (companionMissing ? ' · ⚠' : '');
   E.profChip.title = `${sharedBrowser.name} · ${control ? 'Control allowed' : 'View only'} · Tabs shared by their owner${companionMissing ? ' · Firefox companion unavailable; some clicks and keyboard input may not work' : ''}`;
   E.profChip.onclick = e => { e.stopPropagation(); toggleSessMenu(true); };
-  $('smTitle').textContent = sharedBrowser.name; $('smTitle').title = 'Shared browser';
+  $('smTitle').textContent = sharedBrowser.name; $('smTitle').title = 'Real browser';
   $('smTitle').onclick = null; $('smTitle').removeAttribute('role'); $('smTitle').removeAttribute('tabindex');
   $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Key expiry disabled' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}${companionMissing ? ' · Firefox companion unavailable; some clicks may not work. Fully quit Firefox, restart with firefox-browser-node, then reconnect.' : ''}`;
   $('smStatus').classList.toggle('companion-missing', companionMissing);

@@ -15,6 +15,8 @@
 * Public sessions stand out with a full border, glow and top bar. The clock,
   shield and control indicators sit next to the session name, and "Control
   allowed" / "View only" is an icon with a tooltip.
+* A browser connected through the extension is labelled "Real browser" instead of
+  "Shared browser".
 
 ## [0.3.27] - 2026-10-22
 
