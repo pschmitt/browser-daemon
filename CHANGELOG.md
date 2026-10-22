@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Node cards in the Nodes view are compact: "New session" (or "Take over")
+  and "Settings" are buttons in the card header, the stats are one inline
+  strip with a capacity bar under the sessions, and uptime drops the seconds
+  once a node is a minute old. The per-card "Filter" buttons are gone.
+
 ## [0.3.27] - 2026-10-22
 
 ### Changed

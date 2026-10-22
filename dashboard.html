@@ -631,7 +631,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .add-card .add-row .input { flex: 1; min-width: 0; }
 .add-card .add-status { font-size: 13px; min-height: 0; margin: 0; }
 .add-card .add-status:empty { display: none; }
-.node-card { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.node-card { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
 .node-head { display: flex; align-items: center; gap: 12px; }
 .node-settings { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
 .node-setting { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; }
@@ -647,20 +647,26 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .node-card .t > span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-card .bars { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; flex-wrap: wrap; }
 .node-card .t > b { flex-wrap: wrap; row-gap: 4px; }
-.node-card .node-head { align-items: flex-start; }
-.node-card .node-head .gear { flex: none; margin: -4px -4px 0 0; }
-.node-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
-.node-stat { display: flex; flex-direction: column; gap: 1px; padding: 8px 10px; border-radius: 10px; background: color-mix(in oklab, var(--node) 7%, var(--bg)); min-width: 0; }
-.node-stat b { font-size: 15px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.node-stat span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-card .node-head { align-items: center; }
+.node-card .avatar { width: 34px; height: 34px; border-radius: 9px; flex: none; }
+.node-ctl { display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+.node-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; padding-top: 10px; border-top: 1px solid var(--line); }
+.node-stat { display: inline-flex; align-items: baseline; gap: 5px; padding: 0 14px; border-left: 1px solid var(--line); min-width: 0; white-space: nowrap; }
+.node-stat:first-child { padding-left: 0; border-left: 0; }
+.node-stat b { display: inline-flex; align-items: center; font-size: 13.5px; font-weight: 650; }
+.node-stat span { font-size: 12px; color: var(--muted); }
+.node-stat b small { font-size: inherit; font-weight: 500; }
+.node-stat.has-meter { position: relative; }
+.node-stat .meter { position: absolute; left: 14px; right: 14px; bottom: -6px; height: 3px; margin: 0; }
+.node-stat:first-child .meter { left: 0; }
+.node-stat .meter > span { display: block; }
 .node-stat.warn b { color: var(--warn); }
-.node-card .node-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 .node-card .node-note { font-size: 12.5px; color: var(--muted); margin: 0; }
 @media (max-width: 640px) {
-  .node-card .node-buttons > * { flex: 1; justify-content: center; }
-  .node-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-  .node-stat { padding: 7px 8px; }
-  .node-stat b { font-size: 14px; }
+  .node-card .node-head { flex-wrap: wrap; }
+  .node-ctl { width: 100%; margin-left: 0; }
+  .node-ctl > * { flex: 1; justify-content: center; }
+  .node-stat { padding: 0 10px; }
 }
 .settings-list { display: flex; flex-direction: column; gap: 14px; }
 .settings-list .node-setting { flex-direction: column; align-items: stretch; gap: 6px; }
@@ -4134,7 +4140,7 @@ function renderNodes() {
   const html = mismatch + nodes.map((n) => {
     const online = n.status === 'online';
     const rev = n.revision ? ` · ${n.revision.slice(0, 7)}` : '';
-    const stat = (value, label, cls = '') => `<div class="node-stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
+    const stat = (value, label, cls = '', pct = null) => `<div class="node-stat ${cls}${pct === null ? '' : ' has-meter'}"><b>${value}</b><span>${label}</span>${pct === null ? '' : `<i class="meter" role="presentation"><span style="width:${pct}%;background:${pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)'}"></span></i>`}</div>`;
     return `<div class="node-card" style="--node:${nodeColor(n.name)}">
       <div class="node-head">
         <div class="avatar">${icon('server')}</div>
@@ -4143,19 +4149,18 @@ function renderNodes() {
             ? ` · <span class="chip warn" title="${esc(`Another version than the other nodes (${mainBuild})`)}">${icon('alert', 'sm')}v${esc(n.version)}${esc(rev)}</span>`
             : ` · v${esc(n.version)}${esc(rev)}`) : ''}</span>
         </div>
-        <button class="btn icon sm ghost gear" data-settings="node" data-key="${esc(n.name)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}</button>
+        <div class="node-ctl">
+          ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus', 'sm')}New session</button>` : ''}
+          <button class="btn sm" data-settings="node" data-key="${esc(n.name)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}Settings</button>
+        </div>
       </div>
       ${online ? `<div class="node-stats">
-        ${stat(`${esc(n.active_sessions)}<small class="muted">/${esc(n.max_sessions)}</small>`, 'sessions')}
+        ${stat(`${esc(n.active_sessions)}<small class="muted">/${esc(n.max_sessions)}</small>`, 'sessions', '', n.max_sessions ? Math.min(100, (n.active_sessions / n.max_sessions) * 100) : null)}
         ${stat(esc(n.profiles_count), 'profiles')}
         ${stat(formatBytes(n.storage_used_bytes || 0), 'recordings')}
-        ${n.uptime_seconds ? stat(formatUptime(n.uptime_seconds), 'uptime') : ''}
+        ${n.uptime_seconds ? stat(cardAge(n.uptime_seconds), 'uptime') : ''}
         ${n.supported_engines?.length ? stat(n.supported_engines.map((e) => icon(e, 'sm')).join(' '), plural(n.supported_engines.length, 'engine').replace(/^\d+ /, '')) : ''}
       </div>` : ''}
-      <div class="node-buttons">
-        <button class="btn sm${filter === n.name ? ' primary' : ''}" data-act="filter" data-node="${esc(n.name)}" aria-pressed="${filter === n.name}" title="${filter === n.name ? 'Filtered to this node: click to show all' : 'Show only this node on the other tabs'}">${icon('filter', 'sm')}${filter === n.name ? 'Filtered' : 'Filter'}</button>
-        ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus', 'sm')}New session</button>` : ''}
-      </div>
     </div>`;
   }).join('') + extensionBrowserNodes.map(extensionNodeCard).join('');
   if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
@@ -4176,7 +4181,10 @@ function extensionNodeCard(n) {
       <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span>${addonBadge()}${online && n.browser === 'firefox' && !n.native_control ? `<span class="node-warning-icon" role="img" tabindex="0" title="Firefox companion is disconnected. Some clicks, text selection, right-clicks and keyboard input may not work reliably. Enable the companion in the browser extension for trusted input." aria-label="Firefox companion is disconnected; some remote input may not work reliably">${icon('alert')}</span>` : ''}${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
         <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
       </div>
-      <button class="btn icon sm ghost gear" data-settings="browser" data-key="${esc(key)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}</button>
+      <div class="node-ctl">
+        ${online && (n.tabs.length || n.can_open) ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}</a>` : ''}
+        <button class="btn sm" data-settings="browser" data-key="${esc(key)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}Settings</button>
+      </div>
     </div>
     <div class="node-stats">
       ${stat(esc(n.tabs.length), `shared tab${n.tabs.length === 1 ? '' : 's'}`)}
@@ -4184,10 +4192,6 @@ function extensionNodeCard(n) {
       ${days !== null ? stat(days ? `${days}d` : 'today', 'until forgotten', 'warn') : stat(n.remembered ? 'Off' : n.expires_at ? untilShort(n.expires_at) : 'None', n.remembered ? 'key expiry' : 'key expires in')}
     </div>
     ${!n.tabs.length ? `<p class="node-note">${online ? 'Switch tabs on in the browser extension to share them here.' : 'This browser reconnects when it starts; its tabs stay private until shared again.'}</p>` : ''}
-    <div class="node-buttons">
-      <button class="btn sm${filter === key ? ' primary' : ''}" data-act="filter" data-node="${esc(key)}" aria-pressed="${filter === key}">${icon('filter', 'sm')}${filter === key ? 'Filtered' : 'Filter'}</button>
-      ${online && (n.tabs.length || n.can_open) ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}</a>` : ''}
-    </div>
   </div>`;
 }
 // Defaults per browser engine, the same on every node: shown as the local node has
