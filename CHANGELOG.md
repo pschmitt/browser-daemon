@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.27] - 2026-10-22
+
 ### Changed
 
 * The Nodes view has a single "Add node" button that opens one dialog with
