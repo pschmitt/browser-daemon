@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+* Live-view tabs close from a hover button and have Reload, Pin and Close menus,
+  including managed sessions. Profile pictures appear in the profile menu, top
+  bar and session menu, and Escape closes the tab chooser and local dialogs.
+
+* The extension offers **Re-pair** for a remembered browser, reusing its
+  configured daemon, and the pairing button is now called **Pair**. Popup
+  buttons have icons, and **Forget this browser** stays disabled while
+  disconnected.
+
 ## [0.4.1] - 2026-10-23
 
 ### Added
