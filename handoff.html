@@ -35,6 +35,14 @@
   .tab-strip-item { height: 33px; width: 36px; padding: 0; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 0 36px; min-width: 36px; max-width: 36px; overflow: hidden; text-decoration: none; user-select: none; }
   .tab-strip-item:not(.pinned) { width: auto; min-width: 84px; max-width: 220px; flex: 0 1 170px; justify-content: flex-start; gap: 7px; padding: 0 9px; }
   .tab-strip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .tab-strip-entry { position: relative; display: flex; flex: 0 1 170px; min-width: 84px; max-width: 220px; }
+  .tab-strip-entry > .tab-strip-item { flex: 1; width: 100%; min-width: 0; max-width: none; padding-right: 33px; }
+  .tab-strip-close { position: absolute; right: 6px; top: 6px; display: grid; place-items: center; width: 21px; height: 21px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .12s, background .12s; }
+  .tab-strip-close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+  .tab-strip-entry:hover .tab-strip-close, .tab-strip-entry:focus-within .tab-strip-close { opacity: 1; pointer-events: auto; }
+  .tab-strip-close:hover { background: var(--btn); color: var(--fg); }
+  .tab-strip-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  @media (hover: none) { .tab-strip-close { opacity: 1; pointer-events: auto; } }
   .tab-strip-item:hover { background: color-mix(in oklab, var(--bar) 75%, var(--btn)); color: var(--fg); }
   .tab-strip-item.active { background: var(--bar); color: var(--fg); font-weight: 600; border-color: var(--line); border-bottom: 1px solid var(--bar); margin-bottom: -1px; }
   .tab-strip-item.dragging { opacity: .4; }
@@ -371,6 +379,10 @@
   .sm-engine { flex: none; width: 22px; height: 22px; display: grid; place-items: center; }
   .sm-engine svg, #sessPop .sp-eng svg { width: 18px; height: 18px; }
   .sm-status { padding: 0 10px 8px; font-size: 12px; color: var(--muted); }
+  .sm-agent { display: flex; align-items: center; gap: 6px; margin: 4px 0; color: var(--fg); }
+  .sm-agent svg { flex: none; }
+  .sm-engine img, #profChipIcon img { width: 20px; height: 20px; object-fit: cover; border-radius: 5px; }
+  #profChipIcon { display: inline-flex; align-items: center; flex: none; }
   .sm-status.companion-missing { color: var(--warn-fg); }
   .sm-rec { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 6px; }
   .sm-rec-gap { flex: 1; }
@@ -539,7 +551,7 @@
 <div id="tabStrip">
   <a href="/" class="ib" id="dash" aria-label="Dashboard" title="Return to Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></a>
   <button class="ib chev" id="dashMore" aria-label="Other sessions" title="Other sessions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
-  <button class="prof-chip" id="profChip" hidden title="Profile of this session"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span id="profChipText"></span></button>
+  <button class="prof-chip" id="profChip" hidden title="Profile of this session"><span id="profChipIcon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><span id="profChipText"></span></button>
   <button class="agent-chip" id="agentChip" hidden title="An agent drives this session"></button>
   <button class="agent-chip watch-chip" id="watchChip" hidden></button>
   <div id="tabsScroll"></div>
@@ -766,7 +778,7 @@
   </form>
 </dialog>
 <div id="tabsModal" class="tabs-modal-overlay">
-  <div class="tabs-modal-card">
+  <div class="tabs-modal-card" role="dialog" aria-modal="true" aria-label="Tabs">
     <div class="tabs-modal-header">
       <div style="display:flex;align-items:center;gap:8px;">
         <svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:var(--accent);fill:none;stroke-width:2;"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
@@ -3339,6 +3351,12 @@ const knownTabs = new Set();
 // The last list of tabs: the dialog is drawn from it when it opens (it is not drawn
 // while closed, and a redraw is skipped when nothing changed).
 let tabsAll = [];
+// Managed browsers have no owner-facing tab strip. Keep their pin layout in
+// this viewer, across refreshes, without changing the page or its title.
+let managedPins;
+try { managedPins = new Set(JSON.parse(localStorage.getItem('bd-managed-tab-pins') || '[]')); }
+catch { managedPins = new Set(); }
+const managedPinKey = tab => `${tab.sessionId}/${tab.id}`;
 async function loadTabs() {
   try {
     const list = sharedBrowserId ? await fetchTargets() : await getJson("/json/list");
@@ -3352,6 +3370,10 @@ async function loadTabs() {
     }
     // The tabs of this browser only; the node's other sessions are in the drawer's picker.
     const all = list.filter((x) => x.type === "page");
+    if (!sharedBrowserId) {
+      for (const tab of all) tab.pinned = managedPins.has(managedPinKey(tab));
+      all.sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    }
     const pages = all.filter((x) => !target?.sessionId || x.sessionId === target.sessionId);
     for (const x of all) knownTabs.add(x.id);
     tabsAll = all;
@@ -3387,7 +3409,7 @@ function closeTabContextMenu() {
   contextTab = null;
 }
 function showTabContextMenu(event, tab) {
-  if (!sharedBrowserId || !tab.control) return;
+  if (sharedBrowserId && !tab.control) return;
   event.preventDefault();
   contextTab = tab;
   E.tabContextPinLabel.textContent = tab.pinned ? "Unpin tab" : "Pin tab";
@@ -3473,7 +3495,18 @@ function renderTabStrip(pages) {
       label.textContent = tabLabel;
       item.appendChild(label);
     }
-    E.tabsScroll.appendChild(item);
+    if (!p.pinned && (!sharedBrowserId || p.control)) {
+      const entry = document.createElement('div');
+      entry.className = 'tab-strip-entry';
+      const close = document.createElement('button');
+      close.type = 'button'; close.className = 'tab-strip-close';
+      close.title = 'Close tab'; close.setAttribute('aria-label', `Close ${tabLabel}`);
+      close.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>';
+      close.onpointerdown = event => event.stopPropagation();
+      close.onclick = event => { event.stopPropagation(); void closeTab(p.id); };
+      entry.append(item, close);
+      E.tabsScroll.appendChild(entry);
+    } else E.tabsScroll.appendChild(item);
   }
   // The tab being opened in a shared browser: shown until its address is
   // submitted (then the real tab replaces it) or the address bar is dismissed.
@@ -3628,22 +3661,54 @@ async function openTabsModal() {
 
 function closeTabsModal() {
   E.tabsModal.classList.remove("open");
+  closeTabContextMenu();
+  E.tabsDrawerBtn.focus({preventScroll: true});
 }
+
+// Handle local surfaces before the keyboard handlers can forward Escape to the page.
+window.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  const dialogs = [...document.querySelectorAll('dialog[open]')];
+  const dialog = document.activeElement?.closest('dialog[open]') || dialogs.at(-1);
+  let close;
+  if (dialog) close = () => dialog.close('cancel');
+  else if (!E.tabContextMenu.hidden) close = closeTabContextMenu;
+  else if (E.tabsModal.classList.contains('open')) close = closeTabsModal;
+  else if (!$("vaultPop").hidden) close = closeVaultPop;
+  else if (!$("profMenu").hidden) close = () => showProfMenu(false);
+  else if (!$("sessPop").hidden) close = closeSessPop;
+  else if (!E.sessMenu.hidden) close = () => toggleSessMenu(false);
+  if (!close) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  close();
+}, true);
 
 E.tabAddBtn.onclick = () => openNewTab();
 E.tabsDrawerBtn.onclick = () => openTabsModal();
 E.newTabBtn.onclick = () => openNewTab();
 E.tabsSearch.addEventListener("input", () => renderTabsModal(tabsAll));
 E.tabContextReload.addEventListener("click", () => {
-  if (contextTab) void reloadSharedTab(contextTab.id);
+  if (contextTab) {
+    if (sharedBrowserId) void reloadSharedTab(contextTab.id);
+    else void reloadManagedTab(contextTab);
+  }
   closeTabContextMenu();
 });
 E.tabContextClose.addEventListener("click", () => {
-  if (contextTab) void closeSharedTab(contextTab.id);
+  if (contextTab) void closeTab(contextTab.id);
   closeTabContextMenu();
 });
 E.tabContextPin.addEventListener("click", () => {
-  if (contextTab) void setSharedTabPinned(contextTab.id, !contextTab.pinned);
+  if (contextTab) {
+    if (sharedBrowserId) void setSharedTabPinned(contextTab.id, !contextTab.pinned);
+    else {
+      const key = managedPinKey(contextTab);
+      if (contextTab.pinned) managedPins.delete(key); else managedPins.add(key);
+      try { localStorage.setItem('bd-managed-tab-pins', JSON.stringify([...managedPins].slice(-512))); } catch { /* Memory layout still works. */ }
+      void loadTabs();
+    }
+  }
   closeTabContextMenu();
 });
 document.addEventListener("pointerdown", (e) => {
@@ -3652,6 +3717,35 @@ document.addEventListener("pointerdown", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeTabContextMenu(); });
 window.addEventListener("resize", closeTabContextMenu);
 window.addEventListener("scroll", closeTabContextMenu, true);
+
+async function reloadManagedTab(tab) {
+  const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const firefox = tab.engine === 'firefox';
+  const url = firefox ? `${scheme}//${location.host}/firefox?session_id=${encodeURIComponent(tab.sessionId)}&observer=true`
+    : `${scheme}//${location.host}/devtools/page/${encodeURIComponent(tab.id)}?observer=true`;
+  try {
+    await new Promise((resolve, reject) => {
+      const socket = new WebSocket(url);
+      const commands = firefox ? [
+        {method: 'session.new', params: {capabilities: {}}},
+        {method: 'browsingContext.reload', params: {context: tab.id, wait: 'none'}},
+      ] : [{method: 'Page.reload', params: {}}];
+      let index = 0;
+      const timer = setTimeout(() => finish(new Error('Reload timed out')), 15000);
+      const finish = error => { clearTimeout(timer); socket.close(); error ? reject(error) : resolve(); };
+      const send = () => socket.send(JSON.stringify({id: index + 1, ...commands[index]}));
+      socket.onopen = send;
+      socket.onerror = () => finish(new Error('Could not connect to the tab'));
+      socket.onclose = () => { clearTimeout(timer); reject(new Error('Tab connection closed')); };
+      socket.onmessage = event => {
+        const message = JSON.parse(event.data);
+        if (message.id !== index + 1) return;
+        if (message.error || message.type === 'error') { finish(new Error('The browser rejected reload')); return; }
+        if (++index === commands.length) finish(); else send();
+      };
+    });
+  } catch (error) { toast(`Could not reload tab: ${error.message}`, 4000); }
+}
 // Double click (or double tap) on the empty part of the tab bar opens a new tab, like a
 // desktop browser. Taps are counted here: phones do not reliably fire dblclick.
 let stripTap = { t: 0, x: 0, y: 0 };
@@ -4253,6 +4347,7 @@ function showProfMenu(open = $("profMenu").hidden) {
   $("pmThrowaway").hidden = named;
   $("pmEdit").hidden = true;
   setEngineIcon($("pmEngine"), sess?.engine);
+  renderProfilePicture();
   $("pmTitle").textContent = named ? sess.profile : "Throwaway session";
   $("pmNote").textContent = named
     ? "Its logins, cookies and storage are kept between sessions."
@@ -5351,6 +5446,33 @@ function setEngineIcon(el, engine) {
   el.setAttribute("aria-label", el.title);
 }
 
+const sessionProfilePictures = new Map();
+function renderProfilePicture() {
+  setEngineIcon($("profChipIcon"), sess?.engine);
+  setEngineIcon($("pmEngine"), sess?.engine);
+  const key = sess?.profile_id || sess?.profile;
+  if (!key) return;
+  if (!sessionProfilePictures.has(key)) {
+    sessionProfilePictures.set(key, '');
+    fetch(`/api/profiles/${encodeURIComponent(key)}/icon`, {headers: authHeaders()})
+      .then(response => response.ok ? response.blob() : null)
+      .then(blob => {
+        if (!blob) return;
+        sessionProfilePictures.set(key, URL.createObjectURL(blob));
+        if ((sess?.profile_id || sess?.profile) === key) renderSession();
+      }).catch(() => {});
+  }
+  const url = sessionProfilePictures.get(key);
+  if (!url) return;
+  for (const id of ['smEngine', 'profChipIcon', 'pmEngine']) {
+    const element = $(id);
+    const image = document.createElement('img');
+    image.src = url; image.alt = ''; image.title = `Profile ${sess.profile}`;
+    element.replaceChildren(image);
+    delete element.dataset.engine;
+  }
+}
+
 function renderSession() {
   if (sharedBrowserId) { renderSharedSession(); return; }
   if (!sess) return;
@@ -5383,15 +5505,16 @@ function renderSession() {
   E.agentChip.hidden = !driving.length;
   if (driving.length) {
     const a = driving[0];
-    const name = agentShort(a) || AGENT_TITLE[agentBrand(a)];
+    const name = agentLabel(a);
     E.agentChip.innerHTML = `${agentSvg(a)}<span>${esc(driving.length > 1 ? `${name} +${driving.length - 1}` : name)}</span>`;
     E.agentChip.title = driving.map((c) => [c.agent_name, c.topic && `: ${c.topic}`].filter(Boolean).join("")).join("\n") || "An agent drives this session";
   }
-  const agents = (sess.clients || []).filter((c) => c.agent);
-  $("smStatus").textContent = (agents.length ? `Agent: ${agents.map((c) => [agentShort(c) || c.from, c.topic].filter(Boolean).join(": ")).join(", ")} · ` : "")
-    + (sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
-    + ` · Up ${formatUptime(Math.floor(sess.uptime_seconds || 0))} · ${sess.tabs_count} tab${sess.tabs_count === 1 ? "" : "s"}`
-    + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : "");
+  const lead = driving[0];
+  $("smStatus").innerHTML = (lead ? `<div class="sm-agent">${agentSvg(lead)}<span>${esc(agentLabel(lead))}${driving.length > 1 ? ` +${driving.length - 1}` : ''}</span></div>` : '')
+    + `<span>${esc((sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
+      + ` · Up ${formatUptime(Math.floor(sess.uptime_seconds || 0))}`
+      + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : ''))}</span>`;
+  renderProfilePicture();
   if (document.activeElement !== $("smProxy")) $("smProxy").value = sess.proxy || "none";
   E.audioBtn.hidden = !sess.audio;
   $("smAudioLabel").hidden = !sess.audio;
@@ -5426,13 +5549,14 @@ function renderSharedSession() {
   const companionMissing = sharedBrowser.browser === 'firefox' && !sharedBrowser.native_control;
   E.sessBtn.hidden = false; E.profChip.hidden = false; E.agentChip.hidden = true;
   E.sessBtn.title = 'Real browser';
+  setEngineIcon($('profChipIcon'), sharedBrowser.browser);
   renderFollow();
   $('profChipText').textContent = sharedBrowser.name + (control ? '' : ' · View only') + (companionMissing ? ' · ⚠' : '');
   E.profChip.title = `${sharedBrowser.name} · ${control ? 'Control allowed' : 'View only'} · Tabs shared by their owner${companionMissing ? ' · Firefox companion unavailable; some clicks and keyboard input may not work' : ''}`;
   E.profChip.onclick = e => { e.stopPropagation(); toggleSessMenu(true); };
   $('smTitle').textContent = sharedBrowser.name; $('smTitle').title = 'Real browser';
   $('smTitle').onclick = null; $('smTitle').removeAttribute('role'); $('smTitle').removeAttribute('tabindex');
-  $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.tabs.length} shared tabs · ${sharedBrowser.remembered ? 'Key expiry disabled' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}${companionMissing ? ' · Firefox companion unavailable; some clicks may not work. Fully quit Firefox, restart with firefox-browser-node, then reconnect.' : ''}`;
+  $('smStatus').textContent = `${control ? 'Control allowed' : 'View only'} · ${sharedBrowser.remembered ? 'Key expiry disabled' : sharedBrowser.expires_at ? 'Expires ' + new Date(sharedBrowser.expires_at * 1000).toLocaleTimeString() : 'No key expiry'}${companionMissing ? ' · Firefox companion unavailable; some clicks may not work. Fully quit Firefox, restart with firefox-browser-node, then reconnect.' : ''}`;
   $('smStatus').classList.toggle('companion-missing', companionMissing);
   setEngineIcon($('smEngine'), sharedBrowser.browser);
   for (const id of ['smLayout', 'forceBtn', 'smProxyRow', 'smNotes', 'smSave', 'smDevtools', 'smStreamRow']) $(id).hidden = true;

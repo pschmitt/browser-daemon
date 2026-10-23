@@ -157,6 +157,11 @@ const AGENT_SVG = {
 const AGENT_TITLE = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', antigravity: 'Antigravity', opencode: 'OpenCode', cursor: 'Cursor', copilot: 'Copilot', hermes: 'Hermes', agent: 'Agent' };
 // The agent as shown: without its version, and "claude" rather than "claude-code".
 const agentShort = (c) => String(c?.agent_name || "").replace(/ \d[\w.-]*/, "").replace(/^claude-code/, "claude");
+// Shared session-card and live-view label: agent and topic, or its origin.
+function agentLabel(c) {
+  if (!c.agent_name) return `Agent · ${c.from}`;
+  return c.topic ? `${agentShort(c)}: ${c.topic}` : `${agentShort(c)} · ${c.from}`;
+}
 function agentBrand(c) {
   const n = String(c?.agent_name || '').toLowerCase();
   if (/claude/.test(n)) return 'claude';

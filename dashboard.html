@@ -3406,11 +3406,6 @@ function agentIcon(c, cls = 'sm') {
   return `<svg class="i ${cls} agent-ic" viewBox="0 0 24 24" aria-hidden="true"><title>${AGENT_TITLE[b]}</title>${AGENT_SVG[b]}</svg>`;
 }
 
-// The tag: which agent and what it does (its topic), else from where.
-function agentLabel(c) {
-  if (!c.agent_name) return `Agent · ${c.from}`;
-  return c.topic ? `${agentShort(c)}: ${c.topic}` : `${agentShort(c)} · ${c.from}`;
-}
 // A connected automation client, for the hover: the agent and its conversation (when
 // its MCP says), origin with address, since when, User-Agent.
 function clientInfo(c) {
