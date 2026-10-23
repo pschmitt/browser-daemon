@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-23
+
 ### Added
 
 * Live-view tabs close from a hover button and have Reload, Pin and Close menus,
