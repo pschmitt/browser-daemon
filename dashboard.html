@@ -4558,9 +4558,17 @@ const backoff = (n) => Math.min(30000, 1000 * 2 ** Math.min(n, 5)) * (0.75 + Mat
 
 // ?play=<recording id> (e.g. from `browser-daemon tui`): open that recording once it is listed.
 // Same for #recordings/<id>, which the player shows while a recording is open.
+function recordingLink(hash) {
+  const m = /^#recordings\/([^?]+)(?:\?(.*))?$/.exec(hash);
+  if (!m) return null;
+  const q = new URLSearchParams(m[2] || '');
+  const seconds = Number(q.get('t'));
+  return { id: decodeURIComponent(m[1]), ms: Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 0, raw: q.get('mode') === 'raw' };
+}
+let requestedPlayback = recordingLink(location.hash);
 let pendingPlay = new URLSearchParams(location.search).get('play');
 {
-  const m = /^#recordings\/(.+)$/.exec(location.hash);
+  const m = /^#recordings\/([^?]+)/.exec(location.hash);
   if (m) {
     pendingPlay = pendingPlay || decodeURIComponent(m[1]);
     history.replaceState(null, '', '#recordings');   // the player pushes its own entry
@@ -5054,6 +5062,7 @@ async function uncacheSelectedRecordings() {
 }
 
 let activePlayer = null;
+let playerStartPosition = null;
 let playerControlsTimer = null;
 let isHoveringControls = false;
 
@@ -5230,6 +5239,37 @@ const playerDuration = (p) => {
   const tail = Math.max(0, (p.expectedMs || 0) - last);
   return playerTime(p, i) + (p.raw ? tail : Math.min(5000, tail));
 };
+// URLs use source seconds so links survive changes to the concise timeline.
+function playerSourceNow(p) {
+  const base = p.frames[p.currentIndex]?.t || 0;
+  if (p.isPlaying && p.waitSince != null) return p.waitSource + Math.min(p.waitLength, (performance.now() - p.waitSince) * p.speed);
+  return base + (p.sourceOffset || 0);
+}
+function copyPlayerTimeLink() {
+  const p = activePlayer;
+  if (!p) return;
+  const r = (currentOverview?.recordings || []).find(x => x.id === p.id && x.node_name === p.node);
+  const u = new URL(r?.share?.url || location.href);
+  const q = new URLSearchParams({ t: (playerSourceNow(p) / 1000).toFixed(3), mode: p.raw ? 'raw' : 'concise' });
+  u.hash = r?.share?.url ? q.toString() : `recordings/${enc(p.id)}?${q}`;
+  copyText(u.toString());
+}
+function seekPlayerSource(ms) {
+  const p = activePlayer;
+  clearTimeout(p.timer);
+  let lo = 0, hi = p.frames.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (p.frames[mid].t <= ms) lo = mid; else hi = mid - 1;
+  }
+  p.waitSince = null;
+  p.tailDone = false;
+  renderPlayerFrame(lo);
+  p.sourceOffset = Math.max(0, ms - p.frames[lo].t);
+  p.audioSeek = ms / 1000;
+  syncPlayerAudio();
+  if (p.isPlaying) playNextFrame();
+}
 function togglePlayerMode() {
   const p = activePlayer;
   if (!p) return;
@@ -5280,6 +5320,13 @@ function streamProgress() {
   const p = activePlayer;
   if (!p) return;
   const have = p.frames.length;
+  if (p.startAt != null && have) {
+    if (p.streaming && p.frames[have - 1].t < p.startAt) return;
+    const ms = Math.min(p.startAt, Math.max(p.expectedMs || 0, p.frames[have - 1].t));
+    p.startAt = null;
+    seekPlayerSource(ms);
+    if (!p.isPlaying && have > 1) { p.isPlaying = true; updatePlayPauseButton(); updateCenterPlayButtonState(); playNextFrame(); }
+  }
   const total = p.streaming ? Math.max(have, p.expectedFrames || 0) : have;
   updateScrubber(p);
   renderStaticSpans(p);
@@ -5312,14 +5359,17 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     isPlaying: false,
     isLooping: false,
     speed: 1,
-    raw: false,
+    raw: !!playerStartPosition?.raw,
+    startAt: playerStartPosition?.ms ?? null,
+    sourceOffset: 0,
     times: [],
     tailDone: false,
     timer: null,
     cachedImages: new Map(),
   };
 
-  $('playerModeBtn').textContent = 'Concise';
+  playerStartPosition = null;
+  $('playerModeBtn').textContent = activePlayer.raw ? 'Raw' : 'Concise';
   const centerPlayBtn = document.getElementById('playerCenterPlayBtn');
   if (frames.length <= 1 && !streaming) {
     document.getElementById('playerScrubber').max = 0;
@@ -5352,7 +5402,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
   streamProgress();
 
   // Auto-play immediately if multiple frames!
-  if (frames.length > 1) {
+  if (frames.length > 1 && activePlayer.startAt == null && !activePlayer.isPlaying) {
     togglePlayPause();
   }
 }
@@ -5432,7 +5482,8 @@ async function loadPlayerAudio(id, node, rec) {
 function syncPlayerAudio() {
   if (!playerHasSound()) return;
   const a = $('playerAudio'), p = activePlayer;
-  const t = (p.frames[p.currentIndex]?.t || 0) / 1000;
+  const t = ((p.frames[p.currentIndex]?.t || 0) + (p.sourceOffset || 0)) / 1000;
+  if (p.audioSeek != null) { a.currentTime = p.audioSeek; p.audioSeek = null; }
   const running = p.isPlaying && !p.waiting;
   // While playing, the sound runs on between two frames (a still page sends none
   // for a while): it only drifted when it left the stretch up to the next frame.
@@ -5452,7 +5503,9 @@ function togglePlayerMute() {
 }
 
 let playerOpenSeq = 0;
-async function openPlayerModal(id, node) {
+async function openPlayerModal(id, node, position = requestedPlayback) {
+  requestedPlayback = null;
+  playerStartPosition = position?.id === id ? position : null;
   const openSeq = ++playerOpenSeq;
   const modal = document.getElementById('playerModal');
   playerHash = '#recordings/' + enc(id);
@@ -5645,9 +5698,10 @@ async function ensureFrameData(p, idx) {
   if (c != null) await loadChunk(p, c);
 }
 
-function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
+function renderPlayerFrame(idx, { quiet = false, scrub = false, preservePosition = false } = {}) {
   if (!activePlayer || !activePlayer.frames[idx]) return;
   const p = activePlayer;
+  if (!quiet && !preservePosition) { p.sourceOffset = 0; p.waitSince = null; }
   p.currentIndex = idx;
   const frame = p.frames[idx];
   const totalFrames = p.frames.length;
@@ -5681,7 +5735,7 @@ function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
       loadChunk(p, frame.c).then(() => {
         if (activePlayer !== p) return;
         p.dataWait = false;
-        if (p.currentIndex === idx) renderPlayerFrame(idx);
+        if (p.currentIndex === idx) renderPlayerFrame(idx, { preservePosition: true });
         else $('playerViewportContainer').classList.toggle('buffering', !!p.waiting);
       }, () => {
         if (activePlayer !== p) return;
@@ -5782,6 +5836,10 @@ function updateCenterPlayButtonState() {
 
 function togglePlayPause() {
   if (!activePlayer || activePlayer.frames.length <= 1) return;
+  if (activePlayer.isPlaying) {
+    activePlayer.sourceOffset = Math.max(0, playerSourceNow(activePlayer) - activePlayer.frames[activePlayer.currentIndex].t);
+    activePlayer.waitSince = null;
+  }
   activePlayer.isPlaying = !activePlayer.isPlaying;
   updatePlayPauseButton();
   updateCenterPlayButtonState();
@@ -5818,7 +5876,7 @@ function playNextFrame() {
     }
     if (!activePlayer.tailDone && !(activePlayer.raw && playerHasSound())) {
       activePlayer.tailDone = true;
-      const tail = playerDuration(activePlayer) - playerTime(activePlayer, activePlayer.currentIndex);
+      const tail = Math.max(0, Math.min(activePlayer.raw ? Infinity : 5000, (activePlayer.expectedMs || 0) - playerSourceNow(activePlayer)));
       if (tail > 0) { activePlayer.timer = setTimeout(playNextFrame, tail / activePlayer.speed); return; }
     }
     if (activePlayer.isLooping) {
@@ -5840,7 +5898,12 @@ function playNextFrame() {
   const next = activePlayer.frames[activePlayer.currentIndex + 1];
   // Cap the source gap before applying the selected playback speed.
   const cap = activePlayer.raw ? Infinity : 5000;
-  let delay = Math.max(25, Math.min(cap, next.t - curr.t) / activePlayer.speed);
+  const offset = activePlayer.sourceOffset || 0;
+  const remaining = Math.min(cap, Math.max(0, next.t - curr.t - offset));
+  const delay = Math.max(0, remaining / activePlayer.speed);
+  activePlayer.waitSince = performance.now();
+  activePlayer.waitSource = curr.t + offset;
+  activePlayer.waitLength = remaining;
 
   activePlayer.timer = setTimeout(() => {
     if (!activePlayer || !activePlayer.isPlaying) return;
@@ -5927,6 +5990,7 @@ function openPlayerMenu(el) {
   const url = activePlayer?.currentUrl;
   openMenu(el, [
     { label: `Recording ${String(id || '').slice(0, 8)}` },
+    { icon: 'copy', label: 'Copy link at current time', run: copyPlayerTimeLink },
     r && { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
     url && url !== 'about:blank' && { icon: 'copy', label: 'Copy page URL', run: () => copyText(url) },
     { icon: 'download', label: r?.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(id, node) },
@@ -6143,9 +6207,10 @@ addEventListener('hashchange', () => {
   if (addNodeLink()) return;
   const v = location.hash.slice(1);
   if (VIEWS.includes(v)) setView(v);
-  const m = /^recordings\/(.+)$/.exec(v);
-  const r = m && (ov?.recordings || []).find((x) => x.id === decodeURIComponent(m[1]));
-  if (r && activePlayerModalId !== r.id) { setView('recordings'); openPlayerModal(r.id, r.node_name); }
+  const link = recordingLink(location.hash);
+  const r = link && (ov?.recordings || []).find(x => x.id === link.id);
+  if (r && activePlayerModalId !== r.id) { setView('recordings'); openPlayerModal(r.id, r.node_name, link); }
+  else if (r && activePlayer) { activePlayer.raw = link.raw; activePlayer.startAt = link.ms; $('playerModeBtn').textContent = link.raw ? 'Raw' : 'Concise'; streamProgress(); }
 });
 syncCachedRecordingsSet();
 refreshData(true);

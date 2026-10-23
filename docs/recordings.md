@@ -23,3 +23,10 @@ The seek bar and duration follow the selected mode. During streaming, the
 concise duration adjusts as frames arrive. Sound jumps forward with skipped
 still periods, so use Raw to hear uninterrupted audio on a static page.
 Stored frames, audio and downloads retain their original timing.
+
+Use **Copy link at current time** in the dashboard player menu, or
+**Copy time link** in the public player, to link to a moment. Links carry `t`
+in seconds of the original recording and the playback `mode` (concise or raw),
+for example `#recordings/<id>?t=1563.000&mode=raw` or a public link ending in
+`#t=1563.000&mode=raw`. Copying from an already public recording uses its public
+link; other dashboard links require access to the dashboard.

@@ -4,6 +4,9 @@
 
 ### Added
 
+* Recording players can copy links at the current timestamp, preserving playback
+  mode and using original recording seconds in both dashboard and public links.
+
 * `GET /api/recordings/vacuum` lists what the retention policy would remove
   now, without removing it; the cleanup's answer names the recordings too
   (`ids`).
