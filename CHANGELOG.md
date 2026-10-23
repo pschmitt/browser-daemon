@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-24
+
 ### Added
 
 * Live-view extensions: the vault's toolbar button, popover and passkey prompt
