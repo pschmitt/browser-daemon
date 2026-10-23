@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "profile_archive.rs"]
+mod archive;
+
 #[derive(Deserialize, Debug, Default)]
 pub struct ImportProfileParams {
     pub overwrite: Option<bool>,
@@ -177,78 +180,12 @@ impl Drop for StagingDir {
     }
 }
 
-/// Unpack a gzipped tar from a request body into `dir`, as it arrives. Returns the
-/// bytes received.
+/// Validate and unpack a bounded gzipped tar upload into `dir`. Returns the
+/// compressed bytes received.
 pub(crate) async fn extract_archive(body: axum::body::Body, dir: &Path) -> Result<u64, ApiError> {
-    use futures_util::StreamExt;
-    let mut child = tokio::process::Command::new("tar")
-        .arg("-xzf")
-        .arg("-")
-        .arg("--no-same-owner")
-        .arg("-C")
-        .arg(dir)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| {
-            error!(error = %e, "Failed to spawn tar process for import");
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to spawn tar: {e}"),
-            )
-        })?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| api_error(StatusCode::INTERNAL_SERVER_ERROR, "tar has no input"))?;
-    // Read while tar runs: it blocks on a full stderr pipe, and we on its stdin.
-    let errors = drain_stderr(child.stderr.take());
-
-    let mut chunks = Box::pin(capped_chunks(body, MAX_UPLOAD_BYTES));
-    let mut received = 0u64;
-    let mut write_failed = false;
-    while let Some(chunk) = chunks.next().await {
-        let chunk = match chunk {
-            Ok(c) => c,
-            Err(e) => {
-                drop(stdin);
-                let _ = child.kill().await;
-                return Err(api_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("Upload failed: {e}"),
-                ));
-            }
-        };
-        received += chunk.len() as u64;
-        // A failing write means tar gave up (a broken archive): its message says why.
-        if stdin.write_all(&chunk).await.is_err() {
-            write_failed = true;
-            break;
-        }
-    }
-    drop(stdin);
-    if received == 0 {
-        let _ = child.kill().await;
-        return Err(api_error(StatusCode::BAD_REQUEST, "Empty archive body"));
-    }
-    let status = child.wait().await.map_err(|e| {
-        error!(error = %e, "Failed to wait on tar process");
-        api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("tar extraction error: {e}"),
-        )
-    })?;
-    if write_failed || !status.success() {
-        let why = errors.await.unwrap_or_default();
-        error!(error = %why, "tar extraction failed");
-        return Err(api_error(
-            StatusCode::BAD_REQUEST,
-            format!("tar extraction failed: {why}"),
-        ));
-    }
-    Ok(received)
+    archive::extract(body, dir)
+        .await
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, format!("tar import failed: {e}")))
 }
 
 /// Import an archive as the profile named in the path. The archive's own

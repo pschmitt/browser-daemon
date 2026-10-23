@@ -54,6 +54,7 @@ function harness(firefox = false, stored = {shareAll: false}) {
     debugger: {attach: async target => { calls.push(['attach', target]); }, detach: async target => { calls.push(['detach', target]); },
       sendCommand: async (...args) => { calls.push(['cdp', ...args]); return {data: 'image'}; }, onDetach: event('detach'), onEvent: event('cdpEvent')},
     alarms: {clear: async () => false, create: async () => {}, onAlarm: event('alarm')},
+    webNavigation: {onBeforeNavigate: event('beforeNavigate'), onCommitted: event('committed'), onErrorOccurred: event('navigationError')},
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setBadgeTextColor: async () => {}, setTitle: async () => {}, setIcon: async () => {}},
     storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true, ...stored}), remove: async () => {}},
       session: {get: async () => ({}), set: async () => {}, remove: async () => {}},
@@ -171,6 +172,32 @@ test('sharing follows the tab across sites and pauses on daemon pages', async ()
   h.listeners.cdpEvent({tabId: 1}, 'Page.screencastFrame', {data: 'page'});
   assert.equal(s.sent.filter(c => c.type === 'cdp_event' && c.method === 'Page.screencastFrame').length, 1);
 });
+test('protected navigation detaches automation before commit and safe tabs can reconnect', async () => {
+  for (const url of ['https://daemon.example/', 'http://127.0.0.1:3001/']) {
+    const h = harness(); const s = await h.pair();
+    await h.message({type: 'share', tabs: [1], control: true});
+    s.receive({type: 'cdp', automation: true, channel: 'pw', tab: 1, id: 1, method: 'Fetch.enable', params: {}});
+    await h.flush();
+    assert.ok(h.calls.some(c => c[0] === 'cdp' && c[2] === 'Fetch.enable'));
+    h.listeners.beforeNavigate({tabId: 1, frameId: 0, url});
+    // No tabs.onUpdated / frameNavigated has happened yet.
+    assert.ok(h.calls.some(c => c[0] === 'detach' && c[1].tabId === 1));
+    assert.ok(!(await h.message({type: 'state'})).tabs.some(t => t.id === 1));
+    s.receive({type: 'cdp', automation: true, channel: 'pw', tab: 1, id: 2, method: 'Runtime.evaluate', params: {expression: 'document.cookie'}});
+    await h.flush();
+    assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 2).error);
+    h.listeners.cdpEvent({tabId: 1}, 'Network.requestWillBeSent', {request: {url}});
+    assert.ok(!s.sent.some(c => c.type === 'cdp_event' && c.method === 'Network.requestWillBeSent'));
+    h.tabs.get(1).url = 'https://one.example/';
+    h.listeners.committed({tabId: 1, frameId: 0});
+    h.listeners.updated(1, {url: 'https://one.example/'}, h.tabs.get(1));
+    s.receive({type: 'cdp', automation: true, channel: 'new', tab: 1, id: 3, method: 'Runtime.evaluate', params: {expression: '1'}});
+    await h.flush();
+    assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 3).result);
+    assert.equal(h.calls.filter(c => c[0] === 'attach').length, 2);
+  }
+});
+
 test('the live view relay enforces view-only grants locally', async () => {
   const h = harness(); const s = await h.pair();
   await h.message({type: 'share', tabs: [1], control: false});

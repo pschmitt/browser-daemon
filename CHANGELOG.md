@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* The browser extension detaches its debugger before a shared tab navigates to
+  a protected page, clearing automation overrides and request interception.
+* Profile imports validate archives before extraction and enforce expanded-size,
+  entry-count, metadata-size and time limits. Sparse files are refused.
+
 ## [0.4.2] - 2026-10-23
 
 ### Added

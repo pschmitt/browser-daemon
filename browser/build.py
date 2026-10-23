@@ -27,7 +27,7 @@ def main():
             "name": "Browser Daemon Node",
             "version": VERSION,
             "description": "Temporarily share selected tabs with your browser daemon, with optional remote control.",
-            "permissions": ["tabs", "storage", "scripting", "alarms"],
+            "permissions": ["tabs", "storage", "scripting", "alarms", "webNavigation"],
             "host_permissions": ["http://*/*", "https://*/*"],
             "action": {"default_popup": "popup.html", "default_title": "Browser node", "default_icon": {
                 str(size): f"toolbar-{size}.png" for size in (16, 32, 48)

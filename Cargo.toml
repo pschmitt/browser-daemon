@@ -31,6 +31,8 @@ sha2 = "0.11"
 psl = "2"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+flate2 = "1"
+tar = "0.4"
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 
 [profile.release]

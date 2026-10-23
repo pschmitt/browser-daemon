@@ -400,6 +400,8 @@ async function detach(tab) {
   stopTabAudio(tab);
   stopFileTab(tab);
   for (const [channel, owner] of channels) if (owner === tab) { channels.delete(channel); stopCast(channel); }
+  for (const [channel, owner] of automations) if (owner === tab) automations.delete(channel);
+  leftovers.delete(tab);
   hooked.delete(tab);
   if (!attached.delete(tab)) return;
   try { await api.debugger.detach({tabId: tab}); } catch { /* Already closed/detached. */ }
@@ -549,7 +551,8 @@ function safeURL(url) {
     ![...daemons, ...(registration ? [registration.server] : [])].some(origin =>
       new URL(origin).hostname.replace(/\.$/, '') === u.hostname.replace(/\.$/, ''));
 }
-function safeTab(tab) { return !tab.incognito && safeURL(tab.url); }
+const protectedNavigations = new Set();
+function safeTab(tab) { return !protectedNavigations.has(tab.id) && !tab.incognito && safeURL(tab.url); }
 
 async function wakeDiscardedTab(id, tab) {
   if (chromium || !tab.discarded) return;
@@ -2155,9 +2158,25 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     value => respond(value), error => respond({error: error.message}));
   return true;
 });
-api.tabs.onRemoved.addListener(id => { shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
+api.tabs.onRemoved.addListener(id => { protectedNavigations.delete(id); shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
 let publishTimer = null;
 function publishSoon() { clearTimeout(publishTimer); publishTimer = setTimeout(publishSafely, 150); }
+// Stop interception and other debugger overrides before a protected document
+// commits. Waiting for tabs.onUpdated / frameNavigated can leave its request
+// suspended by Fetch.enable, so it never reaches either commit notification.
+api.webNavigation.onBeforeNavigate.addListener(({tabId, frameId, url}) => {
+  const grant = shared.get(tabId);
+  if (!grant || frameId !== 0 || safeURL(url)) return;
+  protectedNavigations.add(tabId);
+  grant.paused = true;
+  void detach(tabId);
+  publishSoon();
+});
+const finishProtectedNavigation = ({tabId, frameId}) => {
+  if (frameId === 0 && protectedNavigations.delete(tabId)) publishSoon();
+};
+api.webNavigation.onCommitted.addListener(finishProtectedNavigation);
+api.webNavigation.onErrorOccurred.addListener(finishProtectedNavigation);
 api.tabs.onUpdated.addListener((id, change, tab) => {
   const grant = shared.get(id);
   if (!grant) return;
@@ -2165,13 +2184,13 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
     hooked.delete(id);
     // Sharing follows the tab. A page that must not be shared pauses it at once,
     // before anything of that page is captured or relayed.
-    grant.paused = !safeTab({incognito: tab?.incognito, url: change.url});
+    grant.paused = !safeTab({id, incognito: tab?.incognito, url: change.url});
     if (!grant.paused) grant.origin = new URL(change.url).origin;
     if (!chromium) sendEvent(id, 'Page.frameNavigated', {frame: {id: String(id), url: change.url}});
   }
   if (!chromium && change.status === 'loading') { sendEvent(id, 'Page.frameStartedLoading', {frameId: String(id)}); touchCast(id); }
   if (!chromium && change.status === 'complete') { sendEvent(id, 'Page.loadEventFired', {timestamp: Date.now() / 1000}); touchCast(id); }
-  if (grant.paused) { stopTabAudio(id); stopFileTab(id); }
+  if (grant.paused) void detach(id);
   if (change.status === 'complete' && mediaAudio.has(id)) void renewTabAudio(id);
   if (change.status === 'complete' && !chromium && grant.control && !grant.paused) void hookPasskeys(id).catch(() => hooked.delete(id));
   if (change.status === 'complete' && fileTabs.get(id)?.channels.size) void installFilePages(id);
@@ -2198,8 +2217,9 @@ if (chromium) api.debugger.onEvent.addListener((source, method, params) => {
     return;
   }
   if (method === 'Page.frameNavigated' && !params.frame.parentId) {
-    grant.paused = !safeURL(params.frame.url);
+    grant.paused = protectedNavigations.has(source.tabId) || !safeURL(params.frame.url);
     if (!grant.paused) grant.origin = new URL(params.frame.url).origin;
+    else void detach(source.tabId);
     publishSoon();
   }
   // Runtime is enabled for the passkey hook: its events leave only for CDP clients.
