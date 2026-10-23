@@ -16,6 +16,8 @@
   (`packages.rbw-extension`, the NixOS module's default). browser-daemon keeps
   no rbw styles or icons of its own: `just rbw-theme` and the `rbw-theme` flake
   check are gone. Without an extension the live view has no vault button.
+  The `rbw` input follows rbw's `release` branch (2.29.0 brings the bundle; its
+  fills confirm in place like the rbw popup's).
 
 ## [0.4.3] - 2026-10-23
 

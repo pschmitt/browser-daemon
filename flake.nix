@@ -8,8 +8,9 @@
     # reuse them instead of recompiling every crate on each change.
     crane.url = "github:ipetkov/crane";
     # rbw ships the live view's vault (its browser-daemon-extension package).
+    # The `release` branch: rbw's latest release, as nixos-config uses it.
     rbw = {
-      url = "github:pschmitt/rbw";
+      url = "github:pschmitt/rbw/release";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.crane.follows = "crane";
     };

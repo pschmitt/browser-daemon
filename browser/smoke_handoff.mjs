@@ -249,6 +249,18 @@ try {
   await agent(`/secret-agent/${lookup.id}`, {method: 'POST', body: JSON.stringify({ok: true, info: [{id: 'entry-1', name: 'Example', user: 'alice'}]})});
   await until(async () => (await vaultPop(`document.querySelector('.vp-entry b')?.textContent`)) === 'Example');
   assert.equal(await view.evaluate(`document.querySelector('.ext-btn .ext-count').textContent`), '1');
+  // Filling from it: the fill button stamps the outcome in place (rbw's
+  // feedback.js), then the popover closes.
+  const fillTaken = agent('/secret-agent/next').then(r => r.json());
+  await vaultPop(`document.querySelector('.vp-fill').click(); true`);
+  const fillJob = await fillTaken;
+  assert.deepEqual([fillJob.kind, fillJob.entry], ['fill', 'entry-1']);
+  await agent(`/secret-agent/${fillJob.id}`, {method: 'POST', body: JSON.stringify({ok: true, info: {filled: ['username', 'password']}})});
+  await until(() => vaultPop(`document.querySelector('.vp-fill').classList.contains('is-copied') && !!document.querySelector('.vp-fill .copy-check')`));
+  await until(() => view.evaluate(`document.querySelector('.ext-pop').hidden`));
+  // Open again (the list is still fresh: no second lookup).
+  await view.evaluate(`document.querySelector('.ext-btn').click(); true`);
+  await until(async () => (await vaultPop(`document.querySelector('.vp-entry b')?.textContent`)) === 'Example');
   assert.equal(await view.evaluate(`document.querySelector('.ext-pop').hidden`), false);
   await vaultPop(`document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); true`);
   await until(() => view.evaluate(`document.querySelector('.ext-pop').hidden`));
