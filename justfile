@@ -33,6 +33,7 @@ browser-smoke:
   node browser/smoke_chromium.mjs
   python3 browser/smoke_firefox.py
   python3 browser/smoke_firefox_roundtrip.py
+  python3 browser/smoke_firefox_roundtrip.py --dom-only
 
 # Bump to VERSION (X.Y.Z), date the changelog, commit and push.
 release-prepare version:

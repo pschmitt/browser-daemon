@@ -48,6 +48,15 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function renderHeader() {
   const reg = state.registration;
+  const sharingSummary = state.sharing.all ? 'All current and future web tabs will be shared.'
+    : state.sharing.autoShare ? 'New web tabs will be shared automatically. Choose existing tabs after connecting.'
+    : 'Choose tabs to share after connecting.';
+  const soundSummary = state.sharing.audio ? 'Viewers can hear media playing in shared tabs.' : 'Sound sharing is off.';
+  $('approvalSharing').textContent = sharingSummary;
+  $('approvalSound').textContent = soundSummary;
+  $('setupSharing').textContent = `${sharingSummary} ${soundSummary}${state.sharing.control ? ' Remote control is enabled.' : ''}`;
+  $('inputMode').textContent = state.chromium || state.nativeReady ? 'Trusted mouse and keyboard input'
+    : 'DOM control: basic editing and page events. Some sites require the Firefox companion for trusted input.';
   $('title').textContent = reg ? (state.saved.name || 'Browser node') : 'Browser node';
   // The version where the eye looks first; the daemon gets room in the main card.
   $('subtitle').textContent = `v${state.version}${state.nativeReady ? ' · companion' : ''}`;

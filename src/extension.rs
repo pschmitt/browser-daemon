@@ -620,8 +620,8 @@ pub fn relay_allowed(method: &str, params: &Value, control: bool) -> bool {
     }
     match method {
         "Page.navigate" => params["url"].as_str().is_some_and(page_url),
-        "Page.reload"
-        | "Page.navigateToHistoryEntry"
+        "Page.reload" => params.get("scriptToEvaluateOnLoad").is_none(),
+        "Page.navigateToHistoryEntry"
         | "Page.handleJavaScriptDialog"
         | "Page.startFiles"
         | "Page.stopFiles"
@@ -648,45 +648,143 @@ fn view_event(method: &str) -> bool {
 /// made with the browser's credentials outside the page, no files from the
 /// owner's disk and no downloads to it.
 pub fn automation_allowed(method: &str, params: &Value) -> bool {
-    if matches!(
-        method,
-        "Page.setDownloadBehavior"
-            | "Page.crash"
-            | "Network.getAllCookies"
-            | "Network.getCookies"
-            | "Network.setCookie"
-            | "Network.setCookies"
-            | "Network.deleteCookies"
-            | "Network.clearBrowserCookies"
-            | "Network.clearBrowserCache"
-            | "Network.loadNetworkResource"
-            | "DOM.setFileInputFiles"
-    ) {
+    if method == "Page.addScriptToEvaluateOnNewDocument" {
+        return params["source"].as_str() == Some("")
+            && params["worldName"]
+                .as_str()
+                .is_some_and(|name| !name.is_empty());
+    }
+    if method == "Page.reload" && params.get("scriptToEvaluateOnLoad").is_some() {
         return false;
     }
-    if method == "Page.navigate" {
+    if method == "Page.navigate"
+        || (method == "Fetch.continueRequest" && params.get("url").is_some())
+    {
         return params["url"].as_str().is_some_and(page_url);
     }
-    if matches!(method, "IO.read" | "IO.close") {
-        return true;
-    }
     matches!(
-        method.split_once('.').map(|(domain, _)| domain),
-        Some(
-            "Page"
-                | "Runtime"
-                | "DOM"
-                | "Input"
-                | "Emulation"
-                | "Network"
-                | "Fetch"
-                | "Log"
-                | "Accessibility"
-                | "CSS"
-                | "Overlay"
-                | "Performance"
-                | "DOMSnapshot"
-        )
+        method,
+        "Page.enable"
+            | "Page.disable"
+            | "Page.getFrameTree"
+            | "Page.getLayoutMetrics"
+            | "Page.getNavigationHistory"
+            | "Page.navigateToHistoryEntry"
+            | "Page.reload"
+            | "Page.stopLoading"
+            | "Page.bringToFront"
+            | "Page.captureScreenshot"
+            | "Page.captureSnapshot"
+            | "Page.printToPDF"
+            | "Page.handleJavaScriptDialog"
+            | "Page.addScriptToEvaluateOnNewDocument"
+            | "Page.removeScriptToEvaluateOnNewDocument"
+            | "Page.createIsolatedWorld"
+            | "Page.setLifecycleEventsEnabled"
+            | "Page.setInterceptFileChooserDialog"
+            | "Page.setBypassCSP"
+            | "Page.startScreencast"
+            | "Page.stopScreencast"
+            | "Page.screencastFrameAck"
+            | "Runtime.enable"
+            | "Runtime.disable"
+            | "Runtime.evaluate"
+            | "Runtime.callFunctionOn"
+            | "Runtime.awaitPromise"
+            | "Runtime.getProperties"
+            | "Runtime.releaseObject"
+            | "Runtime.releaseObjectGroup"
+            | "Runtime.addBinding"
+            | "Runtime.removeBinding"
+            | "Runtime.runIfWaitingForDebugger"
+            | "Runtime.discardConsoleEntries"
+            | "DOM.enable"
+            | "DOM.disable"
+            | "DOM.getDocument"
+            | "DOM.getFlattenedDocument"
+            | "DOM.querySelector"
+            | "DOM.querySelectorAll"
+            | "DOM.describeNode"
+            | "DOM.resolveNode"
+            | "DOM.requestNode"
+            | "DOM.getBoxModel"
+            | "DOM.getContentQuads"
+            | "DOM.getNodeForLocation"
+            | "DOM.getOuterHTML"
+            | "DOM.focus"
+            | "DOM.scrollIntoViewIfNeeded"
+            | "DOM.setNodeValue"
+            | "DOM.setAttributeValue"
+            | "DOM.removeAttribute"
+            | "DOM.collectClassNamesFromSubtree"
+            | "Input.dispatchMouseEvent"
+            | "Input.dispatchKeyEvent"
+            | "Input.insertText"
+            | "Input.dispatchTouchEvent"
+            | "Input.synthesizeScrollGesture"
+            | "Input.setIgnoreInputEvents"
+            | "Emulation.setDeviceMetricsOverride"
+            | "Emulation.clearDeviceMetricsOverride"
+            | "Emulation.setEmulatedMedia"
+            | "Emulation.setTouchEmulationEnabled"
+            | "Emulation.setFocusEmulationEnabled"
+            | "Emulation.setGeolocationOverride"
+            | "Emulation.clearGeolocationOverride"
+            | "Emulation.setUserAgentOverride"
+            | "Emulation.setLocaleOverride"
+            | "Emulation.setTimezoneOverride"
+            | "Emulation.setScriptExecutionDisabled"
+            | "Emulation.setCPUThrottlingRate"
+            | "Emulation.setDefaultBackgroundColorOverride"
+            | "Emulation.setEmulatedVisionDeficiency"
+            | "Emulation.setAutomationOverride"
+            | "Emulation.setIdleOverride"
+            | "Emulation.clearIdleOverride"
+            | "Network.enable"
+            | "Network.disable"
+            | "Network.getResponseBody"
+            | "Network.getRequestPostData"
+            | "Network.setExtraHTTPHeaders"
+            | "Network.setCacheDisabled"
+            | "Network.setBlockedURLs"
+            | "Network.setBypassServiceWorker"
+            | "Network.emulateNetworkConditions"
+            | "Network.setUserAgentOverride"
+            | "Fetch.enable"
+            | "Fetch.disable"
+            | "Fetch.failRequest"
+            | "Fetch.fulfillRequest"
+            | "Fetch.continueRequest"
+            | "Fetch.continueResponse"
+            | "Fetch.continueWithAuth"
+            | "Fetch.getResponseBody"
+            | "Fetch.takeResponseBodyAsStream"
+            | "Log.enable"
+            | "Log.disable"
+            | "Log.clear"
+            | "Accessibility.enable"
+            | "Accessibility.disable"
+            | "Accessibility.getFullAXTree"
+            | "Accessibility.getPartialAXTree"
+            | "CSS.enable"
+            | "CSS.disable"
+            | "CSS.getComputedStyleForNode"
+            | "CSS.getMatchedStylesForNode"
+            | "CSS.getStyleSheetText"
+            | "CSS.setStyleSheetText"
+            | "CSS.getInlineStylesForNode"
+            | "Overlay.enable"
+            | "Overlay.disable"
+            | "Overlay.hideHighlight"
+            | "Overlay.highlightNode"
+            | "Overlay.highlightRect"
+            | "Overlay.setShowViewportSizeOnResize"
+            | "Performance.enable"
+            | "Performance.disable"
+            | "Performance.getMetrics"
+            | "DOMSnapshot.captureSnapshot"
+            | "IO.read"
+            | "IO.close"
     )
 }
 

@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 import zipfile
 
-from companion import ADDON, Bidi
+from companion import ADDON, Bidi, WebSocket
 from smoke_firefox import Page
 
 HTTP = build_opener(ProxyHandler({}))
@@ -61,6 +61,22 @@ class Fixture(Page):
             value = {"ok": True}
         elif url.path == "/mode":
             value = {"control": self.server.control}
+        elif url.path in ("/page", "/dom-frame"):
+            frame = f'http://frame.browser.test:{self.server.server_port}/dom-frame'
+            html = '''<!doctype html><title>DOM fixture</title>
+<input id="field"><input id="hidden" hidden><button id="button" onclick="window.trustedClick=event.isTrusted">Click</button>
+<output id="value"></output><output id="hover"></output>
+<script>
+document.querySelector('input').oninput=e=>{window.trustedInput=e.isTrusted;document.querySelector('#value').textContent='VALUE:'+e.target.value;};
+document.querySelector('input').onmousemove=()=>document.querySelector('#hover').textContent='HOVER';
+</script>'''
+            if url.path == "/page":
+                html += f'<iframe src="{frame}" style="position:absolute;left:20px;top:200px;width:400px;height:200px;border:0"></iframe>'
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html.encode())
+            return
         else:
             return super().do_GET()
         self.send_response(200)
@@ -69,9 +85,43 @@ class Fixture(Page):
         self.wfile.write(json.dumps(value).encode())
 
 
+def check_dom(command, relay):
+    def act(action, params):
+        status, result = command(action, params)
+        assert status == 200 and not result.get("error"), (action, status, result)
+
+    def text():
+        status, result = command("snapshot")
+        assert status == 200 and not result.get("error"), (status, result)
+        return "\n".join(frame.get("text", "") for frame in result["result"]["frames"])
+
+    assert "VALUE:hello" in text()
+    act("key", {"key": "Backspace"})
+    assert "VALUE:hell" in text()
+    act("key", {"key": "a", "modifiers": {"ctrl": True}})
+    act("type", {"text": "world"})
+    assert "VALUE:world" in text()
+    act("key", {"key": "ArrowLeft"})
+    act("key", {"key": "Backspace"})
+    assert "VALUE:word" in text()
+    act("key", {"key": "Tab"})
+    act("key", {"key": "Tab", "modifiers": {"shift": True}})
+    act("type", {"text": "!"})
+    assert "VALUE:wor!d" in text()
+    assert relay("Page.enable")["inputMode"] == "dom"
+    relay("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 40, "y": 220})
+    assert "HOVER" in text()
+    act("click", {"x": 40, "y": 220})
+    act("type", {"text": "frame-text"})
+    act("key", {"key": "Backspace"})
+    assert "VALUE:frame-tex" in text(), text()
+    assert command("evaluate", {"script": "return document.title"})[1].get("error")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--firefox", default="firefox")
+    parser.add_argument("--dom-only", action="store_true", help="Exercise Firefox without its native companion")
     parser.add_argument("--daemon", default="target/debug/browser-daemon")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
@@ -100,13 +150,13 @@ def main():
             daemon = subprocess.Popen([str(Path(args.daemon).resolve()), "run", "--bind", f"127.0.0.1:{daemon_port}", "--public-url", base, "--profile-dir", str(directory / "state/profiles"), "--recordings-dir", str(directory / "state/recordings"), "--cluster-secret-file", str(secret_file), "--record-sessions", "false"], stdout=output, stderr=output)
         firefox = None
         driver = None
-        fixture = ThreadingHTTPServer(("127.0.0.2", 0), Fixture)
+        fixture = ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
         fixture.api = api
         fixture.daemon_url = base
         fixture.stage = "starting"
         fixture.control = False
         threading.Thread(target=fixture.serve_forever, daemon=True).start()
-        fixture_url = f"http://127.0.0.2:{fixture.server_port}"
+        fixture_url = f"http://fixture.browser.test:{fixture.server_port}"
         try:
             wait_for(lambda: api("/health")[0] == 200)
             source = directory / "extension"
@@ -114,11 +164,11 @@ def main():
             manifest = json.loads((source / "manifest.json").read_text())
             manifest["permissions"].append("nativeMessaging")
             manifest.pop("optional_permissions", None)
-            manifest["host_permissions"] = ["http://127.0.0.2/*"]
+            manifest["host_permissions"] = ["<all_urls>"]
             (source / "manifest.json").write_text(json.dumps(manifest))
             with (source / "popup.html").open("a") as html:
                 html.write('<script src="fixture.js"></script>')
-            (source / "fixture.js").write_text("const fixtureURL=" + json.dumps(fixture_url) + ";" + r"""
+            (source / "fixture.js").write_text("const domOnly=" + json.dumps(args.dom_only) + ";const fixtureURL=" + json.dumps(fixture_url) + ";" + r"""
 (async () => {
   const fixtureApi = browser;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -135,7 +185,8 @@ def main():
     let state;
     for(let i=0;i<100;i++){state=await message({type:'state'}); if(state.registration)break; await delay(100);}
     if(!state.registration)throw Error('No registration');
-    await message({type:'native',enable:true});
+    if (!domOnly) await message({type:'native',enable:true});
+    else await message({type:'native',enable:false});
     const tab=state.tabs.find(t=>t.url===`${fixtureURL}/page`);
     if(!tab)throw Error('Fixture tab missing');
     let control=false;
@@ -156,7 +207,7 @@ def main():
                         archive.write(path, path.relative_to(source))
             profile = directory / "profile"
             profile.mkdir()
-            (profile / "user.js").write_text('user_pref("browser.aboutwelcome.enabled", false);\n')
+            (profile / "user.js").write_text('user_pref("browser.aboutwelcome.enabled", false);\nuser_pref("network.dns.localDomains", "fixture.browser.test,frame.browser.test");\nuser_pref("network.proxy.type", 0);\n')
             environment = {**os.environ, "HOME": str(home), "MOZ_REMOTE_ALLOW_SYSTEM_ACCESS": "1", "BROWSER_DAEMON_FIREFOX_PORT": str(remote_port)}
             with (directory / "firefox.log").open("wb") as output:
                 firefox = subprocess.Popen([args.firefox, "--headless", "--no-remote", "--profile", str(profile), "--remote-debugging-port", str(remote_port)], env=environment, stdout=output, stderr=output)
@@ -166,7 +217,7 @@ def main():
             driver.call("webExtension.install", {"extensionData": {"type": "archivePath", "path": str(package)}})
             first = driver.call("browsingContext.getTree", {"maxDepth": 0})["contexts"][0]["context"]
             driver.call("browsingContext.navigate", {"context": first, "url": fixture_url + "/page", "wait": "complete"})
-            popup = driver.function("(addon) => { const {ExtensionParent} = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs'); return ExtensionParent.GlobalManager.getExtension(addon).baseURI.resolve('popup.html'); }",
+            popup = driver.function("(addon) => { const {ExtensionParent} = ChromeUtils.importESModule('resource://gre/modules/ExtensionParent.sys.mjs'); return ExtensionParent.GlobalManager.getExtension(addon).baseURI.resolve('popup.html?tab'); }",
                                     [ADDON], {"context": driver.chrome_context()})
             tab = driver.call("browsingContext.create", {"type": "tab"})["context"]
             driver.call("browsingContext.navigate", {"context": tab, "url": popup})
@@ -188,11 +239,31 @@ def main():
             assert fixture.stage == "control"
             assert command("click", {"selector": "#button"})[1]["error"] is None
             assert command("type", {"selector": "#field", "text": "hello"})[1]["error"] is None
-            status, result = command("evaluate", {"script": "return {value:document.querySelector('#field').value,click:window.wrappedJSObject.trustedClick,input:window.wrappedJSObject.trustedInput,system:typeof globalThis.ChromeUtils,components:typeof Components.utils};"})
-            assert status == 200 and result["result"] == {"value": "hello", "click": True, "input": True, "system": "undefined", "components": "undefined"}, (status, result)
+            if args.dom_only:
+                token = api("/api/auth/token")[1]["token"]
+                live = WebSocket(daemon_port, f'/api/extension/nodes/{node["id"]}/tabs/{tab}/cdp?auth={token}')
+                sequence = 0
+
+                def relay(method, params=None):
+                    nonlocal sequence
+                    sequence += 1
+                    live.send(json.dumps({"id": sequence, "method": method, "params": params or {}}))
+                    while True:
+                        result = json.loads(live.recv())
+                        if result.get("id") == sequence:
+                            assert "error" not in result, result
+                            return result["result"]
+
+                try:
+                    check_dom(command, relay)
+                finally:
+                    live.close()
+            else:
+                status, result = command("evaluate", {"script": "return {value:document.querySelector('#field').value,click:window.wrappedJSObject.trustedClick,input:window.wrappedJSObject.trustedInput,system:typeof globalThis.ChromeUtils,components:typeof Components.utils};"})
+                assert status == 200 and result["result"] == {"value": "hello", "click": True, "input": True, "system": "undefined", "components": "undefined"}, (status, result)
             api(f'/api/extension/nodes/{node["id"]}', "DELETE")
             wait_for(lambda: not api("/api/extension/nodes")[1]["nodes"])
-            print("Firefox round trip (WebDriver BiDi): real extension registration, native pipe identity, JPEG screenshots, trusted click/type, sandboxed content evaluation, view-only enforcement and revocation passed")
+            print("Firefox DOM-only: setup tab, editing, focus traversal, cross-origin iframe input, snapshots, view-only enforcement and revocation passed" if args.dom_only else "Firefox native round trip passed")
         finally:
             if driver:
                 with contextlib.suppress(OSError, ValueError, EOFError):

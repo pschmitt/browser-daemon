@@ -526,6 +526,11 @@
 </style>
 </head>
 <body>
+<div id="sharedInputMode" role="status" hidden style="position:fixed;bottom:12px;right:12px;z-index:1000;padding:6px 10px;background:#20252ddd;color:white;border-radius:8px;font-size:12px" title="Some sites require the Firefox companion for trusted mouse and keyboard input">Firefox DOM control</div>
+<div id="captureFailure" role="alert" hidden style="position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:1000;padding:12px;background:#402323;color:white;border-radius:8px">
+  Live capture is unavailable. Check site access in the browser extension. Retrying automatically.
+  <button id="retryCapture" type="button">Retry now</button>
+</div>
 <!-- The browser engines' icons (as in the dashboard). -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-chromium" viewBox="0 0 24 24"><image width="24" height="24" href="data:image/png;base64,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"/></symbol>
@@ -1010,7 +1015,7 @@ class CdpDriver {
     this.ready = this.cdp.ready;
   }
   isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
-  close() { clearInterval(this.passkeyBeat); clearInterval(this.frameWatch); fileAsk?.finish(null); this.cdp.close(); }
+  close() { clearInterval(this.passkeyBeat); clearInterval(this.frameWatch); fileAsk?.finish(null); if (this === drv) { document.getElementById("captureFailure").hidden = true; document.getElementById("sharedInputMode").hidden = true; } this.cdp.close(); }
   // A shared tab behind another tab of its window gets no screencast frames:
   // show screenshots instead until it is painted again.
   watchFrames() {
@@ -1027,7 +1032,8 @@ class CdpDriver {
     }, 1000);
   }
   async start() {
-    await this.cdp.call("Page.enable");
+    const enabled = await this.cdp.call("Page.enable");
+    document.getElementById("sharedInputMode").hidden = !this.shared || enabled?.inputMode !== "dom";
     // Chromium only paints (and screencasts) the tab in front of its window.
     // A shared browser brings it forward only if its user lets views follow (and this view does).
     if (!this.shared || followFocus()) await this.cdp.call("Page.bringToFront").catch(() => {});
@@ -1198,6 +1204,14 @@ class CdpDriver {
   }
   onEvent(method, p) {
     const h = this.h;
+    if (method === "Page.captureStatus" && this.shared && this === drv) {
+      document.getElementById("captureFailure").hidden = p.ok;
+      document.getElementById("retryCapture").onclick = () => {
+        this.cdp.send("Page.stopScreencast");
+        this.cdp.send("Page.startScreencast", this.castParams || {format: "jpeg", quality: castQuality()});
+      };
+      return;
+    }
     if (method === "Runtime.bindingCalled" && p.name === "__bdClipboard") {
       // Only right after input in this view (the user pressed the page's copy button).
       if (performance.now() - (this.lastInput || -1e9) < 5000) h.clipboard(p.payload);

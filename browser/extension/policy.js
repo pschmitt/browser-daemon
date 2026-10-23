@@ -26,6 +26,13 @@ globalThis.NodePolicy = (() => {
   }
   // A web page, or the blank page a CDP client opens before navigating.
   const pageURL = value => value === 'about:blank' || webURL(value);
+  // URL normalizes unusual IPv4 spellings before we inspect the address.
+  function localHost(host) {
+    host = host.toLowerCase().replace(/\.$/, '');
+    return host === 'localhost' || host.endsWith('.localhost') || /^127\./.test(host) ||
+      host === '0.0.0.0' || host === '[::]' || host === '[::1]' ||
+      /^\[::ffff:(?:127\.|7f[0-9a-f]{2}:)/.test(host);
+  }
   function serverURL(value) {
     const u = new URL(value);
     if (u.hostname.includes('*') || u.username || u.password || u.search || u.hash || !['', '/'].includes(u.pathname)) {
@@ -53,6 +60,7 @@ globalThis.NodePolicy = (() => {
     if (!control) return false;
     if (command.action === 'navigate' || command.action === 'open') return pageURL(command.params.url);
     if (command.action === 'move') return Number.isSafeInteger(command.params.index) && command.params.index >= 0;
+    if (command.action === 'pointerMove') return Number.isFinite(command.params.x) && Number.isFinite(command.params.y);
     if (command.action === 'pin') return typeof command.params.pinned === 'boolean';
     if (command.action === 'cdp') return methods.has(command.params.method);
     if (command.action === 'suggest') return typeof command.params.query === 'string' && command.params.query.length <= 200;
@@ -63,6 +71,7 @@ globalThis.NodePolicy = (() => {
         JSON.stringify(params).length > 128 * 1024) return false;
     if (viewing.has(method)) return true;
     if (!control) return false;
+    if (method === 'Page.reload' && params.scriptToEvaluateOnLoad !== undefined) return false;
     if (method === 'Page.navigate') return pageURL(params.url);
     return steering.has(method) || methods.has(method);
   }
@@ -70,21 +79,145 @@ globalThis.NodePolicy = (() => {
   // control: the page's own domains, never the profile's. No cookies or cache of
   // other sites, no requests with the browser's credentials outside the page, no
   // files from the owner's disk, no downloads to it. Same as automation_allowed.
-  const automationDenied = new Set([
-    'Page.setDownloadBehavior', 'Page.crash', 'Network.getAllCookies', 'Network.getCookies',
-    'Network.setCookie', 'Network.setCookies', 'Network.deleteCookies', 'Network.clearBrowserCookies',
-    'Network.clearBrowserCache', 'Network.loadNetworkResource', 'DOM.setFileInputFiles',
+  const automationMethods = new Set([
+    'Page.enable',
+    'Page.disable',
+    'Page.getFrameTree',
+    'Page.getLayoutMetrics',
+    'Page.getNavigationHistory',
+    'Page.navigateToHistoryEntry',
+    'Page.navigate',
+    'Page.reload',
+    'Page.stopLoading',
+    'Page.bringToFront',
+    'Page.captureScreenshot',
+    'Page.captureSnapshot',
+    'Page.printToPDF',
+    'Page.handleJavaScriptDialog',
+    'Page.addScriptToEvaluateOnNewDocument',
+    'Page.removeScriptToEvaluateOnNewDocument',
+    'Page.createIsolatedWorld',
+    'Page.setLifecycleEventsEnabled',
+    'Page.setInterceptFileChooserDialog',
+    'Page.setBypassCSP',
+    'Page.startScreencast',
+    'Page.stopScreencast',
+    'Page.screencastFrameAck',
+    'Runtime.enable',
+    'Runtime.disable',
+    'Runtime.evaluate',
+    'Runtime.callFunctionOn',
+    'Runtime.awaitPromise',
+    'Runtime.getProperties',
+    'Runtime.releaseObject',
+    'Runtime.releaseObjectGroup',
+    'Runtime.addBinding',
+    'Runtime.removeBinding',
+    'Runtime.runIfWaitingForDebugger',
+    'Runtime.discardConsoleEntries',
+    'DOM.enable',
+    'DOM.disable',
+    'DOM.getDocument',
+    'DOM.getFlattenedDocument',
+    'DOM.querySelector',
+    'DOM.querySelectorAll',
+    'DOM.describeNode',
+    'DOM.resolveNode',
+    'DOM.requestNode',
+    'DOM.getBoxModel',
+    'DOM.getContentQuads',
+    'DOM.getNodeForLocation',
+    'DOM.getOuterHTML',
+    'DOM.focus',
+    'DOM.scrollIntoViewIfNeeded',
+    'DOM.setNodeValue',
+    'DOM.setAttributeValue',
+    'DOM.removeAttribute',
+    'DOM.collectClassNamesFromSubtree',
+    'Input.dispatchMouseEvent',
+    'Input.dispatchKeyEvent',
+    'Input.insertText',
+    'Input.dispatchTouchEvent',
+    'Input.synthesizeScrollGesture',
+    'Input.setIgnoreInputEvents',
+    'Emulation.setDeviceMetricsOverride',
+    'Emulation.clearDeviceMetricsOverride',
+    'Emulation.setEmulatedMedia',
+    'Emulation.setTouchEmulationEnabled',
+    'Emulation.setFocusEmulationEnabled',
+    'Emulation.setGeolocationOverride',
+    'Emulation.clearGeolocationOverride',
+    'Emulation.setUserAgentOverride',
+    'Emulation.setLocaleOverride',
+    'Emulation.setTimezoneOverride',
+    'Emulation.setScriptExecutionDisabled',
+    'Emulation.setCPUThrottlingRate',
+    'Emulation.setDefaultBackgroundColorOverride',
+    'Emulation.setEmulatedVisionDeficiency',
+    'Emulation.setAutomationOverride',
+    'Emulation.setIdleOverride',
+    'Emulation.clearIdleOverride',
+    'Network.enable',
+    'Network.disable',
+    'Network.getResponseBody',
+    'Network.getRequestPostData',
+    'Network.setExtraHTTPHeaders',
+    'Network.setCacheDisabled',
+    'Network.setBlockedURLs',
+    'Network.setBypassServiceWorker',
+    'Network.emulateNetworkConditions',
+    'Network.setUserAgentOverride',
+    'Fetch.enable',
+    'Fetch.disable',
+    'Fetch.failRequest',
+    'Fetch.fulfillRequest',
+    'Fetch.continueRequest',
+    'Fetch.continueResponse',
+    'Fetch.continueWithAuth',
+    'Fetch.getResponseBody',
+    'Fetch.takeResponseBodyAsStream',
+    'Log.enable',
+    'Log.disable',
+    'Log.clear',
+    'Accessibility.enable',
+    'Accessibility.disable',
+    'Accessibility.getFullAXTree',
+    'Accessibility.getPartialAXTree',
+    'CSS.enable',
+    'CSS.disable',
+    'CSS.getComputedStyleForNode',
+    'CSS.getMatchedStylesForNode',
+    'CSS.getStyleSheetText',
+    'CSS.setStyleSheetText',
+    'CSS.getInlineStylesForNode',
+    'Overlay.enable',
+    'Overlay.disable',
+    'Overlay.hideHighlight',
+    'Overlay.highlightNode',
+    'Overlay.highlightRect',
+    'Overlay.setShowViewportSizeOnResize',
+    'Performance.enable',
+    'Performance.disable',
+    'Performance.getMetrics',
+    'DOMSnapshot.captureSnapshot',
+    'IO.read',
+    'IO.close',
   ]);
-  const automationDomains = new Set(['Page', 'Runtime', 'DOM', 'Input', 'Emulation', 'Network', 'Fetch', 'Log',
-    'Accessibility', 'CSS', 'Overlay', 'Performance', 'DOMSnapshot']);
   function automationAllowed(method, params) {
     if (typeof method !== 'string' || !params || typeof params !== 'object' || Array.isArray(params) ||
-        JSON.stringify(params).length > 8 * 1024 * 1024 || automationDenied.has(method)) return false;
+        JSON.stringify(params).length > 8 * 1024 * 1024 || !automationMethods.has(method)) return false;
     if (method === 'Page.navigate') return pageURL(params.url);
-    if (method === 'IO.read' || method === 'IO.close') return true;
-    return automationDomains.has(method.split('.')[0]);
+    // Playwright creates its utility world with an empty script. Executable
+    // initialization scripts would survive a later navigation to a private page.
+    if (method === 'Page.addScriptToEvaluateOnNewDocument') return params.source === '' &&
+      typeof params.worldName === 'string' && params.worldName.length > 0;
+    if (method === 'Page.reload' && params.scriptToEvaluateOnLoad !== undefined) return false;
+    // Interception must not redirect requests to local services or daemon pages.
+    // The background applies the current daemon allowlist to these URLs too.
+    if (method === 'Fetch.continueRequest' && params.url !== undefined) return pageURL(params.url);
+    return true;
   }
   // Events a view-only viewer may see: the page's frames and navigation state.
   const viewEvent = method => method.startsWith('Page.') || method === 'Inspector.detached';
-  return {webURL, pageURL, serverURL, daemonOrigins, approvedServer, allowed, relayAllowed, automationAllowed, viewEvent};
+  return {webURL, pageURL, localHost, serverURL, daemonOrigins, approvedServer, allowed, relayAllowed, automationAllowed, viewEvent};
 })();

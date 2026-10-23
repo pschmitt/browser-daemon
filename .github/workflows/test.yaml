@@ -102,3 +102,5 @@ jobs:
         run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
       - name: Firefox extension and native messaging round trip
         run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py
+      - name: Firefox extension without the native companion
+        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py --dom-only

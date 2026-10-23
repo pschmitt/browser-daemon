@@ -77,8 +77,8 @@ try {
     res.end('<!doctype html><title>Start</title><h1>Start</h1>');
   });
   await new Promise(r => pageServer.listen(0, '127.0.0.2', r));
-  const pageURL = `http://127.0.0.2:${pageServer.address().port}/`;
-  launch(process.env.CHROMIUM || 'chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
+  const pageURL = `http://fixture.browser.test:${pageServer.address().port}/`;
+  launch(process.env.CHROMIUM || 'chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', '--host-resolver-rules=MAP fixture.browser.test 127.0.0.2', '--no-proxy-server', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
   const targets = () => fetch(`http://127.0.0.1:${chromePort}/json/list`).then(r => r.json());
   const worker = await until(async () => (await targets()).find(t => t.type === 'service_worker' && t.url.endsWith('/background.js')));
   const origin = worker.url.replace(/\/background.js$/, '');

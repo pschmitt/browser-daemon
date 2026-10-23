@@ -4,6 +4,10 @@
 
 ### Added
 
+* Firefox without the native companion supports basic text editing, hover,
+  backward focus traversal and input in accessible embedded frames. Live views
+  identify DOM control and show capture failures with a retry action.
+
 * Seeking into an unloaded recording fetches a bounded window around that
   timestamp immediately. Dashboard downloads pause for the foreground request
   and resume afterward; new seeks cancel stale requests. Public links support
@@ -17,6 +21,12 @@
   (`ids`).
 
 ### Changed
+
+* Browser sharing excludes additional loopback spellings and daemon aliases.
+  Chromium automation uses an explicit method allowlist and refuses executable
+  initialization and reload scripts while retaining Playwright utility worlds.
+* Firefox viewers share one capture loop per tab. Pairing accurately describes
+  automatic tab and sound sharing, and setup works when opened in a browser tab.
 
 * Recording players keep the original timeline and fixed total duration in both
   playback modes, so the duration and seek bar no longer grow as frames load.

@@ -48,6 +48,7 @@ async function shareEverything() {
   publishSoon();
 }
 async function openTab(url, windowId) {
+  if (!safeURL(url)) throw new ShimError('Local services and daemon pages cannot be opened remotely.');
   const created = await api.tabs.create({url, active: true, ...(windowId ? {windowId} : {})});
   shared.set(created.id, {origin: null, control: true, paused: true});
   publishSoon();
@@ -544,8 +545,9 @@ function safeURL(url) {
   // A controller must never read its own pairing UI, a dashboard's credential,
   // or a code printed in a localhost daemon page.
   const u = new URL(url);
-  return !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) &&
-    !daemons.has(u.origin) && (!registration || u.origin !== registration.server);
+  return !NodePolicy.localHost(u.hostname) &&
+    ![...daemons, ...(registration ? [registration.server] : [])].some(origin =>
+      new URL(origin).hostname.replace(/\.$/, '') === u.hostname.replace(/\.$/, ''));
 }
 function safeTab(tab) { return !tab.incognito && safeURL(tab.url); }
 
@@ -762,9 +764,103 @@ async function cdp(tab, method, params = {}) {
   return api.debugger.sendCommand({tabId: tab}, method, params);
 }
 
+// One short-lived routing capability per document, in the isolated world. Only
+// parent-to-child messages route input; the background validates the final frame.
+function installDomRoute(token) {
+  const api = globalThis.browser || chrome;
+  const routes = globalThis.__bdDomRoutes ||= new Map();
+  if (!globalThis.__bdDomReceiver) {
+    globalThis.__bdDomReceiver = event => {
+      const value = event.data;
+      if (event.source !== parent || typeof value?.bdDomRoute !== 'string' || typeof value.point !== 'boolean' ||
+          !Number.isFinite(value.x) || !Number.isFinite(value.y)) return;
+      routes.get(value.bdDomRoute)?.route(value);
+    };
+    addEventListener('message', globalThis.__bdDomReceiver);
+  }
+  const url = location.href;
+  const route = ({x, y, point, focus = false, scaleX = 1, scaleY = 1}) => {
+    if (location.href !== url) return;
+    let element = point ? document.elementFromPoint(x, y) : document.activeElement;
+    while (element?.shadowRoot) {
+      const inner = point ? element.shadowRoot.elementFromPoint(x, y) : element.shadowRoot.activeElement;
+      if (!inner || inner === element) break;
+      element = inner;
+    }
+    if (element instanceof HTMLIFrameElement || element instanceof HTMLFrameElement) {
+      const r = element.getBoundingClientRect();
+      if (focus) element.focus();
+      element.contentWindow?.postMessage({bdDomRoute: token, point, focus,
+        x: point ? (x - r.left) * element.offsetWidth / r.width - element.clientLeft : 0,
+        y: point ? (y - r.top) * element.offsetHeight / r.height - element.clientTop : 0,
+        scaleX: scaleX * element.offsetWidth / r.width, scaleY: scaleY * element.offsetHeight / r.height}, '*');
+    } else {
+      void api.runtime.sendMessage({type: 'domRoute', token, x, y, scaleX, scaleY, url}).catch(() => {});
+    }
+  };
+  if (routes.size >= 32) routes.delete(routes.keys().next().value);
+  routes.set(token, {url, route});
+  setTimeout(() => routes.delete(token), 2500);
+  return {url};
+}
+const domRoutes = new Map();
+async function domAction(tab, action, params, grant) {
+  const token = crypto.randomUUID();
+  const frames = await api.scripting.executeScript({target: {tabId: tab, allFrames: true}, func: installDomRoute, args: [token]});
+  const permittedNow = () => shared.get(tab) === grant && !grant.paused && (action === 'snapshot' || grant.control);
+  if (!permittedNow()) throw new ShimError('Sharing ended.');
+  const permitted = frames.filter(frame => safeURL(frame.result?.url));
+  if (action === 'snapshot') {
+    const results = await Promise.all(permitted.slice(0, 32).map(frame => api.scripting.executeScript({target: {tabId: tab, frameIds: [frame.frameId]},
+      func: pageAction, args: [action, params, new URL(frame.result.url).origin, token]})));
+    const snapshots = results.flat().map(frame => ({frame: frame.frameId, ...frame.result}));
+    let textBudget = 100000, elementBudget = 400;
+    snapshots.sort((a, b) => a.frame - b.frame);
+    for (const frame of snapshots) {
+      frame.text = (frame.text || '').slice(0, textBudget);
+      frame.elements = (frame.elements || []).slice(0, elementBudget);
+      textBudget -= frame.text.length;
+      elementBudget -= frame.elements.length;
+    }
+    return {...snapshots.find(frame => frame.frame === 0), frames: snapshots};
+  }
+  const point = !params.selector && ['click', 'pointerMove', 'scroll'].includes(action) &&
+    Number.isFinite(params.x) && Number.isFinite(params.y);
+  // Selector actions deliberately address the main document; point and keyboard
+  // actions follow the embedded frame under the pointer or holding focus.
+  if (params.selector || action === 'scroll' && !Number.isFinite(params.deltaY)) {
+    return (await api.scripting.executeScript({target: {tabId: tab}, func: pageAction,
+      args: [action, params, grant.origin, token]}))[0]?.result;
+  }
+  let timer;
+  try {
+    const selected = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new ShimError('The frame is unavailable or does not permit access.')), 2000);
+      domRoutes.set(token, {tab, grant, permitted, resolve, reject});
+    });
+    void selected.catch(() => {});
+    await api.scripting.executeScript({target: {tabId: tab}, func: (token, point, x, y, focus) => {
+      globalThis.__bdDomRoutes?.get(token)?.route({point, x, y, focus});
+    }, args: [token, point, params.x || 0, params.y || 0, action === 'click']});
+    const frame = await selected;
+    if (!safeTab(await api.tabs.get(tab)) || !permittedNow()) throw new ShimError('Sharing ended.');
+    const values = point ? {...params, x: frame.x, y: frame.y,
+      ...(params.path ? {path: params.path.map(p => ({x: frame.x + (p.x - params.x) * frame.scaleX,
+        y: frame.y + (p.y - params.y) * frame.scaleY}))} : {})} : params;
+    return (await api.scripting.executeScript({target: {tabId: tab, frameIds: [frame.id]}, func: pageAction,
+      args: [action, values, new URL(frame.url).origin, token]}))[0]?.result;
+  } finally { clearTimeout(timer); domRoutes.delete(token); }
+}
+
 // Runs in an isolated extension world. Arguments are data; never eval/code.
-function pageAction(action, params, expectedOrigin) {
+function pageAction(action, params, expectedOrigin, documentToken) {
   if (location.origin !== expectedOrigin) throw new Error('Page changed site.');
+  if (documentToken && globalThis.__bdDomRoutes?.get(documentToken)?.url !== location.href) throw new Error('Document changed.');
+  const active = () => {
+    let element = document.activeElement;
+    while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+    return element;
+  };
   const finite = x => typeof x === 'number' && Number.isFinite(x);
   const hit = (x, y) => {
     let target = document.elementFromPoint(x, y);
@@ -808,9 +904,23 @@ function pageAction(action, params, expectedOrigin) {
       if (!finite(params.x) || !finite(params.y)) throw new Error('Expected scroll offsets.');
       window.scrollBy(params.x, params.y);
     }
-  } else if (action === 'move') {
+  } else if (action === 'pointerMove') {
     if (!finite(params.x) || !finite(params.y)) throw new Error('Expected pointer coordinates.');
     const target = hit(params.x, params.y);
+    const previous = globalThis.__bdHoverTarget;
+    const dispatch = (element, type, relatedTarget, bubbles = true) => {
+      if (!element) return;
+      const init = {bubbles, cancelable: true, composed: true, view: window,
+        clientX: params.x, clientY: params.y, button: -1, buttons: 0, relatedTarget};
+      element.dispatchEvent(type.startsWith('pointer') && typeof PointerEvent === 'function'
+        ? new PointerEvent(type, {...init, pointerId: 1, pointerType: 'mouse', isPrimary: true})
+        : new MouseEvent(type, init));
+    };
+    if (target !== previous) {
+      for (const type of ['pointerout', 'mouseout', 'pointerleave', 'mouseleave']) dispatch(previous, type, target, !type.endsWith('leave'));
+      for (const type of ['pointerover', 'mouseover', 'pointerenter', 'mouseenter']) dispatch(target, type, previous, !type.endsWith('enter'));
+      globalThis.__bdHoverTarget = target;
+    }
     if (target) {
       const init = {bubbles: true, cancelable: true, composed: true, view: window,
         clientX: params.x, clientY: params.y, button: -1, buttons: 0};
@@ -938,9 +1048,11 @@ function pageAction(action, params, expectedOrigin) {
       }));
     }
   } else if (action === 'type') {
-    const e = params.selector ? document.querySelector(params.selector) : document.activeElement;
+    const e = params.selector ? document.querySelector(params.selector) : active();
     if (!e || typeof params.text !== 'string') throw new Error('Expected a field and text.');
+    if (e.disabled || e.readOnly) throw new Error('This field cannot be edited.');
     e.focus();
+    if (!e.dispatchEvent(new InputEvent('beforeinput', {bubbles: true, composed: true, cancelable: true, inputType: 'insertText', data: params.text}))) return {ok: true};
     if (e.isContentEditable) {
       document.execCommand('insertText', false, params.text);
     } else {
@@ -956,12 +1068,78 @@ function pageAction(action, params, expectedOrigin) {
       e.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType: 'insertText', data: params.text}));
     }
   } else if (action === 'key') {
-    const e = document.activeElement;
-    if (params.key === 'Enter' && e?.form) e.form.requestSubmit();
-    else if (params.key === 'Tab') {
-      const fields = [...document.querySelectorAll('a[href],button,input,select,textarea,[tabindex="0"]')].filter(e => !e.disabled);
-      fields[(fields.indexOf(e) + 1) % fields.length]?.focus();
-    } else throw new Error('Firefox supports Enter (forms) and Tab; other trusted keys require Chromium.');
+    const e = active() || document.body;
+    const m = params.modifiers || {};
+    const init = {key: params.key, bubbles: true, composed: true, cancelable: true,
+      ctrlKey: !!m.ctrl, metaKey: !!m.meta, altKey: !!m.alt, shiftKey: !!m.shift};
+    const accepted = e.dispatchEvent(new KeyboardEvent('keydown', init));
+    try {
+      if (!accepted) return {ok: true};
+      if (params.key === 'Tab') {
+        const fields = [];
+        const walk = root => {
+          for (const field of root.querySelectorAll('*')) {
+            if (field.tabIndex >= 0 && !field.matches(':disabled') && !field.closest('[inert]') &&
+                field.getClientRects().length && getComputedStyle(field).visibility === 'visible') fields.push(field);
+            if (field.shadowRoot) walk(field.shadowRoot);
+          }
+        };
+        walk(document);
+        fields.sort((a, b) => (a.tabIndex || Infinity) - (b.tabIndex || Infinity));
+        const index = fields.indexOf(e), step = m.shift ? -1 : 1;
+        fields[(index < 0 ? (m.shift ? fields.length - 1 : 0) : index + step + fields.length) % fields.length]?.focus();
+      } else if (params.key === 'Enter' && e instanceof HTMLTextAreaElement && !m.ctrl && !m.meta) {
+        pageAction('type', {text: '\n'}, expectedOrigin);
+      } else if (params.key === 'Enter' && e?.matches('button,a[href],input[type="submit"],input[type="button"]')) {
+        e.click();
+      } else if (params.key === 'Enter' && e?.form && !e.isContentEditable) {
+        e.form.requestSubmit();
+      } else if (params.key === ' ' && e?.matches('button,input[type="checkbox"],input[type="radio"]')) {
+        e.click();
+      } else if (params.key === 'Escape') {
+        const dialog = e?.closest('dialog[open]');
+        if (dialog && dialog.dispatchEvent(new Event('cancel', {cancelable: true}))) dialog.close();
+      } else if (e?.isContentEditable) {
+        const command = (m.ctrl || m.meta) && params.key.toLowerCase() === 'a' ? 'selectAll'
+          : params.key === 'Backspace' ? 'delete' : params.key === 'Delete' ? 'forwardDelete'
+          : params.key === 'Enter' ? 'insertParagraph' : null;
+        if (command) document.execCommand(command);
+        else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(params.key)) {
+          const backward = ['ArrowLeft', 'ArrowUp', 'Home'].includes(params.key);
+          const granularity = ['Home', 'End'].includes(params.key) ? 'lineboundary'
+            : ['ArrowUp', 'ArrowDown'].includes(params.key) ? 'line' : m.ctrl || m.meta ? 'word' : 'character';
+          window.getSelection()?.modify(m.shift ? 'extend' : 'move', backward ? 'backward' : 'forward', granularity);
+        }
+      } else if ((e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement) &&
+          Number.isInteger(e.selectionStart) && !e.disabled) {
+        const value = e.value, start = e.selectionStart, end = e.selectionEnd;
+        const shortcut = m.ctrl || m.meta;
+        if (shortcut && params.key.toLowerCase() === 'a') e.setSelectionRange(0, value.length);
+        else if (['Backspace', 'Delete'].includes(params.key) && !e.readOnly) {
+          let from = start, to = end;
+          if (from === to) {
+            if (params.key === 'Backspace') from = shortcut ? 0 : Math.max(0, from - (/[\uDC00-\uDFFF]/.test(value[from - 1] || '') ? 2 : 1));
+            else to = shortcut ? value.length : Math.min(value.length, to + (/[\uD800-\uDBFF]/.test(value[to] || '') ? 2 : 1));
+          }
+          const inputType = params.key === 'Backspace' ? 'deleteContentBackward' : 'deleteContentForward';
+          if (e.dispatchEvent(new InputEvent('beforeinput', {bubbles: true, composed: true, cancelable: true, inputType}))) {
+            const proto = e instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            Object.getOwnPropertyDescriptor(proto, 'value').set.call(e, value.slice(0, from) + value.slice(to));
+            e.setSelectionRange(from, from);
+            e.dispatchEvent(new InputEvent('input', {bubbles: true, composed: true, inputType}));
+          }
+        } else if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(params.key)) {
+          const backward = params.key === 'ArrowLeft' || params.key === 'Home';
+          const focus = e.selectionDirection === 'backward' ? start : end;
+          let next = params.key === 'Home' ? 0 : params.key === 'End' ? value.length
+            : !m.shift && start !== end ? (backward ? start : end)
+            : Math.max(0, Math.min(value.length, focus + (backward ? -1 : 1)));
+          if (shortcut && params.key.startsWith('Arrow')) next = backward ? 0 : value.length;
+          const anchor = m.shift ? (e.selectionDirection === 'backward' ? end : start) : next;
+          e.setSelectionRange(Math.min(anchor, next), Math.max(anchor, next), next < anchor ? 'backward' : 'forward');
+        }
+      }
+    } finally { e.dispatchEvent(new KeyboardEvent('keyup', init)); }
   } else throw new Error('Unsupported page action.');
   return {ok: true};
 }
@@ -1159,6 +1337,7 @@ async function execute(command) {
   if (action === 'snapshot') {
     if (chromium) return cdp(tab, 'Accessibility.getFullAXTree');
   } else if (action === 'navigate') {
+    if (!safeURL(params.url)) throw new ShimError('Local services and daemon pages cannot be opened remotely.');
     await api.tabs.update(tab, {url: params.url});
     return {ok: true};
   } else if (action === 'open') {
@@ -1200,6 +1379,7 @@ async function execute(command) {
       return cdp(tab, 'Input.dispatchKeyEvent', {type: 'keyUp', ...key});
     }
   }
+  if (!chromium) return domAction(tab, action, params, grant);
   return (await api.scripting.executeScript({target: {tabId: tab}, func: pageAction, args: [action, params, grant.origin]}))[0]?.result;
 }
 
@@ -1227,6 +1407,11 @@ async function relayCdp(message, connection, currentGeneration, queued = false) 
     }
     await wakeDiscardedTab(tab, await api.tabs.get(tab));
     if (shared.get(tab) !== grant || grant.paused || !safeTab(await api.tabs.get(tab))) throw new ShimError('Tab is paused or sharing ended.');
+    if (!(NodePolicy.relayAllowed(method, params, grant.control) ||
+        automation && grant.control && NodePolicy.automationAllowed(method, params))) throw new ShimError('Control was revoked.');
+    if ((method === 'Page.navigate' || method === 'Fetch.continueRequest') && params.url !== undefined && !safeURL(params.url)) {
+      throw new ShimError('Local services and daemon pages cannot be opened remotely.');
+    }
     channels.set(channel, tab);
     if (fileMethods.has(method)) {
       const result = await fileCommand(tab, channel, method, params);
@@ -1400,7 +1585,8 @@ async function shim(tab, channel, method, params) {
   const modifiers = params.modifiers || 0;
   const mods = {alt: !!(modifiers & 1), ctrl: !!(modifiers & 2), meta: !!(modifiers & 4), shift: !!(modifiers & 8)};
   switch (method) {
-    case 'Page.enable': case 'Page.getFrameTree': return {};
+    case 'Page.enable': return {inputMode: nativeReady ? 'trusted' : 'dom'};
+    case 'Page.getFrameTree': return {};
     case 'Page.startScreencast': startCast(tab, channel, params.quality); return {};
     case 'Page.stopScreencast': stopCast(channel); return {};
     case 'Page.screencastFrameAck': { const cast = casts.get(channel); if (cast) { cast.inflight = Math.max(0, cast.inflight - 1); pump(channel); } return {}; }
@@ -1492,7 +1678,7 @@ async function pointer(tab, params, run) {
   }
   if (params.type === 'mousePressed') { pointers.set(tab, {x: params.x, y: params.y, button: Math.max(0, button), clickCount: params.clickCount, modifiers: params.modifiers || 0, path: []}); return {}; }
   const down = pointers.get(tab);
-  if (!down && params.type === 'mouseMoved') return run('move', {x: params.x, y: params.y});
+  if (!down && params.type === 'mouseMoved') return run('pointerMove', {x: params.x, y: params.y});
   if (!down) return {};
   if (params.type === 'mouseMoved') {
     down.path.push({x: params.x, y: params.y});
@@ -1520,41 +1706,74 @@ async function capture(tab, quality) {
     return {data: r.data, format: r.format || 'png'};
   }
 }
+const captureWorkers = new Map();
 function startCast(tab, channel, quality) {
   stopCast(channel);
-  casts.set(channel, {tab, quality, inflight: 0, last: '', seq: 0, timer: null, busy: false});
-  pump(channel);
+  casts.set(channel, {tab, quality, inflight: 0, last: '', seq: 0});
+  if (!captureWorkers.has(tab)) captureWorkers.set(tab, {busy: false, timer: null, hot: Date.now(), failed: false});
+  if (captureWorkers.get(tab).failed) sendEvent(tab, 'Page.captureStatus', {ok: false}, channel);
+  void pump(channel);
 }
 function stopCast(channel) {
   const cast = casts.get(channel);
-  if (cast) { clearTimeout(cast.timer); casts.delete(channel); }
+  casts.delete(channel);
+  if (cast && ![...casts.values()].some(other => other.tab === cast.tab)) {
+    clearTimeout(captureWorkers.get(cast.tab)?.timer);
+    captureWorkers.delete(cast.tab);
+  }
 }
-// Input and page loads make the next frames come quickly; an idle page is checked slowly.
+// One capture worker per tab, shared by all viewers. Slow viewers have their
+// own acknowledgement window and cannot hold up the other viewers.
 function touchCast(tab) {
-  for (const [channel, cast] of casts) if (cast.tab === tab) { cast.hot = Date.now(); clearTimeout(cast.timer); cast.timer = setTimeout(() => pump(channel), 60); }
+  const worker = captureWorkers.get(tab);
+  if (!worker) return;
+  worker.hot = Date.now();
+  clearTimeout(worker.timer);
+  const channel = [...casts].find(([, cast]) => cast.tab === tab)?.[0];
+  if (channel) worker.timer = setTimeout(() => void pump(channel), 60);
 }
 async function pump(channel) {
   const cast = casts.get(channel);
-  if (!cast || cast.busy || cast.inflight >= 2) return;
-  clearTimeout(cast.timer);
-  cast.busy = true;
+  if (!cast) return;
+  const tab = cast.tab, worker = captureWorkers.get(tab);
+  if (!worker || worker.busy) return;
+  clearTimeout(worker.timer);
+  worker.busy = true;
   try {
-    const grant = shared.get(cast.tab);
-    if (grant && !grant.paused) {
-      const t = await api.tabs.get(cast.tab);
-      const frame = await capture(cast.tab, cast.quality);
-      // Unchanged pictures are not sent: an idle page costs no bandwidth.
-      if (casts.get(channel) === cast && frame.data !== cast.last) {
-        cast.last = frame.data;
-        cast.inflight++;
-        sendEvent(cast.tab, 'Page.screencastFrame', {data: frame.data, sessionId: ++cast.seq,
-          metadata: {deviceWidth: t.width, deviceHeight: t.height, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0, timestamp: Date.now() / 1000}}, channel);
+    const viewers = [...casts].filter(([, item]) => item.tab === tab && item.inflight < 2);
+    const grant = shared.get(tab);
+    if (viewers.length && grant && !grant.paused) {
+      const t = await api.tabs.get(tab);
+      if (!safeTab(t)) throw new Error('Tab is paused');
+      const frame = await capture(tab, Math.max(...viewers.map(([, item]) => item.quality || 65)));
+      const current = await api.tabs.get(tab);
+      // Discard captures spanning navigation, revocation or worker replacement.
+      if (captureWorkers.get(tab) !== worker || shared.get(tab) !== grant || grant.paused ||
+          current.url !== t.url || !safeTab(current)) return;
+      for (const [viewer, item] of casts) {
+        if (item.tab !== tab || item.inflight >= 2) continue;
+        if (worker.failed) sendEvent(tab, 'Page.captureStatus', {ok: true}, viewer);
+        if (frame.data === item.last) continue;
+        item.last = frame.data;
+        item.inflight++;
+        sendEvent(tab, 'Page.screencastFrame', {data: frame.data, sessionId: ++item.seq,
+          metadata: {deviceWidth: t.width, deviceHeight: t.height, pageScaleFactor: 1, offsetTop: 0,
+            scrollOffsetX: 0, scrollOffsetY: 0, timestamp: Date.now() / 1000}}, viewer);
       }
+      worker.failed = false;
     }
-  } catch { /* The next round tries again; a revoked grant ends the cast. */ }
-  finally { cast.busy = false; }
-  if (casts.get(channel) !== cast) return;
-  cast.timer = setTimeout(() => pump(channel), Date.now() - (cast.hot || 0) < 2000 ? 120 : 500);
+  } catch {
+    if (!worker.failed) {
+      for (const [viewer, item] of casts) if (item.tab === tab) sendEvent(tab, 'Page.captureStatus', {ok: false}, viewer);
+    }
+    worker.failed = true;
+  } finally {
+    worker.busy = false;
+    if (captureWorkers.get(tab) === worker) {
+      const next = [...casts].find(([, item]) => item.tab === tab)?.[0];
+      if (next) worker.timer = setTimeout(() => void pump(next), worker.failed ? 2000 : Date.now() - worker.hot < 2000 ? 120 : 500);
+    }
+  }
 }
 
 async function handleCommand(command, connection, currentGeneration) {
@@ -1714,8 +1933,11 @@ async function localMessage(message, sender) {
   if (message.type === 'fileBridge') return fileBridgeMessage(message, sender);
   if (message.type === 'mediaAudio') return relayMediaAudio(message, sender);
   if (message.type === 'dashboardPair') return dashboardMessage(message, sender);
-  if (sender.id !== api.runtime.id ||
-      sender.url !== api.runtime.getURL('popup.html')) throw new Error('Extension UI only.');
+  const uiURL = new URL(sender.url || 'about:blank');
+  const popupURL = new URL(api.runtime.getURL('popup.html'));
+  if (sender.id !== api.runtime.id || sender.tab?.incognito ||
+      uiURL.protocol !== popupURL.protocol || uiURL.host !== popupURL.host ||
+      uiURL.pathname !== popupURL.pathname) throw new Error('Extension UI only.');
   await historyReady;
   if (message.type === 'configureDashboard') {
     const server = await requireDaemon(message.server);
@@ -1900,6 +2122,20 @@ async function localMessage(message, sender) {
 }
 
 api.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.type === 'domRoute') {
+    const pending = domRoutes.get(message.token);
+    if (sender.id === api.runtime.id && pending && sender.tab?.id === pending.tab &&
+        shared.get(pending.tab) === pending.grant && !pending.grant.paused &&
+        safeURL(sender.url) && sender.url === message.url &&
+        pending.permitted.some(frame => frame.frameId === sender.frameId && frame.result.url === message.url) &&
+        Number.isFinite(message.x) && Number.isFinite(message.y)) {
+      pending.resolve({id: sender.frameId, url: message.url, x: message.x, y: message.y,
+        scaleX: Number.isFinite(message.scaleX) && message.scaleX > 0 ? message.scaleX : 1,
+        scaleY: Number.isFinite(message.scaleY) && message.scaleY > 0 ? message.scaleY : 1});
+    }
+    respond({ok: true});
+    return false;
+  }
   if (message?.type === 'passkeyHook') {
     const tab = sender.tab?.id;
     const grant = shared.get(tab);

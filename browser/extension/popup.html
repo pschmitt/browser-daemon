@@ -14,7 +14,8 @@
   <div class="approval-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg></div>
   <h2>Connect to <span id="approvalHost"></span>?</h2>
   <ul class="facts">
-    <li>Nothing is shared until you switch tabs on.</li>
+    <li id="approvalSharing"></li>
+    <li id="approvalSound"></li>
     <li>You can disconnect at any time.</li>
   </ul>
   <label class="field">Name this browser<input id="approvalName" maxlength="80" placeholder="My laptop"></label>
@@ -25,6 +26,7 @@
 </section>
 
 <main id="connected" hidden>
+  <p id="inputMode" class="muted small" role="status"></p>
   <div class="card server">
     <span class="server-dot" aria-hidden="true"></span>
     <span class="server-text"><small>Connected to</small><b id="serverHost"></b></span>
@@ -55,6 +57,7 @@
   </section>
   <details id="newConnection" class="card">
     <summary id="newConnectionTitle">Connect this browser</summary>
+    <p id="setupSharing" class="muted small"></p>
     <label class="field">Daemon<select id="serverChoice"></select><input id="server" type="url" placeholder="https://browser.example.org"></label>
     <label class="field">Browser name<input id="name" maxlength="80" placeholder="My laptop"></label>
     <button id="enableDashboard" type="button" class="primary wide">Pair from the dashboard</button>

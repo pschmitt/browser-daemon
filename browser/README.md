@@ -224,6 +224,15 @@ too. Closing the native pipe ends the BiDi session; it does not quit Firefox.
 
 Without the companion, Firefox uses DOM clicks and form editing. Those events
 are not trusted keyboard/pointer input, so some web apps will ignore them.
+The live view labels this mode. Basic editing includes Backspace/Delete,
+selection, arrow/Home/End keys and forward/backward focus traversal. Pointer
+and keyboard input follow accessible embedded frames and open shadow roots;
+selectors address the main document. Snapshots retain the top-level fields and
+include a `frames` list. Browser shortcuts, native menus and sites requiring
+trusted input still need the companion. Capture failures show a retry action;
+all viewers of a Firefox tab share one capture loop.
+Synthetic hover events can drive page handlers, but cannot set the browser's
+native CSS `:hover` state.
 Live views capture frames with Firefox's own `tabs.captureTab` (JPEG at CSS
 pixels), which needs the `<all_urls>` permission; the companion's screenshots
 are the fallback without it.
@@ -282,12 +291,13 @@ pairing**. Pair directly with the hosting daemon using the dashboard or its clus
   It is appropriate only for daemon clients you trust with those accounts.
   Arbitrary content evaluation can act with that site's authority, including
   requests and same-origin windows reachable by the page.
-- Browser-wide CDP domains, target attachment, cookie/storage APIs, emulation,
+- Browser-wide CDP domains, target attachment, cookie/storage APIs,
   file-system upload commands, and persistent injected scripts are blocked, in
   the daemon and again in the extension. Browser chrome,
   private windows, unshared tabs, desktop control, native file pickers and
   browser permission dialogs are outside the grant. Native automation is
-  currently Linux-only.
+  currently Linux-only. Controlling Chromium automation clients can change
+  tab emulation; the extension resets supported overrides when they disconnect.
 - Limits: 32 extension sockets (including pending handshakes), 128 shared tabs,
   bounded command queues, a five-second authentication deadline, heartbeat
   liveness checks, and an eight-MiB response limit. Registrations and grants are
@@ -298,6 +308,14 @@ pairing**. Pair directly with the hosting daemon using the dashboard or its clus
   is stored only when you explicitly choose to remember the browser. Screenshots and commands
   are not recorded by this feature. Agent tool arguments/results may be logged:
   do not type credentials through these tools.
+
+Chromium automation uses an explicit method allowlist. Playwright can create
+an isolated utility world with an empty initialization script; executable
+initialization scripts and reload-time scripts are refused. This means
+`addInitScript` is unavailable on shared browsers. Runtime evaluation in the
+currently shared page remains available under a control grant. Loopback IP
+spellings, localhost subdomains and trailing-dot daemon names are excluded;
+these URL checks do not resolve arbitrary DNS aliases to local addresses.
 
 ## CI and releases
 

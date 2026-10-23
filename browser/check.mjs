@@ -58,7 +58,16 @@ function harness(firefox = false, stored = {shareAll: false}) {
     storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true, ...stored}), remove: async () => {}},
       session: {get: async () => ({}), set: async () => {}, remove: async () => {}},
       managed: {get: async () => ({allowedDaemonOrigins: ['https://daemon.example']})}, onChanged: event('storage')},
-    scripting: {executeScript: async args => { calls.push(['script', args]); return [{result: 'snapshot'}]; }},
+    scripting: {executeScript: async args => {
+      calls.push(['script', args]);
+      const url = tabs.get(args.target.tabId)?.url;
+      if (args.func.name === 'installDomRoute') return [{frameId: 0, result: {url}}];
+      if (args.func.toString().includes('__bdDomRoutes?.get(token)?.route')) {
+        listeners.message({type: 'domRoute', token: args.args[0], x: args.args[2], y: args.args[3], url},
+          {id: 'test', tab: {id: args.target.tabId}, frameId: 0, url}, () => {});
+      }
+      return [{frameId: 0, result: 'snapshot'}];
+    }},
     permissions: {contains: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
   };
   if (firefox) api.runtime.getBrowserInfo = async () => ({name: 'Firefox'});
@@ -80,8 +89,40 @@ function harness(firefox = false, stored = {shareAll: false}) {
     return socket;
   }
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  return {listeners, calls, sockets, tabs, message, pair, flush};
+  return {listeners, calls, sockets, tabs, message, pair, flush, api};
 }
+
+test('setup tab can manage sharing, but other extension pages cannot', async () => {
+  const h = harness();
+  const state = await h.message({type: 'state'}, {id: 'test', url: 'chrome-extension://test/popup.html?tab'});
+  assert.equal(state.chromium, true);
+  for (const url of ['chrome-extension://other/popup.html?tab', 'https://test/popup.html', 'chrome-extension://test/files.html']) {
+    assert.ok((await h.message({type: 'state'}, {id: 'test', url})).error);
+  }
+});
+test('loopback spellings cannot be shared', async () => {
+  const h = harness(); await h.pair();
+  for (const host of ['127.0.0.2', '127.1', '2130706433', 'localhost.', 'sub.localhost', '[::ffff:127.0.0.1]', '[::1]', '0.0.0.0']) {
+    h.tabs.set(4, {id: 4, url: `http://${host}/`, incognito: false});
+    assert.ok((await h.message({type: 'share', tabs: [4], control: true})).error, host);
+  }
+});
+test('automation admits Playwright setup but rejects persistent code and unknown methods', () => {
+  assert.ok(p.automationAllowed('Page.addScriptToEvaluateOnNewDocument', {source: '', worldName: 'utility'}));
+  assert.equal(p.automationAllowed('Page.addScriptToEvaluateOnNewDocument', {source: 'steal()', worldName: 'utility'}), false);
+  for (const method of ['Page.futureMethod', 'Network.getAllCookies', 'Network.loadNetworkResource', 'DOM.setFileInputFiles']) {
+    assert.equal(p.automationAllowed(method, {}), false, method);
+  }
+  assert.equal(p.automationAllowed('Page.reload', {scriptToEvaluateOnLoad: 'steal()'}), false);
+  assert.equal(p.relayAllowed('Page.reload', {scriptToEvaluateOnLoad: 'steal()'}, true), false);
+  assert.ok(p.automationAllowed('Runtime.evaluate', {expression: 'document.title'}));
+});
+test('automation method lists stay identical in Rust and JavaScript', () => {
+  const js = source('policy.js').split('const automationMethods = new Set([')[1].split(']);')[0];
+  const rust = readFileSync(new URL('../src/extension.rs', import.meta.url), 'utf8').split('pub fn automation_allowed(')[1].split('/// A web page')[0];
+  const names = text => [...new Set(text.match(/[A-Z][A-Za-z]+\.[A-Za-z]+/g))].sort();
+  assert.deepEqual(names(js), names(rust));
+});
 
 test('only extension UI may grant tabs; private and daemon tabs are excluded', async () => {
   const h = harness(); await h.pair();
@@ -242,6 +283,65 @@ test('Firefox emulates the live view: pushed frames, flow control and input', as
 test('Firefox detection does not depend on optional capture permissions', async () => {
   const h = harness(true);
   assert.equal((await h.message({type: 'state'})).chromium, false);
+});
+test('Firefox hover uses pointer input rather than the tab-move action', async () => {
+  const h = harness(true); const socket = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: true});
+  socket.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Input.dispatchMouseEvent', params: {type: 'mouseMoved', x: 20, y: 30}});
+  await h.flush();
+  assert.ok(h.calls.some(call => call[0] === 'script' && call[1].args?.[0] === 'pointerMove'));
+  assert.ok(!socket.sent.find(message => message.type === 'cdp_result' && message.id === 1)?.error);
+});
+test('revoking control while Firefox routes input prevents the edit', async () => {
+  const h = harness(true); const socket = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: true});
+  const executeScript = h.api.scripting.executeScript;
+  let release;
+  h.api.scripting.executeScript = async args => {
+    if (args.func.toString().includes('__bdDomRoutes?.get(token)?.route')) {
+      await new Promise(resolve => { release = resolve; });
+    }
+    return executeScript(args);
+  };
+  socket.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Input.insertText', params: {text: 'forbidden'}});
+  await h.flush();
+  assert.ok(release);
+  await h.message({type: 'setControl', control: false});
+  release(); await h.flush();
+  assert.ok(socket.sent.find(message => message.type === 'cdp_result' && message.id === 1)?.error);
+  assert.ok(!h.calls.some(call => call[0] === 'script' && call[1].args?.[0] === 'type'));
+});
+test('Firefox viewers share captures, and revocation discards an in-flight frame', async () => {
+  const h = harness(true); const socket = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: true});
+  let finish, count = 0;
+  h.api.tabs.captureTab = async () => { count++; return new Promise(resolve => { finish = resolve; }); };
+  for (const [id, channel] of [[1, 'first'], [2, 'second']]) {
+    socket.receive({type: 'cdp', channel, tab: 1, id, method: 'Page.startScreencast', params: {}});
+  }
+  await h.flush();
+  assert.equal(count, 1);
+  finish('data:image/jpeg;base64,/9jfirst'); await h.flush();
+  const frames = socket.sent.filter(message => message.method === 'Page.screencastFrame');
+  assert.deepEqual(frames.map(message => message.channel).sort(), ['first', 'second']);
+  socket.receive({type: 'cdp', channel: 'first', tab: 1, id: 3, method: 'Page.screencastFrameAck', params: {}});
+  await h.flush();
+  assert.equal(count, 2);
+  await h.message({type: 'share', tabs: [], control: false});
+  finish('data:image/jpeg;base64,/9jprivate'); await h.flush();
+  assert.equal(socket.sent.filter(message => message.method === 'Page.screencastFrame').length, 2);
+});
+test('Firefox capture failures report status and recover on retry', async () => {
+  const h = harness(true); const socket = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: false});
+  h.api.tabs.captureTab = async () => { throw Error('Permission denied'); };
+  socket.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Page.startScreencast', params: {}});
+  await h.flush();
+  assert.equal(socket.sent.find(message => message.method === 'Page.captureStatus').params.ok, false);
+  h.api.tabs.captureTab = async () => 'data:image/jpeg;base64,/9jrecovered';
+  socket.receive({type: 'cdp', channel: 'view', tab: 1, id: 2, method: 'Page.screencastFrameAck', params: {}});
+  await h.flush();
+  assert.equal(socket.sent.filter(message => message.method === 'Page.captureStatus').at(-1).params.ok, true);
 });
 test('extension and daemon CDP allowlists agree', () => {
   const rust = readFileSync(new URL('../src/extension.rs', import.meta.url), 'utf8');

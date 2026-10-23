@@ -81,14 +81,14 @@ try {
     res.end('<!doctype html><title>Stereo fixture</title><audio loop src="/tone.wav"></audio>');
   });
   await new Promise(r => pageServer.listen(0, '127.0.0.2', r));
-  const pageURL = `http://127.0.0.2:${pageServer.address().port}/`;
+  const pageURL = `http://fixture.browser.test:${pageServer.address().port}/`;
   const extension = join(directory, 'extension');
   await cp(resolve('browser/dist/chromium'), extension, {recursive: true});
   const manifest = JSON.parse(await readFile(join(extension, 'manifest.json'), 'utf8'));
   // Headless fixture: preapprove site access, bypassing only the permissions dialog.
   manifest.host_permissions = ['http://*/*', 'https://*/*'];
   await writeFile(join(extension, 'manifest.json'), JSON.stringify(manifest));
-  launch('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', `--load-extension=${extension}`, pageURL]);
+  launch('chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', '--host-resolver-rules=MAP fixture.browser.test 127.0.0.2', '--no-proxy-server', `--load-extension=${extension}`, pageURL]);
   const targets = () => fetch(`http://127.0.0.1:${chromePort}/json/list`).then(r => r.json());
   const worker = await until(async () => (await targets()).find(t => t.type === 'service_worker' && t.url.endsWith('/background.js')));
   const origin = worker.url.replace(/\/background.js$/, '');
@@ -121,7 +121,11 @@ try {
     };
   `);
   await until(() => view.evaluate(`!!audio.context`));
+  // Initiate playback in the foreground, as an owner would. Background tabs
+  // can defer media promises even when CDP supplies a user gesture.
+  await source.call('Page.bringToFront');
   await source.call('Runtime.evaluate', {expression: `document.querySelector('audio').play()`, awaitPromise: true, userGesture: true});
+  await view.call('Page.bringToFront');
   await view.call('Runtime.evaluate', {expression: `audio.context.resume()`, awaitPromise: true, userGesture: true});
   await until(() => view.evaluate(`audioStarted > 3 && audioPeaks.every(v => v > 0.1)`));
   console.log('Stereo media sound captured, relayed, decoded and scheduled in view-only handoff:', await view.evaluate(`({chunks:audioStarted,peaks:audioPeaks,state:audio.context.state})`));

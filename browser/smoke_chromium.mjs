@@ -77,8 +77,8 @@ try {
     res.end('<!doctype html><title>Chromium integration</title><input id="field"><button onclick="window.trusted=event.isTrusted">Click</button>');
   });
   await new Promise(resolve => pageServer.listen(0, '127.0.0.2', resolve));
-  const pageURL = `http://127.0.0.2:${pageServer.address().port}/`;
-  launch(process.env.CHROMIUM || 'chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
+  const pageURL = `http://fixture.browser.test:${pageServer.address().port}/`;
+  launch(process.env.CHROMIUM || 'chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', '--host-resolver-rules=MAP fixture.browser.test 127.0.0.2', '--no-proxy-server', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
   const targets = () => fetch(`http://127.0.0.1:${chromePort}/json/list`).then(r => r.json());
   const worker = await until(async () => (await targets()).find(t => t.type === 'service_worker' && t.url.endsWith('/background.js')));
   const origin = worker.url.replace(/\/background.js$/, '');
@@ -164,7 +164,10 @@ try {
   assert.equal((await live.call('Runtime.evaluate', {expression: 'location.pathname', returnByValue: true})).result.value, '/next');
   assert.equal((await command('screenshot')).status, 200);
   // A daemon page pauses sharing: the tab is unlisted and its views close.
-  await command('navigate', {url: `${base}/`});
+  assert.ok((await command('navigate', {url: `${base}/`})).value.error);
+  const ownerTab = (await targets()).find(t => t.type === 'page' && t.url === `${pageURL}next`);
+  const owner = await CDP.open(ownerTab.webSocketDebuggerUrl); sockets.push(owner.socket);
+  await owner.call('Page.navigate', {url: `${base}/`});
   await until(async () => (await api('/api/extension/nodes')).value.nodes[0]?.tabs.length === 0);
   await until(() => live.socket.readyState === WebSocket.CLOSED);
   assert.equal((await command('screenshot')).status, 403);
