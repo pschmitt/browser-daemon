@@ -1247,7 +1247,7 @@ class CdpDriver {
     } else if (method === "Page.javascriptDialogClosed") {
       this.dialogOpen = false;
     } else if (method === "Inspector.detached" || method === "Target.targetCrashed") {
-      h.gone("The page was closed");
+      h.gone("The page was closed", this);
     }
   }
   // The page opened a file chooser (intercepted, see start): what is picked here goes
@@ -1437,7 +1437,7 @@ class BidiDriver {
     const h = this.h;
     this.kick();
     if (method === "browsingContext.navigationStarted") h.loading();
-    else if (method === "browsingContext.contextDestroyed") h.gone("The tab was closed");
+    else if (method === "browsingContext.contextDestroyed") h.gone("The tab was closed", this);
     else if (method === "browsingContext.userPromptOpened") {
       h.dialog({ type: p.type, message: p.message, defaultValue: p.defaultValue })
         .then(({ accept, text }) => this.send("browsingContext.handleUserPrompt", { context: this.ctx, accept, userText: text }));
@@ -1847,6 +1847,46 @@ async function askPasskey({ rpId, challenge, allow }) {
   }
 }
 
+// A popup closing ends its target, not its browser session. Resolve the next tab
+// before showing an error; keep the last picture up while the stream switches.
+const popupOpeners = new Map();
+let recoveringTab = null;
+async function recoverClosedTab(owner) {
+  if (owner !== drv || recoveringTab === owner || connecting) return;
+  if (stopping) { setState("bad", "Session stopped"); return; }
+  recoveringTab = owner;
+  const closed = pageId, sid = target?.sessionId;
+  E.dot.className = "wait";
+  const warning = setTimeout(() => {
+    if (drv === owner && pageId === closed) setState("bad", "The browser session ended");
+  }, 1500);
+  try {
+    const tabs = await fetchTargets();
+    if (drv !== owner || pageId !== closed) return;
+    const siblings = tabs.filter(t => t.type === "page" && t.sessionId === sid && t.id !== closed);
+    const next = siblings.find(t => t.id === popupOpeners.get(closed)) || siblings.find(t => t.active) || siblings[0];
+    if (next && !tabs.some(t => t.id === closed)) {
+      popupOpeners.delete(closed);
+      // Replace the dead popup's history entry so Back does not reopen it.
+      const url = new URL(location.href);
+      url.searchParams.set("page", next.id);
+      history.replaceState(history.state, "", url.toString());
+      E.overlay.classList.remove("show");
+      await switchTab(next.id, { push: false });
+    } else {
+      await connect({ quiet: hadFrame });
+    }
+  } catch {
+    if (drv === owner && pageId === closed) {
+      setState("bad", "The browser session ended");
+      if (document.visibilityState === "visible") setTimeout(autoReconnect, 1500);
+    }
+  } finally {
+    clearTimeout(warning);
+    if (recoveringTab === owner) recoveringTab = null;
+  }
+}
+
 const handlers = {
   frame: (data, m, mime) => {
     hadFrame = true;
@@ -1882,7 +1922,10 @@ const handlers = {
     if (type === "beforeunload") return { accept: await ask({ title: "Leave this page?", text: "Changes you made may not be saved.", ok: "Leave", danger: true }) };
     return { accept: await ask({ title: "The page asks", text: message || "Continue?" }) };
   },
-  gone: (why) => setState("bad", stopping ? "Session stopped" : why),
+  gone: (why, owner) => {
+    if (owner) { if (owner === drv) recoverClosedTab(owner); return; }
+    setState("bad", stopping ? "Session stopped" : why);
+  },
   // The page opened a popup or a new tab: the browser shows that one now, so the view
   // follows (its address, tab and input), instead of driving the tab behind it.
   popup: async (url, id = null) => {
@@ -1898,6 +1941,7 @@ const handlers = {
       id = (real && fresh.find((t) => t.url === url))?.id || fresh[0]?.id || (real && others.find((t) => t.url === url))?.id || null;
     }
     if (!id || pageId !== opener) return;
+    popupOpeners.set(id, opener);
     toast("Switched to the new tab");
     switchTab(id);
   },
@@ -1912,8 +1956,7 @@ const handlers = {
   passkey: (req) => (passkeyPending ||= askPasskey(req).finally(() => { passkeyPending = null; })),
   close: (d) => {
     if (d !== drv) return;   // a replaced driver shutting down
-    setState("bad", "The browser session ended");
-    if (document.visibilityState === "visible") setTimeout(autoReconnect, 1500);
+    recoverClosedTab(d);
   },
 };
 
@@ -1940,6 +1983,7 @@ async function doConnect({ quiet = false } = {}) {
   }
   connecting = true;
   // Detach the old driver first: its close event must not look like the session ending.
+  const previousSession = target?.sessionId;
   const old = drv;
   drv = null;
   if (old) old.close();
@@ -1969,7 +2013,7 @@ async function doConnect({ quiet = false } = {}) {
     if (!target) {
       // Gone (closed, or its session ended), e.g. when coming back here with Back:
       // another tab of the same session, else the dashboard, not a dead end.
-      const sid = history.state?.session || params.get("session");
+      const sid = previousSession || history.state?.session || params.get("session");
       const other = sid && targets.find((t) => t.sessionId === sid);
       if (other) {
         pageId = other.id;

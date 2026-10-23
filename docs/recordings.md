@@ -13,3 +13,13 @@ select two or more recordings of a node in the dashboard and **Merge**: pick the
 ## Keeping recordings
 
 the cleanup (age, count and storage limits) removes old recordings. Mark one as kept and it is never removed: the pin in the dashboard (recording menu, or select several), `K` in the TUI, `browser-daemon recording keep ID...` (`unkeep` undoes it), `POST /api/recordings/<id>/keep {"keep": true}`. Kept (and still running) recordings do not count against the count and storage limits. Nothing is kept unless you ask; deleting a kept recording by hand still works (after a warning). Recordings, backups, history and profile directories are readable by the daemon's user only; `meta.json` is replaced atomically and rebuilt from `frames.jsonl` if a crash leaves it unreadable.
+
+## Playback timing
+
+The dashboard and public recording player default to **Concise**: each gap
+between changed images lasts at most five seconds (at 1× speed). Select **Raw**
+to watch with the original timing. Switching modes keeps the current frame.
+The seek bar and duration follow the selected mode. During streaming, the
+concise duration adjusts as frames arrive. Sound jumps forward with skipped
+still periods, so use Raw to hear uninterrupted audio on a static page.
+Stored frames, audio and downloads retain their original timing.

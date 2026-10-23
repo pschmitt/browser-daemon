@@ -1418,6 +1418,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
             <input type="range" id="playerVolume" class="player-volume-slider" min="0" max="1" step="0.01" value="1" oninput="setPlayerVolume(this.value)" aria-label="Volume">
           </span>
           <button class="player-ctrl-btn" id="playerLoopBtn" onclick="togglePlayerLoop()" title="Loop (Shift+L)"><svg viewBox="0 0 24 24"><path d="m17 2 4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/></svg></button>
+          <button class="player-ctrl-btn" id="playerModeBtn" onclick="togglePlayerMode()" title="Concise caps still periods at 5 seconds; switch to Raw for original timing">Concise</button>
           <button class="player-ctrl-btn" id="playerSpeedCycleBtn" onclick="cyclePlaySpeed()" title="Playback speed">1x</button>
           <button class="player-ctrl-btn" id="playerFullscreenBtn" onclick="togglePlayerFullscreen()" title="Full screen (f)"><svg viewBox="0 0 24 24" id="playerFsIcon"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg></button>
         </div>
@@ -5181,12 +5182,11 @@ function togglePlayerLoop() {
 
 function jumpSeconds(deltaSec) {
   if (!activePlayer || activePlayer.frames.length <= 1) return;
-  const currFrame = activePlayer.frames[activePlayer.currentIndex];
-  const targetTime = Math.max(0, currFrame.t + deltaSec * 1000);
+  const targetTime = Math.max(0, playerTime(activePlayer, activePlayer.currentIndex) + deltaSec * 1000);
   let closestIdx = 0;
   let minDiff = Infinity;
   for (let i = 0; i < activePlayer.frames.length; i++) {
-    const diff = Math.abs(activePlayer.frames[i].t - targetTime);
+    const diff = Math.abs(playerTime(activePlayer, i) - targetTime);
     if (diff < minDiff) {
       minDiff = diff;
       closestIdx = i;
@@ -5215,21 +5215,42 @@ const recordingDurationMs = (id, node) => {
   const r = (currentOverview?.recordings || []).find((x) => x.id === id && (!node || x.node_name === node));
   return r?.duration_ms || (r?.duration_seconds || 0) * 1000;
 };
+// Stored timestamps stay raw; this incremental index also works while downloading.
+function playerTime(p, i) {
+  if (p.raw) return p.frames[i]?.t || 0;
+  const times = p.times || (p.times = []);
+  while (times.length <= i && times.length < p.frames.length) {
+    const n = times.length;
+    times.push(n ? times[n - 1] + Math.min(5000, Math.max(0, p.frames[n].t - p.frames[n - 1].t)) : Math.min(5000, p.frames[0].t));
+  }
+  return times[i] || 0;
+}
 const playerDuration = (p) => {
-  const last = p.frames[p.frames.length - 1]?.t || 0;
-  return Math.max(last, p.expectedMs || 0);
+  const i = p.frames.length - 1, last = p.frames[i]?.t || 0;
+  const tail = Math.max(0, (p.expectedMs || 0) - last);
+  return playerTime(p, i) + (p.raw ? tail : Math.min(5000, tail));
 };
+function togglePlayerMode() {
+  const p = activePlayer;
+  if (!p) return;
+  p.raw = !p.raw;
+  p.tailDone = false;
+  clearTimeout(p.timer);
+  $('playerModeBtn').textContent = p.raw ? 'Raw' : 'Concise';
+  streamProgress();
+  if (p.isPlaying && !p.waiting) playNextFrame();
+}
 // The last frame shown at or before this time.
 function frameIndexAt(p, ms) {
   let lo = 0, hi = p.frames.length - 1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
-    if (p.frames[mid].t <= ms) lo = mid; else hi = mid - 1;
+    if (playerTime(p, mid) <= ms) lo = mid; else hi = mid - 1;
   }
   return lo;
 }
 function updateScrubber(p, { moveThumb = true } = {}) {
-  const s = $('playerScrubber'), max = playerDuration(p), t = p.frames[p.currentIndex]?.t || 0;
+  const s = $('playerScrubber'), max = playerDuration(p), t = playerTime(p, p.currentIndex);
   s.max = max;
   if (moveThumb) s.value = t;
   s.setAttribute('aria-valuetext', `${clock(+s.value)} of ${clock(max)}`);
@@ -5251,8 +5272,8 @@ function renderStaticSpans(p) {
     el.title = `No visible change for ${clock(end - start)}`;
     spans.push(el);
   };
-  for (let i = 1; i < frames.length; i++) add(frames[i - 1].t, frames[i].t);
-  if (!p.streaming) add(frames[frames.length - 1].t, duration);
+  for (let i = 1; i < frames.length; i++) add(playerTime(p, i - 1), playerTime(p, i));
+  if (!p.streaming) add(playerTime(p, frames.length - 1), duration);
   host.replaceChildren(...spans);
 }
 function streamProgress() {
@@ -5291,10 +5312,14 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     isPlaying: false,
     isLooping: false,
     speed: 1,
+    raw: false,
+    times: [],
+    tailDone: false,
     timer: null,
     cachedImages: new Map(),
   };
 
+  $('playerModeBtn').textContent = 'Concise';
   const centerPlayBtn = document.getElementById('playerCenterPlayBtn');
   if (frames.length <= 1 && !streaming) {
     document.getElementById('playerScrubber').max = 0;
@@ -5633,7 +5658,7 @@ function renderPlayerFrame(idx, { quiet = false, scrub = false } = {}) {
   document.getElementById('playerFrameDisplay').textContent = p.waiting ? '(buffering…)'
     : `(${idx + 1} / ${shownTotal} frames${p.streaming ? ` · ${Math.round((totalFrames / Math.max(1, shownTotal)) * 100)}% loaded` : ''})`;
 
-  document.getElementById('playerTimeDisplay').textContent = `${clock(frame.t)} / ${clock(playerDuration(p))}`;
+  document.getElementById('playerTimeDisplay').textContent = `${clock(playerTime(p, idx))} / ${clock(playerDuration(p))}`;
   document.getElementById('playerFrameOffset').textContent = `frame at ${(frame.t / 1000).toFixed(1)}s`;
   syncPlayerAudio();
 
@@ -5763,6 +5788,7 @@ function togglePlayPause() {
 
   if (activePlayer.isPlaying) {
     if (!activePlayer.streaming && activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+      activePlayer.tailDone = false;
       activePlayer.currentIndex = 0;
       renderPlayerFrame(0);
     }
@@ -5786,11 +5812,17 @@ function playNextFrame() {
   if (activePlayer.currentIndex >= activePlayer.frames.length - 1) {
     // The page stood still at the end, but the sound goes on: play it out.
     const a = $('playerAudio');
-    if (playerHasSound() && !a.ended && a.duration && a.currentTime < a.duration - 0.15) {
+    if (activePlayer.raw && playerHasSound() && !a.ended && a.duration && a.currentTime < a.duration - 0.15) {
       activePlayer.timer = setTimeout(playNextFrame, 250);
       return;
     }
+    if (!activePlayer.tailDone && !(activePlayer.raw && playerHasSound())) {
+      activePlayer.tailDone = true;
+      const tail = playerDuration(activePlayer) - playerTime(activePlayer, activePlayer.currentIndex);
+      if (tail > 0) { activePlayer.timer = setTimeout(playNextFrame, tail / activePlayer.speed); return; }
+    }
     if (activePlayer.isLooping) {
+      activePlayer.tailDone = false;
       activePlayer.currentIndex = 0;
       renderPlayerFrame(0);
       activePlayer.timer = setTimeout(playNextFrame, 150);
@@ -5806,12 +5838,13 @@ function playNextFrame() {
 
   const curr = activePlayer.frames[activePlayer.currentIndex];
   const next = activePlayer.frames[activePlayer.currentIndex + 1];
-  // Long still stretches are shortened, unless there's sound to keep in step with.
-  const cap = playerHasSound() ? Infinity : 1200;
-  let delay = Math.max(25, Math.min(cap, (next.t - curr.t) / activePlayer.speed));
+  // Cap the source gap before applying the selected playback speed.
+  const cap = activePlayer.raw ? Infinity : 5000;
+  let delay = Math.max(25, Math.min(cap, next.t - curr.t) / activePlayer.speed);
 
   activePlayer.timer = setTimeout(() => {
     if (!activePlayer || !activePlayer.isPlaying) return;
+    if (!activePlayer.raw && next.t - curr.t > 5000 && playerHasSound()) $('playerAudio').currentTime = next.t / 1000;
     renderPlayerFrame(activePlayer.currentIndex + 1);
     playNextFrame();
   }, delay);

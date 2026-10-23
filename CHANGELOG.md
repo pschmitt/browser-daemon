@@ -10,6 +10,13 @@
 
 ### Changed
 
+* Handover returns to a popup's opener when it closes, keeping the picture visible
+  while switching instead of flashing a session-disconnected error.
+
+* Recording playback defaults to Concise in the dashboard and public links: still
+  periods are capped at five seconds. Switch to Raw for the original timing.
+  The seek bar follows the selected mode; stored recordings and downloads stay raw.
+
 * Dashboard: "Stop all" is now "Prune sessions", and its dialog shows the
   sessions it stops as their cards, which work there as in the grid.
 * Dashboard: "Clean up" is now "Prune recordings", and its dialog lists the
