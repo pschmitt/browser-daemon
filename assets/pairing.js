@@ -8,7 +8,7 @@
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         window.removeEventListener('message', receive);
-        reject(new Error('No extension found. In Browser Daemon Node, choose this daemon and click “Pair from the dashboard” once.'));
+        reject(new Error('No extension found. In Browser Daemon Node, choose this daemon and click “Pair” once.'));
       }, 5000);
       function receive(event) {
         if (event.source !== window || event.origin !== location.origin ||

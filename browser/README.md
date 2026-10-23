@@ -33,7 +33,7 @@ extension's setup page. No origins are trusted by default.
 
 ## Pair from the dashboard
 
-Pick the daemon in the extension and click **Pair from the dashboard** once to
+Pick the daemon in the extension and click **Pair** once to
 grant access to that site. Then click **Pair browser** under **Nodes → Add a
 node** on the signed-in HTTPS dashboard. An extension tab opens for your local
 approval; name the browser and click **Connect**, then switch on the tabs to
