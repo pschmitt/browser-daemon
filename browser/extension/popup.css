@@ -51,6 +51,8 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.danger { color: var(--bad); }
 button.link { border: 0; background: none; color: var(--accent); padding: 0; font-weight: 600; }
 button.wide { width: 100%; margin-top: 2px; }
+button svg { width: 16px; height: 16px; flex: none; margin-right: 7px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.companion-actions button svg { margin-right: 0; }
 button:disabled { opacity: .5; cursor: default; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; margin: 10px 0 12px; }
 .actions > * { flex: 1; }

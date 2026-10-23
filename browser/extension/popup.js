@@ -232,6 +232,9 @@ async function refresh() {
       : `Disconnected.\nReconnect to ${host}?`;
   }
   $('forgetRemembered').hidden = !state.rememberedBrowser;
+  // Forgetting has to tell the daemon, so it only works while connected.
+  $('forgetRemembered').disabled = !reg;
+  $('forgetHint').hidden = !state.rememberedBrowser || !!reg;
 
   // Connected
   if (reg) {
@@ -363,11 +366,10 @@ $('native').addEventListener('click', async () => {
     await refresh();
   } catch (error) { showError(error); }
 });
-$('enableDashboard').addEventListener('click', async () => {
+async function pairFromDashboard(address, name) {
   clearError();
   try {
-    const address = NodePolicy.approvedServer(server(), state?.allowlist.origins || []);
-    const name = $('name').value || state.defaultName;
+    address = NodePolicy.approvedServer(address, state?.allowlist.origins || []);
     const configured = message({type: 'configureDashboard', server: address, name});
     // Every allowed daemon at once: any of their dashboards can pair afterwards.
     const origins = [...new Set([address, ...state.allowlist.origins].map(permissionPattern))];
@@ -377,7 +379,9 @@ $('enableDashboard').addEventListener('click', async () => {
     await message({type: 'configureDashboard', server: address, name});
     await api.tabs.create({url: `${address}/#nodes/add`});
   } catch (error) { showError(error); }
-});
+}
+$('enableDashboard').addEventListener('click', () => pairFromDashboard(server(), $('name').value || state.defaultName));
+$('repairRemembered').addEventListener('click', () => pairFromDashboard(state.rememberedBrowser.server, state.rememberedBrowser.name));
 $('approvePairing').addEventListener('click', async () => {
   try {
     const name = $('approvalName').value.trim() || state.defaultName;
