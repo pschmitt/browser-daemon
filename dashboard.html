@@ -5224,20 +5224,12 @@ const recordingDurationMs = (id, node) => {
   const r = (currentOverview?.recordings || []).find((x) => x.id === id && (!node || x.node_name === node));
   return r?.duration_ms || (r?.duration_seconds || 0) * 1000;
 };
-// Stored timestamps stay raw; this incremental index also works while downloading.
-function playerTime(p, i) {
-  if (p.raw) return p.frames[i]?.t || 0;
-  const times = p.times || (p.times = []);
-  while (times.length <= i && times.length < p.frames.length) {
-    const n = times.length;
-    times.push(n ? times[n - 1] + Math.min(5000, Math.max(0, p.frames[n].t - p.frames[n - 1].t)) : Math.min(5000, p.frames[0].t));
-  }
-  return times[i] || 0;
-}
+// Keep the original timeline in both modes: loading more frames must not
+// change the duration or move the seek bar underneath the viewer.
+const playerTime = (p, i) => p.frames[i]?.t || 0;
 const playerDuration = (p) => {
-  const i = p.frames.length - 1, last = p.frames[i]?.t || 0;
-  const tail = Math.max(0, (p.expectedMs || 0) - last);
-  return playerTime(p, i) + (p.raw ? tail : Math.min(5000, tail));
+  if (p.durationMs == null && !p.streaming) p.durationMs = Math.max(p.expectedMs || 0, p.frames[p.frames.length - 1]?.t || 0);
+  return p.durationMs || 0;
 };
 // URLs use source seconds so links survive changes to the concise timeline.
 function playerSourceNow(p) {
@@ -5348,6 +5340,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     streaming,
     expectedFrames,
     expectedMs,
+    durationMs: expectedMs || (streaming ? null : frames[frames.length - 1]?.t || 0),
     // The pictures are not held for the whole recording: a few chunks of frames
     // (see loadChunk), and the images made from them (cachedImages).
     chunks: frames.chunks || [],
@@ -5362,7 +5355,6 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     raw: !!playerStartPosition?.raw,
     startAt: playerStartPosition?.ms ?? null,
     sourceOffset: 0,
-    times: [],
     tailDone: false,
     timer: null,
     cachedImages: new Map(),
@@ -5712,7 +5704,7 @@ function renderPlayerFrame(idx, { quiet = false, scrub = false, preservePosition
   document.getElementById('playerFrameDisplay').textContent = p.waiting ? '(buffering…)'
     : `(${idx + 1} / ${shownTotal} frames${p.streaming ? ` · ${Math.round((totalFrames / Math.max(1, shownTotal)) * 100)}% loaded` : ''})`;
 
-  document.getElementById('playerTimeDisplay').textContent = `${clock(playerTime(p, idx))} / ${clock(playerDuration(p))}`;
+  document.getElementById('playerTimeDisplay').textContent = `${clock(playerTime(p, idx))} / ${p.durationMs == null ? '–:–' : clock(playerDuration(p))}`;
   document.getElementById('playerFrameOffset').textContent = `frame at ${(frame.t / 1000).toFixed(1)}s`;
   syncPlayerAudio();
 

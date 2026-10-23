@@ -248,30 +248,9 @@ async function recording(info) {
       setTimeout(() => { $('timeLinkBtn').textContent = 'Copy time link'; }, 1800);
     } catch { window.prompt('Copy link at current time', url.toString()); }
   };
-  const times = [];
-  function conciseTime(i) {
-    while (times.length <= i && times.length < frames.length) {
-      const n = times.length;
-      times.push(n ? times[n - 1] + Math.min(5000, Math.max(0, frames[n].t - frames[n - 1].t)) : Math.min(5000, frames[0].t));
-    }
-    return times[i] || 0;
-  }
-  function viewTime(t) {
-    if (raw || !frames.length) return t;
-    const i = frameAt(t);
-    if (t < frames[0].t) return Math.min(5000, t);
-    return conciseTime(i) + Math.min(5000, Math.max(0, t - frames[i].t));
-  }
-  function sourceTime(t) {
-    if (raw || !frames.length) return t;
-    let lo = 0, hi = frames.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (conciseTime(mid) <= t) lo = mid; else hi = mid - 1;
-    }
-    if (t < conciseTime(0)) return t;
-    return frames[lo].t + t - conciseTime(lo);
-  }
+  // Source time stays stable while loading, even when Concise skips pauses.
+  const viewTime = (t) => t;
+  const sourceTime = (t) => t;
   $('modeBtn').onclick = () => {
     raw = !raw;
     $('modeBtn').textContent = raw ? 'Raw' : 'Concise';
@@ -316,7 +295,7 @@ async function recording(info) {
     if (i + 1 < frames.length) image(i + 1);
   }
   function updateUi() {
-    $("time").textContent = `${fmtTime(viewTime(clock))} / ${fmtTime(viewTime(total))}`;
+    $("time").textContent = `${fmtTime(viewTime(clock))} / ${total ? fmtTime(total) : loaded ? fmtTime(0) : '–:–'}`;
     if (!scrubbing) $("scrub").value = total ? Math.round((viewTime(clock) / Math.max(1, viewTime(total))) * 1000) : 0;
     $("buffered").style.width = `${total ? Math.min(100, (viewTime(lastLoadedT()) / Math.max(1, viewTime(total))) * 100) : 0}%`;
     $("playBtn").innerHTML = playing ? ICONS.pause : ICONS.play;
@@ -442,7 +421,7 @@ async function recording(info) {
     if (done) break;
   }
   loaded = true;
-  total = Math.max(total, lastLoadedT());
+  total ||= lastLoadedT();
   if (startAt != null) { seek(startAt); startAt = null; }
   if (!frames.length) { overlay("This recording is empty", ""); return; }
   $("overlay").hidden = true;

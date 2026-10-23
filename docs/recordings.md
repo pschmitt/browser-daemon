@@ -19,8 +19,9 @@ the cleanup (age, count and storage limits) removes old recordings. Mark one as 
 The dashboard and public recording player default to **Concise**: each gap
 between changed images lasts at most five seconds (at 1× speed). Select **Raw**
 to watch with the original timing. Switching modes keeps the current frame.
-The seek bar and duration follow the selected mode. During streaming, the
-concise duration adjusts as frames arrive. Sound jumps forward with skipped
+The seek bar, timestamps and total duration always use the original recording
+timeline. Concise skips forward over long pauses without changing the total
+duration as frames load. Sound jumps forward with skipped
 still periods, so use Raw to hear uninterrupted audio on a static page.
 Stored frames, audio and downloads retain their original timing.
 

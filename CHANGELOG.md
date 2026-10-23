@@ -13,6 +13,9 @@
 
 ### Changed
 
+* Recording players keep the original timeline and fixed total duration in both
+  playback modes, so the duration and seek bar no longer grow as frames load.
+
 * Handover returns to a popup's opener when it closes, keeping the picture visible
   while switching instead of flashing a session-disconnected error.
 
