@@ -43,7 +43,3 @@ release-prepare version:
 # the release workflow publishes binaries and the signed browser extension.
 release-tag:
   tools/release.sh tag
-
-# Restyle the live view's vault from the locked rbw (after `nix flake update rbw`).
-rbw-theme:
-  node tools/rbw-theme.mjs sync "$(nix flake archive --json | jq -r .inputs.rbw.path)"

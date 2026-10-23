@@ -73,6 +73,7 @@ live view.
 | [Automation](docs/automation.md) | CDP and BiDi endpoints, engines, Playwright on shared browsers |
 | [Live view](docs/live-view.md) | Handoff, downloads, vault logins |
 | [rbw vault](docs/rbw.md) | Secret agent, logins and passkeys from rbw, styling |
+| [Live-view extensions](docs/extensions.md) | The vault's UI as a sandboxed bundle, its manifest and messages |
 | [Recordings](docs/recordings.md) | Sound, merging, keeping |
 | [Profiles](docs/profiles.md) | What a profile keeps, transfers, proxies, notes |
 | [Public links](docs/sharing.md) | Sharing sessions and recordings |

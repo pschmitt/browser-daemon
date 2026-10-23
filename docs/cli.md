@@ -90,6 +90,8 @@ Options:
           Block ads in new sessions unless they opt out [default: true] [possible values: true, false]
       --proxies-file <PROXIES_FILE>
           JSON list of upstream proxies sessions can use: [{"id", "name", "url"}]
+      --extension-dir <EXTENSION_DIRS>
+          Live-view extension to load (a directory with manifest.json), such as rbw's vault
       --pulse-server <PULSE_SERVER>
           PulseAudio socket for session audio (per-session sinks, streamed on /audio)
       --pactl <PACTL>

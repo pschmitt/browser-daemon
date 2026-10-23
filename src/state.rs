@@ -250,6 +250,8 @@ pub struct AppState {
     pub downloads: Arc<downloads::Downloads>,
     /// Untrusted, temporary browser registrations (not cluster peers).
     pub extensions: Arc<extension::Broker>,
+    /// The live view's extensions (UI bundles such as the rbw vault).
+    pub view_extensions: Arc<crate::view_extensions::Registry>,
 }
 
 /// How long a profile directory's size is taken as it was.

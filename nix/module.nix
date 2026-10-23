@@ -229,6 +229,17 @@ in
       description = "Exact HTTPS origins advertised to browser extensions in automatic daemon discovery.";
     };
 
+    liveViewExtensions = lib.mkOption {
+      type = lib.types.listOf lib.types.path;
+      default = [ ];
+      example = lib.literalExpression "[ ./my-extension ]";
+      description = ''
+        Live-view extensions: directories (or packages) with a `manifest.json`
+        (see docs/extensions.md). The flake's module defaults to rbw's vault
+        (`packages.rbw-extension`); without one the live view has no vault.
+      '';
+    };
+
     clusterSecret = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -663,6 +674,10 @@ in
                 "--extension-origin"
                 origin
               ]) cfg.extensionOrigins
+              ++ lib.concatMap (dir: [
+                "--extension-dir"
+                "${dir}"
+              ]) cfg.liveViewExtensions
               ++ lib.optionals (cfg.clusterSecretFile != null) [
                 "--cluster-secret-file"
                 cfg.clusterSecretFile

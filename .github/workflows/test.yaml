@@ -91,7 +91,9 @@ jobs:
       - name: Chromium extension round trip
         run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_chromium.mjs
       - name: Live views of a shared browser
-        run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_handoff.mjs
+        run: |
+          BROWSER_DAEMON_EXTENSION_DIR="$(nix build --no-link --print-out-paths .#rbw-extension)" \
+            nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_handoff.mjs
       - name: Shared media audio and owner revocation
         run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_audio.mjs
       - name: Playwright against a shared browser

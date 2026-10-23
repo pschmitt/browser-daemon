@@ -52,6 +52,7 @@ mod thumbnail;
 mod tui;
 mod vault_index;
 mod video;
+mod view_extensions;
 mod viewers;
 
 use axum::body::Bytes;
@@ -262,6 +263,12 @@ pub struct Args {
         help = "JSON list of upstream proxies sessions can use: [{\"id\", \"name\", \"url\"}]"
     )]
     pub proxies_file: Option<PathBuf>,
+
+    #[arg(
+        long = "extension-dir",
+        help = "Live-view extension to load (a directory with manifest.json), such as rbw's vault"
+    )]
+    pub extension_dirs: Vec<PathBuf>,
 
     #[arg(
         long,
@@ -529,6 +536,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     profiles::migrate(&args.profile_dir).await;
     remove_stale_imports(&args.profile_dir).await;
+    let view_extensions = match view_extensions::Registry::load(&args.extension_dirs) {
+        Ok(registry) => Arc::new(registry),
+        Err(e) => {
+            eprintln!("Invalid extension: {e}");
+            std::process::exit(1);
+        }
+    };
     let proxies = match args.proxies_file {
         Some(ref path) => match proxies::load(path) {
             Ok(list) => list,
@@ -671,6 +685,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         overview: Arc::default(),
         downloads: Arc::default(),
         extensions,
+        view_extensions,
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -876,6 +891,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/json/activate/{id}", put(json_activate))
         .route("/handoff/", get(handoff_page))
         .route("/handoff", get(|| async { Redirect::to("/handoff/") }))
+        .route("/handoff/extensions", get(view_extensions::list))
+        .route("/handoff/ext/{name}/{*path}", get(view_extensions::file))
         // Public links (see shares.rs): no sign-in, and nothing else of the node.
         .route("/share/{node}/{token}", get(share_page))
         .route(

@@ -6,7 +6,7 @@ browser-daemon fills logins and passkeys from an [rbw](https://github.com/doy/rb
 | --- | --- | --- |
 | Secret agent (`browser-daemon secret-agent`) | as the vault's user, anywhere that reaches the nodes | serves the live views: passkeys, the vault button's logins and fills |
 | MCP server (`browser-daemon mcp`) | as the agent's user, next to the AI agent | `browser_fill_secret` types a vault field into a page (see [MCP](mcp.md#secrets-browser_fill_secret)) |
-| `rbw` flake input | at build time only | the vault's look in the live view follows the rbw extension (see [Styling](#styling)) |
+| `rbw` flake input | at build time only | rbw's live-view extension, the vault's UI (see [Styling](#styling)) |
 
 browser-daemon only runs the `rbw` command (`rbw get`, `rbw code`, `rbw list`, `rbw search`, `rbw passkey ...`); rbw talks to its own `rbw-agent` as usual. Nothing reads rbw's database or the agent's socket directly.
 
@@ -63,6 +63,4 @@ It must run as the vault's user, with rbw configured and able to reach that user
 
 ## Styling
 
-The live view's vault popover and passkey dialog look like the rbw browser extension. Their palette and type come from rbw's `browser/extension/theme.css`, and the icon from its `icons/rbw-48.png`, through the `rbw` flake input (source only, not a flake). `tools/rbw-theme.mjs` writes them into `handoff.html` between the `rbw-theme:begin` and `rbw-theme:end` markers; the rest of the styles are hand-written and use rbw's colour names.
-
-After `nix flake update rbw`, run `just rbw-theme` and commit `handoff.html` with the lock. The `rbw-theme` flake check (part of `nix flake check`) fails while `handoff.html` differs from the locked rbw, so a lock bump that changes the theme is flagged.
+The live view's vault popover and passkey prompt are rbw's [live-view extension](extensions.md), from rbw's repository (`browser/browser-daemon`), which shares the rbw browser extension's theme, icons and logo. Nodes deployed from this flake load it from the `rbw` flake input (`packages.rbw-extension`); after `nix flake update rbw` they get rbw's current look. Elsewhere pass `--extension-dir` (see [Live-view extensions](extensions.md#rbws)).

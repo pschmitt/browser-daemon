@@ -189,6 +189,11 @@ impl Auth {
                 ))
             };
         }
+        // A live-view extension's frame is sandboxed, an opaque origin: what it
+        // loads comes cross-site, modules with `Origin: null`. Static files only.
+        if is_view_extension_file(req.method, req.path) {
+            return Ok(Credential::Open);
+        }
         if req.method == Method::GET && req.path == "/api/extension/config" {
             return if req.origin.is_none_or(crate::extension::extension_origin) {
                 Ok(Credential::Open)
@@ -303,8 +308,14 @@ pub fn is_public(method: &Method, path: &str) -> bool {
             | "/icon-maskable-512.png"
             | "/download-worker.js"
             | "/api/extension/config"
+            | "/handoff/extensions"
     ) || path.starts_with("/assets/")
         || is_share(path)
+}
+
+/// A file of a live-view extension (view_extensions.rs), read-only.
+pub fn is_view_extension_file(method: &Method, path: &str) -> bool {
+    (method == Method::GET || method == Method::HEAD) && path.starts_with("/handoff/ext/")
 }
 
 /// A public link's page or what it loads: `/share/<node>/<token>[/<what>]`. The
@@ -712,6 +723,23 @@ mod tests {
         }
         // Open mode lets everything through.
         assert_eq!(decide(&auth(None), &req("/chromium")), Ok(Credential::Open));
+    }
+
+    #[test]
+    fn view_extension_files_load_in_sandboxed_frames() {
+        let a = auth(Some("s3cret"));
+        let mut r = req("/handoff/ext/rbw/popup.js");
+        r.site = Some("cross-site");
+        r.mode = Some("cors");
+        r.origin = Some("null");
+        assert_eq!(decide(&a, &r), Ok(Credential::Open));
+        assert!(decide(&a, &req("/handoff/extensions")).is_ok());
+        // Reading only, and nothing next to it.
+        r.method = Method::POST;
+        assert!(decide(&a, &r).is_err());
+        let mut other = req("/handoff/extra");
+        other.site = Some("cross-site");
+        assert!(decide(&a, &other).is_err());
     }
 
     #[test]

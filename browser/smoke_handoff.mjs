@@ -55,6 +55,30 @@ class CDP {
 }
 
 
+// Evaluates in an extension's sandboxed frame: a target of its own when the frame
+// runs out of process, else an isolated world in it (same DOM).
+async function inFrame(cdp, part, expression) {
+  const port = new URL(cdp.socket.url).port;
+  const oopif = (await fetch(`http://127.0.0.1:${port}/json/list`).then(r => r.json())).find(t => t.type === 'iframe' && t.url.includes(part));
+  if (oopif) {
+    const frame = await CDP.open(oopif.webSocketDebuggerUrl);
+    try { return await frame.evaluate(expression); } finally { frame.socket.close(); }
+  }
+  const {frameTree} = await cdp.call('Page.getFrameTree');
+  const find = node => node.frame.url.includes(part) ? node.frame : (node.childFrames || []).map(find).find(Boolean);
+  const frame = find(frameTree);
+  if (!frame) throw new Error(`No frame ${part}`);
+  const {executionContextId} = await cdp.call('Page.createIsolatedWorld', {frameId: frame.id, worldName: 'smoke'});
+  const value = await cdp.call('Runtime.evaluate', {expression, contextId: executionContextId, awaitPromise: true, returnByValue: true});
+  if (value.exceptionDetails) throw new Error(`Frame script failed: ${value.exceptionDetails.exception?.description || value.exceptionDetails.text}`);
+  return value.result.value;
+}
+
+// The vault's live-view extension (rbw's): `nix build .#rbw-extension`, or rbw's
+// browser/dist/browser-daemon.
+const extensionDir = process.env.BROWSER_DAEMON_EXTENSION_DIR;
+if (!extensionDir) throw new Error('Set BROWSER_DAEMON_EXTENSION_DIR to the rbw extension (nix build .#rbw-extension)');
+
 const directory = await mkdtemp(join(tmpdir(), 'browser-node-notab-'));
 const children = [];
 try {
@@ -64,7 +88,7 @@ try {
   await writeFile(secretFile, secret, {mode: 0o600});
   const base = `http://127.0.0.1:${daemonPort}`;
   const launch = (program, args) => { const child = spawn(program, args, {stdio: 'ignore'}); children.push(child); return child; };
-  launch(resolve('target/debug/browser-daemon'), ['run', '--bind', `127.0.0.1:${daemonPort}`, '--public-url', base, '--profile-dir', join(directory, 'daemon/profiles'), '--recordings-dir', join(directory, 'daemon/recordings'), '--cluster-secret-file', secretFile, '--record-sessions', 'false']);
+  launch(resolve('target/debug/browser-daemon'), ['run', '--bind', `127.0.0.1:${daemonPort}`, '--public-url', base, '--profile-dir', join(directory, 'daemon/profiles'), '--recordings-dir', join(directory, 'daemon/recordings'), '--cluster-secret-file', secretFile, '--record-sessions', 'false', '--extension-dir', extensionDir]);
   await until(async () => (await fetch(`${base}/health`)).ok);
   const pageServer = httpServer((req, res) => { res.writeHead(200, {'Content-Type': 'text/html'}); if (req.url === '/login') return res.end('<!doctype html><title>Sign in</title><form><input name=user autocomplete=username><input name=pw type=password></form>'); res.end('<!doctype html><title>Later tab</title><h1>Later</h1><p id=c></p><div id=drop-left>Left target</div><div id=drop-right>Right target</div><script>let n=0;(function f(){document.getElementById("c").textContent=n++;requestAnimationFrame(f)})(); for(const id of ["drop-left","drop-right"]) { const e=document.getElementById(id); Object.assign(e.style,{position:"fixed",top:"0",left:id==="drop-left"?"0":"100px",width:"100px",height:"100px"}); e.addEventListener("drop",event=>window.__lastDrop={id:event.currentTarget.id,x:event.clientX,y:event.clientY}); }</script>'); });
   await new Promise(r => pageServer.listen(0, '127.0.0.2', r));
@@ -193,20 +217,41 @@ try {
   // A second fill for the same approval is refused.
   const again = await agent(`/pages/${job.page_id}/autofill`, {method: 'POST', body: JSON.stringify({request: job.id, host: job.rp_id, uris: [{uri: loginOrigin, match_type: null}], username: 'x'})});
   assert.equal(again.status, 403);
-  // The simplified rbw prompt presents accounts as keyboard-selectable cards.
-  // Picking one must pass its exact id to the agent.
+  // The rbw extension's prompt (a sandboxed frame) presents accounts as
+  // keyboard-selectable cards. Picking one must pass its exact id to the agent.
   await until(() => view.evaluate(`vaultReady() && pageId === ${JSON.stringify(String(typed.id))}`));
   await view.call('Page.bringToFront');
+  const ext = (await (await fetch(`${base}/handoff/extensions`)).json()).extensions.find(e => e.name === 'rbw');
+  assert.ok(ext?.toolbar && ext.passkey, 'the rbw extension is listed');
+  const extPage = await fetch(`${base}${ext.base}${ext.passkey.entry}`);
+  assert.match(extPage.headers.get('content-security-policy'), /sandbox allow-scripts;.*connect-src 'none'/);
   await view.evaluate(`window.__savedPasskeyAgent = passkeyAgent; window.__passkeyEntry = null; passkeyAgent = async (_rp, find, _note, entry) => { if (find) return [{id:'personal',name:'Example',user:'alice'}, {id:'work',name:'Example Work',user:'alice-work'}]; window.__passkeyEntry = entry; return {}; }; void askPasskey({rpId:'example.org',challenge:'AQID',allow:[]}); true`);
-  await until(() => view.evaluate(`document.querySelectorAll('#passkeyEntries input[type=radio]').length === 2`));
-  assert.equal(await view.evaluate(`document.querySelector('#passkeyEntries input:checked').value`), 'personal');
-  await view.evaluate(`document.querySelector('#passkeyEntries input[value=work]').click(); document.querySelector('#passkeyDialog button[value=vault]').click(); true`);
-  assert.equal(await view.evaluate(`document.getElementById('passkeyDialog').returnValue`), 'vault');
-  await until(() => view.evaluate(`window.__passkeyEntry === 'work'`));
+  const prompt = (expression) => inFrame(view, '/handoff/ext/rbw/passkey.html', expression);
+  await until(() => prompt(`document.querySelectorAll('#entries input[type=radio]').length === 2`));
+  assert.equal(await prompt(`document.querySelector('#entries input:checked').value`), 'personal');
+  assert.equal(await prompt(`document.getElementById('rp').textContent`), 'example.org');
+  await prompt(`document.querySelector('#entries input[value=work]').click(); document.getElementById('use').click(); true`);
+  await until(() => view.evaluate(`window.__passkeyEntry === 'work' && !document.getElementById('passkeyDialog').open`));
   await view.evaluate(`passkeyAgent = async () => ({locked:true}); void askPasskey({rpId:'locked.example',challenge:'AQID',allow:[]}); true`);
-  await until(() => view.evaluate(`document.querySelector('#passkeyDialog button[value=vault]').textContent === 'Unlock and continue'`));
-  assert.equal(await view.evaluate(`document.querySelectorAll('#passkeyEntries input').length`), 0);
+  await until(() => prompt(`document.getElementById('use').textContent === 'Unlock and continue'`));
+  assert.equal(await prompt(`document.querySelectorAll('#entries input').length`), 0);
   await view.evaluate(`document.getElementById('passkeyDialog').close('cancel'); passkeyAgent = window.__savedPasskeyAgent; true`);
+  // The toolbar button opens the vault popover for the page's site, which asks
+  // the secret agent (played here) through the view and lists what it found;
+  // Escape in the frame closes it again.
+  const lookupTaken = agent('/secret-agent/next').then(r => r.json());
+  await view.evaluate(`document.querySelector('.ext-btn').click(); true`);
+  const vaultPop = (expression) => inFrame(view, '/handoff/ext/rbw/popup.html', expression);
+  await until(async () => (await vaultPop(`document.querySelector('.rbw-heading small')?.textContent`)) === 'fixture.browser.test');
+  const lookup = await lookupTaken;
+  assert.equal(lookup.kind, 'logins');
+  assert.ok(lookup.page_id.endsWith(`-${typed.id}`), `the lookup is for the view's tab: ${lookup.page_id}`);
+  await agent(`/secret-agent/${lookup.id}`, {method: 'POST', body: JSON.stringify({ok: true, info: [{id: 'entry-1', name: 'Example', user: 'alice'}]})});
+  await until(async () => (await vaultPop(`document.querySelector('.vp-entry b')?.textContent`)) === 'Example');
+  assert.equal(await view.evaluate(`document.querySelector('.ext-btn .ext-count').textContent`), '1');
+  assert.equal(await view.evaluate(`document.querySelector('.ext-pop').hidden`), false);
+  await vaultPop(`document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); true`);
+  await until(() => view.evaluate(`document.querySelector('.ext-pop').hidden`));
   // Passkeys: the extension hooks the tab; with the view watching, the page's request
   // reaches the view, and the vault signs for the tab's own origin.
   await until(() => login.evaluate(`typeof globalThis.__bdPasskeyRepair === "function" && Date.now() - (globalThis.__bdPasskeyAlive || 0) < 8000`));
@@ -253,7 +298,7 @@ try {
   await until(async () => !(await message({type: 'state'})).tabs.some(t => t.url === `${pageURL}dash`));
   await view.evaluate(`document.getElementById('smReopen').click()`);
   await until(async () => (await message({type: 'state'})).tabs.some(t => t.url === `${pageURL}dash` && t.shared));
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it; vault logins; passkeys; the view's dialogs; reopening closed tabs passed`);
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it; vault logins; the rbw extension's passkey prompt and popover; passkeys; the view's dialogs; reopening closed tabs passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

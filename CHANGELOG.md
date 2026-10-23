@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+* Live-view extensions: the vault's toolbar button, popover and passkey prompt
+  are now a bundle the live view runs in sandboxed frames and talks to by
+  message (`docs/extensions.md`), loaded with `--extension-dir` (NixOS:
+  `liveViewExtensions`).
+
+### Changed
+
+* The vault's UI comes from rbw (`browser/browser-daemon` there), in the rbw
+  extension's current look, through the `rbw` flake input, now a flake
+  (`packages.rbw-extension`, the NixOS module's default). browser-daemon keeps
+  no rbw styles or icons of its own: `just rbw-theme` and the `rbw-theme` flake
+  check are gone. Without an extension the live view has no vault button.
+
 ## [0.4.3] - 2026-10-23
 
 ### Fixed
