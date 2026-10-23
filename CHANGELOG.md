@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
 ### Added
 
 * Firefox without the native companion supports basic text editing, hover,
