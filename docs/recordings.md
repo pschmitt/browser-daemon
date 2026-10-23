@@ -31,3 +31,9 @@ in seconds of the original recording and the playback `mode` (concise or raw),
 for example `#recordings/<id>?t=1563.000&mode=raw` or a public link ending in
 `#t=1563.000&mode=raw`. Copying from an already public recording uses its public
 link; other dashboard links require access to the dashboard.
+
+Seeking into an unloaded section fetches a small window around the selected
+time first. The dashboard pauses its background transfer for that request and
+resumes afterward. Playback fetches following windows as needed until the
+background download catches up. Shared players also request the selected window
+with foreground priority. Scrubbing again cancels the previous seek request.

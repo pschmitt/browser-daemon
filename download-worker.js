@@ -57,10 +57,20 @@ const activeTasks = new Map();
 self.addEventListener('message', async (e) => {
   const { action, id, url, headers, expectedBytes } = e.data || {};
 
+  if (action === 'PAUSE' || action === 'RESUME') {
+    const task = activeTasks.get(id);
+    if (task) {
+      task.paused = action === 'PAUSE';
+      if (task.paused) task.request?.abort();
+      else { task.wake?.(); task.wake = null; }
+    }
+    return;
+  }
   if (action === 'CANCEL') {
     const task = activeTasks.get(id);
     if (task && task.controller) {
       task.controller.abort();
+      task.wake?.();
       activeTasks.delete(id);
     }
     return;
@@ -69,7 +79,7 @@ self.addEventListener('message', async (e) => {
   if (action === 'DOWNLOAD') {
     if (activeTasks.has(id)) return;
     const controller = new AbortController();
-    activeTasks.set(id, { controller, startTime: Date.now() });
+    activeTasks.set(id, { controller, startTime: Date.now(), paused: false });
     try {
       await download(id, url, headers, controller.signal, expectedBytes || 0);
     } catch (err) {
@@ -103,6 +113,7 @@ async function download(id, url, headers, signal, expectedBytes = 0, maxRetries 
   let chunkEnd = 0;
   let attempt = 0;
   let lastProgressPost = 0;
+  const decoder = new TextDecoder('utf-8');
 
   await dropChunks(id).catch(() => { cacheOk = false; });
 
@@ -147,11 +158,15 @@ async function download(id, url, headers, signal, expectedBytes = 0, maxRetries 
 
   while (true) {
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    const decoder = new TextDecoder('utf-8');
+    const task = activeTasks.get(id);
+    while (task?.paused && !signal.aborted) await new Promise(resolve => { task.wake = resolve; });
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    const request = new AbortController();
+    if (task) task.request = request;
     try {
       const reqHeaders = { ...(headers || {}) };
       if (receivedBytes > 0) reqHeaders.Range = `bytes=${receivedBytes}-`;
-      const res = await fetch(url, { headers: reqHeaders, signal, cache: 'no-store' });
+      const res = await fetch(url, { headers: reqHeaders, signal: AbortSignal.any([signal, request.signal]), cache: 'no-store' });
       if (res.status === 416 && receivedBytes > 0) break;
       if (!res.ok) {
         const err = new Error(`HTTP ${res.status}${res.statusText ? ': ' + res.statusText : ''}`);
@@ -183,7 +198,9 @@ async function download(id, url, headers, signal, expectedBytes = 0, maxRetries 
       takeLines(decoder.decode(), false);
       break;
     } catch (err) {
-      if (err.name === 'AbortError' || err.fatal) throw err;
+      if (signal.aborted || err.fatal) throw err;
+      if (request.signal.aborted) continue;
+      if (err.name === 'AbortError') throw err;
       attempt++;
       if (attempt > maxRetries) throw err;
       self.postMessage({ type: 'RETRY', id, attempt, maxRetries, receivedBytes, totalBytes });

@@ -5101,6 +5101,8 @@ function closePlayerModal() {
   activePlayerModalNode = null;
   unloadPlayerAudio();
   if (activePlayer) {
+    activePlayer.seekRequest?.abort();
+    getDownloadWorker()?.postMessage({ action: 'RESUME', id: activePlayer.id });
     activePlayer.isPlaying = false;
     if (activePlayer.timer) clearTimeout(activePlayer.timer);
     activePlayer = null;
@@ -5191,7 +5193,11 @@ function togglePlayerLoop() {
 
 function jumpSeconds(deltaSec) {
   if (!activePlayer || activePlayer.frames.length <= 1) return;
-  const targetTime = Math.max(0, playerTime(activePlayer, activePlayer.currentIndex) + deltaSec * 1000);
+  const targetTime = Math.min(playerDuration(activePlayer), Math.max(0, playerSourceNow(activePlayer) + deltaSec * 1000));
+  if (activePlayer.priority || (activePlayer.streaming && targetTime > activePlayer.frames[activePlayer.frames.length - 1].t)) {
+    prioritizePlayerTime(targetTime);
+    return;
+  }
   let closestIdx = 0;
   let minDiff = Infinity;
   for (let i = 0; i < activePlayer.frames.length; i++) {
@@ -5246,6 +5252,53 @@ function copyPlayerTimeLink() {
   u.hash = r?.share?.url ? q.toString() : `recordings/${enc(p.id)}?${q}`;
   copyText(u.toString());
 }
+async function prioritizePlayerTime(ms, { play = activePlayer?.isPlaying || activePlayer?.seekWantPlay } = {}) {
+  const p = activePlayer;
+  if (!p) return;
+  p.seekRequest?.abort();
+  const request = p.seekRequest = new AbortController();
+  p.seeking = true;
+  p.seekWantPlay = !!play;
+  clearTimeout(p.timer);
+  p.isPlaying = false;
+  syncPlayerAudio();
+  $('playerViewportContainer').classList.add('buffering');
+  getDownloadWorker()?.postMessage({ action: 'PAUSE', id: p.id });
+  try {
+    const res = await fetch(api(p.node, `/recordings/${enc(p.id)}/seek`), {
+      headers: { ...authHeaders(), 'x-recording-time': String(Math.max(0, Math.floor(ms))) }, signal: request.signal, priority: 'high',
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const window = await res.json();
+    if (activePlayer !== p || p.seekRequest !== request) return;
+    if (!window.frames.length) throw new Error('No frames at this time');
+    p.backgroundFrames ||= p.frames;
+    p.frames = window.frames;
+    p.cachedImages.clear();
+    p.priority = true;
+    p.windowEof = window.eof;
+    p.streaming = !window.eof;
+    p.startAt = null;
+    p.seeking = false;
+    p.isPlaying = p.seekWantPlay;
+    seekPlayerSource(ms);
+    updatePlayPauseButton();
+    updateCenterPlayButtonState();
+  } catch (err) {
+    if (err.name !== 'AbortError' && activePlayer === p && p.seekRequest === request) {
+      p.seeking = false;
+      showToast('Could not load this section', 'danger', 5000, null, err.message);
+    }
+  } finally {
+    if (activePlayer === p && p.seekRequest === request) {
+      p.seekRequest = null;
+      p.seekWantPlay = false;
+      p.seeking = false;
+      getDownloadWorker()?.postMessage({ action: 'RESUME', id: p.id });
+      $('playerViewportContainer').classList.remove('buffering');
+    }
+  }
+}
 function seekPlayerSource(ms) {
   const p = activePlayer;
   clearTimeout(p.timer);
@@ -5255,6 +5308,7 @@ function seekPlayerSource(ms) {
     if (p.frames[mid].t <= ms) lo = mid; else hi = mid - 1;
   }
   p.waitSince = null;
+  p.waiting = false;
   p.tailDone = false;
   renderPlayerFrame(lo);
   p.sourceOffset = Math.max(0, ms - p.frames[lo].t);
@@ -5284,7 +5338,7 @@ function frameIndexAt(p, ms) {
 function updateScrubber(p, { moveThumb = true } = {}) {
   const s = $('playerScrubber'), max = playerDuration(p), t = playerTime(p, p.currentIndex);
   s.max = max;
-  if (moveThumb) s.value = t;
+  if (moveThumb && !p.seeking) s.value = t;
   s.setAttribute('aria-valuetext', `${clock(+s.value)} of ${clock(max)}`);
 }
 // A long gap between stored frames means the recorder saw the same image in
@@ -5311,9 +5365,19 @@ function renderStaticSpans(p) {
 function streamProgress() {
   const p = activePlayer;
   if (!p) return;
+  if (p.seeking) return;
+  if (p.priority && p.backgroundFrames?.length && p.backgroundFrames[p.backgroundFrames.length - 1].t >= playerSourceNow(p)) {
+    const ms = playerSourceNow(p);
+    p.frames = p.backgroundFrames;
+    p.chunks = p.frames.chunks || [];
+    p.priority = false;
+    p.streaming = activeDownloadsMap.has(p.id);
+    p.cachedImages.clear();
+    seekPlayerSource(ms);
+  }
   const have = p.frames.length;
   if (p.startAt != null && have) {
-    if (p.streaming && p.frames[have - 1].t < p.startAt) return;
+    if (p.streaming && p.frames[have - 1].t < p.startAt) { prioritizePlayerTime(p.startAt, { play: true }); return; }
     const ms = Math.min(p.startAt, Math.max(p.expectedMs || 0, p.frames[have - 1].t));
     p.startAt = null;
     seekPlayerSource(ms);
@@ -5332,6 +5396,8 @@ function streamProgress() {
 }
 
 function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, expectedFrames = 0, expectedMs = 0 } = {}) {
+  activePlayer?.seekRequest?.abort();
+  if (activePlayer) getDownloadWorker()?.postMessage({ action: 'RESUME', id: activePlayer.id });
   if (activePlayer?.timer) clearTimeout(activePlayer.timer);
   activePlayer = {
     id,
@@ -5828,6 +5894,7 @@ function updateCenterPlayButtonState() {
 
 function togglePlayPause() {
   if (!activePlayer || activePlayer.frames.length <= 1) return;
+  if (activePlayer.seeking) { activePlayer.seekWantPlay = !activePlayer.seekWantPlay; return; }
   if (activePlayer.isPlaying) {
     activePlayer.sourceOffset = Math.max(0, playerSourceNow(activePlayer) - activePlayer.frames[activePlayer.currentIndex].t);
     activePlayer.waitSince = null;
@@ -5853,6 +5920,10 @@ function togglePlayPause() {
 
 function playNextFrame() {
   if (!activePlayer || !activePlayer.isPlaying) return;
+  if (activePlayer.priority && !activePlayer.windowEof && activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+    prioritizePlayerTime(activePlayer.frames[activePlayer.currentIndex].t + 1, { play: true });
+    return;
+  }
   if (activePlayer.streaming && activePlayer.currentIndex >= activePlayer.frames.length - 1) {
     // Caught up with the download: wait for more frames (streamProgress resumes).
     activePlayer.waiting = true;
@@ -5915,7 +5986,11 @@ function stepFrame(delta) {
 
 function onScrubberInput(val) {
   if (!activePlayer) return;
-  // Not downloaded yet: stop at what is there.
+  const ms = +val;
+  if (activePlayer.priority || (activePlayer.streaming && ms > (activePlayer.frames[activePlayer.frames.length - 1]?.t || 0))) {
+    prioritizePlayerTime(ms);
+    return;
+  }
   const idx = frameIndexAt(activePlayer, +val);
   renderPlayerFrame(idx, { scrub: true });
 }
@@ -6122,7 +6197,7 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     const pct = parseInt(e.key, 10) / 10;
     if (activePlayer && activePlayer.frames.length > 1) {
-      renderPlayerFrame(frameIndexAt(activePlayer, playerDuration(activePlayer) * pct));
+      onScrubberInput(playerDuration(activePlayer) * pct);
       resetPlayerControlsTimer();
     }
   } else if ((e.key === 'm' || e.key === 'M') && playerSound.url) {

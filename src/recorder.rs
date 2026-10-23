@@ -79,6 +79,54 @@ pub struct RecordingFrame {
     pub data: String, // base64 JPEG
 }
 
+/// Fetch a bounded playback window without reading the images preceding it.
+/// Frame timestamps are monotonic, so probing complete JSON lines locates it.
+pub async fn playback_window(path: &Path, at: u64) -> std::io::Result<(Vec<RecordingFrame>, bool)> {
+    use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
+    let file = fs::File::open(path).await?;
+    let size = file.metadata().await?.len();
+    let mut reader = tokio::io::BufReader::new(file);
+    let (mut low, mut high) = (0, size);
+    let mut line = String::new();
+    while high.saturating_sub(low) > 1024 * 1024 {
+        let mid = low + (high - low) / 2;
+        reader.seek(std::io::SeekFrom::Start(mid)).await?;
+        line.clear();
+        reader.read_line(&mut line).await?; // skip the partial line
+        let start = reader.stream_position().await?;
+        line.clear();
+        if reader.read_line(&mut line).await? == 0 {
+            high = mid;
+            continue;
+        }
+        match serde_json::from_str::<RecordingFrame>(&line) {
+            Ok(frame) if frame.t <= at => low = start,
+            _ => high = mid,
+        }
+    }
+    reader.seek(std::io::SeekFrom::Start(low)).await?;
+    let mut frames = Vec::new();
+    let mut bytes = 0;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).await? == 0 {
+            return Ok((frames, true));
+        }
+        let Ok(frame) = serde_json::from_str::<RecordingFrame>(&line) else {
+            continue;
+        };
+        if frame.t <= at {
+            frames.clear();
+            bytes = 0;
+        }
+        bytes += line.len();
+        frames.push(frame);
+        if frames.len() >= 120 || (frames.len() >= 2 && bytes >= 8 * 1024 * 1024) {
+            return Ok((frames, reader.stream_position().await? >= size));
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RecorderConfig {
     pub enabled: bool,
@@ -2365,5 +2413,48 @@ mod tests {
         drop(rx);
         *sender.last.lock().unwrap() = None;
         assert!(sender.send(frame("z")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod playback_window_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn seeks_before_between_and_after_frames_without_losing_the_preceding_image() {
+        let dir = std::env::temp_dir().join(format!("bd-seek-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).await.unwrap();
+        let path = dir.join("frames.jsonl");
+        let mut data = Vec::new();
+        for i in 0..4000u64 {
+            let frame = RecordingFrame {
+                t: 1000 + i * i,
+                url: None,
+                title: None,
+                data: "x".repeat(512),
+            };
+            data.extend(serde_json::to_vec(&frame).unwrap());
+            data.push(b'\n');
+        }
+        data.extend_from_slice(b"{\"t\":"); // a recording interrupted mid-frame
+        fs::write(&path, data).await.unwrap();
+        for at in [0, 1000, 5_000_500, u64::MAX] {
+            let (frames, eof) = playback_window(&path, at).await.unwrap();
+            assert!(!frames.is_empty());
+            assert!(frames.len() <= 120);
+            if at < 1000 {
+                assert_eq!(frames[0].t, 1000);
+            } else {
+                assert!(frames[0].t <= at);
+            }
+            if let Some(next) = frames.get(1) {
+                assert!(next.t > at);
+            }
+            if at == u64::MAX {
+                assert!(eof);
+                assert_eq!(frames.len(), 1);
+            }
+        }
+        fs::remove_dir_all(dir).await.unwrap();
     }
 }

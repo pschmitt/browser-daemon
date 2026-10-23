@@ -4,6 +4,11 @@
 
 ### Added
 
+* Seeking into an unloaded recording fetches a bounded window around that
+  timestamp immediately. Dashboard downloads pause for the foreground request
+  and resume afterward; new seeks cancel stale requests. Public links support
+  the same window fetching with sanitized addresses.
+
 * Recording players can copy links at the current timestamp, preserving playback
   mode and using original recording seconds in both dashboard and public links.
 

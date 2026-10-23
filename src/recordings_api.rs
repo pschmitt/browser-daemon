@@ -426,3 +426,26 @@ pub(crate) async fn set_recording_paused(
         "recording_id": handle.recording_id
     })))
 }
+
+/// The foreground playback window; authentication is the same as the full frames.
+pub(crate) async fn api_seek_recording(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, api::ApiError> {
+    state.check_auth(&headers)?;
+    let at = headers
+        .get("x-recording-time")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(|| api::api_error(StatusCode::BAD_REQUEST, "Invalid recording timestamp"))?;
+    let path = state
+        .recorder_config
+        .recordings_dir
+        .join(id.to_string())
+        .join("frames.jsonl");
+    let (frames, eof) = recorder::playback_window(&path, at)
+        .await
+        .map_err(|_| api::api_error(StatusCode::NOT_FOUND, "Recording frames unavailable"))?;
+    Ok(Json(serde_json::json!({ "frames": frames, "eof": eof })))
+}

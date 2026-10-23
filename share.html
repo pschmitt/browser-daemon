@@ -219,7 +219,9 @@ async function recording(info) {
   showExpiry(info.expires_at);
 
   const canvas = $("canvas"), ctx = canvas.getContext("2d");
-  const frames = [];          // { t, data, title, url }
+  let frames = [];          // { t, data, title, url }
+  const backgroundFrames = frames;
+  let priority = false, priorityEof = false, seekRequest = null, seekWantPlay = false;
   let total = info.duration_ms || 0;
   let loaded = false, playing = false, clock = 0, lastTick = 0, speed = 1, drawn = -1;
   const audio = info.audio ? new Audio(`${base}/audio`) : null;
@@ -257,7 +259,7 @@ async function recording(info) {
     lastTick = performance.now();
     updateUi();
   };
-  const lastLoadedT = () => (frames.length ? frames[frames.length - 1].t : 0);
+  const lastLoadedT = () => (backgroundFrames.length ? backgroundFrames[backgroundFrames.length - 1].t : 0);
   function frameAt(t) {
     let lo = 0, hi = frames.length - 1, hit = -1;
     while (lo <= hi) {
@@ -302,13 +304,52 @@ async function recording(info) {
     $("playBtn").setAttribute("aria-label", playing ? "Pause" : "Play");
     $("bigPlay").hidden = playing || !frames.length;
   }
+  async function prioritizeTime(t) {
+    seekRequest?.abort();
+    const request = seekRequest = new AbortController();
+    t = Math.max(0, Math.min(total, t));
+    clock = t;
+    const resume = playing || seekWantPlay;
+    pause();
+    seekWantPlay = resume;
+    $('stage').classList.add('buffering');
+    try {
+      const res = await fetch(`${base}/seek`, { headers: { 'x-recording-time': String(Math.max(0, Math.floor(t))) }, signal: request.signal, priority: 'high' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const window = await res.json();
+      if (seekRequest !== request) return;
+      if (!window.frames.length) throw new Error('No frames at this time');
+      frames = window.frames;
+      priority = true;
+      priorityEof = window.eof;
+      decoded.clear(); drawn = -1;
+      const resumeNow = seekWantPlay;
+      seekRequest = null;
+      $('overlay').hidden = true;
+      seek(t);
+      if (resumeNow) play();
+    } catch (err) {
+      if (err.name !== 'AbortError' && seekRequest === request) {
+        $('timeLinkBtn').title = `Could not load this section: ${err.message}. Seek again to retry.`;
+      }
+    } finally {
+      if (seekRequest === request) seekRequest = null;
+      if (!seekRequest) { seekWantPlay = false; $('stage').classList.remove('buffering'); }
+    }
+  }
   function seek(t) {
+    t = Math.max(0, Math.min(total, t));
+    if ((!priority && !loaded && t > lastLoadedT()) || (priority && (t < frames[0].t || (!priorityEof && t > frames[frames.length - 1].t)))) {
+      prioritizeTime(t);
+      return;
+    }
     clock = Math.max(0, Math.min(total, t));
     if (audio) { try { audio.currentTime = clock / 1000; } catch { /* not loaded yet */ } }
     draw(true);
     updateUi();
   }
   function play() {
+    if (seekRequest) { seekWantPlay = true; return; }
     if (!frames.length) return;
     if (clock >= total) seek(0);
     playing = true;
@@ -317,13 +358,17 @@ async function recording(info) {
     updateUi();
   }
   function pause() {
+    seekWantPlay = false;
     playing = false;
     if (audio) audio.pause();
     updateUi();
   }
   function tick(now) {
     if (playing) {
-      const buffering = !loaded && clock > lastLoadedT();
+      if (priority && !priorityEof && clock >= frames[frames.length - 1].t) {
+        prioritizeTime(clock + 1);
+      }
+      const buffering = !!seekRequest || (!priority && !loaded && clock > lastLoadedT());
       $("stage").classList.toggle("buffering", buffering);
       if (!buffering) {
         if (audio && !audio.paused && audio.currentTime > 0 && Math.abs(audio.currentTime * 1000 - clock) < 1500) {
@@ -387,9 +432,10 @@ async function recording(info) {
   });
 
   // The frames arrive as JSON lines; playback can start with the first ones.
-  const res = await fetch(`${base}/frames`);
+  const res = await fetch(`${base}/frames`, { priority: 'low' });
   if (!res.ok || !res.body) { gone(); return; }
   const reader = res.body.getReader();
+  if (startAt != null) { prioritizeTime(startAt); startAt = null; }
   const decoder = new TextDecoder();
   let rest = "", received = 0;
   const expected = info.size_bytes || 0;
@@ -405,17 +451,18 @@ async function recording(info) {
         if (!line) continue;
         try {
           const f = JSON.parse(line);
-          frames.push({ t: f.t, data: f.data, title: f.title, url: f.url });
+          backgroundFrames.push({ t: f.t, data: f.data, title: f.title, url: f.url });
         } catch { /* a cut line */ }
       }
-      if (frames.length && !$("overlay").hidden && frames.length >= 2) {
+      if (priority && lastLoadedT() >= clock && !seekRequest) {
+        frames = backgroundFrames; priority = false; decoded.clear(); drawn = -1;
+      }
+      if (!priority && !seekRequest && frames.length >= 2 && !$("overlay").hidden) {
         $("overlay").hidden = true;
-        seek(startAt != null && lastLoadedT() >= startAt ? startAt : 0);
-        if (startAt != null && lastLoadedT() >= startAt) startAt = null;
-      } else if (!$("overlay").hidden) {
+        seek(clock);
+      } else if (!$("overlay").hidden && !priority) {
         overlay("Loading recording…", "", { spin: true, bar: expected ? Math.min(1, received / expected) : null });
       }
-      if (startAt != null && lastLoadedT() >= startAt) { seek(startAt); startAt = null; }
       updateUi();
     }
     if (done) break;

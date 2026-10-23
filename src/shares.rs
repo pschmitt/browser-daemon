@@ -654,6 +654,33 @@ pub(crate) async fn share_resource(
     let res = match (share.kind, what.as_str()) {
         (_, "info") => info(&state, &share).await,
         (ShareKind::Recording, "frames") => recording_frames(&state, share.target).await,
+        (ShareKind::Recording, "seek") => {
+            let at = req
+                .headers()
+                .get("x-recording-time")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok());
+            match at {
+                Some(at) => {
+                    let path = state
+                        .recorder_config
+                        .recordings_dir
+                        .join(share.target.to_string())
+                        .join("frames.jsonl");
+                    match recorder::playback_window(&path, at).await {
+                        Ok((mut frames, eof)) => {
+                            for frame in &mut frames {
+                                frame.url = frame.url.as_deref().and_then(site_of);
+                            }
+                            Json(serde_json::json!({ "frames": frames, "eof": eof }))
+                                .into_response()
+                        }
+                        Err(_) => not_found(),
+                    }
+                }
+                None => StatusCode::BAD_REQUEST.into_response(),
+            }
+        }
         (ShareKind::Recording, "audio") => recording_audio(&state, share.target, req).await,
         (ShareKind::Recording, "favicon") => recording_favicon(&state, share.target).await,
         (ShareKind::Session, "tabs") => public_tabs(&state, &share).await,
@@ -725,6 +752,7 @@ async fn forward(
     .timeout(wait.timeout());
     for name in [
         header::RANGE.as_str(),
+        "x-recording-time",
         VIEWER,
         "x-share-tab",
         "x-share-audio-since",

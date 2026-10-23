@@ -1023,6 +1023,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_recording).delete(api_delete_recording),
         )
         .route("/api/recordings/{id}/frames", get(api_get_recording_frames))
+        .route("/api/recordings/{id}/seek", get(api_seek_recording))
         .route("/api/recordings/{id}/audio", get(api_get_recording_audio))
         .route(
             "/api/recordings/{id}/export.webm",
