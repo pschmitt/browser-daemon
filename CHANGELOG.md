@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-23
+
 ### Fixed
 
 * The browser extension detaches its debugger before a shared tab navigates to
