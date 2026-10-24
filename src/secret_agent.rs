@@ -12,7 +12,7 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::passkeys::{Outcome, Request};
-use crate::{secrets, vault_index};
+use crate::secrets;
 
 #[derive(clap::Args, Debug)]
 pub struct SecretAgentArgs {
@@ -37,6 +37,10 @@ pub struct SecretAgentArgs {
     pub notify_webhook: Option<String>,
     #[arg(skip)]
     seen: std::sync::Mutex<std::collections::VecDeque<uuid::Uuid>>,
+    /// The rbw account of each entry a lookup listed (with several accounts,
+    /// `rbw get` and `rbw code` need to be told).
+    #[arg(skip)]
+    accounts: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 /// How long one rbw call may take.
@@ -81,10 +85,17 @@ fn valid_request(req: &Request) -> Result<(), String> {
     if req.allow.iter().any(|a| !id_like(a)) || req.allow.len() > 64 {
         return Err("Bad credential id".into());
     }
-    if req.origin.as_deref().is_some_and(|o| {
-        url::Url::parse(o).map_or(true, |u| !matches!(u.scheme(), "http" | "https"))
-    }) {
+    let web = |o: &str| url::Url::parse(o).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
+    if req.origin.as_deref().is_some_and(|o| !web(o)) {
         return Err("Bad origin".into());
+    }
+    // The page's address goes to rbw as a value of `--url`, never as an option.
+    if req
+        .url
+        .as_deref()
+        .is_some_and(|u| !web(u) || u.len() > 2048)
+    {
+        return Err("Bad page address".into());
     }
     if req
         .fields
@@ -120,17 +131,6 @@ pub async fn run(args: SecretAgentArgs) -> Result<(), Box<dyn std::error::Error>
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         .build()?;
-    // Keeps the vault index (vault_index.rs) current while rbw is unlocked, so
-    // lookups rarely wait for rbw.
-    let rbw = args.rbw.clone();
-    tokio::spawn(async move {
-        loop {
-            if unlocked(&rbw).await {
-                let _ = vault_index::entries(&rbw);
-            }
-            tokio::time::sleep(Duration::from_secs(60)).await;
-        }
-    });
     let mut tasks = Vec::new();
     for node in &args.nodes {
         let (node, secret, client, args) = (
@@ -196,6 +196,7 @@ async fn poll(
                     "find" => find(&req, &args).await.map(Some),
                     "logins" => logins(&node, &secret, &req, &client, &args).await.map(Some),
                     "fill" => fill(&node, &secret, &req, &client, &args).await.map(Some),
+                    "copy" => copy(&node, &secret, &req, &client, &args).await.map(Some),
                     "assert" => assert(&node, &secret, &req, &client, &args).await.map(Some),
                     "inject" => serve(&node, &secret, &req, &client, &args)
                         .await
@@ -289,7 +290,7 @@ async fn ensure_unlocked(
         client
             .post(hook)
             .timeout(Duration::from_secs(15))
-            .json(&serde_json::json!({ "host": args.unlock_host, "agent": format!("{} for {}", if matches!(req.kind.as_str(), "logins" | "fill") { "Login" } else { "Passkey" }, req.rp_id) }))
+            .json(&serde_json::json!({ "host": args.unlock_host, "agent": format!("{} for {}", if matches!(req.kind.as_str(), "logins" | "fill" | "copy") { "Login" } else { "Passkey" }, req.rp_id) }))
             .send()
             .await
             .map_err(|e| format!("Could not ask for an unlock: {}", e.without_url()))?;
@@ -436,14 +437,57 @@ async fn serve(
     })
 }
 
-/// At most this many vault entries are checked for a site (without the index).
-const MAX_CANDIDATES: usize = 30;
 /// At most this many logins are listed.
 const MAX_RESULTS: usize = 50;
 
-/// The login entries for the page's site (rp_id is its host), as Bitwarden's
-/// autofill would pick them: name, user and whether there's a TOTP, no secrets.
-/// A locked vault is reported, or unlocked first when the user asked.
+/// rbw's answer for the page's site (`rbw search --url`, rbw's URI matching,
+/// as its browser extension offers logins): the logins saved for it or, with
+/// a query, those matching it, the site's first. Metadata only, no secrets;
+/// one batched decrypt in rbw-agent.
+async fn rbw_logins(
+    args: &SecretAgentArgs,
+    req: &Request,
+    query: Option<&str>,
+) -> Result<Vec<serde_json::Value>, String> {
+    // A node from before page addresses only names the host.
+    let url = req
+        .url
+        .clone()
+        .unwrap_or_else(|| format!("https://{}/", req.rp_id));
+    let mut cmd = vec!["search", "--url", url.as_str(), "--json"];
+    if let Some(query) = query {
+        cmd.extend(["--", query]);
+    }
+    let found: Vec<serde_json::Value> = match secrets::rbw(&args.rbw, &cmd).await {
+        Ok(out) => serde_json::from_str(&out).map_err(|_| "rbw: unexpected output".to_string())?,
+        Err(e) if e.contains("no entries found") => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    let mut accounts = args.accounts.lock().unwrap();
+    if accounts.len() > 10_000 {
+        accounts.clear();
+    }
+    for e in &found {
+        if let (Some(id), Some(account)) = (e["id"].as_str(), e["account"].as_str()) {
+            accounts.insert(id.to_string(), account.to_string());
+        }
+    }
+    Ok(found)
+}
+
+/// `rbw` arguments for the entry, with its account when a lookup named one.
+fn for_entry<'a>(args: &'a SecretAgentArgs, cmd: &[&'a str], entry: &'a str) -> Vec<String> {
+    let mut out: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
+    if let Some(account) = args.accounts.lock().unwrap().get(entry) {
+        out.extend(["--account".to_string(), account.clone()]);
+    }
+    out.push(entry.to_string());
+    out
+}
+
+/// The login entries for the page's site (rp_id is its host), as rbw picks
+/// them for its browser extension: name, user and whether there's a TOTP, no
+/// secrets. A locked vault is reported, or unlocked first when the user asked.
 async fn logins(
     node: &str,
     secret: &str,
@@ -456,81 +500,26 @@ async fn logins(
     } else if !unlocked(&args.rbw).await {
         return Ok(serde_json::json!({ "locked": true }));
     }
-    let host = req.rp_id.as_str();
-    if let Some(all) = vault_index::entries(&args.rbw) {
-        let mut out: Vec<(bool, &vault_index::Entry)> = all
-            .iter()
-            .map(|e| (secrets::site_matches(host, &e.uris), e))
-            .filter(|(site, e)| match req.query.as_deref() {
-                Some(q) => e.matches(q),
-                None => *site,
-            })
-            .collect();
-        out.sort_by_key(|(site, e)| (!site, e.name.to_lowercase()));
-        return Ok(out
-            .into_iter()
-            .take(MAX_RESULTS)
-            .map(|(site, e)| {
-                serde_json::json!({
-                    "id": e.id,
-                    "name": e.name,
-                    "user": e.user,
-                    "folder": e.folder,
-                    "password": e.password,
-                    "totp": e.totp,
-                    "site": site,
-                })
-            })
-            .collect());
-    }
-    // Every URI of a matching entry names the site's base domain, so a search for it
-    // narrows the vault cheaply (`rbw list --raw` decrypts all of it); the URIs and
-    // their match types then decide. A search of the user's lists every login it
-    // finds, the site's first.
-    let term = req.query.as_deref().unwrap_or(secrets::base_domain(host));
-    let found = secrets::rbw(&args.rbw, &["search", "--fields", "id", "--", term])
-        .await
-        .unwrap_or_default();
-    let ids: Vec<&str> = found
-        .lines()
-        .filter_map(|l| l.split('\t').next())
-        .filter(|id| uuid::Uuid::parse_str(id).is_ok())
-        .take(MAX_CANDIDATES)
-        .collect();
-    let entries = futures_util::future::join_all(
-        ids.iter()
-            .map(|id| async move { secrets::rbw(&args.rbw, &["get", "--raw", id]).await }),
-    )
-    .await;
-    let mut out: Vec<serde_json::Value> = ids
-        .iter()
-        .zip(entries)
-        .filter_map(|(id, raw)| {
-            let raw: serde_json::Value = serde_json::from_str(&raw.ok()?).ok()?;
-            let data = &raw["data"];
-            let has = |f: &str| data[f].as_str().is_some_and(|v| !v.is_empty());
-            let site = secrets::site_matches(host, &secrets::uris(&raw));
-            ((site || req.query.is_some()) && (has("username") || has("password"))).then(|| {
-                serde_json::json!({
-                    "id": id,
-                    "name": raw["name"],
-                    "user": data["username"],
-                    "folder": raw["folder"],
-                    "password": has("password"),
-                    "totp": has("totp"),
-                    "site": site,
-                })
+    let found = rbw_logins(args, req, req.query.as_deref()).await?;
+    Ok(found
+        .into_iter()
+        // Logins with something to fill (not only a passkey).
+        .filter(|e| e["has_password"] == true || e["user"].as_str().is_some_and(|u| !u.is_empty()))
+        .take(MAX_RESULTS)
+        .map(|e| {
+            serde_json::json!({
+                "id": e["id"],
+                "name": e["name"],
+                "user": e["user"],
+                "folder": e["folder"],
+                "password": e["has_password"],
+                "totp": e["has_totp"],
+                "site": e["site"],
+                // For its favicon in the view.
+                "uri": e["uris"].as_array().into_iter().flatten().filter_map(|u| u.as_str()).find(|u| u.starts_with("https://") || u.starts_with("http://")),
             })
         })
-        .collect();
-    // The site's entries first, then by name.
-    out.sort_by_key(|e| {
-        (
-            e["site"] != true,
-            e["name"].as_str().unwrap_or_default().to_lowercase(),
-        )
-    });
-    Ok(serde_json::Value::Array(out))
+        .collect())
 }
 
 /// Fills the picked entry into the page: read here, checked against the page's
@@ -547,12 +536,19 @@ async fn fill(
         return Err("Not a vault entry id".into());
     }
     ensure_unlocked(node, secret, req, client, args).await?;
-    let raw: serde_json::Value =
-        serde_json::from_str(&secrets::rbw(&args.rbw, &["get", "--raw", entry]).await?)
-            .map_err(|_| "rbw: unexpected output".to_string())?;
+    // Saved for the page's site? rbw decides, as for its browser extension
+    // (the lookup also notes the entry's account).
+    let saved = rbw_logins(args, req, None)
+        .await?
+        .iter()
+        .any(|e| e["id"] == entry && e["site"] == true);
+    let get = for_entry(args, &["get", "--raw"], entry);
+    let get: Vec<&str> = get.iter().map(String::as_str).collect();
+    let raw: serde_json::Value = serde_json::from_str(&secrets::rbw(&args.rbw, &get).await?)
+        .map_err(|_| "rbw: unexpected output".to_string())?;
     let mut uris = secrets::uris(&raw);
     let mut any_site = false;
-    if !secrets::site_matches(&req.rp_id, &uris) {
+    if !saved {
         if !req.any_site {
             return Err(format!("This entry is not saved for {}", req.rp_id));
         }
@@ -571,12 +567,9 @@ async fn fill(
             .filter(|v| !v.is_empty())
     };
     let totp = if want("totp") && raw["data"]["totp"].as_str().is_some_and(|t| !t.is_empty()) {
-        Some(
-            secrets::rbw(&args.rbw, &["code", entry])
-                .await?
-                .trim()
-                .to_string(),
-        )
+        let code = for_entry(args, &["code"], entry);
+        let code: Vec<&str> = code.iter().map(String::as_str).collect();
+        Some(secrets::rbw(&args.rbw, &code).await?.trim().to_string())
     } else {
         None
     };
@@ -622,6 +615,44 @@ async fn fill(
     }
     info!(host = %req.rp_id, fields = %answer["filled"], "Login filled");
     Ok(answer)
+}
+
+/// Copies a value of the picked entry for the clipboard of the device viewing
+/// (the live view writes it there): the first of the request's fields the
+/// entry has, a TOTP as its current code. Unlike a fill it needs no site: the
+/// user asked for the value itself. Only the field's name is logged.
+async fn copy(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    args: &SecretAgentArgs,
+) -> Result<serde_json::Value, String> {
+    let entry = req.entry.as_deref().ok_or("No entry")?;
+    if uuid::Uuid::parse_str(entry).is_err() {
+        return Err("Not a vault entry id".into());
+    }
+    ensure_unlocked(node, secret, req, client, args).await?;
+    let get = for_entry(args, &["get", "--raw"], entry);
+    let get: Vec<&str> = get.iter().map(String::as_str).collect();
+    let raw: serde_json::Value = serde_json::from_str(&secrets::rbw(&args.rbw, &get).await?)
+        .map_err(|_| "rbw: unexpected output".to_string())?;
+    for field in &req.fields {
+        let value = match field.as_str() {
+            "totp" if raw["data"]["totp"].as_str().is_some_and(|t| !t.is_empty()) => {
+                let code = for_entry(args, &["code"], entry);
+                let code: Vec<&str> = code.iter().map(String::as_str).collect();
+                Some(secrets::rbw(&args.rbw, &code).await?.trim().to_string())
+            }
+            "totp" => None,
+            f => secrets::pick_field(&raw, f),
+        };
+        if let Some(value) = value.filter(|v| !v.is_empty()) {
+            info!(host = %req.rp_id, field = %field, "Vault value copied");
+            return Ok(serde_json::json!({ "field": field, "value": value }));
+        }
+    }
+    Err("The entry has nothing to copy".into())
 }
 
 /// The custom fields of an entry (`rbw get --raw`) worth filling, as name and
@@ -754,6 +785,15 @@ mod tests {
         let mut bad = req();
         bad.origin = Some("file:///etc/passwd".into());
         assert!(valid_request(&bad).is_err());
+        // The page's address only ever is a web address (it becomes rbw's --url).
+        let mut ok = req();
+        ok.url = Some("http://10.5.1.1:8123/lovelace/0".into());
+        assert!(valid_request(&ok).is_ok());
+        for url in ["--help", "javascript:alert(1)", "file:///etc/passwd"] {
+            let mut bad = req();
+            bad.url = Some(url.into());
+            assert!(valid_request(&bad).is_err(), "{url}");
+        }
     }
 
     #[test]
@@ -766,6 +806,7 @@ mod tests {
             unlock_host: "x".into(),
             notify_webhook: None,
             seen: Default::default(),
+            accounts: Default::default(),
         };
         let id = uuid::Uuid::new_v4();
         assert!(args.remember(id));

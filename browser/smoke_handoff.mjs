@@ -227,14 +227,13 @@ try {
   assert.match(extPage.headers.get('content-security-policy'), /sandbox allow-scripts;.*connect-src 'none'/);
   await view.evaluate(`window.__savedPasskeyAgent = passkeyAgent; window.__passkeyEntry = null; passkeyAgent = async (_rp, find, _note, entry) => { if (find) return [{id:'personal',name:'Example',user:'alice'}, {id:'work',name:'Example Work',user:'alice-work'}]; window.__passkeyEntry = entry; return {}; }; void askPasskey({rpId:'example.org',challenge:'AQID',allow:[]}); true`);
   const prompt = (expression) => inFrame(view, '/handoff/ext/rbw/passkey.html', expression);
-  await until(() => prompt(`document.querySelectorAll('#entries input[type=radio]').length === 2`));
-  assert.equal(await prompt(`document.querySelector('#entries input:checked').value`), 'personal');
-  assert.equal(await prompt(`document.getElementById('rp').textContent`), 'example.org');
-  await prompt(`document.querySelector('#entries input[value=work]').click(); document.getElementById('use').click(); true`);
+  await until(() => prompt(`document.querySelectorAll('.passkey-choice').length === 2`));
+  assert.equal(await prompt(`document.getElementById('approval-origin').textContent`), 'example.org');
+  await prompt(`[...document.querySelectorAll('.passkey-choice')].find(b => b.textContent.includes('Example Work')).click(); true`);
   await until(() => view.evaluate(`window.__passkeyEntry === 'work' && !document.getElementById('passkeyDialog').open`));
   await view.evaluate(`passkeyAgent = async () => ({locked:true}); void askPasskey({rpId:'locked.example',challenge:'AQID',allow:[]}); true`);
-  await until(() => prompt(`document.getElementById('use').textContent === 'Unlock and continue'`));
-  assert.equal(await prompt(`document.querySelectorAll('#entries input').length`), 0);
+  await until(() => prompt(`document.querySelector('.passkey-locked')?.textContent === 'Unlock and continue'`));
+  assert.equal(await prompt(`document.querySelectorAll('.passkey-choice').length`), 0);
   await view.evaluate(`document.getElementById('passkeyDialog').close('cancel'); passkeyAgent = window.__savedPasskeyAgent; true`);
   // The toolbar button opens the vault popover for the page's site, which asks
   // the secret agent (played here) through the view and lists what it found;
@@ -242,25 +241,45 @@ try {
   const lookupTaken = agent('/secret-agent/next').then(r => r.json());
   await view.evaluate(`document.querySelector('.ext-btn').click(); true`);
   const vaultPop = (expression) => inFrame(view, '/handoff/ext/rbw/popup.html', expression);
-  await until(async () => (await vaultPop(`document.querySelector('.rbw-heading small')?.textContent`)) === 'fixture.browser.test');
+  await until(async () => (await vaultPop(`document.querySelector('[data-extension-version]')?.textContent`)) === `v${ext.version}`);
   const lookup = await lookupTaken;
   assert.equal(lookup.kind, 'logins');
   assert.ok(lookup.page_id.endsWith(`-${typed.id}`), `the lookup is for the view's tab: ${lookup.page_id}`);
   await agent(`/secret-agent/${lookup.id}`, {method: 'POST', body: JSON.stringify({ok: true, info: [{id: 'entry-1', name: 'Example', user: 'alice'}]})});
-  await until(async () => (await vaultPop(`document.querySelector('.vp-entry b')?.textContent`)) === 'Example');
+  await until(async () => (await vaultPop(`document.querySelector('.item-main strong')?.textContent`)) === 'Example');
   assert.equal(await view.evaluate(`document.querySelector('.ext-btn .ext-count').textContent`), '1');
   // Filling from it: the fill button stamps the outcome in place (rbw's
   // feedback.js), then the popover closes.
   const fillTaken = agent('/secret-agent/next').then(r => r.json());
-  await vaultPop(`document.querySelector('.vp-fill').click(); true`);
+  await vaultPop(`document.querySelector('.item-fill').click(); true`);
   const fillJob = await fillTaken;
   assert.deepEqual([fillJob.kind, fillJob.entry], ['fill', 'entry-1']);
   await agent(`/secret-agent/${fillJob.id}`, {method: 'POST', body: JSON.stringify({ok: true, info: {filled: ['username', 'password']}})});
-  await until(() => vaultPop(`document.querySelector('.vp-fill').classList.contains('is-copied') && !!document.querySelector('.vp-fill .copy-check')`));
+  await until(() => vaultPop(`document.querySelector('.item-fill').classList.contains('is-copied') && !!document.querySelector('.item-fill .copy-check')`));
   await until(() => view.evaluate(`document.querySelector('.ext-pop').hidden`));
   // Open again (the list is still fresh: no second lookup).
   await view.evaluate(`document.querySelector('.ext-btn').click(); true`);
-  await until(async () => (await vaultPop(`document.querySelector('.vp-entry b')?.textContent`)) === 'Example');
+  await until(async () => (await vaultPop(`document.querySelector('.item-main strong')?.textContent`)) === 'Example');
+  // Searching the vault: typed into the popover's field, the search reaches the
+  // secret agent and its matches are listed.
+  const searchTaken = agent('/secret-agent/next').then(r => r.json());
+  await vaultPop(`document.getElementById('query').focus(); true`);
+  await view.call('Input.insertText', {text: 'work'});
+  const search = await searchTaken;
+  assert.deepEqual([search.kind, search.query], ['logins', 'work']);
+  await agent(`/secret-agent/${search.id}`, {method: 'POST', body: JSON.stringify({ok: true, info: [{id: 'entry-2', name: 'Work mail', user: 'alice', site: false}]})});
+  await until(async () => (await vaultPop(`[...document.querySelectorAll('.item-main strong')].map(b => b.textContent).join()`)) === 'Work mail');
+  // Copying: the value goes to this device's clipboard (written by the view,
+  // stubbed here), never into the extension's frame.
+  await view.evaluate(`window.__copied = []; navigator.clipboard.writeText = async (t) => { window.__copied.push(t); }; true`);
+  const copyTaken = agent('/secret-agent/next').then(r => r.json());
+  await vaultPop(`document.querySelector('.item-actions .copy').click(); true`);
+  const copyJob = await copyTaken;
+  assert.deepEqual([copyJob.kind, copyJob.entry, copyJob.fields], ['copy', 'entry-2', ['password', 'totp', 'username']]);
+  await agent(`/secret-agent/${copyJob.id}`, {method: 'POST', body: JSON.stringify({ok: true, info: {field: 'password', value: 'hunter22-secret'}})});
+  await until(() => view.evaluate(`window.__copied.join() === 'hunter22-secret'`));
+  await until(() => vaultPop(`document.querySelector('.item-actions .copy').classList.contains('is-copied')`));
+  assert.equal(await vaultPop(`document.documentElement.outerHTML.includes('hunter22')`), false, 'the copied value never reaches the frame');
   assert.equal(await view.evaluate(`document.querySelector('.ext-pop').hidden`), false);
   await vaultPop(`document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'})); true`);
   await until(() => view.evaluate(`document.querySelector('.ext-pop').hidden`));
@@ -310,7 +329,7 @@ try {
   await until(async () => !(await message({type: 'state'})).tabs.some(t => t.url === `${pageURL}dash`));
   await view.evaluate(`document.getElementById('smReopen').click()`);
   await until(async () => (await message({type: 'state'})).tabs.some(t => t.url === `${pageURL}dash` && t.shared));
-  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it; vault logins; the rbw extension's passkey prompt and popover; passkeys; the view's dialogs; reopening closed tabs passed`);
+  console.log(`Handoff: a shared browser without tabs shows its first shared tab by itself; shared/unshared tabs appear in ${shown} ms / leave in ${hidden} ms; the address bar opens the first tab; + and the quality slider; screencast frames; zoom; the browser follows the view; the dashboard opens tabs in it; vault logins; the rbw extension's passkey prompt, popover, fills and search; passkeys; the view's dialogs; reopening closed tabs passed`);
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);

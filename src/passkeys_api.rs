@@ -149,6 +149,25 @@ pub(crate) struct AutofillRequest {
     /// Filling: the user confirmed an entry that isn't saved for the site.
     #[serde(default)]
     pub(crate) any_site: bool,
+    /// With `entry`: copy its value (the first of `fields` it has) for the
+    /// viewer's clipboard instead of filling the page.
+    #[serde(default)]
+    pub(crate) copy: bool,
+}
+
+/// The page's host and its address without query and fragment (what rbw's
+/// URI matching looks at), from the browser's own page list.
+fn page_address(url: &str) -> Result<(String, String), ApiError> {
+    let mut url = url::Url::parse(url)
+        .ok()
+        .filter(|u| matches!(u.scheme(), "http" | "https") && u.host_str().is_some())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+    url.set_query(None);
+    url.set_fragment(None);
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    Ok((host, url.to_string()))
 }
 
 /// The vault button of the live view: list the logins for the page's site, or
@@ -166,11 +185,7 @@ pub(crate) async fn api_session_autofill(
         .iter()
         .find(|t| t.id == req.page_id && t.session_id == Some(id))
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Page not found in this session"))?;
-    let host = url::Url::parse(&page.url)
-        .ok()
-        .filter(|u| matches!(u.scheme(), "http" | "https"))
-        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+    let (host, page_url) = page_address(&page.url)?;
     if let Some(session) = state.sessions.read().await.get(&id) {
         session.activity.touch();
     }
@@ -179,7 +194,8 @@ pub(crate) async fn api_session_autofill(
             session_id = %id,
             host = %host,
             any_site = req.any_site,
-            "Login fill approved in the live view"
+            copy = req.copy,
+            "Vault entry picked in the live view"
         );
     }
     let query = req
@@ -203,6 +219,8 @@ pub(crate) async fn api_session_autofill(
                 unlock: req.unlock,
                 query,
                 any_site: req.any_site,
+                copy: req.copy,
+                url: Some(page_url.clone()),
             },
         )
         .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;
@@ -221,13 +239,9 @@ pub(crate) async fn api_extension_autofill(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     let shared = crate::extension::controlled(&state, id, tab)?;
-    let host = url::Url::parse(&shared.url)
-        .ok()
-        .filter(|u| matches!(u.scheme(), "http" | "https"))
-        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
-        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "The page is not on a website"))?;
+    let (host, page_url) = page_address(&shared.url)?;
     if req.entry.is_some() {
-        info!(browser = %id, host = %host, any_site = req.any_site, "Login fill approved in a shared browser's live view");
+        info!(browser = %id, host = %host, any_site = req.any_site, copy = req.copy, "Vault entry picked in a shared browser's live view");
     }
     let query = req
         .query
@@ -250,6 +264,8 @@ pub(crate) async fn api_extension_autofill(
                 unlock: req.unlock,
                 query,
                 any_site: req.any_site,
+                copy: req.copy,
+                url: Some(page_url.clone()),
             },
         )
         .map_err(|e| api_error(StatusCode::SERVICE_UNAVAILABLE, &e))?;

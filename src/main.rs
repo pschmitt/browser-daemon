@@ -50,7 +50,6 @@ mod shares;
 mod state;
 mod thumbnail;
 mod tui;
-mod vault_index;
 mod video;
 mod view_extensions;
 mod viewers;

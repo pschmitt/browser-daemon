@@ -1704,21 +1704,22 @@ async function agentRequest(url, body, onNote = () => {}, signal = null, base = 
 // (it looks that up itself, asking this view); signing is then done here.
 async function askPasskey({ rpId, challenge, allow }) {
   const answer = await extAskPasskey(rpId);
-  // No extension handles passkeys: the page goes on the browser's own way.
-  if (!answer) return true;
+  // No extension handles passkeys, or "another authenticator": the page goes on
+  // the browser's own way.
+  if (!answer || answer.device) return true;
   if (!answer.use || !vaultReady()) return false;
   toast(`Getting the passkey for ${rpId}…`, 0);
   try {
     let shown = "";
     const entry = answer.entry;
     const onNote = (note) => { if (note !== shown) { shown = note; toast(`${rpId}: ${note}`, 0); } };
-    // Chromium: the passkey goes into its authenticator and the page's request goes on.
-    // Firefox: the request is signed outside the browser and the page gets the result.
-    // A shared browser: always signed (its own authenticator is never touched).
-    const signed = target?.engine === "firefox" || !!sharedBrowserId;
-    const result = await passkeyAgent(rpId, false, onNote, entry, signed ? { challenge, allow } : {});
+    // rbw signs the page's challenge and the page's hook answers with the result,
+    // in every browser: the browser's own authenticator is never touched (putting
+    // the passkey into Chromium's would start a counter rbw may not keep, see
+    // rbw's passkeyCounter).
+    const result = await passkeyAgent(rpId, false, onNote, entry, { challenge, allow });
     toast(`Signing in to ${rpId} with your passkey`);
-    return signed ? result : true;
+    return result;
   } catch (err) {
     toast(`No passkey: ${err.message}`, 5000);
     return false;
@@ -5147,7 +5148,7 @@ addEventListener("message", (e) => {
   if (!f || !m || m.bd !== "ext" || typeof m.type !== "string") return;
   switch (m.type) {
     case "ready":
-      extPost(f, "init", { api: EXT_API, slot: f.slot, theme: document.documentElement.dataset.theme || null });
+      extPost(f, "init", { api: EXT_API, slot: f.slot, theme: document.documentElement.dataset.theme || null, version: f.ext.version || null });
       if (f.slot === "toolbar") extPost(f, "context", extContextNow());
       f.onReady();
       break;
@@ -5173,10 +5174,33 @@ addEventListener("message", (e) => {
       if (typeof m.text === "string") toast(m.text.slice(0, 300), Number.isFinite(m.ms) ? m.ms : 1100);
       break;
     case "passkey.answer":
-      if (f === extPasskey && f.prompt && f.prompt.id === m.id) f.prompt.done({ use: m.use === true, entry: typeof m.entry === "string" ? m.entry : null });
+      if (f === extPasskey && f.prompt && f.prompt.id === m.id) {
+        f.prompt.done({ use: m.use === true, device: m.device === true, entry: typeof m.entry === "string" ? m.entry : null });
+      }
       break;
   }
 });
+
+// A site's icon for an extension (which cannot load anything itself), from this
+// node's /api/favicon, as a data: URL; null when there is none.
+const extFavicons = new Map();
+function extFavicon(url) {
+  let origin;
+  try { origin = new URL(String(url)).origin; } catch { return Promise.resolve(null); }
+  if (!/^https?:\/\//.test(origin)) return Promise.resolve(null);
+  if (!extFavicons.has(origin)) {
+    extFavicons.set(origin, fetch(`/api/favicon?url=${encodeURIComponent(origin)}`, { headers: authHeaders() })
+      .then((res) => (res.ok ? res.blob() : null))
+      .then((blob) => blob && blob.size < 256 * 1024 && /^image\//.test(blob.type) ? new Promise((done) => {
+        const reader = new FileReader();
+        reader.onload = () => done(reader.result);
+        reader.onerror = () => done(null);
+        reader.readAsDataURL(blob);
+      }) : null)
+      .catch(() => null));
+  }
+  return extFavicons.get(origin);
+}
 
 // An extension's request: only what its manifest and slot allow, for this view's page.
 async function extRequest(f, m) {
@@ -5185,7 +5209,7 @@ async function extRequest(f, m) {
   const note = (text) => extPost(f, "note", { id, note: text });
   f.pending.set(id, ac);
   try {
-    if (!extMay(f, "vault")) throw new Error("This extension may not use the vault");
+    if (!extMay(f, "vault") && m.kind !== "favicon") throw new Error("This extension may not use the vault");
     let result;
     if (m.kind === "logins" && f.slot === "toolbar") {
       if (!pageHost() || !vaultReady()) throw new Error("There is no page to fill");
@@ -5195,6 +5219,16 @@ async function extRequest(f, m) {
       if (!pageHost() || !vaultReady()) throw new Error("There is no page to fill");
       const fields = Array.isArray(m.fields) ? m.fields.filter((x) => typeof x === "string") : [];
       result = await vaultCall({ entry: String(m.entry), fields, any_site: m.any_site === true }, note, ac.signal);
+    } else if (m.kind === "copy" && f.slot === "toolbar") {
+      // The value goes to this device's clipboard, never into the frame.
+      if (!vaultReady()) throw new Error("Not connected to a session");
+      const fields = Array.isArray(m.fields) ? m.fields.filter((x) => typeof x === "string") : [];
+      const got = await vaultCall({ entry: String(m.entry), fields, copy: true }, note, ac.signal);
+      if (typeof got?.value !== "string") throw new Error("Nothing to copy");
+      try { await navigator.clipboard.writeText(got.value); } catch { throw new Error("This browser blocked the clipboard"); }
+      result = { copied: got.field };
+    } else if (m.kind === "favicon") {
+      result = await extFavicon(m.url);
     } else if (m.kind === "passkey.find" && f.slot === "passkey" && f.prompt) {
       result = await passkeyAgent(f.prompt.rpId, true, note, null, {}, ac.signal);
     } else {

@@ -34,6 +34,10 @@ pub struct Request {
     /// "assert": the page's origin, as the browser reports it (not page script).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// "logins" and "fill": the page's address as the browser has it, without
+    /// query and fragment, for rbw's URI matching (scheme, port and path count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     /// "assert": the request's challenge (base64url) and allowed credential ids.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub challenge: Option<String>,
@@ -48,6 +52,8 @@ pub struct Request {
     /// "logins": search the whole vault for this instead of listing the site's entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+    /// "copy": the first of `fields` the entry has goes to the live view, for
+    /// the clipboard of the device viewing (the user clicked copy).
     /// "fill": the user picked an entry not saved for the site (from a search) and
     /// confirmed it; it may only go into frames on the page's own host.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -58,10 +64,14 @@ pub struct Request {
 #[derive(Default)]
 pub struct Autofill {
     pub entry: Option<String>,
+    /// Copy the entry's value instead of filling it (see Request).
+    pub copy: bool,
     pub fields: Vec<String>,
     pub unlock: bool,
     pub query: Option<String>,
     pub any_site: bool,
+    /// The page's address (see Request::url).
+    pub url: Option<String>,
     /// The session the request is made for.
     pub session: Option<Uuid>,
 }
@@ -141,6 +151,7 @@ impl Broker {
                 kind: kind.into(),
                 entry,
                 origin: signing.origin,
+                url: None,
                 challenge: signing.challenge,
                 allow: signing.allow,
                 fields: Vec::new(),
@@ -160,7 +171,11 @@ impl Broker {
         host: String,
         a: Autofill,
     ) -> Result<Uuid, String> {
-        let kind = if a.entry.is_some() { "fill" } else { "logins" };
+        let kind = match (&a.entry, a.copy) {
+            (Some(_), true) => "copy",
+            (Some(_), false) => "fill",
+            (None, _) => "logins",
+        };
         let session = a.session;
         self.enqueue(
             Request {
@@ -170,6 +185,7 @@ impl Broker {
                 kind: kind.into(),
                 entry: a.entry,
                 origin: None,
+                url: a.url,
                 challenge: None,
                 allow: Vec::new(),
                 fields: a.fields,
@@ -216,7 +232,13 @@ impl Broker {
             };
             self.queue.lock().unwrap().retain(|r| r.id != id);
         }
-        Some(t.status.clone())
+        let status = t.status.clone();
+        // A copied value is handed out once: it does not stay here until the
+        // request is forgotten.
+        if t.kind == "copy" && matches!(status, Status::Ready { .. }) {
+            t.status = Status::Ready { info: None };
+        }
+        Some(status)
     }
 
     /// The agent's long poll: the next request, or None after `wait`.

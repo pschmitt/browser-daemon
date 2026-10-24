@@ -24,15 +24,16 @@ Requests and what the agent runs for them:
 
 | Request | From | rbw |
 | --- | --- | --- |
-| `logins` | opening the vault button, typing a search | the vault index (below), else `rbw search` + `rbw get --raw` |
-| `fill` | picking a login | `rbw get --raw <id>`, `rbw code <id>` for the one-time code |
-| `find` | the passkey dialog: which entry would sign in | `rbw passkey find --rp-id <site>` |
-| `inject` | approving a passkey (Chromium session) | `rbw passkey inject --rp-id <site> --cdp-url <node> --page-id <page>` |
-| `assert` | approving a passkey (Firefox, shared browsers) | `rbw passkey assert --rp-id <site> --origin <origin> --challenge <challenge>` |
+| `logins` | opening the vault button, typing a search | `rbw search --url https://<site>/ --json [-- <search>]` |
+| `fill` | picking a login | `rbw search --url` (is it saved for the site?), `rbw get --raw <id>`, `rbw code <id>` for the one-time code |
+| `copy` | a login's copy button or menu | `rbw get --raw <id>`, `rbw code <id>` for a one-time code |
+| `find` | the passkey dialog: which entry would sign in | `rbw passkey find --rp-id <site>` (one batched decrypt, no sync: rbw 2.30 and later) |
+| `assert` | approving a passkey (any session or shared browser) | `rbw passkey assert --rp-id <site> --origin <origin> --challenge <challenge>` |
+| `inject` | (API only; the live view no longer asks for it) | `rbw passkey inject --rp-id <site> --cdp-url <node> --page-id <page>` |
 
-### Vault index
+### Finding logins
 
-`rbw search` decrypts every entry's names and URIs, and rbw-agent serves one `rbw get` at a time, so a lookup through rbw takes seconds. While rbw is unlocked the agent keeps an index built from `rbw list --raw` (names, users, folders, URIs and whether a password or TOTP is there, never a secret) and rebuilds it when rbw's local database (`~/.cache/rbw/*.json`) changes. Until it is there, lookups go through rbw.
+rbw finds them: `rbw search --url <page>` (rbw 2.30 and later; the node passes the page's address without query and fragment, so scheme, port and path count) lists the logins saved for the page by rbw's URI matching, the way its browser extension offers them (its `defaultUriMatch`, the match types, an HTTPS entry never on an HTTP page), or with a search the logins whose name, user, folder or URIs contain each word, the site's first. It decrypts that metadata in one batch in rbw-agent and answers in milliseconds; it never matches or prints notes, custom fields or secrets. With several rbw accounts it covers the unlocked ones; the agent remembers each entry's account for the `rbw get` and `rbw code` of a fill.
 
 ### Locked vault
 
@@ -40,11 +41,13 @@ Lookups (`logins`, `find`) never unlock: on a locked vault the view says so and 
 
 ### Logins
 
-The vault button lists the entries for the page's site, matched by their URIs and match types as Bitwarden's autofill does, and searches the whole vault. Picking one fills it ([live view](live-view.md#vault-logins)). The site always comes from the browser's own page list, not from the page or the view. The agent fills only entries saved for that site; an entry saved for another site takes a second click in the view, and the agent then posts `{"message": "..."}` (entry, site, fields; never a value) to `--notify-webhook`. The values reach the page only through the node's `POST /api/pages/<id>/autofill`, which needs the cluster secret and a `fill` request the agent took for that page, once. The node fills them from an isolated world (Chromium) or sandbox (Firefox), only into frames on the entry's site; they are never logged and never reach the view.
+The vault button lists the entries for the page's site, as rbw matches them (see [Finding logins](#finding-logins)), and searches the whole vault. Picking one fills it ([live view](live-view.md#vault-logins)). The site always comes from the browser's own page list, not from the page or the view. The agent fills only entries saved for that site; an entry saved for another site takes a second click in the view, and the agent then posts `{"message": "..."}` (entry, site, fields; never a value) to `--notify-webhook`. The values reach the page only through the node's `POST /api/pages/<id>/autofill`, which needs the cluster secret and a `fill` request the agent took for that page, once. The node fills them from an isolated world (Chromium) or sandbox (Firefox), only into frames on the entry's site; they are never logged and never reach the view.
+
+Copying (a login's copy button: the password, else the one-time code, else the username; or the menu's **Copy username/password/TOTP**) is the one way a value reaches the view, and only the browser you view on: the agent answers the `copy` request, the node hands that answer out once and forgets it, and the live view writes it to this device's clipboard. The extension's frame never sees it, and nothing logs it (the agent logs which field was copied).
 
 ### Passkeys
 
-A page's passkey sign-in (`navigator.credentials.get()`) is held while the live view asks: the dialog shows the site and which vault entry would sign in (`find`; with several, you pick one). Approving it has rbw add the passkey to a virtual authenticator in the page over the node's CDP endpoint, removed again once the page has signed in (Chromium sessions), or has rbw sign the page's challenge, which the page's hook answers with (Firefox and shared browsers; the browser's own authenticator is never touched). Only a sign-in that follows a click or tap in the view within 15 seconds is held, so an AI agent driving the page through its own connection is not held up.
+A page's passkey sign-in (`navigator.credentials.get()`) is held while the live view asks: the dialog shows the site and which vault entry would sign in (`find`; with several, you pick one). Approving it has rbw sign the page's challenge, which the page's hook answers with, in every browser; the browser's own authenticator is never touched, so this works whether or not rbw keeps passkey counters (`passkeyCounter`). **Use another authenticator** lets the page ask the browser's own way instead. Only a sign-in that follows a click or tap in the view within 15 seconds is held, so an AI agent driving the page through its own connection is not held up.
 
 ### Safety
 

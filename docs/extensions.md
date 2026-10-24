@@ -37,7 +37,7 @@ Paths are relative to the bundle and stay inside it. The node serves the files a
 
 Every page of an extension runs in an `<iframe sandbox="allow-scripts">` and is served with `Content-Security-Policy: sandbox allow-scripts; default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-ancestors 'self'`. So it is an opaque origin: it has no cookie and no storage of the node's, cannot reach the live view's document, its sign-in or the remote page, cannot fetch or connect anywhere, and loads only its own files. Its only way out is `postMessage` to the view, which answers only what its manifest and slot allow.
 
-The vault keeps its promise in here too: an extension sees entry names, users and folders, never a password, code or key.
+An extension sees entry names, users, folders and URIs, never a password, code or key. When you copy a value, the view puts it on this device's clipboard; the extension only hears which field it was.
 
 ## Messages
 
@@ -54,13 +54,13 @@ From the frame:
 | `badge` | `text` | the toolbar button's badge (up to 3 characters), `null` hides it |
 | `close` | `focus` | close the popover; focus goes back to the `"button"` or to the `"view"` (after a fill) |
 | `toast` | `text`, `ms` | a note at the bottom of the view; `ms: 0` keeps it until the next |
-| `passkey.answer` | `id`, `use`, `entry` | the prompt's answer: use the vault (with the entry id picked, or `null`) or not |
+| `passkey.answer` | `id`, `use`, `entry`, `device` | the prompt's answer: use the vault (with the entry id picked, or `null` to let rbw pick or unlock first), or not; `device: true` lets the browser ask its own way (a security key, the phone) |
 
 To the frame:
 
 | `type` | Fields | |
 | --- | --- | --- |
-| `init` | `api`, `slot`, `theme` | `slot` is `toolbar` or `passkey`; `theme` is `light`, `dark` or `null` (follow the system) |
+| `init` | `api`, `slot`, `theme`, `version` | `slot` is `toolbar` or `passkey`; `theme` is `light`, `dark` or `null` (follow the system); `version` is the manifest's |
 | `context` | `site`, `ready` | toolbar: after each page load and when opened. `site` is the page's host name (`""` off the web), `ready` whether the vault can fill it |
 | `open` | `warning` | the popover is shown |
 | `closed` | | it is hidden again |
@@ -77,9 +77,11 @@ Requests (`vault` permission):
 | --- | --- | --- | --- |
 | `logins` | toolbar | `query`, `unlock` | the site's logins (then, with a `query`, the rest of the vault's matches, `"site": false`), or `{"locked": true}`; `unlock: true` asks the phone first |
 | `fill` | toolbar | `entry`, `fields` (`username`, `password`, `totp`), `any_site` | `{"filled": [...]}`; an entry saved for another site needs `any_site` (ask twice first) |
+| `copy` | toolbar | `entry`, `fields` | `{"copied": field}`: the first of `fields` (`username`, `password`, `totp`) the entry has went to this device's clipboard; the value never reaches the extension |
 | `passkey.find` | passkey, while its prompt is open | | the entries with a passkey for the prompt's site, or `{"locked": true}` |
+| `favicon` | any (no permission) | `url` | the site's icon as a `data:` URL (fetched by the node), or `null` |
 
-Entries are `{"id", "name", "user", "folder", "totp", "site"}` (`passkey_user` for passkeys). After `passkey.answer` with `use: true` the view gets the passkey from the secret agent and signs the page in; the extension is done.
+Entries are `{"id", "name", "user", "folder", "uri", "password", "totp", "site"}` (`uri`: the first web address, for its icon; `password`/`totp`: whether there is one; `passkey_user` for passkeys). After `passkey.answer` with `use: true` the view gets the passkey from the secret agent and signs the page in; the extension is done.
 
 ## rbw's
 

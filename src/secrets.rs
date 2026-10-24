@@ -130,19 +130,6 @@ pub fn uris(raw: &Value) -> Vec<Uri> {
         .unwrap_or_default()
 }
 
-pub fn host_of(uri: &str) -> Option<String> {
-    let parsed = url::Url::parse(uri)
-        .ok()
-        .filter(|u| u.host_str().is_some())
-        .or_else(|| url::Url::parse(&format!("https://{uri}")).ok())?;
-    Some(
-        parsed
-            .host_str()?
-            .trim_end_matches('.')
-            .to_ascii_lowercase(),
-    )
-}
-
 /// The registrable part of a host, by the Public Suffix List (private suffixes
 /// such as `github.io` or `pages.dev` included: `a.github.io` and `b.github.io`
 /// are different sites). A host that is a suffix itself, an IP address or an
@@ -190,23 +177,6 @@ fn same_scheme_and_port(page: &url::Url, entry: &url::Url) -> bool {
         Some(p) => page.port_or_known_default() == Some(p),
         None => page.port().is_none(),
     }
-}
-
-/// Whether the vault entry is meant for `host`, as Bitwarden's autofill would
-/// decide, looking at host names only (regex URIs are not supported and never
-/// match). Listing uses this; anything that fills uses `url_matches`.
-pub fn site_matches(host: &str, uris: &[Uri]) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    uris.iter().any(|u| {
-        let Some(h) = host_of(&u.uri) else {
-            return false;
-        };
-        match u.match_type {
-            Some(4) | Some(5) => false,
-            Some(1..=3) => h == host,
-            _ => base_domain(&h) == base_domain(&host),
-        }
-    })
 }
 
 /// Whether the vault entry may be filled into the page at `page_url`: the
@@ -445,52 +415,6 @@ mod tests {
     }
 
     #[test]
-    fn subdomains_of_the_entry_site_match() {
-        let uris = [uri("https://frigate.video/plus/", None)];
-        assert!(site_matches("auth.frigate.video", &uris));
-        assert!(site_matches("frigate.video", &uris));
-        assert!(!site_matches("frigate.video.evil.test", &uris));
-        assert!(!site_matches("evil-frigate.video", &uris));
-    }
-
-    #[test]
-    fn host_and_exact_matches_need_the_same_host() {
-        let uris = [uri("https://ssl6.hrworks.de/o/dashboard", Some(1))];
-        assert!(site_matches("ssl6.hrworks.de", &uris));
-        assert!(!site_matches("login.hrworks.de", &uris));
-        assert!(!site_matches("x.test", &[uri("https://x.test", Some(5))]));
-        assert!(!site_matches(
-            "x.test",
-            &[uri("^https://x\\.test", Some(4))]
-        ));
-    }
-
-    #[test]
-    fn uris_without_scheme_and_country_suffixes() {
-        assert!(site_matches(
-            "accounts.google.com",
-            &[uri("google.com", None)]
-        ));
-        assert!(site_matches(
-            "login.bbc.co.uk",
-            &[uri("https://www.bbc.co.uk", None)]
-        ));
-        assert!(!site_matches(
-            "evil.co.uk",
-            &[uri("https://www.bbc.co.uk", None)]
-        ));
-        assert!(site_matches(
-            "10.5.1.1",
-            &[uri("http://10.5.1.1:8123", None)]
-        ));
-        assert!(!site_matches(
-            "10.5.1.2",
-            &[uri("http://10.5.1.1:8123", None)]
-        ));
-        assert!(!site_matches("anything.test", &[]));
-    }
-
-    #[test]
     fn fields_never_fall_back_to_notes() {
         let raw = json!({
             "data": { "username": "me@x.test", "password": null, "uris": [] },
@@ -531,25 +455,13 @@ mod tests {
             ("evil.com.au", "https://good.com.au"),
         ] {
             assert!(
-                !site_matches(page, &[uri(entry, None)]),
-                "{page} vs {entry}"
-            );
-            assert!(
                 !url_matches(&format!("https://{page}/"), &[uri(entry, None)]),
                 "{page} vs {entry}"
             );
         }
-        assert!(site_matches(
-            "login.a.github.io",
-            &[uri("https://www.a.github.io", None)]
-        ));
-        assert!(site_matches(
-            "login.bbc.co.uk",
-            &[uri("https://www.bbc.co.uk", None)]
-        ));
-        assert!(site_matches(
-            "shop.example.com.au",
-            &[uri("example.com.au", None)]
+        assert!(url_matches(
+            "https://login.a.github.io/",
+            &[uri("https://a.github.io", None)]
         ));
         assert_eq!(base_domain("a.b.github.io"), "b.github.io");
         assert_eq!(base_domain("github.io"), "github.io");

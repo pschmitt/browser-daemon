@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+### Added
+
+* The vault popover copies a login's password (else its one-time code, else
+  the username) to the clipboard of the device viewing, and its menu copies the
+  username, password or TOTP. The value goes agent → node (handed out once) →
+  live view → clipboard; the extension's frame never sees it.
+* Extensions can show sites' favicons (the `favicon` request: the node fetches
+  them) and know their version (`init`); a passkey prompt can let the browser
+  ask its own way ("Use another authenticator").
+
+### Changed
+
+* The secret agent leaves finding logins to rbw: `rbw search --url <page>`
+  (rbw 2.30 and later) lists the logins saved for the page by rbw's URI
+  matching, the one its browser extension uses, and searches; a fill checks
+  the entry with it too. Its own vault index and matcher are gone. The node
+  passes the page's address (without query and fragment) along, so scheme,
+  port and path count, and with several rbw accounts the agent fills from the
+  right one.
+
+### Fixed
+
+* Passkeys in Chromium sessions failed for passkeys without a counter while
+  rbw's `passkeyCounter` is off ("inject would start one"): the live view now
+  has rbw sign the page's challenge in every browser, as it did in Firefox and
+  shared browsers, instead of putting the passkey into Chromium's virtual
+  authenticator.
+* The vault listed every login of the site's registrable domain as suggested
+  (50 for `auth.brkn.lol`), and an index built while rbw was locked made every
+  lookup and search come back empty until rbw next synced.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added
