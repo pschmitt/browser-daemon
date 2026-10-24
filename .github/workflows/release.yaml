@@ -12,6 +12,10 @@ on:
         description: Mark it as the latest release
         type: boolean
         default: false
+      dry-run:
+        description: Only check that the tag's signed packages match its source
+        type: boolean
+        default: false
 env:
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
@@ -26,6 +30,7 @@ concurrency:
 jobs:
   build:
     name: build (${{ matrix.target }})
+    if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -89,91 +94,21 @@ jobs:
   # when they match it, else (version tags only) signed here, as in rbw: AMO
   # (unlisted) for Firefox, the CRX key for Chromium. AMO signs each version
   # once: after a later job fails, rerun only the failed jobs.
+  # AMO signs a version only once: a rerun reuses the tag's release assets.
   browser:
-    name: Signed browser packages
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.TAG }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-      - name: Does this release have the extension?
-        id: has
-        run: |
-          if [[ -f browser/build.py && -d browser/packages ]]
-          then
-            echo "extension=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "No browser extension in $TAG."
-          fi
-      - name: Build extension packages
-        if: steps.has.outputs.extension
-        run: python3 browser/build.py
-      - name: Reuse signed packages matching this source
-        if: steps.has.outputs.extension
-        id: signed-packages
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # AMO signs a version once, so a retry reuses what this tag's release already has.
-          reused=$(mktemp -d)
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$reused" --pattern 'browser-daemon-node-*'
-          mkdir -p browser/dist/signed
-          cp "$reused"/browser-daemon-node-firefox-*.xpi browser/dist/signed/browser-daemon-node-firefox.xpi
-          cp "$reused"/browser-daemon-node-chromium-*.crx browser/dist/signed/browser-daemon-node-chromium.crx
-          python3 browser/verify.py --signed-directory browser/dist/signed
-      - name: Refuse to sign outside a version tag push
-        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure' && github.event_name != 'push'
-        run: |
-          echo "::error::$TAG has no signed packages matching its source; only a pushed version tag signs new ones."
-          exit 1
-      - name: Sign Firefox with AMO
-        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure'
-        env:
-          WEB_EXT_API_KEY: ${{ secrets.BROWSER_NODE_AMO_API_KEY }}
-          WEB_EXT_API_SECRET: ${{ secrets.BROWSER_NODE_AMO_API_SECRET }}
-        run: |
-          npm install --global web-ext@8
-          web-ext sign --channel=unlisted --source-dir=browser/dist/firefox --artifacts-dir=browser/dist/signed-firefox
-          mkdir -p browser/dist/signed
-          cp browser/dist/signed-firefox/*.xpi browser/dist/signed/browser-daemon-node-firefox.xpi
-      - uses: browser-actions/setup-chrome@v2
-        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure'
-      - name: Sign Chromium CRX3
-        if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure'
-        env:
-          CRX_PRIVATE_KEY: ${{ secrets.BROWSER_NODE_CHROMIUM_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          key_file="$RUNNER_TEMP/browser-node.pem"
-          trap 'rm -f "$key_file"' EXIT
-          umask 077
-          printf '%s' "$CRX_PRIVATE_KEY" > "$key_file"
-          google-chrome --headless --no-sandbox --disable-gpu \
-            --pack-extension="$GITHUB_WORKSPACE/browser/dist/chromium" \
-            --pack-extension-key="$key_file"
-          cp browser/dist/chromium.crx browser/dist/signed/browser-daemon-node-chromium.crx
-      - name: Verify signed packages match source
-        if: steps.has.outputs.extension
-        run: |
-          python3 browser/verify.py --signed-directory browser/dist/signed
-          mkdir -p dist
-          for f in browser/dist/signed/*.xpi browser/dist/signed/*.crx
-          do
-            name=$(basename "$f")
-            cp "$f" "dist/${name%.*}-${TAG#v}.${name##*.}"
-          done
-      - uses: actions/upload-artifact@v7
-        if: steps.has.outputs.extension
-        with:
-          name: browser-extensions
-          path: dist/*
-          if-no-files-found: error
+    uses: pschmitt/ci-workflows/.github/workflows/sign-extension.yaml@main
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+      firefox-asset: browser-daemon-node-firefox-{version}.xpi
+      chromium-asset: browser-daemon-node-chromium-{version}.crx
+      sign: ${{ github.event_name == 'push' }}
+    secrets:
+      amo_api_key: ${{ secrets.BROWSER_NODE_AMO_API_KEY }}
+      amo_api_secret: ${{ secrets.BROWSER_NODE_AMO_API_SECRET }}
+      chromium_signing_key: ${{ secrets.BROWSER_NODE_CHROMIUM_SIGNING_KEY }}
   release:
     needs: [build, browser]
+    if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -219,39 +154,14 @@ jobs:
           body_path: RELEASE_NOTES.md
           generate_release_notes: false
           make_latest: ${{ github.event_name == 'push' || inputs.latest }}
-  # The Nix package fetches the signed packages from the release by hash: pin
-  # the ones signed for a pushed tag in browser/packages/metadata.json.
+  # The Nix package fetches the signed packages from the release by hash.
   packages:
-    name: Pin signed browser packages
     needs: [release]
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: main
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: browser-extensions
-          merge-multiple: true
-          path: dist
-      - name: Commit and push
-        run: |
-          version="${TAG#v}"
-          firefox=$(sha256sum "dist/browser-daemon-node-firefox-$version.xpi" | cut -d' ' -f1)
-          chromium=$(sha256sum "dist/browser-daemon-node-chromium-$version.crx" | cut -d' ' -f1)
-          jq --arg version "$version" --arg firefox "$firefox" --arg chromium "$chromium" \
-            '.version = $version | .firefoxSha256 = $firefox | .chromiumSha256 = $chromium' \
-            browser/packages/metadata.json > "$RUNNER_TEMP/metadata.json"
-          cp "$RUNNER_TEMP/metadata.json" browser/packages/metadata.json
-          if git diff --quiet -- browser/packages
-          then
-            echo "Signed packages for $TAG are already pinned on main."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "release: pin signed browser extension $TAG" -- browser/packages
-          git push origin HEAD:main
+    uses: pschmitt/ci-workflows/.github/workflows/pin-release.yaml@main
+    with:
+      tag: ${{ github.ref_name }}
+      firefox-asset: browser-daemon-node-firefox-{version}.xpi
+      chromium-asset: browser-daemon-node-chromium-{version}.crx

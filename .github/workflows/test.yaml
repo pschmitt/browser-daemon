@@ -46,29 +46,13 @@ jobs:
           done
           node --test browser/check.mjs
           python3 browser/check_companion.py
-      - name: Verify pinned signed packages
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # The Nix package fetches these from the release: check the pinned hashes
-          # and the payloads against the pinned tag's source.
-          version=$(jq -r .version browser/packages/metadata.json)
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          git fetch --depth=1 origin "refs/tags/v$version:refs/tags/v$version"
-          previous=$(mktemp -d)
-          signed=$(mktemp -d)
-          trap 'rm -rf "$previous" "$signed"' EXIT
-          gh release download "v$version" --dir "$signed" --pattern 'browser-daemon-node-*'
-          echo "$(jq -r .firefoxSha256 browser/packages/metadata.json)  $signed/browser-daemon-node-firefox-$version.xpi" | sha256sum --check
-          echo "$(jq -r .chromiumSha256 browser/packages/metadata.json)  $signed/browser-daemon-node-chromium-$version.crx" | sha256sum --check
-          mv "$signed/browser-daemon-node-firefox-$version.xpi" "$signed/browser-daemon-node-firefox.xpi"
-          mv "$signed/browser-daemon-node-chromium-$version.crx" "$signed/browser-daemon-node-chromium.crx"
-          git archive "v$version" | tar -x -C "$previous"
-          python3 "$previous/browser/build.py"
-          python3 "$previous/browser/verify.py" --signed-directory "$signed"
       - name: Lint Firefox extension
         run: npx --yes web-ext@8 lint --source-dir browser/dist/firefox --warnings-as-errors
+  pin:
+    uses: pschmitt/ci-workflows/.github/workflows/verify-pin.yaml@main
+    with:
+      firefox-asset: browser-daemon-node-firefox-{version}.xpi
+      chromium-asset: browser-daemon-node-chromium-{version}.crx
   # Real browsers against the real daemon: the extension, its live views and the
   # Firefox companion. Browsers come from nixpkgs (cached store), the daemon from cargo.
   smoke:
