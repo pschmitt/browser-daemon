@@ -5,3 +5,5 @@ result-*
 .direnv
 /browser/dist/
 /browser/__pycache__/
+/browser/packages/*.xpi
+/browser/packages/*.crx

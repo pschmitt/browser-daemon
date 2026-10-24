@@ -328,8 +328,11 @@ test-only popup driver; production background and companion code are unchanged.
 On a matching `v<Cargo.toml version>` tag, signing waits for all those checks on
 that source. Configure repository secrets `BROWSER_NODE_AMO_API_KEY`,
 `BROWSER_NODE_AMO_API_SECRET`, and `BROWSER_NODE_CHROMIUM_SIGNING_KEY` before using
-it. The Chromium key must remain stable. Signed packages in `browser/packages` are checked against the source in CI.
-The workflow reuses matching packages; otherwise it signs Firefox unlisted
+it. The Chromium key must remain stable. The signed packages are not in git: they are
+release assets, and `browser/packages/metadata.json` pins their version and SHA-256
+for the Nix package (which fetches them) and for CI, which checks them against the
+pinned tag's source. After signing, the workflow commits the new pin to `main`.
+The workflow reuses the tag's release assets when they match the source; otherwise it signs Firefox unlisted
 through AMO and creates a CRX3 with Chrome. It compares payloads to the source,
 produces checksums and provenance, preserves the artifacts, and uploads them to
 the tag's release (creating a draft if absent). No signing credentials are

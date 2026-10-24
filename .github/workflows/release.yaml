@@ -115,14 +115,20 @@ jobs:
         if: steps.has.outputs.extension
         id: signed-packages
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 browser/verify.py --signed-directory browser/packages
+          # AMO signs a version once, so a retry reuses what this tag's release already has.
+          reused=$(mktemp -d)
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$reused" --pattern 'browser-daemon-node-*'
           mkdir -p browser/dist/signed
-          cp browser/packages/*.xpi browser/packages/*.crx browser/dist/signed/
+          cp "$reused"/browser-daemon-node-firefox-*.xpi browser/dist/signed/browser-daemon-node-firefox.xpi
+          cp "$reused"/browser-daemon-node-chromium-*.crx browser/dist/signed/browser-daemon-node-chromium.crx
+          python3 browser/verify.py --signed-directory browser/dist/signed
       - name: Refuse to sign outside a version tag push
         if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure' && github.event_name != 'push'
         run: |
-          echo "::error::The checked-in packages do not match $TAG; only a pushed version tag signs new ones."
+          echo "::error::$TAG has no signed packages matching its source; only a pushed version tag signs new ones."
           exit 1
       - name: Sign Firefox with AMO
         if: steps.has.outputs.extension && steps.signed-packages.outcome == 'failure'
@@ -153,8 +159,7 @@ jobs:
       - name: Verify signed packages match source
         if: steps.has.outputs.extension
         run: |
-          cp browser/dist/signed/*.xpi browser/dist/signed/*.crx browser/packages/
-          python3 browser/verify.py --signed-directory browser/packages
+          python3 browser/verify.py --signed-directory browser/dist/signed
           mkdir -p dist
           for f in browser/dist/signed/*.xpi browser/dist/signed/*.crx
           do
@@ -166,12 +171,6 @@ jobs:
         with:
           name: browser-extensions
           path: dist/*
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        if: steps.has.outputs.extension
-        with:
-          name: browser-packages
-          path: browser/packages/*
           if-no-files-found: error
   release:
     needs: [build, browser]
@@ -220,10 +219,10 @@ jobs:
           body_path: RELEASE_NOTES.md
           generate_release_notes: false
           make_latest: ${{ github.event_name == 'push' || inputs.latest }}
-  # The Nix package installs the checked-in signed packages: commit the ones
-  # signed for a pushed tag to main, unless main's extension moved on.
+  # The Nix package fetches the signed packages from the release by hash: pin
+  # the ones signed for a pushed tag in browser/packages/metadata.json.
   packages:
-    name: Commit signed browser packages
+    name: Pin signed browser packages
     needs: [release]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -235,23 +234,24 @@ jobs:
           ref: main
       - uses: actions/download-artifact@v8
         with:
-          pattern: browser-packages
+          pattern: browser-extensions
           merge-multiple: true
-          path: browser/packages
+          path: dist
       - name: Commit and push
         run: |
+          version="${TAG#v}"
+          firefox=$(sha256sum "dist/browser-daemon-node-firefox-$version.xpi" | cut -d' ' -f1)
+          chromium=$(sha256sum "dist/browser-daemon-node-chromium-$version.crx" | cut -d' ' -f1)
+          jq --arg version "$version" --arg firefox "$firefox" --arg chromium "$chromium" \
+            '.version = $version | .firefoxSha256 = $firefox | .chromiumSha256 = $chromium' \
+            browser/packages/metadata.json > "$RUNNER_TEMP/metadata.json"
+          cp "$RUNNER_TEMP/metadata.json" browser/packages/metadata.json
           if git diff --quiet -- browser/packages
           then
-            echo "Signed packages for $TAG are already on main."
+            echo "Signed packages for $TAG are already pinned on main."
             exit 0
-          fi
-          python3 browser/build.py
-          if ! python3 browser/verify.py --signed-directory browser/packages
-          then
-            echo "::error::main's extension source differs from $TAG; commit its signed packages by hand."
-            exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "release: package signed browser extension $TAG" -- browser/packages
+          git commit -m "release: pin signed browser extension $TAG" -- browser/packages
           git push origin HEAD:main

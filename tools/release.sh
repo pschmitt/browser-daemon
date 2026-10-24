@@ -5,7 +5,7 @@
 #   tag              require green build and test for HEAD, then push a signed vVERSION
 #
 # The release workflow (on v* tags) signs the browser extension, publishes it
-# with the Linux binaries and commits the signed XPI and CRX back to main.
+# with the Linux binaries and pins their hashes in browser/packages/metadata.json on main.
 
 usage() {
   cat <<EOF

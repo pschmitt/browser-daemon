@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Check signed extension payloads against the build, as rbw's release.py does."""
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import struct
@@ -44,8 +43,6 @@ def main():
         stream.seek(12 + size)
         if stream.read(4) != b"PK\x03\x04":
             raise ValueError("Invalid CRX3 payload")
-    checksums = "".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in sorted(signed.iterdir()) if p.suffix in (".crx", ".xpi"))
-    (signed / "SHA256SUMS").write_text(checksums)
     print("Signed payloads match the extension source")
 
 

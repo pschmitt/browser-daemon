@@ -3,6 +3,16 @@ let
   inherit ((fromTOML (builtins.readFile ../Cargo.toml)).package) version;
   addonId = "browser-daemon-node@pschmitt.dev";
   metadata = builtins.fromJSON (builtins.readFile ../browser/packages/metadata.json);
+  # The signed packages are release assets, pinned by hash in metadata.json
+  # (the release workflow updates it after signing).
+  releaseAsset =
+    file: sha256:
+    pkgs.fetchurl {
+      url = "https://github.com/pschmitt/browser-daemon/releases/download/v${metadata.version}/${file}";
+      inherit sha256;
+    };
+  firefoxXpi = releaseAsset "browser-daemon-node-firefox-${metadata.version}.xpi" metadata.firefoxSha256;
+  chromiumCrx = releaseAsset "browser-daemon-node-chromium-${metadata.version}.crx" metadata.chromiumSha256;
   hostName = "dev.pschmitt.browser_daemon";
   companion = pkgs.runCommand "browser-daemon-firefox-companion-${version}" { } ''
     install -Dm755 ${../browser/companion.py} $out/bin/browser-daemon-firefox-companion
@@ -24,26 +34,26 @@ in
   '';
 
   firefox-addon =
-    pkgs.runCommand "browser-daemon-firefox-addon-${version}"
+    pkgs.runCommand "browser-daemon-firefox-addon-${metadata.version}"
       {
-        inherit version;
+        inherit (metadata) version;
         passthru = { inherit addonId; };
       }
       ''
         mkdir -p $out/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}
-        cp ${../browser/packages/browser-daemon-node-firefox.xpi} $out/${addonId}.xpi
+        cp ${firefoxXpi} $out/${addonId}.xpi
         ln -s $out/${addonId}.xpi \
           $out/share/mozilla/extensions/{ec8030f7-c20a-464f-9b0e-13a3a9e97384}/${addonId}.xpi
       '';
 
   chromium-addon =
-    pkgs.runCommand "browser-daemon-chromium-addon-${version}"
+    pkgs.runCommand "browser-daemon-chromium-addon-${metadata.version}"
       {
-        inherit version;
+        inherit (metadata) version;
         passthru.extensionId = metadata.chromiumId;
       }
       ''
         mkdir -p $out
-        cp ${../browser/packages/browser-daemon-node-chromium.crx} $out/browser-daemon-node.crx
+        cp ${chromiumCrx} $out/browser-daemon-node.crx
       '';
 }
