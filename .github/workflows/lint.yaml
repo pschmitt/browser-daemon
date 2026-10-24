@@ -1,0 +1,28 @@
+name: lint
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+env:
+  RUST_BACKTRACE: 1
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  lint:
+    uses: pschmitt/ci-workflows/.github/workflows/rust-lint.yaml@main
+  lint-extension:
+    uses: pschmitt/ci-workflows/.github/workflows/extension-lint.yaml@main
+    with:
+      check-command: |
+        for script in browser/extension/*.js assets/extension.js
+        do
+          node --check "$script"
+        done
+        node --test browser/check.mjs
+        python3 browser/check_companion.py
+  release-script:
+    uses: pschmitt/ci-workflows/.github/workflows/release-script.yaml@main

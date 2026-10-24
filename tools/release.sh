@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
-# Release browser-daemon and its browser extension under one version (Cargo.toml).
+# Release a project and its browser extension under one version.
 #
-#   prepare VERSION  bump Cargo.toml/Cargo.lock, date the CHANGELOG, commit, push
-#   tag              require green build and test for HEAD, then push a signed vVERSION
+#   prepare VERSION  bump the version files, date the CHANGELOG, commit, push
+#   tag              require green CI for HEAD, then push a signed vVERSION tag
 #
 # The release workflow (on v* tags) signs the browser extension, publishes it
-# with the Linux binaries and pins their hashes in browser/packages/metadata.json on main.
+# with the build artifacts and pins the signed packages' hashes in
+# browser/packages/metadata.json on main.
+#
+# This file is shared: the canonical copy lives in pschmitt/ci-workflows
+# (scripts/release.sh) and is copied verbatim to tools/release.sh in each
+# repository. Project specifics go into tools/release-hooks.sh, which may define
+#   current_version       print the current version
+#   bump_version VERSION  write VERSION into the version files
+#   release_files         print the files the release commit contains
+# The defaults handle a Cargo package (Cargo.toml and Cargo.lock).
 
 usage() {
   cat <<EOF
 Usage: $(basename "$0") prepare VERSION | tag
 
   prepare VERSION  Bump to VERSION (X.Y.Z), date the changelog, commit and push.
-  tag              Push the GPG-signed vVERSION tag once build and test are green
-                   for HEAD. The release workflow then signs and publishes.
+  tag              Push the GPG-signed vVERSION tag once CI (build, lint, test and
+                   docker, where the repository has them) is green for HEAD.
+                   The release workflow then signs and publishes.
 EOF
 }
 
@@ -26,8 +36,36 @@ repo_root() {
   git rev-parse --show-toplevel
 }
 
+project_name() {
+  basename "$(repo_root)" .git
+}
+
+# Defaults for a Cargo package.
 current_version() {
   sed -n 's/^version = "\(.*\)"$/\1/p' "$(repo_root)/Cargo.toml" | head -n 1
+}
+
+bump_version() {
+  local version="$1" root crate
+  root="$(repo_root)"
+  crate="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
+  sed -i "0,/^version = \".*\"$/s//version = \"$version\"/" "$root/Cargo.toml"
+  # Only the package's own entry, which directly follows its name line.
+  sed -i "/^name = \"$crate\"$/{n;s/^version = \".*\"$/version = \"$version\"/}" "$root/Cargo.lock"
+}
+
+release_files() {
+  printf '%s\n' Cargo.toml Cargo.lock
+}
+
+load_hooks() {
+  local hooks
+  hooks="$(repo_root)/tools/release-hooks.sh"
+  if [[ -f "$hooks" ]]
+  then
+    # shellcheck source=/dev/null
+    source "$hooks"
+  fi
 }
 
 # Wait until every run of WORKFLOW for COMMIT has finished; succeed only if all passed.
@@ -53,9 +91,9 @@ wait_for_workflow() {
   fi
 }
 
-
 prepare() {
-  local version="$1" root today
+  local version="$1" root today file
+  local -a files=()
   if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
   then
     # Firefox only accepts numeric versions, so no pre-release suffixes.
@@ -69,14 +107,15 @@ prepare() {
     die "CHANGELOG.md has no '## [Unreleased]' section"
     return 1
   fi
-  sed -i "0,/^version = \".*\"$/s//version = \"$version\"/" "$root/Cargo.toml"
-  # Only the browser-daemon package entry, which directly follows its name line.
-  sed -i "/^name = \"browser-daemon\"$/{n;s/^version = \".*\"$/version = \"$version\"/}" "$root/Cargo.lock"
+  bump_version "$version" || return 1
   sed -i "s/^## \[Unreleased\]$/## [Unreleased]\n\n## [$version] - $today/" "$root/CHANGELOG.md"
-  git -C "$root" commit -m "Release browser-daemon $version" -- Cargo.toml Cargo.lock CHANGELOG.md || return 1
+  while IFS= read -r file
+  do
+    files+=("$file")
+  done < <(release_files)
+  git -C "$root" commit -m "Release $(project_name) $version" -- "${files[@]}" CHANGELOG.md || return 1
   git -C "$root" push origin HEAD:main
 }
-
 
 tag() {
   local root commit version workflow
@@ -88,15 +127,19 @@ tag() {
     die "HEAD ${commit:0:7} is not on origin/main; push it first"
     return 1
   fi
-  for workflow in build test
+  for workflow in build lint test docker
   do
-    wait_for_workflow "$commit" "$workflow" || return 1
+    if [[ -f "$root/.github/workflows/$workflow.yaml" ]]
+    then
+      wait_for_workflow "$commit" "$workflow" || return 1
+    fi
   done
   git -C "$root" tag -s "v$version" -m "Release $version" "$commit" || return 1
   git -C "$root" push origin "v$version"
 }
 
 main() {
+  load_hooks
   case "${1:-}" in
     -h|--help)
       usage
