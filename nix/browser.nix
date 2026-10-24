@@ -8,7 +8,7 @@ let
   releaseAsset =
     file: sha256:
     pkgs.fetchurl {
-      url = "https://github.com/pschmitt/browser-daemon/releases/download/v${metadata.version}/${file}";
+      url = "https://github.com/pschmitt/browser-daemon/releases/download/${metadata.tag}/${file}";
       inherit sha256;
     };
   firefoxXpi = releaseAsset "browser-daemon-node-firefox-${metadata.version}.xpi" metadata.firefoxSha256;
