@@ -4,6 +4,12 @@
 
 ## [0.6.1] - 2026-10-24
 
+### Changed
+
+* The vault in the live view follows rbw 2.31.2: the new ninja crab logo,
+  duplicate, archive/trash notices and status pills, and an "All items" view
+  that includes archived and trashed items.
+
 ## [0.6.0] - 2026-10-24
 
 ### Added
