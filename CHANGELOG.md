@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-24
+
 ### Added
 
 * The vault popover copies a login's password (else its one-time code, else
