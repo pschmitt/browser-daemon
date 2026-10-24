@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-24
+
+### Changed
+
+* The signed browser extension packages are no longer committed to the
+  repository: they are release assets, and the Nix package fetches them by the
+  hash pinned in `browser/packages/metadata.json`.
+* Updated the `psl` and `uuid` dependencies.
+
 ## [0.6.1] - 2026-10-24
 
 ### Changed
