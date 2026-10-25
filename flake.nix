@@ -91,7 +91,8 @@
     // {
       # Linux package builds and checks run on the self-hosted nixbot.
       hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
-        packages = self.packages.${system} or { };
+        # rbw builds its own extension; this output only re-exports it.
+        packages = builtins.removeAttrs self.packages.${system} [ "rbw-extension" ];
         checks = self.checks.${system} or { };
       });
 
