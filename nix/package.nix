@@ -40,7 +40,8 @@ let
   '';
   # The dependencies, built once: source changes and version bumps reuse them.
   deps = craneLib.buildDepsOnly (
-    common
+    # dummySrc replaces src; passing both makes crane warn.
+    builtins.removeAttrs common [ "src" ]
     // {
       pname = "browser-daemon-deps";
       version = "0";
