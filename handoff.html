@@ -1105,9 +1105,12 @@ class CdpDriver {
     }
     await this.cdp.call("Page.stopScreencast").catch(() => {});
     if (this.video) return;   // the H.264 stream shows the page
+    // The frame's bound: this screen's real pixels (up to 3x). Not fitting, the page
+    // keeps its own (larger) size, and a phone's 412 px at 1.25 smeared a desktop page.
+    const cast = Math.max(scale, Math.min(dpr, 3));
     this.castParams = {
       format: "jpeg", quality: castQuality(mode), everyNthFrame: 1,
-      maxWidth: Math.min(Math.round(w * scale), 1600), maxHeight: Math.min(Math.round(h * scale), 1000),
+      maxWidth: Math.min(Math.round(w * cast), 1600), maxHeight: Math.min(Math.round(h * cast), 1000),
     };
     await this.cdp.call("Page.startScreencast", this.castParams);
   }
@@ -4539,7 +4542,8 @@ function streamPref() {
 function canVideo() {
   // Native/Phone in Firefox: its viewport cannot be matched by a window size here.
   return !!(sess?.video && window.VideoDecoder && drv && streamPref() === "video"
-    && !(fitLayout && Math.min(devicePixelRatio || 1, 2) > 1.05)
+    // An emulated density above 1 (Chromium scales it), not when an automation client sizes the page.
+    && !(fitLayout && !metricsYielding && Math.min(devicePixelRatio || 1, 2) > 1.05)
     && !(fitLayout && target?.engine === "firefox"));
 }
 // fallback: hand the picture back to the screencast.
