@@ -89,6 +89,12 @@
     in
     eachSystem
     // {
+      # Linux package builds and checks run on the self-hosted nixbot.
+      hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
+        packages = self.packages.${system} or { };
+        checks = self.checks.${system} or { };
+      });
+
       overlays.default = _final: prev: {
         browser-daemon = prev.callPackage ./nix/package.nix {
           inherit rev;
