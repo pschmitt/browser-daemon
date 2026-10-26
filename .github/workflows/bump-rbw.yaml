@@ -1,0 +1,56 @@
+name: bump-rbw
+# The rbw flake input is locked at the commit pinning rbw's latest release's
+# browser packages ("release: pin signed browser extension vX"), not at the
+# head of main, so Renovate's lock maintenance cannot track it.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: ${{ github.workflow }}
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - name: Find the pin commit of rbw's latest release
+        id: pin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$(gh api repos/pschmitt/rbw/releases/latest --jq .tag_name)"
+          rev="$(gh api "repos/pschmitt/rbw/commits?sha=main&per_page=100" \
+            --jq "map(select(.commit.message | startswith(\"release: pin signed browser extension ${tag}\"))) | .[0].sha // empty")"
+          if [[ -z $rev ]]
+          then
+            echo "No pin commit for rbw ${tag} yet" >&2
+            exit 0
+          fi
+          current="$(jq -r '.nodes.rbw.locked.rev' flake.lock)"
+          {
+            echo "tag=${tag}"
+            echo "rev=${rev}"
+            echo "changed=$([[ $rev != "$current" ]] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Lock rbw at the pin commit
+        if: steps.pin.outputs.changed == 'true'
+        run: |
+          meta="$(nix flake prefetch "github:pschmitt/rbw/${{ steps.pin.outputs.rev }}" --json)"
+          jq --argjson meta "$meta" \
+            '.nodes.rbw.locked |= (.rev = $meta.locked.rev | .narHash = $meta.locked.narHash | .lastModified = $meta.locked.lastModified)' \
+            flake.lock > flake.lock.new
+          mv flake.lock.new flake.lock
+          # Pick up rbw's own inputs, which can change between releases
+          nix flake lock
+          nix build --no-link .#rbw-extension
+      - name: Commit
+        if: steps.pin.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add flake.lock
+          git commit -m "flake: bump rbw to ${{ steps.pin.outputs.tag }} (${{ steps.pin.outputs.rev }})"
+          git push
