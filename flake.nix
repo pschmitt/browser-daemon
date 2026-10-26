@@ -8,7 +8,7 @@
     # reuse them instead of recompiling every crate on each change.
     crane.url = "github:ipetkov/crane";
     # rbw ships the live view's vault (its browser-daemon-extension package).
-    # Follows rbw's `main`; the update-rbw workflow bumps it daily.
+    # Follows rbw's `main`; the update-flake-lock workflow bumps it daily.
     rbw = {
       url = "github:pschmitt/rbw";
       inputs.nixpkgs.follows = "nixpkgs";

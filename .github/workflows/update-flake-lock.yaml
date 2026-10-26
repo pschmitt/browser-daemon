@@ -1,6 +1,5 @@
-name: update-rbw
-# The rbw flake input follows rbw's main; bump it daily. Everything else in
-# flake.lock is left to Renovate's lock file maintenance.
+name: update-flake-lock
+# Bump every flake input daily (rbw follows rbw's main).
 on:
   schedule:
     - cron: "17 5 * * *"
@@ -16,6 +15,5 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v23
       - uses: DeterminateSystems/update-flake-lock@v29
         with:
-          inputs: rbw
-          pr-title: "flake: bump rbw"
+          pr-title: "flake: update inputs"
           pr-labels: dependencies
