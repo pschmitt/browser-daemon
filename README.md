@@ -1,7 +1,9 @@
 <p align="center">
-
-[![nixbot](https://nixbot.brkn.lol/repos/github/pschmitt/browser-daemon/badge.svg?branch=main)](https://nixbot.brkn.lol/repos/github/pschmitt/browser-daemon)
   <img src="logo.svg" width="128" height="128" alt="Browser Daemon logo: a browser window with a daemon's grin and horns">
+</p>
+
+<p align="center">
+  <a href="https://nixbot.brkn.lol/repos/github/pschmitt/browser-daemon"><img src="https://nixbot.brkn.lol/repos/github/pschmitt/browser-daemon/badge.svg?branch=main" alt="nixbot"></a>
 </p>
 
 <h1 align="center">browser-daemon</h1>
