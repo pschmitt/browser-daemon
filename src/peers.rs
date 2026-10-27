@@ -178,7 +178,9 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("GET", ["recordings", "vacuum"]) => (false, Long),
         ("POST", ["recordings", "vacuum" | "merge"]) => (false, Long),
         ("GET" | "DELETE", ["recordings", _]) => (false, Short),
-        ("GET", ["recordings", _, "frames" | "audio" | "export.webm"]) => (false, Long),
+        ("GET", ["recordings", _, "frames" | "audio" | "export.webm" | "export-concise.webm"]) => {
+            (false, Long)
+        }
         ("GET", ["sessions", _, "downloads"]) => (false, Short),
         ("GET", ["sessions", _, "downloads", _]) => (false, Long),
         ("DELETE", ["sessions", _, "downloads", _]) => (false, Short),
@@ -543,6 +545,12 @@ mod tests {
         );
         assert_eq!(
             target(Method::GET, "recordings/abc/export.webm")
+                .unwrap()
+                .wait,
+            PeerWait::Long
+        );
+        assert_eq!(
+            target(Method::GET, "recordings/abc/export-concise.webm")
                 .unwrap()
                 .wait,
             PeerWait::Long

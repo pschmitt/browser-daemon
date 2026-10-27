@@ -605,6 +605,9 @@ pub enum RecordingCmd {
         /// A WebM video (VP9, with the sound), encoded on its node.
         #[arg(long)]
         webm: bool,
+        /// Cap still periods at 5 seconds (concise mode).
+        #[arg(long)]
+        concise: bool,
         /// Replace the file if it exists.
         #[arg(short, long)]
         force: bool,
@@ -2208,16 +2211,30 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
             recording,
             output,
             webm,
+            concise,
             force,
         } => {
             let r = c.recording(&recording)?;
-            let what = if webm { "export.webm" } else { "frames" };
+            let what = if webm || concise {
+                if concise {
+                    "export.webm?mode=concise"
+                } else {
+                    "export.webm"
+                }
+            } else {
+                "frames"
+            };
             let path = c.api(
                 &r.node_name,
                 &format!("/recordings/{}/{what}", r.recording.id),
             );
-            let ext = if webm { "webm" } else { "jsonl" };
-            let file = output.unwrap_or_else(|| PathBuf::from(format!("{}.{ext}", r.recording.id)));
+            let ext = if webm || concise { "webm" } else { "jsonl" };
+            let default_name = if (webm || concise) && concise {
+                format!("{}-concise.webm", r.recording.id)
+            } else {
+                format!("{}.{ext}", r.recording.id)
+            };
+            let file = output.unwrap_or_else(|| PathBuf::from(default_name));
             export_to(&c, &path, &file, force).await?;
         }
         RecordingCmd::Vacuum { node } => {

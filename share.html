@@ -59,10 +59,23 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .big-play[hidden] { display: none; }
 .controls { padding: 6px 12px 10px; background: #111217; color: #fff; }
 .controls[hidden] { display: none; }
-.timeline { position: relative; height: 22px; }
-.buffered { position: absolute; left: 9px; right: 9px; top: 10px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .1); overflow: hidden; pointer-events: none; }
-.buffered > span { display: block; height: 100%; width: 0; background: rgba(255, 255, 255, .35); }
-.scrub { position: relative; width: 100%; height: 22px; margin: 0; accent-color: var(--accent); background: transparent; cursor: pointer; }
+.timeline { position: relative; height: 26px; }
+.stillness-bar { position: absolute; left: 0; right: 0; top: 2px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .08); pointer-events: none; overflow: hidden; transition: height .15s ease; }
+#staticSpans { position: absolute; inset: 0; pointer-events: none; }
+.static-span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 1px; background: rgba(255, 255, 255, .45); }
+.track { position: absolute; left: 0; right: 0; top: 11px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .22); overflow: hidden; pointer-events: none; transition: height .15s ease, top .15s ease; }
+.buffered { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; overflow: hidden; pointer-events: none; }
+.buffered > span { display: block; height: 100%; width: 0; background: rgba(255, 255, 255, .15); }
+.track-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--accent); border-radius: 3px; }
+.scrub { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 26px; margin: 0; accent-color: var(--accent); background: transparent; cursor: pointer; z-index: 2; -webkit-appearance: none; appearance: none; }
+.scrub::-webkit-slider-runnable-track { background: transparent; height: 100%; border: none; }
+.scrub::-moz-range-track { background: transparent; height: 100%; border: none; }
+.scrub::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .6); cursor: pointer; margin-top: 6px; transition: transform .12s ease; }
+.scrub:hover::-webkit-slider-thumb, .scrub:active::-webkit-slider-thumb { transform: scale(1.2); }
+.scrub::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .6); cursor: pointer; transition: transform .12s ease; }
+.scrub:hover::-moz-range-thumb, .scrub:active::-moz-range-thumb { transform: scale(1.2); }
+.timeline:hover .track { height: 7px; top: 10px; }
+.timeline:hover .stillness-bar { height: 4px; }
 .row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .row .grow { flex: 1; }
 .btn { height: 34px; min-width: 34px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: 700 12.5px var(--sans); cursor: pointer; }
@@ -126,7 +139,11 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
   </form>
   <div class="controls" id="controls" hidden>
     <div class="timeline">
-      <div class="buffered"><span id="buffered"></span></div>
+      <div class="stillness-bar" id="stillnessBar" title="Still periods (no movement)"><div id="staticSpans"></div></div>
+      <div class="track">
+        <div class="buffered"><span id="buffered"></span></div>
+        <div class="track-fill" id="trackFill"></div>
+      </div>
       <input class="scrub" id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Position">
     </div>
     <div class="row">
@@ -250,9 +267,61 @@ async function recording(info) {
       setTimeout(() => { $('timeLinkBtn').textContent = 'Copy time link'; }, 1800);
     } catch { window.prompt('Copy link at current time', url.toString()); }
   };
-  // Source time stays stable while loading, even when Concise skips pauses.
-  const viewTime = (t) => t;
-  const sourceTime = (t) => t;
+  let conciseTimeline = null;
+  function getConciseTimeline() {
+    if (!frames || !frames.length) return null;
+    const durMs = total || (frames[frames.length - 1]?.t || 0);
+    if (conciseTimeline && conciseTimeline.len === frames.length && conciseTimeline.durMs === durMs) {
+      return conciseTimeline;
+    }
+    const len = frames.length;
+    const starts = new Array(len);
+    const durs = new Array(len);
+    let sum = 0;
+    for (let i = 0; i < len; i++) {
+      starts[i] = sum;
+      let dur;
+      if (i + 1 < len) {
+        dur = Math.min(5000, Math.max(1, frames[i + 1].t - frames[i].t));
+      } else {
+        const lastT = frames[i].t;
+        const rawTail = durMs > lastT ? durMs - lastT : 0;
+        dur = Math.min(5000, Math.max(500, rawTail));
+      }
+      durs[i] = dur;
+      sum += dur;
+    }
+    conciseTimeline = { len, durMs, starts, durs, totalDuration: sum };
+    return conciseTimeline;
+  }
+
+  function viewTime(t) {
+    if (raw) return t;
+    const ct = getConciseTimeline();
+    if (!ct || !frames.length) return t;
+    if (t <= 0) return 0;
+    if (total && t >= total) return ct.totalDuration;
+    const i = frameAt(t);
+    const start = frames[i]?.t || 0;
+    const offset = Math.min(ct.durs[i] || 5000, Math.max(0, t - start));
+    return (ct.starts[i] || 0) + offset;
+  }
+
+  function sourceTime(vt) {
+    if (raw) return vt;
+    const ct = getConciseTimeline();
+    if (!ct || !frames.length) return vt;
+    if (vt <= 0) return 0;
+    if (vt >= ct.totalDuration) return total || frames[frames.length - 1]?.t || 0;
+    const { starts, durs } = ct;
+    let lo = 0, hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= vt) lo = mid; else hi = mid - 1;
+    }
+    const offset = Math.min(durs[lo], Math.max(0, vt - starts[lo]));
+    return (frames[lo]?.t || 0) + offset;
+  }
   $('modeBtn').onclick = () => {
     raw = !raw;
     $('modeBtn').textContent = raw ? 'Raw' : 'Concise';
@@ -296,13 +365,58 @@ async function recording(info) {
     drawn = i;
     if (i + 1 < frames.length) image(i + 1);
   }
+  function renderStaticSpans() {
+    const host = $("staticSpans");
+    if (!host || !frames || frames.length < 2) { if (host) host.replaceChildren(); return; }
+    const vTotal = Math.max(1, viewTime(total));
+    const spans = [];
+    const add = (start, length, originalDuration) => {
+      if (length < 1500) return;
+      const el = document.createElement("span");
+      el.className = "static-span";
+      el.style.left = `${Math.max(0, (start / vTotal) * 100)}%`;
+      el.style.width = `${Math.max(0.5, (length / vTotal) * 100)}%`;
+      el.title = originalDuration && originalDuration !== length
+        ? `No visible change for ${fmtTime(originalDuration)} (concise: ${fmtTime(length)})`
+        : `No visible change for ${fmtTime(length)}`;
+      spans.push(el);
+    };
+
+    if (raw) {
+      for (let i = 1; i < frames.length; i++) {
+        const gap = frames[i].t - frames[i - 1].t;
+        if (gap >= 2000) add(frames[i - 1].t, gap, gap);
+      }
+      if (loaded && total - frames[frames.length - 1].t >= 2000) {
+        add(frames[frames.length - 1].t, total - frames[frames.length - 1].t, total - frames[frames.length - 1].t);
+      }
+    } else {
+      const ct = getConciseTimeline();
+      if (ct) {
+        for (let i = 0; i < frames.length; i++) {
+          const conciseDur = ct.durs[i] || 0;
+          let rawDur;
+          if (i + 1 < frames.length) rawDur = frames[i + 1].t - frames[i].t;
+          else rawDur = Math.max(0, total - frames[i].t);
+          if (rawDur >= 2000) add(ct.starts[i], conciseDur, rawDur);
+        }
+      }
+    }
+    host.replaceChildren(...spans);
+  }
+
   function updateUi() {
-    $("time").textContent = `${fmtTime(viewTime(clock))} / ${total ? fmtTime(total) : loaded ? fmtTime(0) : '–:–'}`;
-    if (!scrubbing) $("scrub").value = total ? Math.round((viewTime(clock) / Math.max(1, viewTime(total))) * 1000) : 0;
-    $("buffered").style.width = `${total ? Math.min(100, (viewTime(lastLoadedT()) / Math.max(1, viewTime(total))) * 100) : 0}%`;
+    $("time").textContent = `${fmtTime(viewTime(clock))} / ${total ? fmtTime(viewTime(total)) : loaded ? fmtTime(0) : '–:–'}`;
+    const vClock = viewTime(clock);
+    const vTotal = Math.max(1, viewTime(total));
+    const pct = total ? (vClock / vTotal) * 100 : 0;
+    if (!scrubbing) $("scrub").value = total ? Math.round((vClock / vTotal) * 1000) : 0;
+    const fill = $("trackFill"); if (fill) fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+    $("buffered").style.width = `${total ? Math.min(100, (viewTime(lastLoadedT()) / vTotal) * 100) : 0}%`;
     $("playBtn").innerHTML = playing ? ICONS.pause : ICONS.play;
     $("playBtn").setAttribute("aria-label", playing ? "Pause" : "Play");
     $("bigPlay").hidden = playing || !frames.length;
+    renderStaticSpans();
   }
   async function prioritizeTime(t) {
     seekRequest?.abort();

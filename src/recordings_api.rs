@@ -223,20 +223,31 @@ pub(crate) async fn api_get_recording_audio(
     }
 }
 
+#[derive(Deserialize, Default)]
+pub(crate) struct ExportQuery {
+    #[serde(default)]
+    pub(crate) mode: Option<String>,
+    #[serde(default)]
+    pub(crate) concise: Option<bool>,
+}
+
 /// The recording as a WebM video with its sound, encoded on request (see
 /// rec_export.rs); this takes a while for a long one.
 pub(crate) async fn api_export_recording(
     AxumPath(id): AxumPath<Uuid>,
+    Query(query): Query<ExportQuery>,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
     if let Err(e) = state.check_auth(&headers) {
         return e.into_response();
     }
-    let (file, size, name) = match rec_export::export_webm(&state.recorder_config, id).await {
-        Ok(x) => x,
-        Err(e) => return api_error(StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
-    };
+    let concise = query.mode.as_deref() == Some("concise") || query.concise.unwrap_or(false);
+    let (file, size, name) =
+        match rec_export::export_webm(&state.recorder_config, id, concise).await {
+            Ok(x) => x,
+            Err(e) => return api_error(StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
+        };
     let chunks = futures_util::stream::unfold(file, |mut f| async move {
         use tokio::io::AsyncReadExt;
         let mut buf = vec![0u8; 256 * 1024];
@@ -258,6 +269,23 @@ pub(crate) async fn api_export_recording(
         )
         .body(axum::body::Body::from_stream(chunks))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+pub(crate) async fn api_export_recording_concise(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    api_export_recording(
+        AxumPath(id),
+        Query(ExportQuery {
+            mode: Some("concise".into()),
+            concise: Some(true),
+        }),
+        State(state),
+        headers,
+    )
+    .await
 }
 
 #[derive(Deserialize, Serialize)]

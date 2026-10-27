@@ -1045,6 +1045,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/recordings/{id}/export.webm",
             get(api_export_recording),
         )
+        .route(
+            "/api/recordings/{id}/export-concise.webm",
+            get(api_export_recording_concise),
+        )
         .route("/api/recordings/merge", post(api_merge_recordings))
         .route("/api/recordings/{id}/keep", post(api_set_recording_keep))
         .route("/api/favicon", get(api_site_favicon))

@@ -4,7 +4,7 @@ Built-in lightweight screencast recorder capturing JPEG frames and metadata, wit
 
 ## Sound
 
-with session audio (`services.browser-daemon.audio.enable`), a recording takes the session's sound too (`recordAudio`, `--record-audio`, on by default), paused and resumed with it; a recording that stayed silent keeps none. Start one without from the dashboard's recording dialog, the handoff's **Sound** toggle or `POST /api/sessions/<id>/record?audio=false`; while it runs, the sound switches on and off at once (the dashboard's REC badge or recording dialog, the handoff's **Sound** button, `POST /api/sessions/<id>/record-audio {"audio": false}`), and what was recorded silent plays back silent. A profile can say for itself whether its sessions are recorded and whether with sound (dashboard: profile menu → **Recording**; `browser-daemon profile set NAME --record on --record-audio off`; `PATCH /api/profiles/<name> {"record": true, "record_audio": false}`, `null` for the node's default). The player plays it in step with the frames (`m` mutes, ↑/↓ volume), and `GET /api/recordings/<id>/audio` serves it (Opus in WebM). **Save as WebM** encodes the recording on its node with ffmpeg, frames at their own times (VP9) and its sound: `GET /api/recordings/<id>/export.webm`, `browser-daemon recording export ID --webm`.
+with session audio (`services.browser-daemon.audio.enable`), a recording takes the session's sound too (`recordAudio`, `--record-audio`, on by default), paused and resumed with it; a recording that stayed silent keeps none. Start one without from the dashboard's recording dialog, the handoff's **Sound** toggle or `POST /api/sessions/<id>/record?audio=false`; while it runs, the sound switches on and off at once (the dashboard's REC badge or recording dialog, the handoff's **Sound** button, `POST /api/sessions/<id>/record-audio {"audio": false}`), and what was recorded silent plays back silent. A profile can say for itself whether its sessions are recorded and whether with sound (dashboard: profile menu → **Recording**; `browser-daemon profile set NAME --record on --record-audio off`; `PATCH /api/profiles/<name> {"record": true, "record_audio": false}`, `null` for the node's default). The player plays it in step with the frames (`m` mutes, ↑/↓ volume), and `GET /api/recordings/<id>/audio` serves it (Opus in WebM). **Save as WebM** encodes the recording on its node with ffmpeg, frames at their own times (VP9) and its sound: `GET /api/recordings/<id>/export.webm` (optional `?mode=concise` or `export-concise.webm`), `browser-daemon recording export ID --webm [--concise]`.
 
 ## Merging
 
@@ -19,11 +19,11 @@ the cleanup (age, count and storage limits) removes old recordings. Mark one as 
 The dashboard and public recording player default to **Concise**: each gap
 between changed images lasts at most five seconds (at 1× speed). Select **Raw**
 to watch with the original timing. Switching modes keeps the current frame.
-The seek bar, timestamps and total duration always use the original recording
-timeline. Concise skips forward over long pauses without changing the total
-duration as frames load. Sound jumps forward with skipped
+In Concise mode, the seek bar, current timestamp, and total duration reflect
+the concise playback timeline (matching concise exports); in Raw mode, they
+reflect the original recording timeline. Sound jumps forward with skipped
 still periods, so use Raw to hear uninterrupted audio on a static page.
-Stored frames, audio and downloads retain their original timing.
+Stored frames and audio retain their original timing; exports can be downloaded either concise (gaps capped at 5s) or raw.
 
 Use **Copy link at current time** in the dashboard player menu, or
 **Copy time link** in the public player, to link to a moment. Links carry `t`

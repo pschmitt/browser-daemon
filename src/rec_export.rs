@@ -20,6 +20,9 @@ static EXPORTS: LazyLock<tokio::sync::Semaphore> = LazyLock::new(|| tokio::sync:
 /// The last frame stays this long at least (ms).
 const LAST_FRAME_MS: u64 = 500;
 
+/// In concise mode, a still period lasts at most this long (ms).
+pub const CONCISE_CAP_MS: u64 = 5_000;
+
 /// Name prefix of an export's work directory inside the recording's: left behind
 /// by a crash, it is removed at startup (see recorder::mark_orphaned_recordings).
 pub const WORK_PREFIX: &str = ".export-";
@@ -52,18 +55,56 @@ fn jpeg_size(data: &[u8]) -> Option<(u32, u32)> {
 
 /// The concat demuxer's list: each frame for as long as it was shown, the first
 /// one from the start (the sound starts there too), the last one until the
-/// recording ended.
-fn concat_list(frames: &[(String, u64)], total_ms: u64) -> String {
+/// recording ended. In concise mode, each gap between frames is capped at 5 seconds.
+/// Returns the concat script and the sum of durations of all frames before the last one.
+fn concat_list(frames: &[(String, u64)], total_ms: u64, concise: bool) -> (String, u64) {
     let mut out = String::from("ffconcat version 1.0\n");
+    let mut sum_durations = 0u64;
     for (i, (file, t)) in frames.iter().enumerate() {
         let from = if i == 0 { 0 } else { *t };
         let until = frames
             .get(i + 1)
             .map_or(total_ms.max(t + LAST_FRAME_MS), |(_, n)| *n);
-        let secs = until.saturating_sub(from).max(1) as f64 / 1000.0;
+        let raw_dur = until.saturating_sub(from).max(1);
+        let dur = if concise {
+            raw_dur.min(CONCISE_CAP_MS)
+        } else {
+            raw_dur
+        };
+        if i + 1 < frames.len() {
+            sum_durations += dur;
+        }
+        let secs = dur as f64 / 1000.0;
         out.push_str(&format!("file '{file}'\nduration {secs:.3}\n"));
     }
-    out
+    (out, sum_durations)
+}
+
+/// The audio slice intervals `(start_ms, end_ms)` to keep for concise mode,
+/// matching the frames shown. Contiguous intervals are merged.
+fn audio_intervals(frames: &[(String, u64)], total_ms: u64, concise: bool) -> Vec<(u64, u64)> {
+    if !concise {
+        return vec![(0, total_ms)];
+    }
+    let mut intervals: Vec<(u64, u64)> = Vec::new();
+    for (i, (_, t)) in frames.iter().enumerate() {
+        let from = if i == 0 { 0 } else { *t };
+        let until = frames
+            .get(i + 1)
+            .map_or(total_ms.max(t + LAST_FRAME_MS), |(_, n)| *n);
+        let raw_dur = until.saturating_sub(from).max(1);
+        let dur = raw_dur.min(CONCISE_CAP_MS);
+        let start = from;
+        let end = from + dur;
+        if let Some(last) = intervals.last_mut() {
+            if last.1 >= start {
+                last.1 = last.1.max(end);
+                continue;
+            }
+        }
+        intervals.push((start, end));
+    }
+    intervals
 }
 
 /// Encodes the recording; the open file of the video, its size and a name for
@@ -71,6 +112,7 @@ fn concat_list(frames: &[(String, u64)], total_ms: u64) -> String {
 pub async fn export_webm(
     config: &RecorderConfig,
     id: Uuid,
+    concise: bool,
 ) -> Result<(tokio::fs::File, u64, String), String> {
     let ffmpeg = config.ffmpeg.clone().ok_or("No ffmpeg on this node")?;
     // Before the wait for a turn: the cleanup must not take the recording meanwhile.
@@ -85,17 +127,18 @@ pub async fn export_webm(
     crate::persist::private_dir(&work)
         .await
         .map_err(|e| format!("No room to work: {e}"))?;
-    let result = encode(&ffmpeg, &meta, id, &rec_dir, &work).await;
+    let result = encode(&ffmpeg, &meta, id, &rec_dir, &work, concise).await;
     // Off the async workers' hands: thousands of frame files.
     let _ = tokio::fs::remove_dir_all(&work).await;
     let (file, size, frames, with_audio) = result?;
-    info!(recording_id = %id, frames, audio = with_audio, size, took_ms = started.elapsed().as_millis() as u64, "Exported recording as WebM");
+    info!(recording_id = %id, frames, concise, audio = with_audio, size, took_ms = started.elapsed().as_millis() as u64, "Exported recording as WebM");
     let date = meta.started_at_secs;
-    Ok((
-        file,
-        size,
-        format!("recording-{}-{date}.webm", &id.to_string()[..8]),
-    ))
+    let name = if concise {
+        format!("recording-{}-{date}-concise.webm", &id.to_string()[..8])
+    } else {
+        format!("recording-{}-{date}.webm", &id.to_string()[..8])
+    };
+    Ok((file, size, name))
 }
 
 /// The encoding itself, in the work directory `dir`: the open video file, its size,
@@ -106,6 +149,7 @@ async fn encode(
     id: Uuid,
     rec_dir: &std::path::Path,
     dir: &std::path::Path,
+    concise: bool,
 ) -> Result<(tokio::fs::File, u64, usize, bool), String> {
     // The frames as files, and the size they all fit in.
     let f = tokio::fs::File::open(rec_dir.join("frames.jsonl"))
@@ -136,8 +180,9 @@ async fn encode(
     let (w, h) = (w.max(2).div_ceil(2) * 2, h.max(2).div_ceil(2) * 2);
     let last_t = frames.last().map_or(0, |(_, t)| *t);
     let total_ms = export_total_ms(meta.length_ms(), last_t);
+    let (concat_content, sum_durations) = concat_list(&frames, total_ms, concise);
     let list = dir.join("frames.ffconcat");
-    tokio::fs::write(&list, concat_list(&frames, total_ms))
+    tokio::fs::write(&list, concat_content)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -149,17 +194,54 @@ async fn encode(
     cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y"])
         .args(["-f", "concat", "-safe", "0", "-i"])
         .arg(&list);
+
+    let mut needs_audio_concat = false;
+    let audio_list = dir.join("audio.ffconcat");
     if with_audio {
-        cmd.arg("-i").arg(&audio);
+        if concise {
+            let intervals = audio_intervals(&frames, total_ms, true);
+            if !(intervals.len() == 1 && intervals[0].0 == 0 && intervals[0].1 >= total_ms) {
+                needs_audio_concat = true;
+                let mut a_out = String::from("ffconcat version 1.0\n");
+                let audio_escaped = audio.to_string_lossy().replace('\'', "'\\''");
+                for (start_ms, end_ms) in intervals {
+                    let in_sec = start_ms as f64 / 1000.0;
+                    let out_sec = end_ms as f64 / 1000.0;
+                    a_out.push_str(&format!(
+                        "file '{audio_escaped}'\ninpoint {in_sec:.3}\noutpoint {out_sec:.3}\n"
+                    ));
+                }
+                tokio::fs::write(&audio_list, a_out)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                cmd.args(["-f", "concat", "-safe", "0", "-i"])
+                    .arg(&audio_list);
+            } else {
+                cmd.arg("-i").arg(&audio);
+            }
+        } else {
+            cmd.arg("-i").arg(&audio);
+        }
     }
+
     // Frames of another size (the window was resized) are fitted in, centred.
     // The concat demuxer drops the last image's duration: the last frame is held
     // with tpad instead, and the video cut to the recording's length.
-    let hold = (total_ms - last_t) as f64 / 1000.0;
+    let hold_ms = if concise {
+        (total_ms.saturating_sub(last_t)).clamp(LAST_FRAME_MS, CONCISE_CAP_MS)
+    } else {
+        total_ms.saturating_sub(last_t)
+    };
+    let hold = hold_ms as f64 / 1000.0;
     let vf = format!(
         "scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=15,tpad=stop_mode=clone:stop_duration={hold:.3},format=yuv420p"
     );
-    let length = format!("{:.3}", total_ms as f64 / 1000.0);
+    let total_video_ms = if concise {
+        sum_durations + hold_ms
+    } else {
+        total_ms
+    };
+    let length = format!("{:.3}", total_video_ms as f64 / 1000.0);
     cmd.args(["-map", "0:v", "-vf", &vf, "-t", &length])
         .args([
             "-c:v",
@@ -171,7 +253,11 @@ async fn encode(
         ])
         .args(["-row-mt", "1", "-crf", "38", "-b:v", "0", "-threads", "4"]);
     if with_audio {
-        cmd.args(["-map", "1:a", "-c:a", "copy"]);
+        if needs_audio_concat {
+            cmd.args(["-map", "1:a", "-c:a", "libopus"]);
+        } else {
+            cmd.args(["-map", "1:a", "-c:a", "copy"]);
+        }
     }
     let res = cmd
         .args(["-f", "webm"])
@@ -213,13 +299,41 @@ mod tests {
             ("b.jpg".to_string(), 1500),
             ("c.jpg".to_string(), 1600),
         ];
-        let list = concat_list(&frames, 4000);
+        let (list, sum) = concat_list(&frames, 4000, false);
         assert_eq!(
             list,
             "ffconcat version 1.0\nfile 'a.jpg'\nduration 1.500\nfile 'b.jpg'\nduration 0.100\nfile 'c.jpg'\nduration 2.400\n"
         );
+        assert_eq!(sum, 1600);
         // A recording whose length is unknown still shows its last frame a moment.
-        assert!(concat_list(&frames[2..], 0).contains("duration 2.100"));
+        let (tail_list, _) = concat_list(&frames[2..], 0, false);
+        assert!(tail_list.contains("duration 2.100"));
+    }
+
+    #[test]
+    fn concise_mode_caps_long_gaps_at_five_seconds() {
+        let frames = vec![
+            ("a.jpg".to_string(), 0),
+            ("b.jpg".to_string(), 20_000),
+            ("c.jpg".to_string(), 21_000),
+        ];
+        let (list, sum) = concat_list(&frames, 100_000, true);
+        assert_eq!(
+            list,
+            "ffconcat version 1.0\nfile 'a.jpg'\nduration 5.000\nfile 'b.jpg'\nduration 1.000\nfile 'c.jpg'\nduration 5.000\n"
+        );
+        assert_eq!(sum, 6_000);
+    }
+
+    #[test]
+    fn concise_audio_intervals_cut_long_gaps() {
+        let frames = vec![
+            ("a.jpg".to_string(), 0),
+            ("b.jpg".to_string(), 20_000),
+            ("c.jpg".to_string(), 21_000),
+        ];
+        let intervals = audio_intervals(&frames, 50_000, true);
+        assert_eq!(intervals, vec![(0, 5_000), (20_000, 26_000)]);
     }
 
     #[test]

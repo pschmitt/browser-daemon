@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+* WebM exports support concise mode (`--concise`, `?mode=concise`, `/export-concise.webm`), capping still periods at 5 seconds and slicing audio to match.
+* The dashboard recording and player menus offer both Concise and Raw WebM downloads.
+
+### Fixed
+
+* Concise recording playback in the dashboard and public share views adjusts total playtime and the progress indicator to reflect concise durations, advancing continuously across capped intervals and reaching the end of the timeline.
+
 ## [0.6.2] - 2026-10-24
 
 ### Changed

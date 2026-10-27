@@ -766,15 +766,121 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 .player-viewport-wrap.buffering::after { content: ""; position: absolute; right: 14px; top: 14px; width: 22px; height: 22px; border-radius: 50%;
   border: 3px solid rgba(255, 255, 255, .25); border-top-color: #fff; animation: spin .8s linear infinite; pointer-events: none; }
 .player-controls-wrap { padding: 4px 12px 10px; background: linear-gradient(to top, rgba(0, 0, 0, .9), rgba(0, 0, 0, .75)); transition: opacity .25s; }
-.player-buffer { height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; margin: 0 2px -2px; }
-.player-buffer.done { visibility: hidden; }
-.player-buffer > span { display: block; height: 100%; width: 0; background: rgba(255,255,255,.45); transition: width .3s; }
-.player-timeline { position: relative; height: 22px; margin: 0 2px; }
-.player-static-spans { position: absolute; inset: 8px 9px; pointer-events: none; }
-.player-static-span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 2px; background: rgba(255,255,255,.3); }
-.player-scrubber { position: relative; z-index: 1; width: 100%; margin: 0; height: 22px; accent-color: var(--accent); cursor: pointer; background: transparent; }
-.player-scrubber::-webkit-slider-runnable-track { background: transparent; }
-.player-scrubber::-moz-range-track { background: transparent; }
+.player-timeline { position: relative; height: 26px; margin: 0 2px; }
+
+/* Tiny bar directly above the progress bar for indicators of non-movement (still periods) */
+.player-stillness-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+  overflow: hidden;
+  transition: height .15s ease;
+}
+.player-static-spans { position: absolute; inset: 0; pointer-events: none; }
+.player-static-span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.45);
+  pointer-events: auto;
+}
+
+/* The actual progress bar track and played fill */
+.player-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 11px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.22);
+  overflow: hidden;
+  pointer-events: none;
+  transition: height .15s ease, top .15s ease;
+}
+.player-track-buffered {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: rgba(255, 255, 255, 0.15);
+  transition: width .2s ease;
+}
+.player-track-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+/* Overlaid draggable scrubber with custom thumb */
+.player-scrubber {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  width: 100%;
+  height: 26px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+  background: transparent;
+  z-index: 2;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.player-scrubber::-webkit-slider-runnable-track { background: transparent; height: 100%; border: none; }
+.player-scrubber::-moz-range-track { background: transparent; height: 100%; border: none; }
+.player-scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+  margin-top: 6px;
+  transition: transform .12s ease;
+}
+.player-scrubber:hover::-webkit-slider-thumb,
+.player-scrubber:active::-webkit-slider-thumb {
+  transform: scale(1.2);
+}
+.player-scrubber::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+  transition: transform .12s ease;
+}
+.player-scrubber:hover::-moz-range-thumb,
+.player-scrubber:active::-moz-range-thumb {
+  transform: scale(1.2);
+}
+
+.player-timeline:hover .player-track {
+  height: 7px;
+  top: 10px;
+}
+.player-timeline:hover .player-stillness-bar {
+  height: 4px;
+}
 .player-preview { position: absolute; z-index: 3; bottom: calc(100% + 7px); left: 0; width: 200px; padding: 5px; border: 1px solid rgba(255,255,255,.22); border-radius: 8px; background: #101116; box-shadow: 0 6px 24px #0009; pointer-events: none; transform: translateX(-50%); }
 .player-preview[hidden] { display: none; }
 .player-preview img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: contain; background: #000; border-radius: 4px; }
@@ -1397,9 +1503,14 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       </div>
     </div>
     <div class="player-controls-wrap">
-      <div class="player-buffer" id="playerBufferWrap"><span id="playerBuffered"></span></div>
       <div class="player-timeline" id="playerTimeline">
-        <div class="player-static-spans" id="playerStaticSpans" aria-hidden="true"></div>
+        <div class="player-stillness-bar" id="playerStillnessBar" title="Still periods (no movement)">
+          <div class="player-static-spans" id="playerStaticSpans" aria-hidden="true"></div>
+        </div>
+        <div class="player-track" id="playerTrack">
+          <div class="player-track-buffered" id="playerBuffered"></div>
+          <div class="player-track-fill" id="playerTrackFill"></div>
+        </div>
         <input type="range" id="playerScrubber" class="player-scrubber" min="0" max="0" value="0" step="1" oninput="onScrubberInput(this.value)" aria-label="Seek" aria-valuetext="00:00 of 00:00">
         <div class="player-preview" id="playerPreview" hidden><img id="playerPreviewImage" alt="Frame preview"><span id="playerPreviewTime"></span></div>
       </div>
@@ -2837,7 +2948,8 @@ const ACT = {
       { icon: 'share', label: r.share ? 'Public link…' : 'Share…', run: () => openShare('recording', r) },
       r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
       { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
-      { icon: 'download', label: r.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(r.id, r.node_name) },
+      { icon: 'download', label: r.audio ? 'Save as WebM (concise, with sound)' : 'Save as WebM (concise)', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: true }) },
+      { icon: 'download', label: r.audio ? 'Save as WebM (raw, with sound)' : 'Save as WebM (raw)', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: false }) },
       r.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
       !Object.keys(authHeaders()).length && { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
       cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
@@ -5188,21 +5300,12 @@ function togglePlayerLoop() {
 
 function jumpSeconds(deltaSec) {
   if (!activePlayer || activePlayer.frames.length <= 1) return;
-  const targetTime = Math.min(playerDuration(activePlayer), Math.max(0, playerSourceNow(activePlayer) + deltaSec * 1000));
-  if (activePlayer.priority || (activePlayer.streaming && targetTime > activePlayer.frames[activePlayer.frames.length - 1].t)) {
-    prioritizePlayerTime(targetTime);
-    return;
-  }
-  let closestIdx = 0;
-  let minDiff = Infinity;
-  for (let i = 0; i < activePlayer.frames.length; i++) {
-    const diff = Math.abs(playerTime(activePlayer, i) - targetTime);
-    if (diff < minDiff) {
-      minDiff = diff;
-      closestIdx = i;
-    }
-  }
-  renderPlayerFrame(closestIdx);
+  const p = activePlayer;
+  const max = playerDisplayDuration(p);
+  const now = playerDisplayNow(p);
+  const targetTime = Math.min(max, Math.max(0, now + deltaSec * 1000));
+  onScrubberInput(targetTime);
+  resetPlayerControlsTimer();
 }
 
 // Playback starts as soon as the first frames arrive; the rest keep
@@ -5225,18 +5328,94 @@ const recordingDurationMs = (id, node) => {
   const r = (currentOverview?.recordings || []).find((x) => x.id === id && (!node || x.node_name === node));
   return r?.duration_ms || (r?.duration_seconds || 0) * 1000;
 };
-// Keep the original timeline in both modes: loading more frames must not
-// change the duration or move the seek bar underneath the viewer.
+// Concise mode caps still periods at 5 seconds (matching rec_export.rs).
+function ensureConciseTimeline(p) {
+  if (!p || !p.frames) return null;
+  const len = p.frames.length;
+  if (!len) return { starts: [0], durs: [0], totalDuration: 0 };
+  const durMs = p.durationMs != null ? p.durationMs : (p.expectedMs || 0);
+  if (p._conciseTimeline && p._conciseTimeline.len === len && p._conciseTimeline.durMs === durMs) {
+    return p._conciseTimeline;
+  }
+  const starts = new Array(len);
+  const durs = new Array(len);
+  let total = 0;
+  for (let i = 0; i < len; i++) {
+    starts[i] = total;
+    let dur;
+    if (i + 1 < len) {
+      dur = Math.min(5000, Math.max(1, p.frames[i + 1].t - p.frames[i].t));
+    } else {
+      const lastT = p.frames[i].t;
+      const rawTail = durMs > lastT ? durMs - lastT : 0;
+      dur = Math.min(5000, Math.max(500, rawTail));
+    }
+    durs[i] = dur;
+    total += dur;
+  }
+  const ct = { len, durMs, starts, durs, totalDuration: total };
+  p._conciseTimeline = ct;
+  return ct;
+}
+
+function conciseToSource(p, conciseMs) {
+  const ct = ensureConciseTimeline(p);
+  if (!ct || !p.frames.length) return { idx: 0, offset: 0, sourceMs: 0 };
+  const ms = Math.max(0, Math.min(ct.totalDuration, conciseMs));
+  const { starts, durs } = ct;
+  let lo = 0, hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= ms) lo = mid; else hi = mid - 1;
+  }
+  const offset = Math.min(durs[lo], Math.max(0, ms - starts[lo]));
+  const sourceMs = p.frames[lo].t + offset;
+  return { idx: lo, offset, sourceMs };
+}
+
+function sourceToConcise(p, sourceMs) {
+  const ct = ensureConciseTimeline(p);
+  if (!ct || !p.frames.length) return 0;
+  const { starts, durs } = ct;
+  let lo = 0, hi = p.frames.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (p.frames[mid].t <= sourceMs) lo = mid; else hi = mid - 1;
+  }
+  const offset = Math.min(durs[lo], Math.max(0, sourceMs - p.frames[lo].t));
+  return Math.min(ct.totalDuration, starts[lo] + offset);
+}
+
 const playerTime = (p, i) => p.frames[i]?.t || 0;
 const playerDuration = (p) => {
   if (p.durationMs == null && !p.streaming) p.durationMs = Math.max(p.expectedMs || 0, p.frames[p.frames.length - 1]?.t || 0);
   return p.durationMs || 0;
 };
+function playerDisplayDuration(p) {
+  if (!p) return 0;
+  if (p.raw) return playerDuration(p);
+  const ct = ensureConciseTimeline(p);
+  return ct ? ct.totalDuration : playerDuration(p);
+}
 // URLs use source seconds so links survive changes to the concise timeline.
 function playerSourceNow(p) {
   const base = p.frames[p.currentIndex]?.t || 0;
   if (p.isPlaying && p.waitSince != null) return p.waitSource + Math.min(p.waitLength, (performance.now() - p.waitSince) * p.speed);
   return base + (p.sourceOffset || 0);
+}
+function playerDisplayNow(p) {
+  if (!p) return 0;
+  if (p.raw) return playerSourceNow(p);
+  const ct = ensureConciseTimeline(p);
+  if (!ct || !p.frames.length) return 0;
+  const idx = Math.min(p.currentIndex, p.frames.length - 1);
+  const start = ct.starts[idx] || 0;
+  const dur = ct.durs[idx] || 0;
+  let offset = p.sourceOffset || 0;
+  if (p.isPlaying && p.waitSince != null) {
+    offset = (p.waitOffset || 0) + Math.min(p.waitLength || dur, (performance.now() - p.waitSince) * p.speed);
+  }
+  return Math.min(ct.totalDuration, start + Math.min(dur, Math.max(0, offset)));
 }
 function copyPlayerTimeLink() {
   const p = activePlayer;
@@ -5305,21 +5484,39 @@ function seekPlayerSource(ms) {
   p.waitSince = null;
   p.waiting = false;
   p.tailDone = false;
-  renderPlayerFrame(lo);
-  p.sourceOffset = Math.max(0, ms - p.frames[lo].t);
+  const rawOffset = Math.max(0, ms - p.frames[lo].t);
+  if (p.raw) {
+    p.sourceOffset = rawOffset;
+  } else {
+    const ct = ensureConciseTimeline(p);
+    const dur = ct?.durs[lo] || 5000;
+    p.sourceOffset = Math.min(dur, rawOffset);
+  }
+  renderPlayerFrame(lo, { preservePosition: true });
   p.audioSeek = ms / 1000;
   syncPlayerAudio();
+  updatePlayerClock(p);
   if (p.isPlaying) playNextFrame();
 }
 function togglePlayerMode() {
   const p = activePlayer;
   if (!p) return;
+  const wasPlaying = p.isPlaying;
+  const currentSource = playerSourceNow(p);
   p.raw = !p.raw;
   p.tailDone = false;
   clearTimeout(p.timer);
   $('playerModeBtn').textContent = p.raw ? 'Raw' : 'Concise';
+  if (p.raw) {
+    p.sourceOffset = Math.max(0, currentSource - (p.frames[p.currentIndex]?.t || 0));
+  } else {
+    const ct = ensureConciseTimeline(p);
+    const dur = ct?.durs[p.currentIndex] || 5000;
+    p.sourceOffset = Math.min(dur, Math.max(0, currentSource - (p.frames[p.currentIndex]?.t || 0)));
+  }
+  p.waitSince = null;
   streamProgress();
-  if (p.isPlaying && !p.waiting) playNextFrame();
+  if (wasPlaying && !p.waiting) playNextFrame();
 }
 // The last frame shown at or before this time.
 function frameIndexAt(p, ms) {
@@ -5331,30 +5528,84 @@ function frameIndexAt(p, ms) {
   return lo;
 }
 function updateScrubber(p, { moveThumb = true } = {}) {
-  const s = $('playerScrubber'), max = playerDuration(p), t = playerTime(p, p.currentIndex);
+  const s = $('playerScrubber'), max = playerDisplayDuration(p), t = Math.min(max, Math.max(0, playerDisplayNow(p)));
   s.max = max;
   if (moveThumb && !p.seeking) s.value = t;
   s.setAttribute('aria-valuetext', `${clock(+s.value)} of ${clock(max)}`);
+  const fill = $('playerTrackFill');
+  if (fill) fill.style.width = max > 0 ? `${Math.min(100, Math.max(0, (+s.value / max) * 100))}%` : '0%';
+}
+function updatePlayerClock(p) {
+  if (!p || p.seeking) return;
+  const max = playerDisplayDuration(p);
+  const now = Math.min(max, Math.max(0, playerDisplayNow(p)));
+  updateScrubber(p);
+  const el = document.getElementById('playerTimeDisplay');
+  if (el) el.textContent = `${clock(now)} / ${p.durationMs == null && p.raw ? '–:–' : clock(max)}`;
+}
+let playerRaf = null;
+function playerLoop() {
+  if (activePlayer?.isPlaying) {
+    updatePlayerClock(activePlayer);
+    playerRaf = requestAnimationFrame(playerLoop);
+  } else {
+    playerRaf = null;
+  }
+}
+function startPlayerLoop() {
+  if (!playerRaf && activePlayer?.isPlaying) {
+    playerRaf = requestAnimationFrame(playerLoop);
+  }
 }
 // A long gap between stored frames means the recorder saw the same image in
 // between; mark it so those quiet stretches are easy to find while scrubbing.
 function renderStaticSpans(p) {
   const host = $('playerStaticSpans');
-  const duration = playerDuration(p);
-  const frames = p.frames;
-  if (!host || !duration || frames.length < 2) { if (host) host.replaceChildren(); return; }
+  if (!host) return;
+  if (!p || !p.frames || p.frames.length < 1) { host.replaceChildren(); return; }
+  const duration = playerDisplayDuration(p);
+  if (!duration) { host.replaceChildren(); return; }
   const spans = [];
-  const add = (start, end) => {
-    if (end - start < 2000) return;
+  const add = (start, length, originalDuration) => {
+    if (length < 1500) return;
     const el = document.createElement('span');
     el.className = 'player-static-span';
-    el.style.left = `${Math.max(0, start / duration * 100)}%`;
-    el.style.width = `${Math.max(0, (end - start) / duration * 100)}%`;
-    el.title = `No visible change for ${clock(end - start)}`;
+    el.style.left = `${Math.max(0, (start / duration) * 100)}%`;
+    el.style.width = `${Math.max(0.5, (length / duration) * 100)}%`;
+    el.title = originalDuration && originalDuration !== length
+      ? `No visible change for ${clock(originalDuration)} (concise: ${clock(length)})`
+      : `No visible change for ${clock(length)}`;
     spans.push(el);
   };
-  for (let i = 1; i < frames.length; i++) add(playerTime(p, i - 1), playerTime(p, i));
-  if (!p.streaming) add(playerTime(p, frames.length - 1), duration);
+
+  if (p.raw) {
+    const frames = p.frames;
+    for (let i = 1; i < frames.length; i++) {
+      const start = playerTime(p, i - 1);
+      const end = playerTime(p, i);
+      if (end - start >= 2000) add(start, end - start, end - start);
+    }
+    if (!p.streaming) {
+      const lastT = playerTime(p, frames.length - 1);
+      if (duration - lastT >= 2000) add(lastT, duration - lastT, duration - lastT);
+    }
+  } else {
+    const ct = ensureConciseTimeline(p);
+    if (ct) {
+      for (let i = 0; i < p.frames.length; i++) {
+        const conciseDur = ct.durs[i] || 0;
+        let rawDur;
+        if (i + 1 < p.frames.length) {
+          rawDur = p.frames[i + 1].t - p.frames[i].t;
+        } else {
+          rawDur = Math.max(0, playerDuration(p) - p.frames[i].t);
+        }
+        if (rawDur >= 2000) {
+          add(ct.starts[i], conciseDur, rawDur);
+        }
+      }
+    }
+  }
   host.replaceChildren(...spans);
 }
 function streamProgress() {
@@ -5381,8 +5632,9 @@ function streamProgress() {
   const total = p.streaming ? Math.max(have, p.expectedFrames || 0) : have;
   updateScrubber(p);
   renderStaticSpans(p);
-  $('playerBuffered').style.width = (p.streaming && total ? Math.min(100, (have / total) * 100) : 100) + '%';
-  $('playerBufferWrap').classList.toggle('done', !p.streaming);
+  const buf = $('playerBuffered');
+  if (buf) buf.style.width = (p.streaming && total ? Math.min(100, (have / total) * 100) : 100) + '%';
+  $('playerBufferWrap')?.classList.toggle('done', !p.streaming);
   if (p.waiting && (have > p.currentIndex + 1 || !p.streaming)) {
     p.waiting = false;
     playNextFrame();
@@ -5419,6 +5671,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
     tailDone: false,
     timer: null,
     cachedImages: new Map(),
+    _conciseTimeline: null,
   };
 
   playerStartPosition = null;
@@ -5426,6 +5679,7 @@ function initPlayerWithFrames(id, node, frames, isCached, { streaming = false, e
   const centerPlayBtn = document.getElementById('playerCenterPlayBtn');
   if (frames.length <= 1 && !streaming) {
     document.getElementById('playerScrubber').max = 0;
+    const fill = $('playerTrackFill'); if (fill) fill.style.width = '0%';
     document.getElementById('playerFrameDisplay').textContent = `(Snapshot: 1 frame)`;
     updatePlayPauseButton();
     if (centerPlayBtn) centerPlayBtn.style.display = 'none';
@@ -5573,6 +5827,7 @@ async function openPlayerModal(id, node, position = requestedPlayback) {
   document.getElementById('playerFrameOffset').textContent = 'frame at 0.0s';
   document.getElementById('playerScrubber').value = 0;
   document.getElementById('playerScrubber').max = 0;
+  const initFill = $('playerTrackFill'); if (initFill) initFill.style.width = '0%';
   $('playerStaticSpans').replaceChildren();
   hidePlayerPreview();
   $('playerViewportContainer').classList.add('loading');
@@ -5765,7 +6020,9 @@ function renderPlayerFrame(idx, { quiet = false, scrub = false, preservePosition
   document.getElementById('playerFrameDisplay').textContent = p.waiting ? '(buffering…)'
     : `(${idx + 1} / ${shownTotal} frames${p.streaming ? ` · ${Math.round((totalFrames / Math.max(1, shownTotal)) * 100)}% loaded` : ''})`;
 
-  document.getElementById('playerTimeDisplay').textContent = `${clock(playerTime(p, idx))} / ${p.durationMs == null ? '–:–' : clock(playerDuration(p))}`;
+  const curDisp = Math.min(playerDisplayDuration(p), Math.max(0, playerDisplayNow(p)));
+  const maxDisp = playerDisplayDuration(p);
+  document.getElementById('playerTimeDisplay').textContent = `${clock(curDisp)} / ${p.durationMs == null && p.raw ? '–:–' : clock(maxDisp)}`;
   document.getElementById('playerFrameOffset').textContent = `frame at ${(frame.t / 1000).toFixed(1)}s`;
   syncPlayerAudio();
 
@@ -5891,7 +6148,14 @@ function togglePlayPause() {
   if (!activePlayer || activePlayer.frames.length <= 1) return;
   if (activePlayer.seeking) { activePlayer.seekWantPlay = !activePlayer.seekWantPlay; return; }
   if (activePlayer.isPlaying) {
-    activePlayer.sourceOffset = Math.max(0, playerSourceNow(activePlayer) - activePlayer.frames[activePlayer.currentIndex].t);
+    if (activePlayer.raw) {
+      activePlayer.sourceOffset = Math.max(0, playerSourceNow(activePlayer) - activePlayer.frames[activePlayer.currentIndex].t);
+    } else {
+      const ct = ensureConciseTimeline(activePlayer);
+      const start = ct?.starts[activePlayer.currentIndex] || 0;
+      const dur = ct?.durs[activePlayer.currentIndex] || 5000;
+      activePlayer.sourceOffset = Math.min(dur, Math.max(0, playerDisplayNow(activePlayer) - start));
+    }
     activePlayer.waitSince = null;
   }
   activePlayer.isPlaying = !activePlayer.isPlaying;
@@ -5899,9 +6163,11 @@ function togglePlayPause() {
   updateCenterPlayButtonState();
 
   if (activePlayer.isPlaying) {
-    if (!activePlayer.streaming && activePlayer.currentIndex >= activePlayer.frames.length - 1) {
+    if (!activePlayer.streaming && activePlayer.currentIndex >= activePlayer.frames.length - 1 && activePlayer.tailDone) {
       activePlayer.tailDone = false;
       activePlayer.currentIndex = 0;
+      activePlayer.sourceOffset = 0;
+      activePlayer.waitSince = null;
       renderPlayerFrame(0);
     }
     playNextFrame();
@@ -5915,6 +6181,7 @@ function togglePlayPause() {
 
 function playNextFrame() {
   if (!activePlayer || !activePlayer.isPlaying) return;
+  startPlayerLoop();
   if (activePlayer.priority && !activePlayer.windowEof && activePlayer.currentIndex >= activePlayer.frames.length - 1) {
     prioritizePlayerTime(activePlayer.frames[activePlayer.currentIndex].t + 1, { play: true });
     return;
@@ -5934,17 +6201,40 @@ function playNextFrame() {
     }
     if (!activePlayer.tailDone && !(activePlayer.raw && playerHasSound())) {
       activePlayer.tailDone = true;
-      const tail = Math.max(0, Math.min(activePlayer.raw ? Infinity : 5000, (activePlayer.expectedMs || 0) - playerSourceNow(activePlayer)));
-      if (tail > 0) { activePlayer.timer = setTimeout(playNextFrame, tail / activePlayer.speed); return; }
+      const ct = ensureConciseTimeline(activePlayer);
+      const lastT = activePlayer.frames[activePlayer.currentIndex]?.t || 0;
+      const rawTail = Math.max(0, (activePlayer.expectedMs || activePlayer.durationMs || 0) - lastT);
+      const tail = activePlayer.raw ? rawTail : (ct ? ct.durs[activePlayer.currentIndex] : Math.min(5000, Math.max(500, rawTail)));
+      const offset = activePlayer.sourceOffset || 0;
+      const remaining = Math.max(0, tail - offset);
+      if (remaining > 0) {
+        activePlayer.waitSince = performance.now();
+        activePlayer.waitSource = playerSourceNow(activePlayer);
+        activePlayer.waitOffset = offset;
+        activePlayer.waitLength = remaining;
+        activePlayer.timer = setTimeout(playNextFrame, remaining / activePlayer.speed);
+        return;
+      }
     }
     if (activePlayer.isLooping) {
       activePlayer.tailDone = false;
       activePlayer.currentIndex = 0;
+      activePlayer.sourceOffset = 0;
+      activePlayer.waitSince = null;
       renderPlayerFrame(0);
       activePlayer.timer = setTimeout(playNextFrame, 150);
       return;
     }
     activePlayer.isPlaying = false;
+    const ct = ensureConciseTimeline(activePlayer);
+    if (activePlayer.raw) {
+      const dur = playerDuration(activePlayer);
+      activePlayer.sourceOffset = Math.max(0, dur - (activePlayer.frames[activePlayer.currentIndex]?.t || 0));
+    } else {
+      activePlayer.sourceOffset = ct ? ct.durs[activePlayer.currentIndex] || 0 : 0;
+    }
+    activePlayer.waitSince = null;
+    updatePlayerClock(activePlayer);
     updatePlayPauseButton();
     updateCenterPlayButtonState();
     resetPlayerControlsTimer();
@@ -5961,6 +6251,7 @@ function playNextFrame() {
   const delay = Math.max(0, remaining / activePlayer.speed);
   activePlayer.waitSince = performance.now();
   activePlayer.waitSource = curr.t + offset;
+  activePlayer.waitOffset = offset;
   activePlayer.waitLength = remaining;
 
   activePlayer.timer = setTimeout(() => {
@@ -5975,19 +6266,48 @@ function stepFrame(delta) {
   if (!activePlayer) return;
   if (activePlayer.isPlaying) togglePlayPause();
   const next = Math.max(0, Math.min(activePlayer.frames.length - 1, activePlayer.currentIndex + delta));
+  activePlayer.sourceOffset = 0;
+  activePlayer.waitSince = null;
+  activePlayer.tailDone = false;
   renderPlayerFrame(next);
   resetPlayerControlsTimer();
 }
 
 function onScrubberInput(val) {
   if (!activePlayer) return;
+  const p = activePlayer;
   const ms = +val;
-  if (activePlayer.priority || (activePlayer.streaming && ms > (activePlayer.frames[activePlayer.frames.length - 1]?.t || 0))) {
-    prioritizePlayerTime(ms);
-    return;
+  if (p.raw) {
+    if (p.priority || (p.streaming && ms > (p.frames[p.frames.length - 1]?.t || 0))) {
+      prioritizePlayerTime(ms);
+      return;
+    }
+    clearTimeout(p.timer);
+    const idx = frameIndexAt(p, ms);
+    p.sourceOffset = Math.max(0, ms - (p.frames[idx]?.t || 0));
+    p.waitSince = null;
+    p.tailDone = false;
+    renderPlayerFrame(idx, { scrub: true, preservePosition: true });
+    p.audioSeek = ms / 1000;
+    syncPlayerAudio();
+    updatePlayerClock(p);
+    if (p.isPlaying) playNextFrame();
+  } else {
+    const { idx, offset, sourceMs } = conciseToSource(p, ms);
+    if (p.priority || (p.streaming && sourceMs > (p.frames[p.frames.length - 1]?.t || 0))) {
+      prioritizePlayerTime(sourceMs);
+      return;
+    }
+    clearTimeout(p.timer);
+    p.sourceOffset = offset;
+    p.waitSince = null;
+    p.tailDone = false;
+    renderPlayerFrame(idx, { scrub: true, preservePosition: true });
+    p.audioSeek = sourceMs / 1000;
+    syncPlayerAudio();
+    updatePlayerClock(p);
+    if (p.isPlaying) playNextFrame();
   }
-  const idx = frameIndexAt(activePlayer, +val);
-  renderPlayerFrame(idx, { scrub: true });
 }
 
 let playerPreviewSeq = 0;
@@ -5998,9 +6318,9 @@ async function showPlayerPreview(event) {
   const rect = scrubber.getBoundingClientRect();
   if (!rect.width) return;
   const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-  const duration = playerDuration(p);
+  const duration = playerDisplayDuration(p);
   const time = ratio * duration;
-  const idx = frameIndexAt(p, time);
+  const idx = p.raw ? frameIndexAt(p, time) : conciseToSource(p, time).idx;
   const bubble = $('playerPreview');
   const img = $('playerPreviewImage');
   const seq = ++playerPreviewSeq;
@@ -6055,14 +6375,15 @@ function openPlayerMenu(el) {
     { icon: 'copy', label: 'Copy link at current time', run: copyPlayerTimeLink },
     r && { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
     url && url !== 'about:blank' && { icon: 'copy', label: 'Copy page URL', run: () => copyText(url) },
-    { icon: 'download', label: r?.audio ? 'Save as WebM (with sound)' : 'Save as WebM', run: () => exportWebMFromRecording(id, node) },
+    { icon: 'download', label: r?.audio ? 'Save as WebM (concise, with sound)' : 'Save as WebM (concise)', run: () => exportWebMFromRecording(id, node, { concise: true }) },
+    { icon: 'download', label: r?.audio ? 'Save as WebM (raw, with sound)' : 'Save as WebM (raw)', run: () => exportWebMFromRecording(id, node, { concise: false }) },
     r?.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
     '-',
     { icon: 'trash', label: 'Delete recording', danger: true, run: async () => { if (await deleteRecording(id, node)) closePlayerModal(); } },
   ]);
 }
 
-async function exportRecordingWebM() {
+async function exportRecordingWebM({ concise = false } = {}) {
   const player = activePlayer;
   if (!player || !player.frames || player.frames.length === 0) return;
   if (player.streaming) { showToast('Still downloading', 'info', 4000, null, 'Export works once the whole recording is here.'); return; }
@@ -6084,7 +6405,8 @@ async function exportRecordingWebM() {
         return;
       }
     }
-    expToast = createProgressToast(`export-${player.id}`, 'Exporting WebM video', 'Preparing the canvas stream…');
+    const title = concise ? 'Exporting WebM video (concise)' : 'Exporting WebM video';
+    expToast = createProgressToast(`export-${player.id}`, title, 'Preparing the canvas stream…');
     const chunks = [];
     mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
     const stopped = new Promise((resolve) => { mediaRecorder.onstop = resolve; });
@@ -6110,12 +6432,12 @@ async function exportRecordingWebM() {
     mediaRecorder.stop();
     await stopped;
     const u = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
-    const a = Object.assign(document.createElement('a'), { href: u, download: `session-${player.id}.webm` });
+    const a = Object.assign(document.createElement('a'), { href: u, download: `session-${player.id}${concise ? '-concise' : ''}.webm` });
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(u), 2000);
-    expToast.done('WebM video ready', `Downloaded session-${player.id}.webm`);
+    expToast.done('WebM video ready', `Downloaded session-${player.id}${concise ? '-concise' : ''}.webm`);
     if (activePlayer === player) {
       renderPlayerFrame(originalIndex);
       if (wasPlaying) togglePlayPause();
@@ -6129,15 +6451,17 @@ async function exportRecordingWebM() {
 
 // Saved as a video with its sound, encoded on the node (frames at their own
 // times); where that fails (an older node), rendered here without sound.
-async function exportWebMFromRecording(id, node) {
-  const t = createProgressToast(`webm-${id}`, 'Saving as WebM', `Encoding on ${node}…`);
+async function exportWebMFromRecording(id, node, { concise = false } = {}) {
+  const label = concise ? 'Saving as WebM (concise)' : 'Saving as WebM';
+  const t = createProgressToast(`webm-${id}`, label, `Encoding on ${node}…`);
   t.update(null, `Encoding on ${node}…`, 'Long recordings take a while');
   try {
-    const res = await fetch(api(node, `/recordings/${enc(id)}/export.webm`), { headers: authHeaders() });
+    const q = concise ? '?mode=concise' : '';
+    const res = await fetch(api(node, `/recordings/${enc(id)}/export.webm${q}`), { headers: authHeaders() });
     if (res.status === 404) throw Object.assign(new Error('This node cannot encode recordings'), { fallback: true });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     const total = +res.headers.get('Content-Length') || 0;
-    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || `recording-${id.slice(0, 8)}.webm`;
+    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || `recording-${id.slice(0, 8)}${concise ? '-concise' : ''}.webm`;
     const reader = res.body.getReader(), parts = [];
     for (let got = 0; ;) {
       const { done, value } = await reader.read();
@@ -6159,7 +6483,7 @@ async function exportWebMFromRecording(id, node) {
     if (!err.fallback) { t.error('Could not save as WebM', err.message); return; }
     t.remove();
     await openPlayerModal(id, node);
-    setTimeout(() => exportRecordingWebM(), 300);
+    setTimeout(() => exportRecordingWebM({ concise }), 300);
   }
 }
 
@@ -6192,7 +6516,7 @@ window.addEventListener('keydown', e => {
     e.preventDefault();
     const pct = parseInt(e.key, 10) / 10;
     if (activePlayer && activePlayer.frames.length > 1) {
-      onScrubberInput(playerDuration(activePlayer) * pct);
+      onScrubberInput(playerDisplayDuration(activePlayer) * pct);
       resetPlayerControlsTimer();
     }
   } else if ((e.key === 'm' || e.key === 'M') && playerSound.url) {
