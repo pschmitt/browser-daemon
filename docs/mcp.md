@@ -49,5 +49,6 @@ Some steps need a person: a CAPTCHA or other bot check, an approval on another d
 | `BD_PAGE` | the page's id |
 | `BD_NODE`, `BD_NODE_URL` | the node's name and address |
 | `BD_TITLE` | the title the agent asked for (may be empty) |
+| `BD_AGENT` | the agent's MCP client (`clientInfo.name`, e.g. `claude-code`) |
 
 What the program does with it is up to you (a phone notification, a chat message); its standard output is passed back to the agent, a non-zero exit is an error. It must finish within a minute. The agent is told to leave the page alone until the user is done.

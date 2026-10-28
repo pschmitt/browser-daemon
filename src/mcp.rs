@@ -57,7 +57,7 @@ pub struct McpArgs {
     #[arg(long = "allow-passkey")]
     pub allow_passkeys: Vec<String>,
 
-    /// Program browser_ask_human runs to ask the user for help, called as `PROGRAM MESSAGE` with BD_HANDOFF_URL (the live view of the agent's page), BD_PAGE, BD_NODE, BD_NODE_URL and BD_TITLE in its environment.
+    /// Program browser_ask_human runs to ask the user for help, called as `PROGRAM MESSAGE` with BD_HANDOFF_URL (the live view of the agent's page), BD_PAGE, BD_NODE, BD_NODE_URL, BD_TITLE and BD_AGENT (the MCP client's name) in its environment.
     #[arg(long)]
     pub ask_human_cmd: Option<PathBuf>,
 
@@ -743,6 +743,7 @@ impl State {
         let (child, page_id, _, host) = self.current_page().await?;
         let node_url = child.target.url.trim_end_matches('/');
         let link = format!("{node_url}/handoff/?page={}", url_component(&page_id));
+        let agent = self.client_name.lock().await.clone();
         let run = Command::new(cmd)
             .arg(self.mask(message))
             .env("BD_HANDOFF_URL", &link)
@@ -750,6 +751,7 @@ impl State {
             .env("BD_NODE", &child.target.node)
             .env("BD_NODE_URL", node_url)
             .env("BD_TITLE", self.mask(title))
+            .env("BD_AGENT", agent)
             .stdin(Stdio::null())
             .kill_on_drop(true)
             .output();
