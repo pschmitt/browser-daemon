@@ -59,6 +59,14 @@ fn valid_request(req: &Request) -> Result<(), String> {
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     };
+    // A WebAuthn challenge or credential id (base64url): longer than an id;
+    // Microsoft's challenges exceed 128 characters.
+    let b64url_like = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 1024
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    };
     let host_like = |s: &str| {
         !s.is_empty()
             && s.len() <= 253
@@ -75,14 +83,10 @@ fn valid_request(req: &Request) -> Result<(), String> {
     if req.entry.as_deref().is_some_and(|e| !id_like(e)) {
         return Err("Bad entry id".into());
     }
-    if req
-        .challenge
-        .as_deref()
-        .is_some_and(|c| !id_like(c) || c.len() > 1024)
-    {
+    if req.challenge.as_deref().is_some_and(|c| !b64url_like(c)) {
         return Err("Bad challenge".into());
     }
-    if req.allow.iter().any(|a| !id_like(a)) || req.allow.len() > 64 {
+    if req.allow.iter().any(|a| !b64url_like(a)) || req.allow.len() > 64 {
         return Err("Bad credential id".into());
     }
     let web = |o: &str| url::Url::parse(o).is_ok_and(|u| matches!(u.scheme(), "http" | "https"));
@@ -329,19 +333,17 @@ async fn assert(
     ensure_unlocked(node, secret, req, client, args).await?;
     let mut cmd = Command::new(&args.rbw);
     cmd.args([
-        "passkey",
-        "assert",
-        "--rp-id",
-        &req.rp_id,
-        "--origin",
-        origin,
-        "--challenge",
-        challenge,
+        "passkey", "assert", "--rp-id", &req.rp_id, "--origin", origin,
     ]);
+    // `=` form: a base64url value may start with a dash, which must not read
+    // as an option.
+    cmd.arg(format!("--challenge={challenge}"));
     for id in &req.allow {
-        cmd.args(["--allow", id]);
+        cmd.arg(format!("--allow={id}"));
     }
-    cmd.args(req.entry.as_deref());
+    if let Some(entry) = req.entry.as_deref() {
+        cmd.args(["--", entry]);
+    }
     let out = tokio::time::timeout(
         RBW_WAIT,
         cmd.stdin(Stdio::null()).kill_on_drop(true).output(),
@@ -794,6 +796,21 @@ mod tests {
             bad.url = Some(url.into());
             assert!(valid_request(&bad).is_err(), "{url}");
         }
+        // Challenges and credential ids are longer than ids (Microsoft: >128).
+        let mut ok = req();
+        ok.challenge = Some("a".repeat(400));
+        ok.allow = vec!["b".repeat(300)];
+        assert!(valid_request(&ok).is_ok());
+        let mut bad = req();
+        bad.challenge = Some("a".repeat(1025));
+        assert!(valid_request(&bad).is_err());
+        bad.challenge = Some("--rp-id".into());
+        assert!(
+            valid_request(&bad).is_ok(),
+            "base64url may start with a dash"
+        );
+        bad.challenge = Some("a b".into());
+        assert!(valid_request(&bad).is_err());
     }
 
     #[test]

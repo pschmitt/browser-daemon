@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* The secret agent refused passkey challenges and credential ids longer than 128 characters ("Bad challenge"), which Microsoft's sign-in sends; it takes up to 1024 now. Values starting with a dash reach `rbw passkey assert` as `--challenge=…`/`--allow=…`, and the entry after `--`.
+
 ## [0.7.0] - 2026-10-29
 
 ### Added
