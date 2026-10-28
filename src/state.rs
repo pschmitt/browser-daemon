@@ -231,6 +231,8 @@ pub struct AppState {
     pub viewers: Arc<viewers::Viewers>,
     /// Passkeys approved in live views, on their way to the secret agent.
     pub passkeys: Arc<passkeys::Broker>,
+    /// Sessions an AI agent armed for passkey sign-ins (agent_passkeys.rs).
+    pub agent_passkeys: Arc<agent_passkeys::Watchers>,
     /// This node's settings (Nodes tab of the dashboard).
     pub settings: Arc<settings::Store>,
     /// Pages visited per profile and session, for the live view's address bar.

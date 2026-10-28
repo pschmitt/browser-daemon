@@ -4,6 +4,8 @@
 
 ### Added
 
+* `browser-daemon mcp` has `browser_passkey` (with `--allow-passkey`): it arms the agent's Chromium session so the secret agent signs its passkey sign-ins on the allowed sites, also across origins and on page load (`POST /api/sessions/{id}/agent-passkey`).
+* `browser-daemon mcp` has `browser_ask_human` (with `--ask-human-cmd`): it runs a program with a link to the live view of the agent's own page, for CAPTCHAs, approvals and other steps only a person may do.
 * WebM exports support concise mode (`--concise`, `?mode=concise`, `/export-concise.webm`), capping still periods at 5 seconds and slicing audio to match.
 * The dashboard recording and player menus offer both Concise and Raw WebM downloads.
 

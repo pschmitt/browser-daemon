@@ -28,7 +28,7 @@ Requests and what the agent runs for them:
 | `fill` | picking a login | `rbw search --url` (is it saved for the site?), `rbw get --raw <id>`, `rbw code <id>` for the one-time code |
 | `copy` | a login's copy button or menu | `rbw get --raw <id>`, `rbw code <id>` for a one-time code |
 | `find` | the passkey dialog: which entry would sign in | `rbw passkey find --rp-id <site>` (one batched decrypt, no sync: rbw 2.30 and later) |
-| `assert` | approving a passkey (any session or shared browser) | `rbw passkey assert --rp-id <site> --origin <origin> --challenge <challenge>` |
+| `assert` | approving a passkey (any session or shared browser), or an AI agent's passkey sign-in ([`browser_passkey`](mcp.md#passkeys-browser_passkey)) | `rbw passkey assert --rp-id <site> --origin <origin> --challenge <challenge>` |
 | `inject` | (API only; the live view no longer asks for it) | `rbw passkey inject --rp-id <site> --cdp-url <node> --page-id <page>` |
 
 ### Finding logins

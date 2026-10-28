@@ -488,3 +488,83 @@ pub(crate) async fn api_secret_agent_done(
         StatusCode::GONE
     })
 }
+
+#[derive(Deserialize)]
+pub(crate) struct AgentPasskeyRequest {
+    /// Relying parties (sites) to sign in to, each with its subdomains; `*` for
+    /// any. Empty: disarm.
+    #[serde(default)]
+    pub(crate) sites: Vec<String>,
+    /// How long to stay armed (default 5 minutes, at most 30).
+    #[serde(default)]
+    pub(crate) seconds: Option<u64>,
+}
+
+/// Arms a Chromium session for an AI agent's passkey sign-ins (see
+/// agent_passkeys.rs): until the time is up, the secret agent signs every
+/// passkey request of its pages on the given sites.
+pub(crate) async fn api_session_agent_passkey(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AgentPasskeyRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    if session.bidi.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Agent passkeys need a Chromium session",
+        ));
+    }
+    let sites: Vec<String> = req
+        .sites
+        .iter()
+        .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if let Some(bad) = sites.iter().find(|s| {
+        *s != "*"
+            && !s
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+    }) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("Not a site: {bad}"),
+        ));
+    }
+    if !sites.is_empty() && !state.passkeys.agent_running() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "No secret agent is running for this node",
+        ));
+    }
+    let seconds = req
+        .seconds
+        .unwrap_or(300)
+        .min(crate::agent_passkeys::MAX_ARMED.as_secs());
+    session.activity.touch();
+    let browser_ws = format!(
+        "ws://127.0.0.1:{}/{}",
+        session.port,
+        session.ws_path.trim_start_matches('/')
+    );
+    info!(session_id = %id, sites = ?sites, seconds, "Agent passkeys requested");
+    state.agent_passkeys.arm(
+        state.passkeys.clone(),
+        id,
+        browser_ws,
+        sites.clone(),
+        std::time::Instant::now() + std::time::Duration::from_secs(seconds),
+    );
+    Ok(Json(
+        serde_json::json!({ "sites": sites, "seconds": if sites.is_empty() { 0 } else { seconds } }),
+    ))
+}

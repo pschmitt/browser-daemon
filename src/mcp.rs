@@ -14,6 +14,11 @@
 //! against the page's site, sent to the node over its API (never in a Playwright
 //! script, which Playwright MCP would echo) and masked in later tool results.
 //! Only the entries named with `--allow-secret` (`*` for all) can be filled.
+//!
+//! `browser_passkey` arms the agent's browser for passkey sign-ins on the sites
+//! named with `--allow-passkey`: the node has the secret agent sign them (see
+//! agent_passkeys.rs). `browser_ask_human` runs `--ask-human-cmd` with a link
+//! to the live view of the agent's own page, for what only a person may do.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -48,6 +53,14 @@ pub struct McpArgs {
     #[arg(long = "allow-secret")]
     pub allow_secrets: Vec<String>,
 
+    /// A site (relying party, with its subdomains) agents may sign in to with a vault passkey through browser_passkey (repeat for several, `*` for all).
+    #[arg(long = "allow-passkey")]
+    pub allow_passkeys: Vec<String>,
+
+    /// Program browser_ask_human runs to ask the user for help, called as `PROGRAM MESSAGE` with BD_HANDOFF_URL (the live view of the agent's page), BD_PAGE, BD_NODE, BD_NODE_URL and BD_TITLE in its environment.
+    #[arg(long)]
+    pub ask_human_cmd: Option<PathBuf>,
+
     /// rbw binary, for browser_fill_secret.
     #[arg(long, default_value = "rbw")]
     pub rbw: PathBuf,
@@ -67,7 +80,9 @@ cookies persist, e.g. `work` for Outlook and OpsGenie) call browser_use with its
 browser_status lists the profiles you may open and the nodes. Switching closes the current browser. \
 For the user's own running browsers, browser_shared_nodes lists temporary extension registrations \
 and browser_shared_command acts on their explicitly shared tabs; browser_use selects managed browsers. \
-Never type a password, token or TOTP code yourself: use browser_fill_secret when it is listed.";
+Never type a password, token or TOTP code yourself: use browser_fill_secret when it is listed. \
+For a passkey sign-in call browser_passkey first; for a CAPTCHA, an approval on another device or \
+anything else only a person may do, call browser_ask_human when it is listed.";
 
 /// A node and profile the browser runs on.
 #[derive(Clone)]
@@ -170,6 +185,8 @@ struct State {
     secret: Option<String>,
     allow: Vec<String>,
     allow_secrets: Vec<String>,
+    allow_passkeys: Vec<String>,
+    ask_human_cmd: Option<PathBuf>,
     rbw: PathBuf,
     /// Secrets filled in this session, masked in every tool result.
     filled: std::sync::Mutex<Vec<String>>,
@@ -202,6 +219,8 @@ pub async fn run(args: McpArgs) -> R<()> {
         secret,
         allow: args.allow,
         allow_secrets: args.allow_secrets,
+        allow_passkeys: args.allow_passkeys,
+        ask_human_cmd: args.ask_human_cmd,
         rbw: args.rbw,
         filled: std::sync::Mutex::new(Vec::new()),
         cmd: args.playwright_cmd,
@@ -245,7 +264,7 @@ fn text_result(text: impl Into<String>, error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text.into() }], "isError": error })
 }
 
-fn own_tools(secrets: &[String]) -> Vec<Value> {
+fn own_tools(secrets: &[String], passkeys: &[String], ask_human: bool) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "browser_status",
@@ -307,6 +326,40 @@ fn own_tools(secrets: &[String]) -> Vec<Value> {
                 "additionalProperties": false
             },
             "annotations": { "title": "Fill a vault secret", "readOnlyHint": false }
+        }));
+    }
+    if !passkeys.is_empty() {
+        tools.push(json!({
+            "name": "browser_passkey",
+            "description": format!(
+                "Sign in with a passkey from the vault: call this before clicking a site's passkey (security key, WebAuthn) sign-in. For the next minutes every passkey request of this browser on the site is signed from the vault and answered in the page, also on pages the sign-in moves on to; nothing secret reaches you. Then click the sign-in button as usual and take a snapshot to see the result. Sites you may sign in to: {}.",
+                if allows(passkeys, "*") { "any site with a passkey in the vault".to_string() } else { passkeys.join(", ") }
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "site": { "type": "string", "description": "The site to sign in to (e.g. microsoft.com); default: every allowed site." },
+                    "minutes": { "type": "integer", "minimum": 0, "maximum": 30, "description": "How long to stay ready (default 5; 0 stops)." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": { "title": "Passkey sign-in", "readOnlyHint": false }
+        }));
+    }
+    if ask_human {
+        tools.push(json!({
+            "name": "browser_ask_human",
+            "description": "Ask the user to do something in your browser that only a person may do: solve a CAPTCHA or other bot check, approve a sign-in on another device, type a password you may not fill. Sends them a link to the live view of your current page, where they can click and type in this very session. Say exactly what to do in `message`. Do not solve or bypass bot checks yourself. Afterwards leave the page alone and wait (browser_wait_for), then take a snapshot to see what changed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string", "description": "What the user should do, e.g. \"Solve the CAPTCHA, then tap Next\"." },
+                    "title": { "type": "string", "description": "Short title of the notification." }
+                },
+                "required": ["message"],
+                "additionalProperties": false
+            },
+            "annotations": { "title": "Ask the user for help", "readOnlyHint": false }
         }));
     }
     tools
@@ -399,7 +452,11 @@ impl State {
     }
 
     async fn tools_list(&self) -> Value {
-        let mut tools = own_tools(&self.allow_secrets);
+        let mut tools = own_tools(
+            &self.allow_secrets,
+            &self.allow_passkeys,
+            self.ask_human_cmd.is_some(),
+        );
         match self.child_or_default().await {
             Ok(child) => tools.extend(child.tools.lock().unwrap().iter().cloned()),
             Err(e) => eprintln!("browser-daemon mcp: no browser tools yet: {e}"),
@@ -469,6 +526,18 @@ impl State {
             }),
             "browser_fill_secret" if !self.allow_secrets.is_empty() => {
                 Ok(match self.fill_secret(&args).await {
+                    Ok(text) => text_result(text, false),
+                    Err(e) => text_result(e, true),
+                })
+            }
+            "browser_passkey" if !self.allow_passkeys.is_empty() => {
+                Ok(match self.passkey(&args).await {
+                    Ok(text) => text_result(text, false),
+                    Err(e) => text_result(e, true),
+                })
+            }
+            "browser_ask_human" if self.ask_human_cmd.is_some() => {
+                Ok(match self.ask_human(&args).await {
                     Ok(text) => text_result(text, false),
                     Err(e) => text_result(e, true),
                 })
@@ -579,6 +648,127 @@ impl State {
         Ok(format!(
             "Typed the {field} of '{entry}' into {element} on {host}{}. The value is not shown; take a browser_snapshot to see the page.",
             if submit { " and pressed Enter" } else { "" }
+        ))
+    }
+
+    /// The page the agent is on: (child, target id, address, host).
+    async fn current_page(&self) -> Result<(Arc<Child>, String, String, String), String> {
+        let child = self.child_or_default().await?;
+        let info = child
+            .request(
+                "tools/call",
+                json!({ "name": "browser_run_code_unsafe", "arguments": { "code": PAGE_INFO } }),
+                Duration::from_secs(60),
+            )
+            .await
+            .map_err(|(_, e)| format!("Could not find the page: {e}"))?;
+        let (page_id, address, host) =
+            parse_page_info(&info).ok_or("Could not find the page (no page open?)")?;
+        Ok((child, page_id, address, host))
+    }
+
+    // -------------------------------------------------------------- passkeys
+
+    async fn passkey(&self, args: &Value) -> Result<String, String> {
+        let site = args["site"]
+            .as_str()
+            .map(|s| s.trim().trim_end_matches('.').to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+        let minutes = args["minutes"].as_u64().unwrap_or(5).min(30);
+        let sites: Vec<String> = match site {
+            Some(site) if crate::agent_passkeys::site_allowed(&self.allow_passkeys, &site) => {
+                vec![site]
+            }
+            Some(site) => {
+                return Err(format!(
+                    "Passkey sign-ins on {site} are not open to agents here. Allowed: {}.",
+                    allowed(&self.allow_passkeys)
+                ))
+            }
+            None => self.allow_passkeys.clone(),
+        };
+        let (child, page_id, _, _) = self.current_page().await?;
+        let session = self
+            .page_session(&child.target.url, &page_id)
+            .await
+            .ok_or("Could not tell which session the page is in")?;
+        let mut req = self
+            .http
+            .post(format!(
+                "{}/api/sessions/{session}/agent-passkey",
+                child.target.url.trim_end_matches('/')
+            ))
+            .json(&json!({
+                "sites": if minutes == 0 { Vec::new() } else { sites.clone() },
+                "seconds": minutes * 60,
+            }));
+        if let Some(ref s) = self.secret {
+            req = req.header("X-Browser-Cluster-Secret", s);
+        }
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("{}: {e}", child.target.node))?;
+        if !res.status().is_success() {
+            let status = res.status();
+            let body: Value = res.json().await.unwrap_or_default();
+            return Err(format!(
+                "{} refused: {}",
+                child.target.node,
+                body["error"].as_str().unwrap_or(status.as_str())
+            ));
+        }
+        if minutes == 0 {
+            return Ok("Passkey sign-ins are no longer answered from the vault.".into());
+        }
+        Ok(format!(
+            "For the next {minutes} minutes, passkey sign-ins of this browser on {} are signed from the vault (the user may have to unlock it on their phone first). Click the site's passkey sign-in now, then take a snapshot to see the result.",
+            if sites.iter().any(|s| s == "*") { "any site".to_string() } else { sites.join(", ") }
+        ))
+    }
+
+    // ------------------------------------------------------------ ask a human
+
+    async fn ask_human(&self, args: &Value) -> Result<String, String> {
+        let cmd = self
+            .ask_human_cmd
+            .as_ref()
+            .ok_or("No way to reach the user")?;
+        let message = args["message"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or("Say what the user should do (`message`)")?;
+        let title = args["title"].as_str().map(str::trim).unwrap_or_default();
+        let (child, page_id, _, host) = self.current_page().await?;
+        let node_url = child.target.url.trim_end_matches('/');
+        let link = format!("{node_url}/handoff/?page={}", url_component(&page_id));
+        let run = Command::new(cmd)
+            .arg(self.mask(message))
+            .env("BD_HANDOFF_URL", &link)
+            .env("BD_PAGE", &page_id)
+            .env("BD_NODE", &child.target.node)
+            .env("BD_NODE_URL", node_url)
+            .env("BD_TITLE", self.mask(title))
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        let out = tokio::time::timeout(Duration::from_secs(60), run)
+            .await
+            .map_err(|_| "Asking the user took too long".to_string())?
+            .map_err(|e| format!("Could not ask the user: {e}"))?;
+        let said = |b: &[u8]| self.mask(String::from_utf8_lossy(b).trim());
+        if !out.status.success() {
+            let err = said(&out.stderr);
+            return Err(format!(
+                "Could not ask the user: {}",
+                err.lines().last().unwrap_or("the command failed")
+            ));
+        }
+        let note = said(&out.stdout);
+        Ok(format!(
+            "Asked the user to help on {host} ({link}){}. Leave the page alone until they are done: wait (browser_wait_for), then take a snapshot.",
+            if note.is_empty() { String::new() } else { format!(": {note}") }
         ))
     }
 
@@ -1112,10 +1302,24 @@ mod tests {
                 .map(|t| t["name"].as_str().unwrap().to_string())
                 .collect::<Vec<_>>()
         };
-        assert!(!names(own_tools(&[])).contains(&"browser_fill_secret".to_string()));
-        assert!(
-            names(own_tools(&["Frigate Plus".into()])).contains(&"browser_fill_secret".to_string())
-        );
+        assert!(!names(own_tools(&[], &[], false)).contains(&"browser_fill_secret".to_string()));
+        assert!(names(own_tools(&["Frigate Plus".into()], &[], false))
+            .contains(&"browser_fill_secret".to_string()));
+    }
+
+    #[test]
+    fn passkey_and_ask_human_tools_are_only_offered_when_configured() {
+        let names = |t: Vec<Value>| {
+            t.iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        let none = names(own_tools(&[], &[], false));
+        assert!(!none.contains(&"browser_passkey".to_string()));
+        assert!(!none.contains(&"browser_ask_human".to_string()));
+        let both = names(own_tools(&[], &["microsoft.com".into()], true));
+        assert!(both.contains(&"browser_passkey".to_string()));
+        assert!(both.contains(&"browser_ask_human".to_string()));
     }
 
     #[test]

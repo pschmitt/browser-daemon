@@ -223,6 +223,14 @@ impl Broker {
         Ok(id)
     }
 
+    /// Whether a secret agent polled recently.
+    pub fn agent_running(&self) -> bool {
+        self.agent_seen
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t.elapsed() <= AGENT_GONE)
+    }
+
     pub fn status(&self, id: Uuid) -> Option<Status> {
         let mut tracked = self.tracked.lock().unwrap();
         let t = tracked.get_mut(&id)?;

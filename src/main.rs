@@ -1,3 +1,4 @@
+mod agent_passkeys;
 mod api;
 mod audible;
 mod audio;
@@ -675,6 +676,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         audible_pages: Arc::default(),
         viewers: Arc::default(),
         passkeys: Arc::default(),
+        agent_passkeys: Arc::default(),
         settings,
         history,
         thumbnails,
@@ -936,6 +938,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
+        .route(
+            "/api/sessions/{id}/agent-passkey",
+            post(api_session_agent_passkey),
+        )
         .route(
             "/api/pages/{page_id}/insert-text",
             post(api_page_insert_text),
