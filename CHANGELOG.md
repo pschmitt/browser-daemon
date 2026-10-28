@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-29
+
 ### Added
 
 * `browser-daemon mcp` has `browser_passkey` (with `--allow-passkey`): it arms the agent's Chromium session so the secret agent signs its passkey sign-ins on the allowed sites, also across origins and on page load (`POST /api/sessions/{id}/agent-passkey`).
