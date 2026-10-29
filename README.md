@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="128" height="128" alt="Browser Daemon logo: the Browser Daemon mascot, a cheeky winking blob">
+  <img src="assets/logo.svg" width="128" height="128" alt="Browser Daemon logo: the Browser Daemon mascot, a winking white blob">
 </p>
 
 <p align="center">
