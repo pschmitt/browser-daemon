@@ -148,6 +148,9 @@ body.asking #advanced { display: none; }
 .copy-command { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; padding: 5px;
   transition: transform .16s ease, background-color .16s ease, border-color .16s ease, color .16s ease; }
 .copy-command svg { width: 16px; height: 16px; margin: 0; }
+.copy-command .check-icon { display: none; }
+.copy-command.copied .copy-icon { display: none; }
+.copy-command.copied .check-icon { display: block; stroke: var(--good); stroke-width: 2.5; }
 .copy-command:active { transform: scale(.92); }
 .copy-command.copied { color: var(--good); border-color: color-mix(in srgb, var(--good) 55%, var(--line)); background: color-mix(in srgb, var(--good) 12%, var(--card)); animation: copy-pop .28s ease-out; }
 @keyframes copy-pop { 0% { transform: scale(.92); } 65% { transform: scale(1.1); } 100% { transform: scale(1); } }
