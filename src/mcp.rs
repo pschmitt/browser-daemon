@@ -1406,6 +1406,19 @@ impl State {
         nodes
     }
 
+    /// The nodes whose profiles the overview lists fewer of than they count: a
+    /// peer that was too slow to answer `/api/profiles` shows up as online with none.
+    fn incomplete_nodes(ov: &MeshOverview) -> Vec<String> {
+        ov.peers
+            .iter()
+            .filter(|p| p.status == "online")
+            .filter(|p| {
+                ov.profiles.iter().filter(|m| m.node_name == p.name).count() < p.profiles_count
+            })
+            .map(|p| p.name.clone())
+            .collect()
+    }
+
     fn ws_base(url: &str) -> String {
         url.trim_end_matches('/').replacen("http", "ws", 1)
     }
@@ -1495,7 +1508,7 @@ impl State {
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-        let ov = self.overview().await?;
+        let mut ov = self.overview().await?;
         let target = match profile {
             Some(name) => {
                 if !allows(&self.allow, name) {
@@ -1504,6 +1517,21 @@ impl State {
                         allowed(&self.allow)
                     ));
                 }
+                let found = |ov: &MeshOverview| {
+                    ov.profiles
+                        .iter()
+                        .filter(|p| p.profile.name == name && node.is_none_or(|n| p.node_name == n))
+                        .count()
+                };
+                // The overview is shared and polls peers with a short timeout: a
+                // busy node can be missing its profiles for one round.
+                for _ in 0..2 {
+                    if found(&ov) > 0 || Self::incomplete_nodes(&ov).is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(2500)).await;
+                    ov = self.overview().await?;
+                }
                 let hits: Vec<_> = ov
                     .profiles
                     .iter()
@@ -1511,9 +1539,18 @@ impl State {
                     .collect();
                 let [p] = hits.as_slice() else {
                     return Err(if hits.is_empty() {
+                        let incomplete = Self::incomplete_nodes(&ov);
                         format!(
-                            "No profile '{name}'{}",
-                            node.map(|n| format!(" on {n}")).unwrap_or_default()
+                            "No profile '{name}'{}{}",
+                            node.map(|n| format!(" on {n}")).unwrap_or_default(),
+                            if incomplete.is_empty() {
+                                String::new()
+                            } else {
+                                format!(
+                                    ". {} did not list all its profiles in time (busy?): try again",
+                                    incomplete.join(", ")
+                                )
+                            }
                         )
                     } else {
                         format!("Profile '{name}' exists on several nodes: name one with `node`")
@@ -1764,6 +1801,16 @@ mod tests {
         assert_eq!(State::pick_node(&ov, None).unwrap().0, "a");
         assert_eq!(State::pick_node(&ov, Some("b")).unwrap().0, "b");
         assert!(State::pick_node(&ov, Some("nope")).is_err());
+    }
+
+    #[test]
+    fn a_node_that_lists_fewer_profiles_than_it_counts_is_incomplete() {
+        let mut ov = overview(&[("fnuc", 0, 5, "online"), ("a", 0, 10, "online")]);
+        assert!(State::incomplete_nodes(&ov).is_empty());
+        ov.peers[0].profiles_count = 2;
+        assert_eq!(State::incomplete_nodes(&ov), vec!["a".to_string()]);
+        ov.peers[0].status = "offline".to_string();
+        assert!(State::incomplete_nodes(&ov).is_empty());
     }
 
     #[test]

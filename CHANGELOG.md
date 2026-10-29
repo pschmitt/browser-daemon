@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `browser_use profile=…` answered "No profile" when the node holding the profile was too slow for the overview's poll (it listed the node as online with no profiles). It checks the nodes' profile counts, asks again (twice) when a node's list is short, and names those nodes in the error if the profile is still missing.
+
 ### Changed
 
 * `browser_export_auth` lists all of the page's storage keys, not the first 60; `storage_filter` narrows the list.
