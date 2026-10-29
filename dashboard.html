@@ -611,6 +611,46 @@ details.adv .adv-sum { font-weight: 400; color: var(--muted); overflow: hidden; 
 .kv > div:hover .kv-copy, .kv .kv-copy:focus-visible { opacity: 1; }
 .kv .kv-copy:hover { background: var(--hover); color: var(--fg); }
 @media (hover: none) { .kv .kv-copy { opacity: 1; } }
+.session-detail { display: grid; gap: 18px; }
+.session-detail[hidden], .kv[hidden] { display: none; }
+.sd-hero { display: flex; align-items: center; gap: 13px; padding: 16px; border: 1px solid color-mix(in oklab, var(--accent) 25%, var(--line)); border-radius: 14px; background: linear-gradient(135deg, color-mix(in oklab, var(--accent) 12%, var(--surface)), var(--surface)); }
+.sd-hero-icon { display: grid; place-items: center; width: 42px; height: 42px; flex: none; border-radius: 12px; background: var(--hover); }
+.sd-hero-icon img { width: 32px; height: 32px; object-fit: cover; border-radius: 8px; }
+.sd-hero-icon .i { width: 27px; height: 27px; }
+.sd-hero-main { min-width: 0; flex: 1; }
+.sd-eyebrow { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.sd-hero-main strong { display: block; margin: 3px 0; font-size: 16px; overflow-wrap: anywhere; }
+.sd-sub { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.sd-live { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.sd-live::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.sd-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.sd-stat { min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.sd-stat span { display: block; color: var(--muted); font-size: 11px; }
+.sd-stat strong { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 13px; }
+.sd-section { display: grid; gap: 9px; min-width: 0; }
+.sd-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.sd-section-head h3 { margin: 0; font-size: 13px; }
+.sd-section-head span, .sd-empty { color: var(--muted); font-size: 12px; }
+.sd-list { display: grid; gap: 6px; }
+.sd-client, .sd-tab { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.sd-client-icon, .sd-tab-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: none; border-radius: 9px; color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, var(--surface)); }
+.sd-client-icon .i { width: 19px; height: 19px; }
+.sd-tab-icon img { width: 16px; height: 16px; }
+.sd-item-main { flex: 1; min-width: 0; }
+.sd-item-main strong, .sd-item-main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-item-main strong { font-size: 12.5px; }
+.sd-item-main span { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+.sd-owner { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-size: 11.5px; font-weight: 600; }
+.sd-technical summary, .details-raw summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; }
+.sd-technical .kv, .details-raw .field { margin-top: 10px; }
+@media (max-width: 520px) {
+  .sd-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sd-hero { flex-wrap: wrap; align-items: flex-start; }
+  .sd-hero-main { flex: 1 1 calc(100% - 55px); }
+  .sd-live { margin-left: 55px; }
+  .sd-tab { flex-wrap: wrap; }
+  .sd-tab .sd-owner { flex: 1 0 100%; max-width: none; padding-left: 40px; white-space: normal; overflow-wrap: anywhere; }
+}
 @media (max-width: 520px) { .kv { grid-template-columns: 1fr; } }
 pre.json .jk { color: var(--accent); }
 pre.json .js { color: var(--ok); }
@@ -1331,8 +1371,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <div class="sheet wide">
     <div class="sheet-head"><h2 id="detailsTitle">Details</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
+      <div class="session-detail" id="sessionDetails" hidden></div>
       <dl class="kv" id="detailsGrid"></dl>
-      <div class="field"><div style="display:flex;align-items:center;justify-content:space-between"><span class="field-label">Raw</span><button class="btn ghost sm" data-act="copy-details"><svg class="i sm"><use href="#i-copy"/></svg>Copy JSON</button></div><pre class="json" id="detailsJson"></pre></div>
+      <details class="details-raw" id="detailsRaw" open><summary>Raw JSON</summary><div class="field"><div style="display:flex;justify-content:flex-end"><button class="btn ghost sm" data-act="copy-details"><svg class="i sm"><use href="#i-copy"/></svg>Copy JSON</button></div><pre class="json" id="detailsJson"></pre></div></details>
     </div>
   </div>
 </dialog>
@@ -3897,11 +3938,17 @@ async function newTab(s) {
   }
 }
 
-function showDetails(title, pairs, raw) {
-  $('detailsTitle').textContent = title;
-  $('detailsGrid').innerHTML = pairs.filter(([, v]) => v !== undefined && v !== null && v !== '')
+function detailsPairs(pairs) {
+  return pairs.filter(([, v]) => v !== undefined && v !== null && v !== '')
     .map(([k, v]) => `<div><dt>${esc(k)}</dt><dd title="${esc(String(v).replace(/<[^>]+>/g, ''))}">${v}</dd>`
       + `<button class="kv-copy" data-act="copy-kv" title="Copy ${esc(k)}" aria-label="Copy ${esc(k)}">${icon('copy', 'sm')}</button></div>`).join('');
+}
+function showDetails(title, pairs, raw) {
+  $('detailsTitle').textContent = title;
+  $('sessionDetails').hidden = true;
+  $('detailsGrid').hidden = false;
+  $('detailsRaw').open = true;
+  $('detailsGrid').innerHTML = detailsPairs(pairs);
   $('detailsJson').innerHTML = highlightJson(JSON.stringify(raw, null, 2));
   openModal('detailsModal');
 }
@@ -3922,11 +3969,39 @@ function highlightJson(json) {
 // The CDP / BiDi endpoint of a session, for automation clients.
 const sessionWsUrl = (s) => `${nodeBase(s.node_name).replace(/^http/, 'ws')}/${s.engine === 'firefox' ? 'firefox' : 'chromium'}?session_id=${s.id}`;
 function showSessionDetails(s) {
-  showDetails(sessName(s), [
-    ['Name', esc(sessName(s))], ['Session', `<span class="mono">${esc(s.id)}</span>`], ['WebSocket URL', `<span class="mono">${esc(sessionWsUrl(s))}</span>`], ['Node', nodeChip(s.node_name)], ['Engine', esc(s.engine || 'chromium')],
-    ['Profile', esc(s.profile || 'none')], ['Lifetime', s.persistent ? 'Persistent: runs until stopped' : 'Ephemeral: ends with its last client'],
-    ['Uptime', formatUptime(s.uptime_seconds)], ['Idle', formatUptime(s.idle_seconds || 0)], ['Ad blocking', s.adblock ? 'on' : 'off'], ['Appearance', schemeName(s.color_scheme)], ['Screen', { native: 'Native', phone: 'Phone' }[s.screen] || 'Window'], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)], ['Clients', (s.clients || []).length ? (s.clients || []).map((c) => esc(clientInfo(c)).replace(/\n/g, '<br>')).join('<br><br>') : esc(s.client_count)], ['Tabs', esc(s.tabs_count)], ['Recording', s.is_recording ? (s.recording_paused ? 'paused' : 'yes') : 'no'],
-  ], s);
+  const clients = s.clients || [], tabs = pagesOf(s), key = esc(keyOf.session(s));
+  const sameOwner = (a, b) => a && b && a.since === b.since && a.from === b.from && a.agent_name === b.agent_name && a.conversation === b.conversation;
+  const picture = profIcon(profileOfSession(s));
+  const engine = s.engine === 'firefox' ? 'Firefox' : 'Chromium';
+  const heroIcon = picture ? `<img src="${esc(picture)}" alt="">` : icon(s.engine === 'firefox' ? 'firefox' : 'chromium');
+  const stat = (label, value) => `<div class="sd-stat"><span>${esc(label)}</span><strong>${esc(String(value))}</strong></div>`;
+  const clientRows = clients.map((c) => {
+    const owned = tabs.filter((t) => sameOwner(c, t.owner)).length;
+    const name = c.integration || c.agent_name || c.kind || 'Client';
+    const conversation = c.conversation && (c.conversation.length <= 24 ? c.conversation : `${c.conversation.slice(0, 8)}…${c.conversation.slice(-4)}`);
+    const meta = [c.topic, c.machine || c.from, conversation ? `conversation ${conversation}` : ''].filter(Boolean).join(' · ');
+    return `<div class="sd-client" title="${esc(clientInfo(c))}"><span class="sd-client-icon">${c.agent ? agentIcon(c) : icon('users', 'sm')}</span><div class="sd-item-main"><strong>${esc(name)}</strong><span>${esc(meta || 'Connected client')}</span></div><span class="sd-owner">${owned} tab${owned === 1 ? '' : 's'}</span></div>`;
+  }).join('');
+  const tabRows = tabs.map((t) => {
+    const name = t.title || shortUrl(t.url) || 'New tab';
+    const owner = t.owner ? (t.owner.integration || t.owner.agent_name || t.owner.kind || 'Client') : 'Unowned';
+    return `<a class="sd-tab" href="${esc(handoffUrl(s.node_name, { page: t.id }))}" title="${esc(`${name}\n${t.url || ''}${t.owner ? `\nOwner: ${clientInfo(t.owner)}` : '\nUnowned'}`)}"${drivenAttr(s, t.owner)}><span class="sd-tab-icon">${favicon(t.url)}</span><span class="sd-item-main"><strong>${esc(name)}</strong><span>${esc(t.url || 'about:blank')}</span></span><span class="sd-owner">${esc(t.owner ? `Owner: ${owner}` : owner)}</span></a>`;
+  }).join('');
+  const technical = [
+    ['Session ID', `<span class="mono">${esc(s.id)}</span>`], ['WebSocket URL', `<span class="mono">${esc(sessionWsUrl(s))}</span>`],
+    ['Lifetime', s.persistent ? 'Persistent' : 'Ends with its last client'], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)],
+    ['Ad blocking', s.adblock ? 'On' : 'Off'], ['Appearance', schemeName(s.color_scheme)],
+    ['Screen', { native: 'Native', phone: 'Phone' }[s.screen] || 'Window'], ['Recording', s.is_recording ? (s.recording_paused ? 'Paused' : 'On') : 'Off'],
+  ];
+  showDetails(sessName(s), [], s);
+  $('detailsGrid').hidden = true;
+  $('detailsRaw').open = false;
+  $('sessionDetails').hidden = false;
+  $('sessionDetails').innerHTML = `<div class="sd-hero"><span class="sd-hero-icon">${heroIcon}</span><div class="sd-hero-main"><span class="sd-eyebrow">Browser session</span><strong>${esc(sessName(s))}</strong><span class="sd-sub">${esc(s.profile ? `Profile ${s.profile}` : 'Throwaway')} · ${esc(engine)} · ${esc(nodeLabel(s.node_name) || s.node_name)}</span></div><span class="sd-live">Running</span></div>`
+    + `<div class="sd-stats">${stat('Clients', clients.length || s.client_count || 0)}${stat('Tabs', tabs.length || s.tabs_count || 0)}${stat('Uptime', formatUptime(s.uptime_seconds))}${stat('Idle', formatUptime(s.idle_seconds || 0))}</div>`
+    + `<section class="sd-section"><div class="sd-section-head"><h3>Connected clients</h3>${clients.length ? `<button class="btn ghost sm" data-act="session-clients" data-key="${key}">Details</button>` : ''}</div><div class="sd-list">${clientRows || `<div class="sd-empty">${s.client_count ? 'Client details unavailable' : 'No clients connected'}</div>`}</div></section>`
+    + `<section class="sd-section"><div class="sd-section-head"><h3>Open tabs</h3><span>Owner shown on each tab</span></div><div class="sd-list">${tabRows || `<div class="sd-empty">${s.tabs_count ? 'Tab details unavailable' : 'No open tabs'}</div>`}</div></section>`
+    + `<details class="sd-technical"><summary>Session settings and connection</summary><dl class="kv">${detailsPairs(technical)}</dl></details>`;
 }
 
 /* ---------------------------------------------------------------- profiles */

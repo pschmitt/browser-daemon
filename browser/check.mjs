@@ -7,6 +7,44 @@ import {test} from 'node:test';
 import {webcrypto} from 'node:crypto';
 
 const source = name => readFileSync(new URL(`extension/${name}`, import.meta.url), 'utf8');
+
+test('the session chip and profile menu follow the selected tab owner', () => {
+  const html = readFileSync(new URL('../handoff.html', import.meta.url), 'utf8');
+  const start = html.indexOf('function currentTab() {');
+  const end = html.indexOf('function showProfMenu(', start);
+  assert.ok(start >= 0 && end > start);
+  const elements = {profChipOwner: {hidden: true, innerHTML: ''}, profMenu: {hidden: false}, pmContext: {innerHTML: ''}};
+  const alpha = {agent_name: 'Alpha', since: 1, from: 'node', conversation: 'a'};
+  const beta = {agent_name: 'Beta', since: 2, from: 'node', conversation: 'b'};
+  const context = vm.createContext({
+    $: id => elements[id], E: {profChip: {title: ''}},
+    sess: {profile: 'test', name: 'Demo', clients: [alpha, beta]},
+    target: {sessionId: 'session'}, pageId: 'one', sharedBrowserId: null,
+    tabsAll: [{id: 'one', sessionId: 'session', owner: alpha}, {id: 'two', sessionId: 'session', owner: beta}, {id: 'three', sessionId: 'session'}],
+    agentShort: c => c.agent_name, tabOwnerLabel: c => c.agent_name,
+    agentSvg: () => '', esc: value => String(value).replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+  });
+  vm.runInContext(html.slice(start, end), context);
+  context.renderTabOwner();
+  assert.match(elements.profChipOwner.innerHTML, /Alpha/);
+  context.pageId = 'two';
+  context.renderTabOwner();
+  assert.match(elements.profChipOwner.innerHTML, /Beta/);
+  assert.match(elements.pmContext.innerHTML, /class="pm-client current"[^>]*>[^<]*<span>Beta · Current tab/);
+  context.pageId = 'three';
+  context.renderTabOwner();
+  assert.match(elements.profChipOwner.innerHTML, /Unowned/);
+  assert.doesNotMatch(elements.pmContext.innerHTML, /class="pm-client current"/);
+  context.target.sessionId = 'other';
+  context.pageId = 'two';
+  context.renderTabOwner();
+  assert.match(elements.profChipOwner.innerHTML, /Checking/);
+  assert.doesNotMatch(elements.profChipOwner.innerHTML, /Beta/);
+  context.sharedBrowserId = 'shared';
+  context.renderTabOwner();
+  assert.equal(elements.profChipOwner.hidden, true);
+});
+
 const policy = vm.createContext({URL});
 vm.runInContext(source('policy.js'), policy);
 const {NodePolicy: p} = policy;

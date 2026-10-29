@@ -60,11 +60,25 @@
   .tab-strip-add:hover { background: var(--btn); color: var(--fg); }
   .tab-strip-add svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
   /* The profile this session runs (or "Throwaway"), at the start of the tab bar. */
-  .prof-chip { height: 26px; max-width: 190px; padding: 0 9px; margin: 0 4px 3px 0; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent); background: color-mix(in oklab, var(--accent) 14%, transparent); color: var(--accent); font-size: 11.5px; font-weight: 700; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 5px; align-self: center; overflow: hidden; }
+  .prof-chip { height: 28px; max-width: min(340px, 70vw); padding: 0 9px; margin: 0 4px 3px 0; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent); background: color-mix(in oklab, var(--accent) 14%, transparent); color: var(--accent); font-size: 11.5px; font-weight: 700; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 5px; align-self: center; overflow: hidden; }
   .prof-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #profChipText { min-width: 0; max-width: 80px; }
+  @media (max-width: 480px) { #profChipText { max-width: 52px; } }
   .prof-chip svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
   .prof-chip.throwaway { border-style: dashed; border-color: var(--line); background: transparent; color: var(--muted); font-weight: 600; }
   .prof-chip[hidden] { display: none; }
+  .prof-chip .prof-owner { display: inline-flex; align-items: center; gap: 5px; border-left: 1px solid color-mix(in oklab, var(--accent) 35%, transparent); padding-left: 7px; color: var(--fg); min-width: 0; }
+  .prof-chip .prof-owner[hidden] { display: none; }
+  .prof-owner svg { flex: none; }
+  .pm-context { display: grid; gap: 6px; padding: 7px 10px 9px; }
+  .pm-context-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12px; }
+  .pm-context-row span { color: var(--muted); flex: none; }
+  .pm-context-row strong { text-align: right; overflow-wrap: anywhere; }
+  .pm-clients { display: grid; gap: 5px; margin-top: 2px; }
+  .pm-client { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; background: var(--btn); font-size: 11.5px; }
+  .pm-client svg { width: 15px; height: 15px; flex: none; }
+  .pm-client span { min-width: 0; overflow-wrap: anywhere; }
+  .pm-client.current { outline: 1px solid color-mix(in oklab, var(--accent) 50%, transparent); }
   .agent-chip { height: 26px; max-width: 150px; padding: 0 9px 0 7px; margin: 0 4px 3px 0; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in oklab, var(--btn) 70%, transparent); color: var(--fg); font-size: 11.5px; font-weight: 600; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 6px; align-self: center; overflow: hidden; }
   .agent-chip svg { width: 14px; height: 14px; flex: none; }
   .agent-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -466,8 +480,7 @@
 <div id="tabStrip">
   <a href="/" class="ib" id="dash" aria-label="Dashboard" title="Return to Dashboard"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></a>
   <button class="ib chev" id="dashMore" aria-label="Other sessions" title="Other sessions" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
-  <button class="prof-chip" id="profChip" hidden title="Profile of this session"><span id="profChipIcon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><span id="profChipText"></span></button>
-  <button class="agent-chip" id="agentChip" hidden title="An agent drives this session"></button>
+  <button class="prof-chip" id="profChip" hidden title="Session and profile"><span id="profChipIcon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg></span><span id="profChipText"></span><span class="prof-owner" id="profChipOwner" hidden></span></button>
   <button class="agent-chip watch-chip" id="watchChip" hidden></button>
   <div id="tabsScroll"></div>
   <button class="tab-strip-add" id="tabAddBtn" title="New Tab" aria-label="New Tab">
@@ -542,6 +555,7 @@
 <div id="profMenu" role="menu" hidden>
   <div class="sm-head"><span class="sm-engine" id="pmEngine"></span><span id="pmTitle">Profile</span></div>
   <div class="pm-note" id="pmNote"></div>
+  <div class="pm-context" id="pmContext"></div>
   <hr>
   <div id="pmProfile">
     <button class="sm-item" id="pmOpenTabs"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 8V6a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg><span id="pmOpenTabsText">Open the default tabs</span></button>
@@ -706,7 +720,7 @@ let sharedNewTab = false;
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const E = {
   smSearch: $("smSearch"),
-  tabStrip: $("tabStrip"), profChip: $("profChip"), agentChip: $("agentChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
+  tabStrip: $("tabStrip"), profChip: $("profChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), tabsSearch: $("tabsSearch"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"), tabContextMenu: $("tabContextMenu"), tabContextReload: $("tabContextReload"), tabContextPin: $("tabContextPin"), tabContextPinLabel: $("tabContextPinLabel"), tabContextClose: $("tabContextClose"),
@@ -2999,6 +3013,7 @@ async function doSwitchTab(id, { push = true } = {}) {
     history.pushState(null, "", u.toString());
   }
   pageId = id;
+  renderTabOwner();
   currentUrl = "";
   const label = document.querySelector(`.tab-strip-item[href*="page=${CSS.escape(id)}"]`)?.textContent.replace(/[✕×]/g, "").trim();
   const cached = frameCache.get(id);
@@ -3234,6 +3249,7 @@ async function loadTabs() {
     const pages = all.filter((x) => !target?.sessionId || x.sessionId === target.sessionId);
     for (const x of all) knownTabs.add(x.id);
     tabsAll = all;
+    renderTabOwner();
     // Redrawn only when something shown changed: this also runs on a timer.
     const sig = JSON.stringify([target?.id, sharedBrowser?.follow, all.map((x) => [x.id, x.title, x.url, x.favicon, x.audible, x.index, x.pinned, x.owner])]);
     if (sig === tabsSig) return;
@@ -3264,7 +3280,8 @@ let contextTab = null;
 function tabOwnerLabel(owner) {
   if (!owner) return "";
   const name = owner.integration || owner.agent_name || owner.kind || "Client";
-  return [name, owner.topic, owner.conversation ? `conversation ${owner.conversation.slice(0, 8)}` : ""].filter(Boolean).join(" · ");
+  const conversation = owner.conversation && (owner.conversation.length <= 24 ? owner.conversation : `${owner.conversation.slice(0, 8)}…${owner.conversation.slice(-4)}`);
+  return [name, owner.topic, conversation ? `conversation ${conversation}` : ""].filter(Boolean).join(" · ");
 }
 function closeTabContextMenu() {
   E.tabContextMenu.hidden = true;
@@ -4193,7 +4210,6 @@ $("smDevtools").addEventListener("click", () => {
   window.open(`/devtools/frontend/${encodeURIComponent(target.sessionId)}/inspector.html?${scheme}=${encodeURIComponent(page)}`, "_blank", "noopener");
 });
 
-E.agentChip.onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
 // The profile chip's own menu: what belongs to the profile (its default tabs, its name),
 // not the session's controls.
 let profileInfo = null;
@@ -4209,6 +4225,34 @@ async function loadProfileInfo() {
 const webTabs = () => tabsAll
   .filter((x) => (!target?.sessionId || x.sessionId === target.sessionId) && /^https?:/.test(x.url || ""))
   .map((x) => x.url);
+function currentTab() {
+  return tabsAll.find((tab) => tab.id === pageId && (!target?.sessionId || tab.sessionId === target.sessionId));
+}
+function sameClient(a, b) {
+  return !!a && !!b && a.since === b.since && a.from === b.from && a.agent_name === b.agent_name && a.conversation === b.conversation;
+}
+function renderProfileContext() {
+  const box = $("pmContext");
+  if (!sess || sharedBrowserId) { box.innerHTML = ""; return; }
+  const tab = currentTab(), owner = tab?.owner;
+  const clients = sess.clients || [];
+  const ownerName = tab ? (owner ? tabOwnerLabel(owner) : "Unowned") : "Checking…";
+  const rows = clients.map((client) => `<div class="pm-client${sameClient(client, owner) ? ' current' : ''}">${agentSvg(client)}<span>${esc(tabOwnerLabel(client))}${sameClient(client, owner) ? ' · Current tab' : ''}</span></div>`).join("");
+  box.innerHTML = `<div class="pm-context-row"><span>Session</span><strong>${esc(sess.name || "Session")}</strong></div>`
+    + `<div class="pm-context-row"><span>Current tab</span><strong>${esc(ownerName)}</strong></div>`
+    + `<div class="pm-context-row"><span>Connected clients</span><strong>${clients.length || sess.client_count || 0}</strong></div>`
+    + (rows ? `<div class="pm-clients">${rows}</div>` : "");
+}
+function renderTabOwner() {
+  const chip = $("profChipOwner");
+  if (!sess || sharedBrowserId) { chip.hidden = true; return; }
+  const tab = currentTab(), owner = tab?.owner;
+  const label = tab ? (owner ? (owner.integration || agentShort(owner) || owner.kind || "Client") : "Unowned") : "Checking…";
+  chip.hidden = false;
+  chip.innerHTML = `${owner ? agentSvg(owner) : ''}<span>Tab: ${esc(label)}</span>`;
+  E.profChip.title = `Profile: ${sess.profile || "Throwaway"}\nSession: ${sess.name || "Session"}\nCurrent tab owner: ${tab ? (owner ? tabOwnerLabel(owner) : "Unowned") : "Checking…"}`;
+  if (!$('profMenu').hidden) renderProfileContext();
+}
 function showProfMenu(open = $("profMenu").hidden) {
   const menu = $("profMenu");
   menu.hidden = !open;
@@ -4229,6 +4273,7 @@ function showProfMenu(open = $("profMenu").hidden) {
   $("pmNote").textContent = named
     ? "Its logins, cookies and storage are kept between sessions."
     : "Nothing from this session is kept when it stops.";
+  renderProfileContext();
   if (named) {
     const n = (profileInfo?.tabs || []).length;
     $("pmOpenTabsText").textContent = n ? `Open the default tabs (${n})` : "Open the default tabs";
@@ -5415,6 +5460,7 @@ function renderSession() {
   $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
   // The profile (or "Throwaway") in the tab bar; the latter offers to keep the data.
   E.profChip.hidden = false;
+  E.profChip.onclick = (e) => { e.stopPropagation(); showProfMenu(); };
   E.profChip.classList.toggle("throwaway", !sess.profile);
   // The session's name always shows (not only inside the menu), with its profile.
   $("profChipText").textContent = [sess.profile, sess.name].filter(Boolean).join(" · ") || "Throwaway";
@@ -5428,17 +5474,11 @@ function renderSession() {
   $("notePillText").textContent = sess.notes?.count || "";
   $("notePill").title = sess.notes?.count ? `${sess.notes.count} note${sess.notes.count === 1 ? "" : "s"}, the latest:\n\n${sess.notes.last || ""}` : "";
   if ($("shareDialog").open) renderShareDialog();
-  // Which agent drives it, with its own mark.
+  // Session status lists its clients; the combined chip names the current tab owner.
   const driving = (sess.clients || []).filter((c) => c.agent);
-  E.agentChip.hidden = !driving.length;
-  if (driving.length) {
-    const a = driving[0];
-    const name = agentLabel(a);
-    E.agentChip.innerHTML = `${agentSvg(a)}<span>${esc(driving.length > 1 ? `${name} +${driving.length - 1}` : name)}</span>`;
-    E.agentChip.title = driving.map((c) => [c.agent_name, c.topic && `: ${c.topic}`].filter(Boolean).join("")).join("\n") || "An agent drives this session";
-  }
+  renderTabOwner();
   const lead = driving[0];
-  $("smStatus").innerHTML = (lead ? `<div class="sm-agent">${agentSvg(lead)}<span>${esc(agentLabel(lead))}${driving.length > 1 ? ` +${driving.length - 1}` : ''}</span></div>` : '')
+  $("smStatus").innerHTML = (lead ? `<div class="sm-agent">${agentSvg(lead)}<span>${driving.length > 1 ? `${driving.length} agents connected` : esc(agentLabel(lead))}</span></div>` : '')
     + `<span>${esc((sess.profile ? `Profile ${sess.profile}` : sess.persistent ? "Persistent" : "Throwaway")
       + ` · Up ${formatUptime(Math.floor(sess.uptime_seconds || 0))}`
       + (sess.proxy ? ` · via ${proxyNames[sess.proxy] || sess.proxy}` : ''))}</span>`;
@@ -5475,7 +5515,7 @@ function renderSharedSession() {
   if (!sharedBrowser) return;
   const tab = sharedBrowser.tabs.find(t => String(t.id) === pageId), control = tab?.control === true;
   const companionMissing = sharedBrowser.browser === 'firefox' && !sharedBrowser.native_control;
-  E.sessBtn.hidden = false; E.profChip.hidden = false; E.agentChip.hidden = true;
+  E.sessBtn.hidden = false; E.profChip.hidden = false; $("profChipOwner").hidden = true;
   E.sessBtn.title = 'Real browser';
   setEngineIcon($('profChipIcon'), sharedBrowser.browser);
   renderFollow();
