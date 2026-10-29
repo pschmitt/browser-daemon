@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+* `browser_export_auth` writes a `Cookie:` header by default (`format: header`, for `curl -H @FILE`): curl 8.22 ignores the cookies of jar files it reads.
+
 ## [0.8.0] - 2026-10-29
 
 ### Added

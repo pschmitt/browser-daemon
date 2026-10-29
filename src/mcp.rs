@@ -381,7 +381,7 @@ fn own_tools(
             "daemon": { "type": "string", "description": "The daemon hosting the shared browser, from browser_shared_nodes." }
         });
         let mut export_props = json!({
-            "format": { "type": "string", "enum": ["cookies", "header", "json"], "description": "cookies (default): a Netscape cookie jar for `curl -b FILE`; header: a `Cookie:` header line for `curl -H @FILE`; json: cookies and the storage_keys asked for." },
+            "format": { "type": "string", "enum": ["cookies", "header", "json"], "description": "header (default): a `Cookie:` header line for `curl -H @FILE`; cookies: a Netscape cookie jar (curl 8.22 ignores the cookies of jar files it reads, other tools take them); json: cookies and the storage_keys asked for." },
             "urls": { "type": "array", "items": { "type": "string" }, "description": "Addresses to take the cookies for (default: the page's own); header uses the first." },
             "storage_keys": { "type": "array", "items": { "type": "string" }, "description": "Local or session storage keys to include (json format). The answer lists the page's storage keys." },
             "minutes": { "type": "integer", "minimum": 1, "maximum": 120, "description": "When the file is deleted (default 15)." }
@@ -402,7 +402,7 @@ fn own_tools(
         tools.push(json!({
             "name": "browser_export_auth",
             "description": format!(
-                "Hand the login of a browser page (its cookies, chosen storage values) to your other tools without seeing it: written to a private file that is deleted after a while, e.g. for `curl -b FILE`. The answer gives the path and the cookie and storage names, never values; the values are masked in all later results. Never print, cat or copy the file. Prefer browser_fetch when one request is enough. The page must be on one of these sites: {sites}."
+                "Hand the login of a browser page (its cookies, chosen storage values) to your other tools without seeing it: written to a private file that is deleted after a while, e.g. for `curl -H @FILE`. The answer gives the path and the cookie and storage names, never values; the values are masked in all later results. Never print, cat or copy the file. Prefer browser_fetch when one request is enough. The page must be on one of these sites: {sites}."
             ),
             "inputSchema": { "type": "object", "properties": export_props, "additionalProperties": false },
             "annotations": { "title": "Export a page's login", "readOnlyHint": false }
@@ -1010,7 +1010,7 @@ impl State {
     }
 
     async fn export_auth(&self, args: &Value) -> Result<String, String> {
-        let format = args["format"].as_str().unwrap_or("cookies");
+        let format = args["format"].as_str().unwrap_or("header");
         if !matches!(format, "cookies" | "header" | "json") {
             return Err("format is cookies, header or json".into());
         }
