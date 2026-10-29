@@ -2,9 +2,11 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-29
+
 ### Changed
 
-* The browser extension adds icons to Settings rows and Advanced section headers, uses a standard cog for Settings, improves connection history, and provides animated feedback for copy actions.
+* The browser extension adds icons to Settings rows and Advanced section headers, makes daemon URLs clickable, removes the green background from shared tabs, improves connection history, and provides animated feedback for copy actions.
 * The app favicon uses the standalone mascot artwork without the purple tile background.
 
 ## [0.9.0] - 2026-10-29
