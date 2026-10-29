@@ -4,7 +4,8 @@
 
 ### Changed
 
-* The browser extension shows a compact Firefox companion warning in Advanced, moves the connection status dot to the header, and presents the companion setup as readable steps.
+* The browser extension shows a compact Firefox companion warning in Advanced, moves the connection status dot to the header, and combines companion setup commands with a copy button.
+* The app favicon uses the standalone mascot artwork without the purple tile background.
 
 ## [0.9.0] - 2026-10-29
 

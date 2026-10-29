@@ -365,6 +365,16 @@ $('native').addEventListener('click', async () => {
     await refresh();
   } catch (error) { showError(error); }
 });
+$('copyCompanionCommand').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  try {
+    await navigator.clipboard.writeText($('companionCommand').textContent.trim());
+    button.textContent = 'Copied';
+  } catch {
+    button.textContent = 'Copy failed';
+  }
+  window.setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+});
 async function pairFromDashboard(address, name) {
   clearError();
   try {
