@@ -267,9 +267,6 @@ async function refresh() {
   $('companion').hidden = state.chromium;
   $('nativeLabel').textContent = state.nativeReady ? 'Disable companion' : 'Enable companion';
   $('native').disabled = !reg;
-  $('nativeStatus').hidden = !reg;
-  $('nativeStatus').textContent = state.nativeReady ? 'Connected' : 'Unavailable';
-  $('nativeStatus').className = `pill${state.nativeReady ? ' on' : ''}`;
   $('diagnosticStatus').textContent = reg
     ? `Node ${reg.id}${reg.expires_at ? `, until ${new Date(reg.expires_at * 1000).toLocaleTimeString()}` : ', no time limit'}.` : state.status;
   $('connectionHistory').replaceChildren(...state.history.slice().reverse().map(event => {

@@ -4,7 +4,7 @@
 
 ### Changed
 
-* The browser extension shows a compact Firefox companion warning in Advanced, and moves the connection status dot to the header.
+* The browser extension shows a compact Firefox companion warning in Advanced, moves the connection status dot to the header, and presents the companion setup as readable steps.
 
 ## [0.9.0] - 2026-10-29
 

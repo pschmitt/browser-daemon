@@ -77,10 +77,13 @@
   <section id="companion" hidden>
     <h3>Firefox companion</h3>
     <p id="inputMode" class="input-mode input-warning small" role="status" hidden></p>
-    <p class="muted small">Trusted mouse and keyboard input. Install with <code>python3 browser/install.py</code>, then start Firefox with <code>MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 firefox --remote-debugging-port 9222</code>.</p>
+    <p class="muted small companion-intro">The companion enables trusted mouse and keyboard input on sites that need it.</p>
+    <ol class="companion-steps small">
+      <li>Install the companion:<code>python3 browser/install.py</code></li>
+      <li>Start Firefox with remote access enabled:<code class="companion-command">MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 &#92;<br>  firefox --remote-debugging-port 9222</code></li>
+    </ol>
     <div class="companion-actions">
       <button id="native" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V3m6 4V3M7 7h10v4a5 5 0 0 1-10 0V7Z"/><path d="M12 16v5"/></svg><span id="nativeLabel">Enable companion</span></button>
-      <span id="nativeStatus" class="pill" role="status" aria-live="polite"></span>
     </div>
   </section>
   <section>
