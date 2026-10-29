@@ -151,7 +151,14 @@ function renderDaemonAllowlist(origins) {
     const address = document.createElement('small');
     address.textContent = value;
     text.append(host, address);
-    row.append(icon, text);
+    const link = document.createElement('a');
+    link.className = 'daemon-origin-link';
+    link.href = value;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.title = `Open ${url.host}`;
+    link.append(icon, text);
+    row.append(link);
 
     if (!managed && mode === 'custom') {
       const remove = document.createElement('button');

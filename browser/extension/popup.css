@@ -159,6 +159,9 @@ body.asking #advanced { display: none; }
 }
 .daemon-origins { display: grid; gap: 6px; max-height: 184px; overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .daemon-origin { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.daemon-origin-link { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.daemon-origin-link:hover .daemon-origin-text b { text-decoration: underline; }
+.daemon-origin-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .daemon-origin-icon { width: 30px; height: 30px; display: grid; place-items: center; flex: none; border-radius: 8px; color: var(--accent); background: var(--accent-soft); }
 .daemon-origin-icon svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .daemon-origin-text { min-width: 0; display: flex; flex: 1; flex-direction: column; }
