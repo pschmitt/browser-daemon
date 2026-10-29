@@ -64,7 +64,7 @@ globalThis.NodePolicy = (() => {
     if (command.action === 'pin') return typeof command.params.pinned === 'boolean';
     if (command.action === 'cdp') return methods.has(command.params.method);
     if (command.action === 'suggest') return typeof command.params.query === 'string' && command.params.query.length <= 200;
-    return ['publicInput', 'click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate', 'frames', 'fill'].includes(command.action);
+    return ['publicInput', 'click', 'type', 'key', 'scroll', 'reload', 'back', 'forward', 'focus', 'close', 'evaluate', 'frames', 'fill', 'authExport'].includes(command.action);
   }
   function relayAllowed(method, params, control) {
     if (typeof method !== 'string' || !params || typeof params !== 'object' || Array.isArray(params) ||

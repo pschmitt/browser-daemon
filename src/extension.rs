@@ -1034,6 +1034,24 @@ pub(crate) fn controlled(state: &AppState, id: Uuid, tab: u32) -> Result<Control
 }
 
 impl Controlled {
+    /// The cookies the browser sends to `urls` (the tab's own address first) and,
+    /// with `storage`, the tab's local and session storage (see auth_export.rs).
+    /// An internal action: the command route does not take it.
+    pub(crate) async fn auth(&self, urls: &[String], storage: bool) -> Result<Value, ApiError> {
+        let answer = ask(
+            &self.node,
+            self.tab,
+            "authExport",
+            json!({"urls": urls, "storage": storage}),
+        )
+        .await?;
+        if let Some(e) = answer["error"].as_str() {
+            return Err(failure(StatusCode::BAD_GATEWAY, e));
+        }
+        crate::auth_export::from_extension(&self.url, &answer["result"])
+            .map_err(|e| failure(StatusCode::BAD_GATEWAY, &e))
+    }
+
     /// Fills a vault login into the tab, in its frames on the entry's sites only
     /// (the browser lists the frames; each is filled only if still at that address).
     pub(crate) async fn fill(

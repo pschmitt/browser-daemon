@@ -54,6 +54,8 @@ def main():
             manifest["permissions"].extend([
                 "nativeMessaging", "webRequest", "webRequestBlocking",
                 "webRequestFilterResponse", "history", "bookmarks",
+                # The daemon's authExport (an agent's tool reads a tab's login).
+                "cookies",
             ])
             manifest["host_permissions"] = ["<all_urls>"]
             manifest["background"] = {"scripts": ["policy.js", "audio.js", "files-page.js", "files.js", "background.js"]}

@@ -19,6 +19,12 @@
 //! named with `--allow-passkey`: the node has the secret agent sign them (see
 //! agent_passkeys.rs). `browser_ask_human` runs `--ask-human-cmd` with a link
 //! to the live view of the agent's own page, for what only a person may do.
+//!
+//! `browser_export_auth` and `browser_fetch` hand a page's login (cookies, a
+//! storage token) to the agent's other tools without the agent seeing it: on the
+//! sites named with `--allow-export`, written to a private file that is deleted
+//! after a while, or used for one HTTP request here. The values are masked in
+//! all later results, as filled secrets are.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -60,6 +66,10 @@ pub struct McpArgs {
     /// Program browser_ask_human runs to ask the user for help, called as `PROGRAM MESSAGE` with BD_HANDOFF_URL (the live view of the agent's page), BD_PAGE, BD_NODE, BD_NODE_URL, BD_TITLE and BD_AGENT (the MCP client's name) in its environment.
     #[arg(long)]
     pub ask_human_cmd: Option<PathBuf>,
+
+    /// A site (with its subdomains) whose login agents may export with browser_export_auth or use with browser_fetch (repeat for several, `*` for all).
+    #[arg(long = "allow-export")]
+    pub allow_exports: Vec<String>,
 
     /// rbw binary, for browser_fill_secret.
     #[arg(long, default_value = "rbw")]
@@ -187,6 +197,9 @@ struct State {
     allow_secrets: Vec<String>,
     allow_passkeys: Vec<String>,
     ask_human_cmd: Option<PathBuf>,
+    allow_exports: Vec<String>,
+    /// Files browser_export_auth wrote, removed when they expire or on exit.
+    exports: std::sync::Mutex<Vec<PathBuf>>,
     rbw: PathBuf,
     /// Secrets filled in this session, masked in every tool result.
     filled: std::sync::Mutex<Vec<String>>,
@@ -221,6 +234,8 @@ pub async fn run(args: McpArgs) -> R<()> {
         allow_secrets: args.allow_secrets,
         allow_passkeys: args.allow_passkeys,
         ask_human_cmd: args.ask_human_cmd,
+        allow_exports: args.allow_exports,
+        exports: std::sync::Mutex::new(Vec::new()),
         rbw: args.rbw,
         filled: std::sync::Mutex::new(Vec::new()),
         cmd: args.playwright_cmd,
@@ -237,6 +252,9 @@ pub async fn run(args: McpArgs) -> R<()> {
         };
         let st = state.clone();
         tokio::spawn(async move { st.handle(msg).await });
+    }
+    for file in state.exports.lock().unwrap().drain(..) {
+        let _ = std::fs::remove_file(file);
     }
     if let Some(child) = state.child.lock().await.take() {
         child.stop().await;
@@ -264,7 +282,12 @@ fn text_result(text: impl Into<String>, error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text.into() }], "isError": error })
 }
 
-fn own_tools(secrets: &[String], passkeys: &[String], ask_human: bool) -> Vec<Value> {
+fn own_tools(
+    secrets: &[String],
+    passkeys: &[String],
+    ask_human: bool,
+    exports: &[String],
+) -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "browser_status",
@@ -346,6 +369,53 @@ fn own_tools(secrets: &[String], passkeys: &[String], ask_human: bool) -> Vec<Va
             "annotations": { "title": "Passkey sign-in", "readOnlyHint": false }
         }));
     }
+    if !exports.is_empty() {
+        let sites = if allows(exports, "*") {
+            "any site".to_string()
+        } else {
+            exports.join(", ")
+        };
+        let where_ = json!({
+            "browser": { "type": "string", "description": "A shared browser (UUID from browser_shared_nodes) instead of your own browser's current page." },
+            "tab": { "type": "integer", "minimum": 0, "description": "The shared browser's tab (it must be shared with control)." },
+            "daemon": { "type": "string", "description": "The daemon hosting the shared browser, from browser_shared_nodes." }
+        });
+        let mut export_props = json!({
+            "format": { "type": "string", "enum": ["cookies", "header", "json"], "description": "cookies (default): a Netscape cookie jar for `curl -b FILE`; header: a `Cookie:` header line for `curl -H @FILE`; json: cookies and the storage_keys asked for." },
+            "urls": { "type": "array", "items": { "type": "string" }, "description": "Addresses to take the cookies for (default: the page's own); header uses the first." },
+            "storage_keys": { "type": "array", "items": { "type": "string" }, "description": "Local or session storage keys to include (json format). The answer lists the page's storage keys." },
+            "minutes": { "type": "integer", "minimum": 1, "maximum": 120, "description": "When the file is deleted (default 15)." }
+        });
+        let mut fetch_props = json!({
+            "url": { "type": "string", "description": "The address to request." },
+            "method": { "type": "string", "description": "HTTP method (default GET)." },
+            "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "More request headers." },
+            "body": { "type": "string", "description": "Request body." },
+            "bearer_storage_key": { "type": "string", "description": "Send `Authorization: Bearer` with the token in this local or session storage key of the page (its value, or its secret/access_token field when it is JSON)." }
+        });
+        for props in [&mut export_props, &mut fetch_props] {
+            props
+                .as_object_mut()
+                .unwrap()
+                .extend(where_.as_object().unwrap().clone());
+        }
+        tools.push(json!({
+            "name": "browser_export_auth",
+            "description": format!(
+                "Hand the login of a browser page (its cookies, chosen storage values) to your other tools without seeing it: written to a private file that is deleted after a while, e.g. for `curl -b FILE`. The answer gives the path and the cookie and storage names, never values; the values are masked in all later results. Never print, cat or copy the file. Prefer browser_fetch when one request is enough. The page must be on one of these sites: {sites}."
+            ),
+            "inputSchema": { "type": "object", "properties": export_props, "additionalProperties": false },
+            "annotations": { "title": "Export a page's login", "readOnlyHint": false }
+        }));
+        tools.push(json!({
+            "name": "browser_fetch",
+            "description": format!(
+                "Make an HTTP request with the login of a browser page (its cookies for the address, optionally a bearer token from its storage) without seeing it, e.g. to call a site's API as the signed-in user. Returns status, headers and body (text, first 64 KiB), with the login's values masked. The address must be on one of these sites: {sites}."
+            ),
+            "inputSchema": { "type": "object", "properties": fetch_props, "required": ["url"], "additionalProperties": false },
+            "annotations": { "title": "Request with a page's login", "readOnlyHint": false }
+        }));
+    }
     if ask_human {
         tools.push(json!({
             "name": "browser_ask_human",
@@ -385,6 +455,75 @@ fn parse_page_info(result: &Value) -> Option<(String, String, String)> {
     let parsed = url::Url::parse(address).ok()?;
     let host = parsed.host_str()?.to_ascii_lowercase();
     (!id.is_empty() && !host.is_empty()).then(|| (id.to_string(), address.to_string(), host))
+}
+
+/// A Netscape cookie jar (curl's `-b FILE`), HttpOnly cookies marked as curl does.
+fn cookie_jar(cookies: &[Value]) -> String {
+    let mut out = String::from("# Netscape HTTP Cookie File\n");
+    for c in cookies {
+        let domain = c["domain"].as_str().unwrap_or_default();
+        let line = format!(
+            "{}{domain}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            if c["http_only"].as_bool() == Some(true) {
+                "#HttpOnly_"
+            } else {
+                ""
+            },
+            if domain.starts_with('.') {
+                "TRUE"
+            } else {
+                "FALSE"
+            },
+            c["path"].as_str().unwrap_or("/"),
+            if c["secure"].as_bool() == Some(true) {
+                "TRUE"
+            } else {
+                "FALSE"
+            },
+            c["expires"].as_f64().map_or(0, |e| e as i64),
+            c["name"].as_str().unwrap_or_default(),
+            c["value"].as_str().unwrap_or_default(),
+        );
+        out.push_str(&line);
+    }
+    out
+}
+
+/// The `Cookie` header the browser would send to `target`.
+fn cookie_header(cookies: &[Value], target: &str) -> Result<String, String> {
+    let url = url::Url::parse(target).map_err(|_| format!("Not an address: {target}"))?;
+    Ok(cookies
+        .iter()
+        .filter(|c| {
+            crate::auth_export::sent_to(
+                c["domain"].as_str().unwrap_or_default(),
+                c["path"].as_str().unwrap_or("/"),
+                c["secure"].as_bool().unwrap_or(false),
+                &url,
+            )
+        })
+        .map(|c| {
+            format!(
+                "{}={}",
+                c["name"].as_str().unwrap_or_default(),
+                c["value"].as_str().unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
+/// The token in a storage value: the value itself, or the token field of a JSON
+/// entry (MSAL keeps `secret`, others `access_token`).
+fn bearer_token(raw: &str) -> String {
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|v| {
+            ["secret", "access_token", "accessToken", "token"]
+                .iter()
+                .find_map(|k| v[*k].as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| raw.trim().trim_matches('"').to_string())
 }
 
 /// The `sessionId` of the one target `page_id` in a /json/list answer.
@@ -456,6 +595,7 @@ impl State {
             &self.allow_secrets,
             &self.allow_passkeys,
             self.ask_human_cmd.is_some(),
+            &self.allow_exports,
         );
         match self.child_or_default().await {
             Ok(child) => tools.extend(child.tools.lock().unwrap().iter().cloned()),
@@ -532,6 +672,18 @@ impl State {
             }
             "browser_passkey" if !self.allow_passkeys.is_empty() => {
                 Ok(match self.passkey(&args).await {
+                    Ok(text) => text_result(text, false),
+                    Err(e) => text_result(e, true),
+                })
+            }
+            "browser_export_auth" if !self.allow_exports.is_empty() => {
+                Ok(match self.export_auth(&args).await {
+                    Ok(text) => text_result(text, false),
+                    Err(e) => text_result(e, true),
+                })
+            }
+            "browser_fetch" if !self.allow_exports.is_empty() => {
+                Ok(match self.fetch(&args).await {
                     Ok(text) => text_result(text, false),
                     Err(e) => text_result(e, true),
                 })
@@ -725,6 +877,348 @@ impl State {
             "For the next {minutes} minutes, passkey sign-ins of this browser on {} are signed from the vault (the user may have to unlock it on their phone first). Click the site's passkey sign-in now, then take a snapshot to see the result.",
             if sites.iter().any(|s| s == "*") { "any site".to_string() } else { sites.join(", ") }
         ))
+    }
+
+    // ------------------------------------------------------------ logins
+
+    /// Masks values that leave with a login from here on: its cookies and the
+    /// storage values used. Short values (`1`, `dark`) are no secrets and would
+    /// garble every later answer, so only those of 8 characters and more.
+    fn remember_login(&self, login: &Value, storage_keys: &[&str]) {
+        let mut filled = self.filled.lock().unwrap();
+        let mut add = |v: &Value| {
+            if let Some(v) = v.as_str().filter(|v| v.len() >= 8) {
+                if !filled.iter().any(|f| f == v) {
+                    filled.push(v.to_string());
+                }
+            }
+        };
+        for c in login["cookies"].as_array().into_iter().flatten() {
+            add(&c["value"]);
+        }
+        for key in storage_keys {
+            for kind in ["local_storage", "session_storage"] {
+                let v = &login[kind][*key];
+                add(v);
+                // A JSON value (an MSAL token entry) also gets its token masked.
+                if let Some(inner) = v
+                    .as_str()
+                    .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                {
+                    for k in ["secret", "access_token", "accessToken", "token"] {
+                        add(&inner[k]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The login of the page in question: the agent's current page, or a shared
+    /// tab (`browser`, `tab`, `daemon`). Its address must be on an allowed site;
+    /// so must every one of `urls`. Its cookies, and the values of `storage_keys`,
+    /// are masked from here on; `storage` reads the storage at all.
+    async fn page_login(
+        &self,
+        args: &Value,
+        urls: &[String],
+        storage: bool,
+        storage_keys: &[&str],
+    ) -> Result<Value, String> {
+        for u in urls {
+            let host = url::Url::parse(u)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+                .ok_or_else(|| format!("Not an address: {u}"))?;
+            if !crate::agent_passkeys::site_allowed(&self.allow_exports, &host) {
+                return Err(format!(
+                    "{host} is not open to agents here. Allowed: {}.",
+                    allowed(&self.allow_exports)
+                ));
+            }
+        }
+        let body = json!({ "urls": urls, "storage": storage });
+        let req = match (args["browser"].as_str(), args["tab"].as_u64()) {
+            (Some(browser), Some(tab)) => {
+                let browser =
+                    uuid::Uuid::parse_str(browser).map_err(|_| "Expected a browser UUID")?;
+                let prefix = match args["daemon"].as_str().filter(|s| !s.is_empty()) {
+                    Some(daemon) => {
+                        let overview = self.overview().await?;
+                        if overview.local_node.name == daemon {
+                            "/api".to_string()
+                        } else if overview.peers.iter().any(|p| p.name == daemon) {
+                            format!("/api/peers/{}", url_component(daemon))
+                        } else {
+                            return Err("Unknown hosting daemon".into());
+                        }
+                    }
+                    None => "/api".to_string(),
+                };
+                self.http
+                    .post(format!(
+                        "{}{prefix}/extension/nodes/{browser}/tabs/{tab}/auth",
+                        self.base
+                    ))
+                    .json(&body)
+            }
+            (None, None) => {
+                let (child, page_id, _, _) = self.current_page().await?;
+                let session = self.page_session(&child.target.url, &page_id).await;
+                let mut body = body;
+                body["session_id"] = json!(session);
+                self.http
+                    .post(format!(
+                        "{}/api/pages/{}/auth",
+                        child.target.url.trim_end_matches('/'),
+                        url_component(&page_id)
+                    ))
+                    .json(&body)
+            }
+            _ => {
+                return Err("Name both `browser` and `tab` for a shared browser, or neither".into())
+            }
+        };
+        let req = match self.secret {
+            Some(ref s) => req.header("X-Browser-Cluster-Secret", s),
+            None => req,
+        };
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("Could not reach the node: {e}"))?;
+        let status = res.status();
+        let login: Value = res.json().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!(
+                "The node refused: {}",
+                login["error"].as_str().unwrap_or(status.as_str())
+            ));
+        }
+        self.remember_login(&login, storage_keys);
+        let page = login["url"].as_str().unwrap_or_default();
+        let host = url::Url::parse(page)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+            .unwrap_or_default();
+        if !crate::agent_passkeys::site_allowed(&self.allow_exports, &host) {
+            return Err(format!(
+                "The page is on {host}, which is not open to agents here. Allowed: {}.",
+                allowed(&self.allow_exports)
+            ));
+        }
+        Ok(login)
+    }
+
+    async fn export_auth(&self, args: &Value) -> Result<String, String> {
+        let format = args["format"].as_str().unwrap_or("cookies");
+        if !matches!(format, "cookies" | "header" | "json") {
+            return Err("format is cookies, header or json".into());
+        }
+        let urls: Vec<String> = args["urls"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|u| u.as_str().map(str::to_string))
+            .collect();
+        let keys: Vec<String> = args["storage_keys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|k| k.as_str().map(str::to_string))
+            .collect();
+        let minutes = args["minutes"].as_u64().unwrap_or(15).clamp(1, 120);
+        let key_refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+        let login = self.page_login(args, &urls, true, &key_refs).await?;
+        let cookies = login["cookies"].as_array().cloned().unwrap_or_default();
+        let target = urls
+            .first()
+            .cloned()
+            .unwrap_or_else(|| login["url"].as_str().unwrap_or_default().to_string());
+        let (content, ext) = match format {
+            "cookies" => (cookie_jar(&cookies), "txt"),
+            "header" => (
+                format!("Cookie: {}\n", cookie_header(&cookies, &target)?),
+                "txt",
+            ),
+            _ => {
+                let mut storage = serde_json::Map::new();
+                for k in &keys {
+                    let v = login["local_storage"]
+                        .get(k)
+                        .or_else(|| login["session_storage"].get(k));
+                    storage.insert(
+                        k.clone(),
+                        v.cloned().ok_or_else(|| format!("No storage key {k}"))?,
+                    );
+                }
+                (
+                    serde_json::to_string_pretty(
+                        &json!({ "url": login["url"], "cookies": cookies, "storage": storage }),
+                    )
+                    .unwrap_or_default(),
+                    "json",
+                )
+            }
+        };
+        let path = self.write_private(&content, ext, minutes)?;
+        let names: Vec<String> = cookies
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} ({})",
+                    c["name"].as_str().unwrap_or("?"),
+                    c["domain"].as_str().unwrap_or("?")
+                )
+            })
+            .collect();
+        let mut storage_keys: Vec<&str> = ["local_storage", "session_storage"]
+            .iter()
+            .flat_map(|k| {
+                login[*k]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|m| m.keys().map(String::as_str))
+            })
+            .collect();
+        storage_keys.sort_unstable();
+        storage_keys.dedup();
+        let more = storage_keys.len().saturating_sub(60);
+        storage_keys.truncate(60);
+        Ok(format!(
+            "Wrote the login of {} to {} ({format}; deleted in {minutes} minutes). Never print, cat or copy it.\nCookies ({}): {}\nStorage keys of the page{}: {}\nValues are not shown and are masked in all later results.",
+            login["url"].as_str().unwrap_or("the page"),
+            path.display(),
+            names.len(),
+            if names.is_empty() { "none".to_string() } else { names.join(", ") },
+            if more > 0 { format!(" (first 60 of {})", 60 + more) } else { String::new() },
+            if storage_keys.is_empty() { "none".to_string() } else { storage_keys.join(", ") },
+        ))
+    }
+
+    /// Writes `content` to a new file only this user can read, in the runtime
+    /// directory (memory, not disk, where there is one), removed after `minutes`.
+    fn write_private(&self, content: &str, ext: &str, minutes: u64) -> Result<PathBuf, String> {
+        use std::io::Write as _;
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let base = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("browser-daemon-mcp");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&base)
+            .map_err(|e| format!("Could not create {}: {e}", base.display()))?;
+        let path = base.join(format!("login-{}.{ext}", uuid::Uuid::new_v4().simple()));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        self.exports.lock().unwrap().push(path.clone());
+        let gone = path.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(minutes * 60)).await;
+            let _ = tokio::fs::remove_file(gone).await;
+        });
+        Ok(path)
+    }
+
+    async fn fetch(&self, args: &Value) -> Result<String, String> {
+        let target = args["url"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or("Name the address (`url`)")?;
+        let parsed = url::Url::parse(target).map_err(|_| format!("Not an address: {target}"))?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("Only http and https".into());
+        }
+        let method = reqwest::Method::from_bytes(
+            args["method"]
+                .as_str()
+                .unwrap_or("GET")
+                .to_ascii_uppercase()
+                .as_bytes(),
+        )
+        .map_err(|_| "Bad method")?;
+        let bearer_key = args["bearer_storage_key"]
+            .as_str()
+            .filter(|s| !s.is_empty());
+        let login = self
+            .page_login(
+                args,
+                &[target.to_string()],
+                bearer_key.is_some(),
+                &bearer_key.into_iter().collect::<Vec<_>>(),
+            )
+            .await?;
+        let cookies = login["cookies"].as_array().cloned().unwrap_or_default();
+        let mut req = self
+            .http
+            .request(method, parsed.clone())
+            .timeout(Duration::from_secs(60));
+        for (k, v) in args["headers"].as_object().into_iter().flatten() {
+            if let Some(v) = v.as_str() {
+                req = req.header(k.as_str(), v);
+            }
+        }
+        let header = cookie_header(&cookies, target)?;
+        if !header.is_empty() {
+            req = req.header(reqwest::header::COOKIE, header);
+        }
+        if let Some(key) = bearer_key {
+            let raw = login["local_storage"]
+                .get(key)
+                .or_else(|| login["session_storage"].get(key))
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("The page has no storage key {key}"))?;
+            req = req.bearer_auth(bearer_token(raw));
+        }
+        if let Some(body) = args["body"].as_str() {
+            req = req.body(body.to_string());
+        }
+        let res = req
+            .send()
+            .await
+            .map_err(|e| self.mask(&format!("Request failed: {e}")))?;
+        let status = res.status();
+        let final_url = res.url().to_string();
+        let headers: Vec<String> = res
+            .headers()
+            .iter()
+            .filter(|(k, _)| {
+                !matches!(
+                    k.as_str(),
+                    "set-cookie" | "content-security-policy" | "report-to" | "nel"
+                )
+            })
+            .map(|(k, v)| format!("{k}: {}", v.to_str().unwrap_or("(binary)")))
+            .collect();
+        let bytes = res
+            .bytes()
+            .await
+            .map_err(|e| format!("Reading the answer failed: {e}"))?;
+        const LIMIT: usize = 64 * 1024;
+        let body = match std::str::from_utf8(&bytes[..bytes.len().min(LIMIT)]) {
+            Ok(text) => text.to_string(),
+            Err(e) if e.valid_up_to() > 0 => {
+                String::from_utf8_lossy(&bytes[..e.valid_up_to()]).into_owned()
+            }
+            Err(_) => format!("({} bytes of binary data)", bytes.len()),
+        };
+        Ok(self.mask(&format!(
+            "HTTP {status} from {final_url}\n{}\n\n{body}{}",
+            headers.join("\n"),
+            if bytes.len() > LIMIT {
+                format!("\n… ({} bytes in all)", bytes.len())
+            } else {
+                String::new()
+            }
+        )))
     }
 
     // ------------------------------------------------------------ ask a human
@@ -1304,9 +1798,54 @@ mod tests {
                 .map(|t| t["name"].as_str().unwrap().to_string())
                 .collect::<Vec<_>>()
         };
-        assert!(!names(own_tools(&[], &[], false)).contains(&"browser_fill_secret".to_string()));
-        assert!(names(own_tools(&["Frigate Plus".into()], &[], false))
+        assert!(
+            !names(own_tools(&[], &[], false, &[])).contains(&"browser_fill_secret".to_string())
+        );
+        assert!(names(own_tools(&["Frigate Plus".into()], &[], false, &[]))
             .contains(&"browser_fill_secret".to_string()));
+    }
+
+    #[test]
+    fn logins_become_jars_headers_and_tokens() {
+        let cookies = vec![
+            json!({ "name": "sid", "value": "s3cr3t", "domain": ".example.com", "path": "/", "expires": 1900000000.5, "http_only": true, "secure": true }),
+            json!({ "name": "pref", "value": "dark", "domain": "app.example.com", "path": "/app", "expires": null, "http_only": false, "secure": false }),
+        ];
+        let jar = cookie_jar(&cookies);
+        assert!(jar.contains("#HttpOnly_.example.com\tTRUE\t/\tTRUE\t1900000000\tsid\ts3cr3t\n"));
+        assert!(jar.contains("app.example.com\tFALSE\t/app\tFALSE\t0\tpref\tdark\n"));
+        assert_eq!(
+            cookie_header(&cookies, "https://app.example.com/app/x").unwrap(),
+            "sid=s3cr3t; pref=dark"
+        );
+        assert_eq!(
+            cookie_header(&cookies, "https://api.example.com/").unwrap(),
+            "sid=s3cr3t"
+        );
+        assert_eq!(
+            cookie_header(&cookies, "http://app.example.com/app").unwrap(),
+            "pref=dark"
+        );
+        assert_eq!(
+            bearer_token(r#"{"credentialType":"AccessToken","secret":"eyJ.a.b"}"#),
+            "eyJ.a.b"
+        );
+        assert_eq!(bearer_token("\"plain-token\""), "plain-token");
+    }
+
+    #[test]
+    fn export_tools_are_only_offered_with_allowed_sites() {
+        let names = |t: Vec<Value>| {
+            t.iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(!names(own_tools(&[], &[], false, &[])).contains(&"browser_fetch".to_string()));
+        let on = names(own_tools(&[], &[], false, &["microsoft.com".into()]));
+        assert!(
+            on.contains(&"browser_export_auth".to_string())
+                && on.contains(&"browser_fetch".to_string())
+        );
     }
 
     #[test]
@@ -1316,10 +1855,10 @@ mod tests {
                 .map(|t| t["name"].as_str().unwrap().to_string())
                 .collect::<Vec<_>>()
         };
-        let none = names(own_tools(&[], &[], false));
+        let none = names(own_tools(&[], &[], false, &[]));
         assert!(!none.contains(&"browser_passkey".to_string()));
         assert!(!none.contains(&"browser_ask_human".to_string()));
-        let both = names(own_tools(&[], &["microsoft.com".into()], true));
+        let both = names(own_tools(&[], &["microsoft.com".into()], true, &[]));
         assert!(both.contains(&"browser_passkey".to_string()));
         assert!(both.contains(&"browser_ask_human".to_string()));
     }

@@ -7,6 +7,7 @@
 - `browser_fill_secret` (only with `--allow-secret`): type a field of an [rbw](https://github.com/doy/rbw) vault entry (`password`, `username`, `totp` or a custom field) into a page field without the value reaching the agent. See below.
 - `browser_passkey` (only with `--allow-passkey`): sign in with a passkey from the vault. See [Passkeys](#passkeys-browser_passkey).
 - `browser_ask_human` (only with `--ask-human-cmd`): ask the user to do something only a person may do, in the live view of the agent's own page. See [Asking the user](#asking-the-user-browser_ask_human).
+- `browser_export_auth` and `browser_fetch` (only with `--allow-export`): hand the login of a page (cookies, storage values) to the agent's other tools, or use it for one HTTP request, without the agent seeing it. See [Logins](#logins-browser_export_auth-and-browser_fetch).
 
 Without a choice the agent gets a throwaway browser on the node with the most room. Profiles keep whatever they are signed in to, so agents may only open the ones named with `--allow-profile` (repeatable; `*` allows every profile); anything else is refused. `--playwright-cmd` names the program that runs Playwright MCP, called as `PROGRAM ENDPOINT OUTPUT_DIR`; `--url`, `--secret-file` as for the other commands.
 
@@ -52,3 +53,16 @@ Some steps need a person: a CAPTCHA or other bot check, an approval on another d
 | `BD_AGENT` | the agent's MCP client (`clientInfo.name`, e.g. `claude-code`) |
 
 What the program does with it is up to you (a phone notification, a chat message); its standard output is passed back to the agent, a non-zero exit is an error. It must finish within a minute. The agent is told to leave the page alone until the user is done.
+
+## Logins: `browser_export_auth` and `browser_fetch`
+
+An agent that is signed in through a browser sometimes needs that login elsewhere: a site's API, `curl`, a CLI. Reading cookies or tokens with Playwright's tools would put them into the tool call's answer and the logs. These tools keep them out:
+
+- `browser_fetch` makes one HTTP request (`url`, `method`, `headers`, `body`) with the cookies the browser would send to that address and, with `bearer_storage_key`, `Authorization: Bearer` with a token from the page's local or session storage (the value, or its `secret`/`access_token` field when it is JSON, as MSAL keeps them). The request is made by the MCP server, not the browser. The answer (status, headers without `Set-Cookie`, the first 64 KiB of the body) has the login's values masked.
+- `browser_export_auth` writes the login to a new file only the user can read, in `$XDG_RUNTIME_DIR/browser-daemon-mcp/` (memory), deleted after `minutes` (default 15) or when the server exits: a Netscape cookie jar (`format: cookies`, for `curl -b FILE`), a `Cookie:` header line (`header`, for `curl -H @FILE`), or JSON with the cookies and the `storage_keys` asked for (`json`). The answer gives the path, the cookie names and the page's storage keys, never a value.
+
+Either works on the agent's own page, or on a shared browser's tab (`browser`, `tab`, `daemon` from `browser_shared_nodes`) that its owner shares **with control**. The page, and every address the cookies are for, must be on a site named with `--allow-export` (repeatable; a site covers its subdomains, `*` allows any). The cookies are those the browser sends to the addresses, HttpOnly ones included. The values (cookies of 8 characters or more, and the storage values used) are masked in all later results, as filled secrets are.
+
+The node serves this as `POST /api/pages/{page}/auth` (a session's page; Chromium over CDP, Firefox over BiDi) and `POST /api/extension/nodes/{id}/tabs/{tab}/auth` (a shared tab with control; the browser extension reads them, Firefox with its `cookies` permission), with `{urls, storage}`; both need the cluster secret and log nothing of the values. The shared-browser command route never takes the extension's `authExport` action, so `browser_shared_command` cannot read them.
+
+What this does not protect: a file the agent's shell can read, it can also print. An exported session cookie is the account, often without a second factor: allow only sites agents need, keep the files short-lived, and treat one that reaches a transcript as leaked (sign that session out).

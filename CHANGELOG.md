@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+* `browser-daemon mcp` has `browser_export_auth` and `browser_fetch` (with `--allow-export`): a page's cookies (HttpOnly too) and storage values go to a private, short-lived file for the agent's tools, or into one HTTP request, without reaching the agent; masked in later results. Works on sessions' pages (Chromium and Firefox) and on shared browsers' tabs with control. Node routes `POST /api/pages/{id}/auth` and `POST /api/extension/nodes/{id}/tabs/{tab}/auth`.
+* The browser extension answers the daemon's `authExport`; the Firefox extension asks for the `cookies` permission for it.
+
 ## [0.7.1] - 2026-10-29
 
 ### Fixed

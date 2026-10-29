@@ -1295,6 +1295,36 @@ async function execute(command) {
   // Vault logins (picked in a live view, sent by the daemon): the frames first, so it
   // can keep to the entry's sites; then the fill, in those frames if still there.
   // Chromium: through the debugger (no host permission needed), in an isolated world per frame.
+  // A tab's login for an agent's tools (sent by the daemon only, never through the
+  // command route): the cookies the browser sends to the tab's address and the given
+  // ones, and with params.storage the top document's local and session storage.
+  if (action === 'authExport') {
+    const current = await api.tabs.get(tab);
+    const web = (u) => { try { return ['http:', 'https:'].includes(new URL(u).protocol); } catch { return false; } };
+    const urls = [current.url, ...(Array.isArray(params.urls) ? params.urls : [])].filter(u => typeof u === 'string' && web(u)).slice(0, 20);
+    if (!urls.length || urls[0] !== current.url) throw new Error('The tab has no web address.');
+    let cookies;
+    if (chromium) {
+      cookies = (await cdp(tab, 'Network.getCookies', {urls})).cookies.map(c => ({name: c.name, value: c.value, domain: c.domain,
+        path: c.path, expires: c.expires > 0 ? c.expires : null, http_only: !!c.httpOnly, secure: !!c.secure, same_site: c.sameSite || null}));
+    } else {
+      const seen = new Map();
+      for (const url of urls) {
+        for (const c of await api.cookies.getAll({url, firstPartyDomain: null, partitionKey: {}})) {
+          seen.set(`${c.domain}|${c.path}|${c.name}|${JSON.stringify(c.partitionKey || null)}`, {name: c.name, value: c.value, domain: c.hostOnly ? c.domain : `.${c.domain.replace(/^\./, '')}`,
+            path: c.path, expires: c.expirationDate || null, http_only: !!c.httpOnly, secure: !!c.secure, same_site: c.sameSite || null});
+        }
+      }
+      cookies = [...seen.values()];
+    }
+    let local_storage = {}, session_storage = {};
+    if (params.storage === true) {
+      const read = () => { const r = (s) => { try { return Object.fromEntries(Object.entries(s)); } catch { return {}; } }; return {local: r(localStorage), session: r(sessionStorage)}; };
+      const [top] = await api.scripting.executeScript({target: {tabId: tab, frameIds: [0]}, func: read});
+      local_storage = top?.result?.local || {}; session_storage = top?.result?.session || {};
+    }
+    return {cookies, local_storage, session_storage};
+  }
   if (action === 'frames') {
     if (chromium) {
       const out = [];

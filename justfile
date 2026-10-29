@@ -35,6 +35,7 @@ browser-smoke:
   python3 browser/smoke_firefox_roundtrip.py
   python3 browser/smoke_firefox_roundtrip.py --dom-only
   node browser/smoke_agent_passkey.mjs
+  node browser/smoke_auth_export.mjs
 
 # Bump to VERSION (X.Y.Z), date the changelog, commit and push.
 release-prepare version:

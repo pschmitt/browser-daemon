@@ -3,6 +3,8 @@ mod api;
 mod audible;
 mod audio;
 mod auth;
+mod auth_api;
+mod auth_export;
 mod autofill;
 mod backups;
 mod bidi;
@@ -78,6 +80,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::api::*;
+use crate::auth_api::*;
 use crate::bidi::BidiHub;
 use crate::browser::{ActiveBrowser, BrowserConfig, BrowserEngine, SessionState};
 use crate::cdp_ws::*;
@@ -941,6 +944,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/sessions/{id}/agent-passkey",
             post(api_session_agent_passkey),
+        )
+        .route("/api/pages/{page_id}/auth", post(api_page_auth))
+        .route(
+            "/api/extension/nodes/{id}/tabs/{tab}/auth",
+            post(api_extension_auth),
         )
         .route(
             "/api/pages/{page_id}/insert-text",
