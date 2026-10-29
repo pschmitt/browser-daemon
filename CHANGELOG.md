@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-29
+
+### Fixed
+
+* Shared browser channels enforce their limit under concurrent connections, and client presence updates are delivered reliably.
+* Unreadable node settings now stop startup instead of silently using defaults. MCP tool discovery rejects repeated or excessive pagination.
+
+### Changed
+
+* Split CLI definitions, terminal rendering, recording playback, and extension favicon handling into smaller modules.
+
 ## [0.9.1] - 2026-10-29
 
 ### Changed
