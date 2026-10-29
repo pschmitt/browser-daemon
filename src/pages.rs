@@ -6,22 +6,22 @@ pub(crate) static HANDOFF_HTML: &str = include_str!("../handoff.html");
 
 pub(crate) static DASHBOARD_HTML: &str = include_str!("../dashboard.html");
 
-pub(crate) static FAVICON_ICO: &[u8] = include_bytes!("../favicon.ico");
+pub(crate) static FAVICON_ICO: &[u8] = include_bytes!("../assets/icons/favicon.ico");
 
-pub(crate) static FAVICON_SVG: &str = include_str!("../favicon.svg");
+pub(crate) static FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
 
-pub(crate) static HANDOFF_ICO: &[u8] = include_bytes!("../handoff.ico");
+pub(crate) static HANDOFF_ICO: &[u8] = include_bytes!("../assets/icons/handoff.ico");
 
-pub(crate) static HANDOFF_SVG: &str = include_str!("../handoff.svg");
+pub(crate) static HANDOFF_SVG: &str = include_str!("../assets/handoff.svg");
 
 pub(crate) static MANIFEST_JSON: &str = include_str!("../manifest.webmanifest");
 
 pub(crate) static SW_JS: &str = include_str!("../sw.js");
 
-pub(crate) static ICON_192: &[u8] = include_bytes!("../icon-192.png");
+pub(crate) static ICON_192: &[u8] = include_bytes!("../assets/icons/icon-192.png");
 
-pub(crate) static ICON_512: &[u8] = include_bytes!("../icon-512.png");
-pub(crate) static ICON_MASKABLE_512: &[u8] = include_bytes!("../icon-maskable-512.png");
+pub(crate) static ICON_512: &[u8] = include_bytes!("../assets/icons/icon-512.png");
+pub(crate) static ICON_MASKABLE_512: &[u8] = include_bytes!("../assets/icons/icon-maskable-512.png");
 
 pub(crate) static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 

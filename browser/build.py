@@ -21,7 +21,11 @@ def main():
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(ROOT / "extension", destination)
-        shutil.copyfile(ROOT.parent / "icon-192.png", destination / "icon.png")
+        # The icons live with the daemon's other logo assets (assets/icons).
+        icons = ROOT.parent / "assets" / "icons"
+        shutil.copyfile(icons / "icon-192.png", destination / "icon.png")
+        for size in (16, 32, 48):
+            shutil.copyfile(icons / f"toolbar-{size}.png", destination / f"toolbar-{size}.png")
         manifest = {
             "manifest_version": 3,
             "name": "Browser Daemon Node",
