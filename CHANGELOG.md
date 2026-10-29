@@ -4,7 +4,7 @@
 
 ### Fixed
 
-* `browser_use profile=…` answered "No profile" when the node holding the profile was too slow for the overview's poll (it listed the node as online with no profiles). It checks the nodes' profile counts, asks again (twice) when a node's list is short, and names those nodes in the error if the profile is still missing.
+* `browser_use profile=…` answered "No profile" when the node holding the profile was too slow for the overview's poll (it listed the node as online with no profiles). It checks the nodes' profile counts, asks again (twice) when a node's list is short, and names those nodes in the error if the profile is still missing. `browser_status` warns the same way when a node's profile list is short.
 
 ### Changed
 

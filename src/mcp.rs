@@ -1490,13 +1490,20 @@ impl State {
             })
             .collect();
         let hidden = ov.profiles.len() - profiles.len();
-        Ok(serde_json::to_string_pretty(&json!({
+        let mut status = json!({
             "current": current,
             "profiles_you_may_open": profiles,
             "other_profiles": format!("{hidden} more exist; the user has not allowed agents to open them"),
             "nodes": nodes,
-        }))
-        .unwrap_or_default())
+        });
+        let incomplete = Self::incomplete_nodes(&ov);
+        if !incomplete.is_empty() {
+            status["warning"] = json!(format!(
+                "{} did not list all its profiles in time (busy?), so the list above may be short: call browser_status again",
+                incomplete.join(", ")
+            ));
+        }
+        Ok(serde_json::to_string_pretty(&status).unwrap_or_default())
     }
 
     async fn use_browser(&self, args: &Value) -> Result<String, String> {
