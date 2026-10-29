@@ -2,12 +2,19 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-29
+
+### Added
+
+* The daemon tracks which agent owns which browser tab. The dashboard and the handoff page show each client's tab count and a tab's owner, the profile chip follows the selected tab's owner, and session details have more information.
+
 ### Fixed
 
 * `browser_use profile=…` answered "No profile" when the node holding the profile was too slow for the overview's poll (it listed the node as online with no profiles). It checks the nodes' profile counts, asks again (twice) when a node's list is short, and names those nodes in the error if the profile is still missing. `browser_status` warns the same way when a node's profile list is short.
 
 ### Changed
 
+* New logo: the winking mascot replaces the browser-window devil, with a vector master in `assets/mascot.svg`. The extension's toolbar icon shows the state: gray when offline, a purple "?" when a dashboard asks to pair, an orange dot while a viewer watches, a red dot while it may control, and a red "!" after a failure.
 * `browser_export_auth` lists all of the page's storage keys, not the first 60; `storage_filter` narrows the list.
 * `browser_export_auth` writes a `Cookie:` header by default (`format: header`, for `curl -H @FILE`): curl 8.22 ignores the cookies of jar files it reads.
 
