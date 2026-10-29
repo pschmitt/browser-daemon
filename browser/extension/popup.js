@@ -317,12 +317,20 @@ async function share(ids, control = $('control').checked) {
 const sharedIds = () => state.tabs.filter(t => t.shared).map(t => t.id);
 
 // Permission requests must start in the click itself (a user gesture).
-$('tabs').addEventListener('click', event => {
-  const toggle = event.target.closest('input.switch');
-  if (!toggle) return;
+function updateTabSharing(toggle) {
   const id = Number(toggle.dataset.id);
   const ids = toggle.checked ? [...sharedIds(), id] : sharedIds().filter(t => t !== id);
   void (toggle.checked ? capturePermission() : Promise.resolve()).then(() => share(ids), error => { toggle.checked = false; showError(error); });
+}
+$('tabs').addEventListener('click', event => {
+  const toggle = event.target.closest('input.switch');
+  if (toggle) { updateTabSharing(toggle); return; }
+  const item = event.target.closest('li');
+  const rowToggle = item?.querySelector('input.switch:not(:disabled)');
+  if (!rowToggle) return;
+  event.preventDefault();
+  rowToggle.checked = !rowToggle.checked;
+  updateTabSharing(rowToggle);
 });
 $('shareAllTabs').addEventListener('click', event => {
   event.preventDefault();
