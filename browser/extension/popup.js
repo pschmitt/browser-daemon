@@ -393,6 +393,21 @@ $('copyCompanionCommand').addEventListener('click', async event => {
     button.setAttribute('aria-label', 'Copy setup commands');
   }, 1600);
 });
+$('copyOrigin').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  try {
+    await navigator.clipboard.writeText($('origin').textContent.trim());
+    button.title = 'Copied';
+    button.setAttribute('aria-label', 'Copied extension origin');
+  } catch {
+    button.title = 'Could not copy';
+    button.setAttribute('aria-label', 'Could not copy extension origin');
+  }
+  window.setTimeout(() => {
+    button.title = 'Copy extension origin';
+    button.setAttribute('aria-label', 'Copy extension origin');
+  }, 1600);
+});
 async function pairFromDashboard(address, name) {
   clearError();
   try {

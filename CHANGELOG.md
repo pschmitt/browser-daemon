@@ -4,7 +4,7 @@
 
 ### Changed
 
-* The browser extension's Advanced panel uses clear icons and a readable connection history; Firefox companion setup is a single copyable command block.
+* The browser extension's Advanced panel uses clear icons and a readable connection history; Firefox companion setup and the extension origin are copyable.
 * The app favicon uses the standalone mascot artwork without the purple tile background.
 
 ## [0.9.0] - 2026-10-29

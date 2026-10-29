@@ -113,7 +113,8 @@ code { font-family: ui-monospace, monospace; font-size: 11.5px; word-break: brea
 .history-event.success .history-marker { background: var(--good); }
 .history-event.failure .history-marker { background: var(--bad); }
 .extension-origin { display: grid; gap: 4px; margin-bottom: 8px; }
-.extension-origin code { font-size: 11px; overflow-wrap: anywhere; word-break: normal; }
+.extension-origin-value { position: relative; min-width: 0; padding: 8px 42px 8px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.extension-origin-value code { display: block; padding: 0; background: transparent; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; word-break: normal; }
 kbd { font: 11px ui-monospace, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
 .approval { background: var(--card); border: 1px solid var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); border-radius: 14px;
   padding: 18px 16px 10px; margin-bottom: 12px; text-align: center; }
