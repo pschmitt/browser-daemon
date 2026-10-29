@@ -378,35 +378,30 @@ $('native').addEventListener('click', async () => {
     await refresh();
   } catch (error) { showError(error); }
 });
-$('copyCompanionCommand').addEventListener('click', async event => {
-  const button = event.currentTarget;
+async function copyWithFeedback(button, value, label) {
+  button.classList.remove('copied');
   try {
-    await navigator.clipboard.writeText($('companionCommand').textContent.trim());
+    await navigator.clipboard.writeText(value);
+    button.classList.add('copied');
     button.title = 'Copied';
-    button.setAttribute('aria-label', 'Copied setup commands');
+    button.setAttribute('aria-label', `Copied ${label}`);
   } catch {
     button.title = 'Could not copy';
-    button.setAttribute('aria-label', 'Could not copy setup commands');
+    button.setAttribute('aria-label', `Could not copy ${label}`);
   }
   window.setTimeout(() => {
-    button.title = 'Copy setup commands';
-    button.setAttribute('aria-label', 'Copy setup commands');
+    button.classList.remove('copied');
+    button.title = `Copy ${label}`;
+    button.setAttribute('aria-label', `Copy ${label}`);
   }, 1600);
+}
+$('copyCompanionCommand').addEventListener('click', event => {
+  const button = event.currentTarget;
+  void copyWithFeedback(button, $('companionCommand').textContent.trim(), 'setup commands');
 });
-$('copyOrigin').addEventListener('click', async event => {
+$('copyOrigin').addEventListener('click', event => {
   const button = event.currentTarget;
-  try {
-    await navigator.clipboard.writeText($('origin').textContent.trim());
-    button.title = 'Copied';
-    button.setAttribute('aria-label', 'Copied extension origin');
-  } catch {
-    button.title = 'Could not copy';
-    button.setAttribute('aria-label', 'Could not copy extension origin');
-  }
-  window.setTimeout(() => {
-    button.title = 'Copy extension origin';
-    button.setAttribute('aria-label', 'Copy extension origin');
-  }, 1600);
+  void copyWithFeedback(button, $('origin').textContent.trim(), 'extension origin');
 });
 async function pairFromDashboard(address, name) {
   clearError();
