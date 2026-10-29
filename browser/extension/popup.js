@@ -56,7 +56,7 @@ function renderHeader() {
   $('approvalSound').textContent = soundSummary;
   $('setupSharing').textContent = `${sharingSummary} ${soundSummary}${state.sharing.control ? ' Remote control is enabled.' : ''}`;
   const companionMissing = !state.chromium && !state.nativeReady;
-  $('inputMode').textContent = companionMissing ? 'Companion not detected · Some sites may block input.'
+  $('inputMode').textContent = companionMissing ? 'Companion not detected'
     : 'Trusted mouse and keyboard input';
   $('inputMode').hidden = !companionMissing;
   $('title').textContent = reg ? (state.saved.name || 'Browser node') : 'Browser node';
@@ -267,11 +267,24 @@ async function refresh() {
   $('companion').hidden = state.chromium;
   $('nativeLabel').textContent = state.nativeReady ? 'Disable companion' : 'Enable companion';
   $('native').disabled = !reg;
-  $('diagnosticStatus').textContent = reg
-    ? `Node ${reg.id}${reg.expires_at ? `, until ${new Date(reg.expires_at * 1000).toLocaleTimeString()}` : ', no time limit'}.` : state.status;
+  $('diagnosticStatus').textContent = reg?.id || state.rememberedBrowser?.name || 'Not connected';
+  $('connectionExpiry').textContent = reg
+    ? reg.expires_at ? new Date(reg.expires_at * 1000).toLocaleString() : 'Never'
+    : 'Not connected';
   $('connectionHistory').replaceChildren(...state.history.slice().reverse().map(event => {
     const row = document.createElement('li');
-    row.textContent = `${new Date(event.at).toLocaleTimeString()} ${event.message}`;
+    const severity = event.message === 'Connected' ? 'success'
+      : /disconnect|closed|failed|rejected|expired|revoked|invalid/i.test(event.message) ? 'failure' : 'pending';
+    row.className = `history-event ${severity}`;
+    const marker = document.createElement('span');
+    marker.className = 'history-marker';
+    marker.setAttribute('aria-hidden', 'true');
+    const time = document.createElement('time');
+    time.dateTime = new Date(event.at).toISOString();
+    time.textContent = new Date(event.at).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    const messageText = document.createElement('span');
+    messageText.textContent = event.message;
+    row.append(marker, time, messageText);
     return row;
   }));
 }
@@ -369,11 +382,16 @@ $('copyCompanionCommand').addEventListener('click', async event => {
   const button = event.currentTarget;
   try {
     await navigator.clipboard.writeText($('companionCommand').textContent.trim());
-    button.textContent = 'Copied';
+    button.title = 'Copied';
+    button.setAttribute('aria-label', 'Copied setup commands');
   } catch {
-    button.textContent = 'Copy failed';
+    button.title = 'Could not copy';
+    button.setAttribute('aria-label', 'Could not copy setup commands');
   }
-  window.setTimeout(() => { button.textContent = 'Copy'; }, 1600);
+  window.setTimeout(() => {
+    button.title = 'Copy setup commands';
+    button.setAttribute('aria-label', 'Copy setup commands');
+  }, 1600);
 });
 async function pairFromDashboard(address, name) {
   clearError();

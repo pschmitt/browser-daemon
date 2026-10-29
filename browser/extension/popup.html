@@ -31,12 +31,12 @@
     <a id="dashboard" class="button dashboard-button" aria-label="Open dashboard" title="Open dashboard" target="_blank" rel="noreferrer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 5h6v6"/><path d="m19 5-9 9"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg></a>
   </div>
   <details id="tabList" class="tab-card">
-    <summary><span class="tab-summary-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><span>Tabs <span id="sharedCount" class="count"></span></span></span><button id="shareAllTabs" type="button" class="link">Share all</button></summary>
+    <summary class="section-summary"><span class="section-summary-title"><svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><svg class="summary-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 3v4M16 3v4"/></svg><span>Tabs <span id="sharedCount" class="count"></span></span></span><button id="shareAllTabs" type="button" class="link">Share all</button></summary>
     <ul id="tabs" class="tabs"></ul>
     <p id="noTabs" class="muted center" hidden>No web pages open.</p>
   </details>
   <details id="sharingSettings" class="card">
-    <summary>Settings</summary>
+    <summary class="section-summary"><span class="section-summary-title"><svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><svg class="summary-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.8 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.8-1l-1.7.7-1.4-2.4 1.4-1.1a7 7 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.8-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.8 1l1.7-.7 1.4 2.4-1.4 1.1a7 7 0 0 1 0 2Z"/></svg><span>Settings</span></span></summary>
     <label class="row"><span><b>Remote control</b><small>Viewers can click, type and navigate</small></span><input id="control" type="checkbox" class="switch danger"></label>
     <label class="row"><span><b>Share all tabs</b><small>Every tab, including new ones</small></span><input id="shareAll" type="checkbox" class="switch"></label>
     <label class="row" id="autoShareRow"><span><b>Share new tabs</b><small>Tabs you open join automatically</small></span><input id="autoShare" type="checkbox" class="switch"></label>
@@ -73,7 +73,7 @@
 </main>
 
 <details id="advanced" class="card">
-  <summary>Advanced</summary>
+  <summary class="section-summary"><span class="section-summary-title"><svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><svg class="summary-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg><span>Advanced</span></span></summary>
   <section id="companion" hidden>
     <h3 class="companion-heading"><img src="firefox-logo.svg" alt="" width="24" height="24">Firefox companion</h3>
     <p id="inputMode" class="input-mode input-warning small" role="status" hidden></p>
@@ -82,14 +82,14 @@
       <code id="companionCommand" class="companion-command">python3 browser/install.py
 MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 &#92;
 firefox --remote-debugging-port 9222</code>
-      <button id="copyCompanionCommand" class="copy-command" type="button" title="Copy setup commands" aria-live="polite">Copy</button>
+      <button id="copyCompanionCommand" class="copy-command" type="button" title="Copy setup commands" aria-label="Copy setup commands" aria-live="polite"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/></svg></button>
     </div>
     <div class="companion-actions">
       <button id="native" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V3m6 4V3M7 7h10v4a5 5 0 0 1-10 0V7Z"/><path d="M12 16v5"/></svg><span id="nativeLabel">Enable companion</span></button>
     </div>
   </section>
   <section>
-    <h3>Allowed daemons</h3>
+    <h3 class="advanced-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>Allowed daemons</h3>
     <p id="allowlistStatus" class="muted small"></p>
     <label class="field">Origin source<select id="allowlistMode"><option value="auto">Automatic</option><option value="custom">Custom</option></select></label>
     <form id="discoveryConfig" class="daemon-origin-form">
@@ -103,10 +103,13 @@ firefox --remote-debugging-port 9222</code>
     </form>
   </section>
   <section>
-    <h3>Connection</h3>
-    <p id="diagnosticStatus" class="muted small"></p>
-    <ol id="connectionHistory" class="history"></ol>
-    <p class="muted small">Extension origin: <span id="origin"></span></p>
+    <h3 class="advanced-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>Connection</h3>
+    <div class="connection-meta">
+      <div><span>Node ID</span><code id="diagnosticStatus"></code></div>
+      <div><span>Grant expiry</span><b id="connectionExpiry"></b></div>
+    </div>
+    <ol id="connectionHistory" class="history" aria-label="Recent connection events"></ol>
+    <div class="extension-origin"><span>Extension origin</span><code id="origin"></code></div>
     <button id="forgetRemembered" type="button" class="danger" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>Forget this browser</button>
     <p id="forgetHint" class="muted small" hidden>Reconnect first, or revoke this browser from the dashboard.</p>
   </section>
