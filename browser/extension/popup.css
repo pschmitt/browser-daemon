@@ -49,6 +49,9 @@ header img { border-radius: 10px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; cursor: pointer; }
 .row + .row { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
 .row span { display: flex; flex-direction: column; }
+.row .row-main { display: flex; flex-direction: row; align-items: flex-start; gap: 9px; min-width: 0; }
+.row .row-copy { min-width: 0; }
+.setting-icon { width: 16px; height: 16px; flex: none; margin-top: 2px; fill: none; stroke: var(--muted); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .row small { color: var(--muted); font-size: 12.5px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 13px; margin-bottom: 10px; }
 input:not([type=checkbox]), select, textarea { font: inherit; font-weight: 400; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
