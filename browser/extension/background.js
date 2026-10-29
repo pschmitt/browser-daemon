@@ -63,6 +63,8 @@ let expiryTimer = null;
 let lastAnswer = 0;
 let restoring = false;
 let status = 'Disconnected';
+// Set when the last disconnect was a failure rather than the user's choice.
+let failed = false;
 let generation = 0;
 let busy = 0;
 let tabSerial = Promise.resolve();
@@ -341,59 +343,79 @@ function publishSafely() { void publish().catch(() => stop('Could not update sha
 
 let published = [];
 let approvalPending = 0;
-const connectionIcon = {bitmaps: null};
+const toolbarIcon = {bitmaps: null};
 async function toolbarBitmaps() {
   const icon = api.runtime.getManifest().action?.default_icon;
-  connectionIcon.bitmaps ||= Promise.all([16, 32, 48].map(async size => {
+  toolbarIcon.bitmaps ||= Promise.all([16, 32, 48].map(async size => {
     const path = typeof icon === 'string' ? icon : icon?.[size] || icon?.[32] || 'icon.png';
     const image = await (await fetch(api.runtime.getURL(path))).blob();
     return [size, await createImageBitmap(image)];
   }));
-  return connectionIcon.bitmaps;
+  return toolbarIcon.bitmaps;
 }
-function connectionFrame(bitmap, size, state) {
+// The mascot with a state mark in the top-right corner: an orange dot while a
+// viewer watches, a red one while it may also control, a purple "?" while a
+// dashboard asks to pair and a red "!" after a failure. Offline is the
+// mascot gray and dimmed.
+function toolbarFrame(bitmap, size, state) {
   const canvas = new OffscreenCanvas(size, size);
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', {willReadFrequently: true});
   ctx.drawImage(bitmap, 0, 0, size, size);
-  const r = size * 0.2, cx = size - r - 0.5, cy = r + 0.5;
-  ctx.fillStyle = state === 'offline' ? '#e11d48' : '#3b82f6';
-  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  if (state === 'offline') {
+    const frame = ctx.getImageData(0, 0, size, size), px = frame.data;
+    for (let i = 0; i < px.length; i += 4) {
+      const gray = 0.3 * px[i] + 0.59 * px[i + 1] + 0.11 * px[i + 2];
+      px[i] = px[i + 1] = px[i + 2] = gray;
+      px[i + 3] *= 0.5;
+    }
+    ctx.putImageData(frame, 0, 0);
+    return frame;
+  }
+  const dots = {view: '#f59e0b', control: '#e11d48'};
+  const bubbles = {approval: ['?', '#6d4aff'], error: ['!', '#e11d48']};
+  if (dots[state]) {
+    const r = size * 0.2, cx = size - r - 0.5, cy = r + 0.5;
+    ctx.fillStyle = dots[state]; ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(1, size / 16);
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  } else if (bubbles[state]) {
+    const [glyph, color] = bubbles[state], r = size * 0.27, cx = size - r - 0.5, cy = r + 0.5;
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(size * 0.42)}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(glyph, cx, cy + size * 0.03);
+  }
   return ctx.getImageData(0, 0, size, size);
 }
-async function drawConnectionIcon(state) {
+async function drawToolbarIcon(state) {
   try {
     const bitmaps = await toolbarBitmaps();
-    if (!registration && state !== 'offline') return;
-    if (registration && state === 'offline') return;
     await api.action.setIcon({imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) =>
-      [size, connectionFrame(bitmap, size, state)]))});
-  } catch { /* Cosmetic only. */ }
-}
-// The top-right icon mark follows rbw's canvas-drawn toolbar badge. A "?"
-// remains the approval prompt when a dashboard is waiting to pair.
-async function badge() {
-  if (approvalPending > Date.now() && !registration) {
-    await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'});
-    await api.action.setBadgeText({text: '?'});
-    await api.action.setBadgeBackgroundColor({color: '#6d4aff'});
-    await api.action.setBadgeTextColor({color: '#ffffff'});
-    await api.action.setTitle({title: 'Browser node: a dashboard asks to connect — click to answer'});
-    return;
+      [size, toolbarFrame(bitmap, size, state)]))});
+  } catch {
+    // Cosmetic only: fall back to the plain mascot.
+    await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'}).catch(() => {});
   }
-  const connected = !!registration && clientConnected;
+}
+function toolbarState() {
+  if (!registration) return approvalPending > Date.now() ? 'approval' : failed ? 'error' : 'offline';
+  if (!clientConnected) return 'idle';
+  return [...shared.values()].some(grant => grant.control && !grant.paused) ? 'control' : 'view';
+}
+const toolbarTitles = {
+  approval: 'Browser node: a dashboard asks to connect — click to answer',
+  error: 'Browser node: the connection failed — click for details',
+  offline: 'Browser node: not connected to the daemon',
+  idle: 'Browser node: connected — waiting for a client',
+  view: 'Browser node: connected — a client is viewing this browser',
+  control: 'Browser node: connected — a client is controlling this browser',
+};
+async function badge() {
+  const state = toolbarState();
   await api.action.setBadgeText({text: ''});
   await api.action.setBadgeBackgroundColor({color: [0, 0, 0, 0]});
-  await api.action.setBadgeTextColor({color: '#e11d48'});
-  if (!registration) {
-    await drawConnectionIcon('offline');
-  } else if (connected) {
-    await drawConnectionIcon('connected');
-  } else {
-    await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'});
-  }
-  await api.action.setTitle({title: !registration ? 'Browser node: not connected to the daemon'
-    : connected ? 'Browser node: connected — a client is using this browser'
-      : 'Browser node: connected — waiting for a client'});
+  await drawToolbarIcon(state);
+  await api.action.setTitle({title: toolbarTitles[state]});
 }
 
 async function detach(tab) {
@@ -411,6 +433,7 @@ async function stop(reason = 'Disconnected', retry = false) {
   generation++;
   const clearedAlarm = api.alarms.clear('node-reconnect');
   status = reason;
+  failed = /could not|fail|invalid|timed out|stopped answering|too large|revoked|not granted|no longer|expired|differs/i.test(reason);
   record(reason);
   clientConnected = false;
   pendingConnection = null;
@@ -1857,6 +1880,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
   publicGrant = crypto.randomUUID();
   const myGeneration = generation;
   status = 'Connecting to daemon';
+  failed = false;
   record(status);
   const url = new URL('/api/extension/connect', server);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
