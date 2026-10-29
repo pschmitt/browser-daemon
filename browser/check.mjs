@@ -115,6 +115,7 @@ function harness(firefox = false, stored = {shareAll: false}) {
   vm.runInContext(source('policy.js'), context);
   vm.runInContext(source('files-page.js'), context);
   vm.runInContext(source('files.js'), context);
+  vm.runInContext(source('favicon.js'), context);
   vm.runInContext(source('background.js'), context);
   const ui = {id: 'test', url: 'chrome-extension://test/popup.html'};
   async function message(value, sender = ui) {

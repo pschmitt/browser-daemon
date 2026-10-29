@@ -1854,6 +1854,7 @@ impl State {
                 .await;
             let mut tools = Vec::new();
             let mut cursor: Option<String> = None;
+            let mut cursors = std::collections::HashSet::new();
             loop {
                 let params = cursor
                     .as_ref()
@@ -1863,8 +1864,9 @@ impl State {
                     .await?;
                 tools.extend(page["tools"].as_array().cloned().unwrap_or_default());
                 cursor = page["nextCursor"].as_str().map(str::to_string);
-                if cursor.is_none() {
-                    break;
+                match &cursor {
+                    None => break,
+                    Some(c) => advance_tool_cursor(&mut cursors, c)?,
                 }
             }
             *child.tools.lock().unwrap() = tools;
@@ -1876,6 +1878,17 @@ impl State {
         }
         Ok(child)
     }
+}
+
+// A child must advance its cursor and finish listing in a bounded number of pages.
+fn advance_tool_cursor(
+    seen: &mut std::collections::HashSet<String>,
+    cursor: &str,
+) -> Result<(), (i64, String)> {
+    if seen.len() >= 100 || !seen.insert(cursor.to_owned()) {
+        return Err((-32603, "Invalid or excessive tool pagination".into()));
+    }
+    Ok(())
 }
 
 /// Answers of a child go to whoever asked; its own requests get the plainest reply.
@@ -1921,6 +1934,16 @@ async fn read_child(child: Arc<Child>, stdout: tokio::process::ChildStdout) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tool_pagination_rejects_repeated_and_excessive_cursors() {
+        let mut seen = std::collections::HashSet::new();
+        assert!(super::advance_tool_cursor(&mut seen, "first").is_ok());
+        assert!(super::advance_tool_cursor(&mut seen, "first").is_err());
+        for i in 1..100 {
+            assert!(super::advance_tool_cursor(&mut seen, &i.to_string()).is_ok());
+        }
+        assert!(super::advance_tool_cursor(&mut seen, "overflow").is_err());
+    }
     use super::*;
 
     #[test]

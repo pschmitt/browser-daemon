@@ -634,7 +634,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let settings = Arc::new(settings::Store::load(&settings_path));
+    let settings = Arc::new(settings::Store::load(&settings_path)?);
     let history = Arc::new(history::History::new(config.state_dir().join("history")));
     let thumbnails = Arc::new(thumbnail::Thumbnails::default());
     let shares = Arc::new(shares::Store::load(&config.state_dir().join("shares.json")));

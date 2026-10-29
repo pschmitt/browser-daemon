@@ -62,7 +62,7 @@ def main():
                 "cookies",
             ])
             manifest["host_permissions"] = ["<all_urls>"]
-            manifest["background"] = {"scripts": ["policy.js", "audio.js", "files-page.js", "files.js", "background.js"]}
+            manifest["background"] = {"scripts": ["policy.js", "audio.js", "files-page.js", "files.js", "favicon.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
                 "id": "browser-daemon-node@pschmitt.dev",
                 "strict_min_version": "142.0",

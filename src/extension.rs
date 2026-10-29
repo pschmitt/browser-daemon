@@ -234,6 +234,7 @@ struct Node {
     // Live views of shared tabs (see `cdp`). Dropping one closes its socket.
     channels: Mutex<HashMap<Uuid, Channel>>,
     stop: tokio::sync::Notify,
+    presence_changed: tokio::sync::Notify,
     // Bumped when its shared tabs change or it goes away (see `changes`).
     revision: std::sync::atomic::AtomicU64,
     changed: tokio::sync::Notify,
@@ -274,10 +275,16 @@ impl Node {
         channel || !self.pending.lock().unwrap().is_empty()
     }
     fn notify_client_presence(&self) {
-        let _ = self.outbound.try_send(json!({
-            "type": "client_presence",
-            "connected": self.client_connected(),
-        }));
+        self.presence_changed.notify_one();
+    }
+
+    fn insert_channel(&self, id: Uuid, channel: Channel) -> bool {
+        let mut channels = self.channels.lock().unwrap();
+        if channels.len() >= MAX_CHANNELS {
+            return false;
+        }
+        channels.insert(id, channel);
+        true
     }
 }
 
@@ -1306,6 +1313,7 @@ async fn serve(
         pending: Mutex::default(),
         channels: Mutex::default(),
         stop: tokio::sync::Notify::new(),
+        presence_changed: tokio::sync::Notify::new(),
         revision: std::sync::atomic::AtomicU64::new(0),
         changed: tokio::sync::Notify::new(),
     });
@@ -1347,6 +1355,9 @@ async fn serve(
             },
             _ = tick.tick() => {
                 if node.deadline.is_some_and(|d| Instant::now() >= d) || last_seen.elapsed() > Duration::from_secs(50) { break; }
+            }
+            _ = node.presence_changed.notified() => {
+                send(ws, json!({"type": "client_presence", "connected": node.client_connected()})).await?;
             }
             Some(command) = commands.recv() => send(ws, command).await?,
             incoming = ws.recv() => {
@@ -1536,7 +1547,7 @@ pub async fn cdp(
 async fn relay(node: &Arc<Node>, tab: u32, ws: &mut WebSocket) {
     let channel = Uuid::new_v4();
     let (tx, mut rx) = mpsc::channel::<String>(256);
-    node.channels.lock().unwrap().insert(
+    if !node.insert_channel(
         channel,
         Channel {
             tab,
@@ -1544,7 +1555,10 @@ async fn relay(node: &Arc<Node>, tab: u32, ws: &mut WebSocket) {
             client: true,
             automation: false,
         },
-    );
+    ) {
+        tracing::warn!("Live view rejected: channel limit reached");
+        return;
+    }
     node.notify_client_presence();
     struct Open(Arc<Node>, Uuid, u32);
     impl Drop for Open {
@@ -1672,7 +1686,10 @@ async fn feed(
                     }
                     tab = want;
                     if let Some(t) = tab {
-                        node.channels.lock().unwrap().insert(channel, Channel { tab: t, tx: tx.clone(), client: false, automation: false });
+                        if !node.insert_channel(channel, Channel { tab: t, tx: tx.clone(), client: false, automation: false }) {
+                            tracing::warn!("Recording waiting for a free channel");
+                            continue;
+                        }
                         request(t, next, "Page.enable", json!({}));
                         request(t, next + 1, "Page.startScreencast", screencast.clone());
                         next += 2;
@@ -1860,6 +1877,36 @@ mod tests {
         let id = Uuid::parse_str(registered["id"].as_str().unwrap()).unwrap();
         let node = broker.nodes.lock().unwrap().get(&id).unwrap().clone();
         assert_eq!(node.info.lock().unwrap().tabs[0].id, 7);
+        // Concurrent registrations share one atomic limit, even after upgrade.
+        let mut tasks = Vec::new();
+        for _ in 0..MAX_CHANNELS * 2 {
+            let node = node.clone();
+            tasks.push(tokio::spawn(async move {
+                let (tx, _rx) = mpsc::channel(1);
+                node.insert_channel(
+                    Uuid::new_v4(),
+                    Channel {
+                        tab: 7,
+                        tx,
+                        client: true,
+                        automation: true,
+                    },
+                )
+            }));
+        }
+        let mut accepted = 0;
+        for task in tasks {
+            accepted += usize::from(task.await.unwrap());
+        }
+        assert_eq!(accepted, MAX_CHANNELS);
+        node.notify_client_presence();
+        let presence = receive_json(&mut ws).await.unwrap();
+        assert_eq!(presence["type"], "client_presence");
+        assert_eq!(presence["connected"], true);
+        node.channels.lock().unwrap().clear();
+        node.notify_client_presence();
+        let presence = receive_json(&mut ws).await.unwrap();
+        assert_eq!(presence["connected"], false);
         let request_id = Uuid::new_v4();
         let (tx, rx) = oneshot::channel();
         node.pending.lock().unwrap().insert(request_id, tx);

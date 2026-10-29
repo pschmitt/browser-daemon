@@ -297,7 +297,9 @@ impl Facade {
                         out.push(json!({"method": "Target.targetCreated", "params": {"targetInfo": self.target_info(&t, false)}}));
                     }
                     if self.auto_attach {
-                        self.attach(&t, None, out);
+                        if let Err(error) = self.attach(&t, None, out) {
+                            tracing::warn!(%error, tab = t.id, "Could not auto-attach");
+                        }
                     }
                     self.known.insert(t.id, t);
                 }
@@ -312,11 +314,16 @@ impl Facade {
     }
 
     /// A session on the tab; `via`: the browser session that asked (its events go there).
-    fn attach(&mut self, t: &Tab, via: Option<&str>, out: &mut Vec<Value>) -> String {
+    fn attach(
+        &mut self,
+        t: &Tab,
+        via: Option<&str>,
+        out: &mut Vec<Value>,
+    ) -> Result<String, String> {
         let session = Uuid::new_v4().simple().to_string().to_uppercase();
         let channel = Uuid::new_v4();
         let (tx, mut rx) = mpsc::channel::<String>(1024);
-        self.node.channels.lock().unwrap().insert(
+        if !self.node.insert_channel(
             channel,
             Channel {
                 tab: t.id,
@@ -324,7 +331,9 @@ impl Facade {
                 client: true,
                 automation: true,
             },
-        );
+        ) {
+            return Err("Too many channels".into());
+        }
         self.node.notify_client_presence();
         let tagged = self.tagged.clone();
         let name = session.clone();
@@ -343,7 +352,7 @@ impl Facade {
             event["sessionId"] = json!(via);
         }
         out.push(event);
-        session
+        Ok(session)
     }
 
     fn close_session(&mut self, session: &str) {
@@ -415,7 +424,9 @@ impl Facade {
                         .cloned()
                         .collect();
                     for t in tabs {
-                        self.attach(&t, None, out);
+                        if let Err(error) = self.attach(&t, None, out) {
+                            tracing::warn!(%error, tab = t.id, "Could not auto-attach");
+                        }
                     }
                 }
                 Ok(json!({}))
@@ -435,7 +446,7 @@ impl Facade {
             },
             "Target.attachToTarget" => {
                 match tab_param(&params).and_then(|t| self.known.get(&t).cloned()) {
-                    Some(t) => Ok(json!({"sessionId": self.attach(&t, via, out)})),
+                    Some(t) => self.attach(&t, via, out).map(|id| json!({"sessionId": id})),
                     None => Err("No target with given id found".into()),
                 }
             }

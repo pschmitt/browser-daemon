@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::browser::BrowserEngine;
 use crate::profiles::ColorScheme;
@@ -72,21 +71,29 @@ pub enum UpdateError<E> {
 }
 
 impl Store {
-    /// The settings in `path`; defaults when it is missing or unreadable.
-    pub fn load(path: &Path) -> Self {
+    /// Load settings, using defaults only when the file does not exist.
+    pub fn load(path: &Path) -> std::io::Result<Self> {
         let current = match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-                warn!(path = %path.display(), error = %e, "Ignoring unreadable node settings");
-                NodeSettings::default()
-            }),
-            Err(_) => NodeSettings::default(),
+            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{}: {e}", path.display()),
+                )
+            })?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => NodeSettings::default(),
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    e.kind(),
+                    format!("{}: {e}", path.display()),
+                ))
+            }
         };
-        Self {
+        Ok(Self {
             path: path.to_path_buf(),
             current: RwLock::new(current),
             write: tokio::sync::Mutex::new(()),
             tmp_counter: AtomicU64::new(0),
-        }
+        })
     }
 
     pub fn get(&self) -> NodeSettings {
@@ -150,7 +157,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bd-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("node-settings.json");
-        let store = Store::load(&path);
+        let store = Store::load(&path).unwrap();
         assert_eq!(store.get(), NodeSettings::default());
         let mut s = NodeSettings {
             default_proxy: Some("tor".into()),
@@ -159,9 +166,10 @@ mod tests {
         s.engines.firefox.show_touches = true;
         s.engines.chromium.color_scheme = Some(ColorScheme::Light);
         store.set(s.clone()).await.unwrap();
-        assert_eq!(Store::load(&path).get(), s);
+        assert_eq!(Store::load(&path).unwrap().get(), s);
         std::fs::write(&path, "not json").unwrap();
-        assert_eq!(Store::load(&path).get(), NodeSettings::default());
+        assert!(Store::load(&path).is_err());
+        assert!(Store::load(&dir).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -170,7 +178,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bd-settings-upd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("node-settings.json");
-        let store = std::sync::Arc::new(Store::load(&path));
+        let store = std::sync::Arc::new(Store::load(&path).unwrap());
         let tasks: Vec<_> = (0..16)
             .map(|_| {
                 let store = store.clone();
@@ -192,7 +200,7 @@ mod tests {
             store.get().default_proxy.as_deref(),
             Some("xxxxxxxxxxxxxxxx")
         );
-        assert_eq!(Store::load(&path).get(), store.get());
+        assert_eq!(Store::load(&path).unwrap().get(), store.get());
         // A rejected change leaves everything as it was, and no temp file behind.
         let err = store.update(|_| Err::<(), _>("no")).await;
         assert!(matches!(err, Err(UpdateError::Rejected("no"))));
