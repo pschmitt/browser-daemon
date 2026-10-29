@@ -21,7 +21,8 @@ pub(crate) static SW_JS: &str = include_str!("../sw.js");
 pub(crate) static ICON_192: &[u8] = include_bytes!("../assets/icons/icon-192.png");
 
 pub(crate) static ICON_512: &[u8] = include_bytes!("../assets/icons/icon-512.png");
-pub(crate) static ICON_MASKABLE_512: &[u8] = include_bytes!("../assets/icons/icon-maskable-512.png");
+pub(crate) static ICON_MASKABLE_512: &[u8] =
+    include_bytes!("../assets/icons/icon-maskable-512.png");
 
 pub(crate) static DOWNLOAD_WORKER_JS: &str = include_str!("../download-worker.js");
 

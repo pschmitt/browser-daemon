@@ -384,6 +384,7 @@ fn own_tools(
             "format": { "type": "string", "enum": ["cookies", "header", "json"], "description": "header (default): a `Cookie:` header line for `curl -H @FILE`; cookies: a Netscape cookie jar (curl 8.22 ignores the cookies of jar files it reads, other tools take them); json: cookies and the storage_keys asked for." },
             "urls": { "type": "array", "items": { "type": "string" }, "description": "Addresses to take the cookies for (default: the page's own); header uses the first." },
             "storage_keys": { "type": "array", "items": { "type": "string" }, "description": "Local or session storage keys to include (json format). The answer lists the page's storage keys." },
+            "storage_filter": { "type": "string", "description": "List only the storage keys containing this (case-insensitive), e.g. token." },
             "minutes": { "type": "integer", "minimum": 1, "maximum": 120, "description": "When the file is deleted (default 15)." }
         });
         let mut fetch_props = json!({
@@ -1082,15 +1083,18 @@ impl State {
             .collect();
         storage_keys.sort_unstable();
         storage_keys.dedup();
-        let more = storage_keys.len().saturating_sub(60);
-        storage_keys.truncate(60);
+        let all = storage_keys.len();
+        if let Some(filter) = args["storage_filter"].as_str().filter(|f| !f.is_empty()) {
+            let filter = filter.to_lowercase();
+            storage_keys.retain(|k| k.to_lowercase().contains(&filter));
+        }
         Ok(format!(
             "Wrote the login of {} to {} ({format}; deleted in {minutes} minutes). Never print, cat or copy it.\nCookies ({}): {}\nStorage keys of the page{}: {}\nValues are not shown and are masked in all later results.",
             login["url"].as_str().unwrap_or("the page"),
             path.display(),
             names.len(),
             if names.is_empty() { "none".to_string() } else { names.join(", ") },
-            if more > 0 { format!(" (first 60 of {})", 60 + more) } else { String::new() },
+            if storage_keys.len() < all { format!(" ({} of {all} match the filter)", storage_keys.len()) } else { String::new() },
             if storage_keys.is_empty() { "none".to_string() } else { storage_keys.join(", ") },
         ))
     }
