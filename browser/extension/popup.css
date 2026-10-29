@@ -89,7 +89,6 @@ details[open] .summary-chevron { transform: rotate(90deg); }
 .tabs { list-style: none; margin: 0 0 4px; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; max-height: 300px; overflow-y: auto; }
 .tabs li + li { border-top: 1px solid var(--line); }
 .tabs label { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
-.tabs li.on { background: color-mix(in srgb, var(--good) 7%, transparent); }
 .fav { width: 20px; height: 20px; border-radius: 4px; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 700;
   background: var(--accent-soft); color: var(--accent); overflow: hidden; }
 .fav img { width: 20px; height: 20px; }
