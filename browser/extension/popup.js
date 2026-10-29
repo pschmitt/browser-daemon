@@ -55,14 +55,16 @@ function renderHeader() {
   $('approvalSharing').textContent = sharingSummary;
   $('approvalSound').textContent = soundSummary;
   $('setupSharing').textContent = `${sharingSummary} ${soundSummary}${state.sharing.control ? ' Remote control is enabled.' : ''}`;
-  $('inputMode').textContent = state.chromium || state.nativeReady ? 'Trusted mouse and keyboard input'
-    : 'DOM control: basic editing and page events. Some sites require the Firefox companion for trusted input.';
+  const companionMissing = !state.chromium && !state.nativeReady;
+  $('inputMode').textContent = companionMissing ? 'Companion not detected · Some sites may block input.'
+    : 'Trusted mouse and keyboard input';
+  $('inputMode').hidden = !companionMissing;
   $('title').textContent = reg ? (state.saved.name || 'Browser node') : 'Browser node';
   // The version where the eye looks first; the daemon gets room in the main card.
   $('subtitle').textContent = `v${state.version}${state.nativeReady ? ' · companion' : ''}`;
   $('subtitle').title = reg ? '' : state.status;
   $('pill').textContent = reg ? 'Connected' : state.connecting ? 'Connecting' : 'Offline';
-  $('pill').className = `pill${reg ? ' on' : state.connecting ? ' wait' : ''}`;
+  $('pill').className = `pill status-pill${reg ? ' on' : state.connecting ? ' wait' : ' off'}`;
   $('pill').disabled = state.connecting || (!reg && !state.rememberedBrowser);
   $('pill').title = reg ? 'Disconnect this browser' : state.connecting ? 'Connecting'
     : state.rememberedBrowser ? 'Reconnect this browser' : 'Offline';

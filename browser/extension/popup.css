@@ -21,13 +21,23 @@ header img { border-radius: 10px; }
 .who { flex: 1; min-width: 0; }
 .who p { margin: 0; color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pill { font-size: 12px; font-weight: 600; padding: 4px 10px; border: 0; border-radius: 999px; background: var(--line); color: var(--muted); white-space: nowrap; }
+.status-pill { gap: 7px; }
+.status-pill::before { content: ""; width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--muted); }
 .pill:disabled { opacity: 1; cursor: default; }
 .pill:not(:disabled) { cursor: pointer; }
 .pill:not(:disabled):hover { filter: brightness(.94); }
 .pill.on { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.pill.on::before { background: var(--good); }
 .pill.wait { background: var(--accent-soft); color: var(--accent); }
+.pill.wait::before { background: var(--accent); }
+.pill.off { background: var(--bad-soft); color: var(--bad); }
+.pill.off::before { background: var(--bad); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
 .card.accent { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.input-mode { margin: 6px 0 8px; }
+.input-mode.input-warning { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid color-mix(in srgb, #d9a441 24%, var(--line)); border-radius: 9px;
+  background: color-mix(in srgb, #d9a441 8%, var(--card)); color: color-mix(in srgb, #d9a441 78%, var(--text)); }
+.input-mode.input-warning::before { content: ""; width: 6px; height: 6px; flex: none; border-radius: 50%; background: #d9a441; }
 #rememberedStatus { white-space: pre-line; }
 .banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; }
 .banner.bad { background: var(--bad-soft); color: var(--bad); }
@@ -102,7 +112,6 @@ button.big { padding: 12px 14px; font-size: 15px; }
 button.quiet { color: var(--muted); font-weight: 500; padding: 10px 0 4px; }
 body.asking #advanced { display: none; }
 .server { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
-.server-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 20%, transparent); flex: none; }
 .server-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .server-text small { color: var(--muted); font-size: 12px; }
 .server-text b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
