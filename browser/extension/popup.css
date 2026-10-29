@@ -131,11 +131,11 @@ button.big { padding: 12px 14px; font-size: 15px; }
 button.quiet { color: var(--muted); font-weight: 500; padding: 10px 0 4px; }
 body.asking #advanced { display: none; }
 .server { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
-.server-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.server-text { flex: 1; min-width: 0; display: flex; flex-direction: column; color: var(--text); text-decoration: none; }
 .server-text small { color: var(--muted); font-size: 12px; }
 .server-text b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.server .dashboard-button { width: 42px; height: 42px; padding: 8px; }
-.server .dashboard-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.server-text:hover b { text-decoration: underline; }
+.server-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
 .tabs.locked .switch { opacity: .55; cursor: default; }
 .companion-actions { display: flex; align-items: center; gap: 8px; }
 .companion-actions button { gap: 8px; }
