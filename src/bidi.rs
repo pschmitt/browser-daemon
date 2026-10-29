@@ -32,7 +32,11 @@ const QUEUE: usize = 1024;
 const PROBE_SANDBOX: &str = "browser-daemon";
 
 enum Route {
-    Client { client: u64, id: Value },
+    Client {
+        client: u64,
+        id: Value,
+        creates_tab: bool,
+    },
     Internal(oneshot::Sender<Value>),
 }
 
@@ -63,6 +67,7 @@ impl Subscription {
 struct Client {
     tx: mpsc::Sender<String>,
     subs: Vec<Subscription>,
+    ownership: Option<(Arc<crate::clients::Clients>, u64)>,
 }
 
 /// How many subscriptions use each event, so the browser streams an event only
@@ -269,7 +274,24 @@ impl BidiHub {
         if let Some(id) = v.get("id").and_then(Value::as_u64) {
             let route = self.pending.lock().unwrap().remove(&id);
             match route {
-                Some(Route::Client { client, id: orig }) => {
+                Some(Route::Client {
+                    client,
+                    id: orig,
+                    creates_tab,
+                }) => {
+                    if creates_tab {
+                        let owner = self
+                            .clients
+                            .lock()
+                            .unwrap()
+                            .get(&client)
+                            .and_then(|c| c.ownership.clone());
+                        if let (Some((clients, owner)), Some(tab)) =
+                            (owner, v["result"]["context"].as_str())
+                        {
+                            clients.claim_tab(tab, owner);
+                        }
+                    }
                     v["id"] = orig;
                     self.deliver(client, v.to_string()).await;
                 }
@@ -286,6 +308,26 @@ impl BidiHub {
         }
         let method = v.get("method").and_then(Value::as_str).unwrap_or_default();
         let params = &v["params"];
+        if matches!(
+            method,
+            "browsingContext.contextCreated" | "browsingContext.contextDestroyed"
+        ) {
+            let owners = self
+                .clients
+                .lock()
+                .unwrap()
+                .values()
+                .find_map(|c| c.ownership.as_ref().map(|(owners, _)| owners.clone()));
+            if let (Some(owners), Some(tab)) = (owners, params["context"].as_str()) {
+                if method == "browsingContext.contextDestroyed" {
+                    owners.tab_closed(tab);
+                } else if params.get("parent").is_none_or(Value::is_null) {
+                    if let Some(opener) = params["originalOpener"].as_str() {
+                        owners.tab_opened(tab, opener);
+                    }
+                }
+            }
+        }
         let context = params
             .get("context")
             .or_else(|| params.pointer("/source/context"))
@@ -693,6 +735,7 @@ impl BidiHub {
                     Route::Client {
                         client,
                         id: id.clone(),
+                        creates_tab: method == "browsingContext.create",
                     },
                 );
                 if let Err(e) = self.send_backend(backend_id, &method, params) {
@@ -722,6 +765,7 @@ impl BidiHub {
                     events: events.clone(),
                     contexts: None,
                 }],
+                ownership: None,
             },
         );
         self.ensure_backend_events(&events).await;
@@ -735,6 +779,7 @@ impl BidiHub {
         activity: Arc<crate::idle::Activity>,
         observer: bool,
         mut downloads: Option<crate::downloads::Claim>,
+        ownership: Option<(Arc<crate::clients::Clients>, u64)>,
     ) {
         let client = self.next_client.fetch_add(1, Ordering::SeqCst);
         let (tx, mut rx) = mpsc::channel::<String>(QUEUE);
@@ -743,8 +788,16 @@ impl BidiHub {
             Client {
                 tx,
                 subs: Vec::new(),
+                ownership: ownership.clone(),
             },
         );
+        let ownership_events = vec![
+            "browsingContext.contextCreated".to_string(),
+            "browsingContext.contextDestroyed".to_string(),
+        ];
+        if ownership.is_some() {
+            self.ensure_backend_events(&ownership_events).await;
+        }
         debug!(client, "BiDi client attached");
 
         let (mut sink, mut stream) = socket.split();
@@ -785,6 +838,9 @@ impl BidiHub {
         if let Some(c) = left {
             let events: Vec<String> = c.subs.into_iter().flat_map(|s| s.events).collect();
             self.release_backend_events(&events).await;
+        }
+        if ownership.is_some() {
+            self.release_backend_events(&ownership_events).await;
         }
         debug!(client, "BiDi client detached");
     }
@@ -880,9 +936,43 @@ mod tests {
             Client {
                 tx,
                 subs: Vec::new(),
+                ownership: None,
             },
         );
         rx
+    }
+
+    #[tokio::test]
+    async fn ownership_tracks_created_contexts_and_popups() {
+        let (port, _) = fake_firefox().await;
+        let hub = BidiHub::connect(port).await.unwrap();
+        let owners = Arc::new(crate::clients::Clients::default());
+        let info = serde_json::from_value(json!({ "kind": "Playwright", "agent": true, "from": "node", "since": 0, "agent_name": "A" })).unwrap();
+        let owner = owners.add(info);
+        let _rx = attach(&hub, 1);
+        hub.clients.lock().unwrap().get_mut(&1).unwrap().ownership = Some((owners.clone(), owner));
+        hub.on_backend_message(&json!({ "type": "event", "method": "browsingContext.contextCreated", "params": { "context": "popup", "parent": null, "originalOpener": "parent" } }).to_string()).await;
+        hub.pending.lock().unwrap().insert(
+            42,
+            Route::Client {
+                client: 1,
+                id: json!(1),
+                creates_tab: true,
+            },
+        );
+        hub.on_backend_message(
+            &json!({ "type": "success", "id": 42, "result": { "context": "parent" } }).to_string(),
+        )
+        .await;
+        assert_eq!(
+            owners.tab_owner("popup").unwrap().agent_name.as_deref(),
+            Some("A")
+        );
+        hub.on_backend_message(&json!({ "type": "event", "method": "browsingContext.contextDestroyed", "params": { "context": "parent" } }).to_string()).await;
+        assert!(owners.tab_owner("parent").is_none());
+        assert!(owners.tab_owner("popup").is_some());
+        owners.remove(owner);
+        assert!(owners.tab_owner("popup").is_none());
     }
 
     fn subscribe_to(events: &[&str]) -> String {

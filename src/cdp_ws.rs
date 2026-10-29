@@ -177,6 +177,7 @@ pub(crate) async fn handle_chromium_ws(
                     true,
                     session.profile_id.is_some(),
                     Some(crate::downloads::Claim::new(sd)),
+                    slot.client.map(|id| (session.clients.clone(), id)),
                 )
                 .await;
             }
@@ -261,7 +262,8 @@ pub(crate) async fn handle_firefox_ws(
         } else {
             None
         };
-        hub.serve_client(socket, session.activity.clone(), !counted, claim)
+        let ownership = slot.client.map(|id| (session.clients.clone(), id));
+        hub.serve_client(socket, session.activity.clone(), !counted, claim, ownership)
             .await;
         drop(slot);
     })
@@ -311,6 +313,7 @@ pub(crate) async fn handle_page_ws(
                     initial_title,
                     false,
                     false,
+                    None,
                     None,
                 )
                 .await;

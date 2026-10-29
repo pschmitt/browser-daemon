@@ -422,6 +422,7 @@ mod tests {
             profile: None,
             engine: None,
             audible: false,
+            owner: None,
         };
         let mut order = TabOrder::default();
         let mut list = vec![tab("a"), tab("b"), tab("c")];

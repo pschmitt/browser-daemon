@@ -23,6 +23,9 @@ pub struct DevToolsTarget {
     /// Playing sound.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub audible: bool,
+    /// The connected client that created the tab, or its opener.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<clients::ClientInfo>,
 }
 
 pub(crate) async fn json_version() -> impl IntoResponse {
@@ -59,6 +62,7 @@ pub(crate) async fn session_targets(
         target.session_id = Some(session.id);
         target.profile = session.profile.clone();
         target.engine = Some(BrowserEngine::Chromium);
+        target.owner = session.clients.tab_owner(&target.id);
     }
     targets
 }
@@ -130,6 +134,7 @@ pub(crate) fn resolve_page<'a>(
 
 pub(crate) fn firefox_target(session: &ManagedSession, ctx: bidi::BidiContext) -> DevToolsTarget {
     DevToolsTarget {
+        owner: session.clients.tab_owner(&ctx.id),
         id: ctx.id,
         title: ctx.title,
         target_type: "page".to_string(),
@@ -366,6 +371,7 @@ mod tests {
             profile: None,
             engine: None,
             audible: false,
+            owner: None,
         }
     }
 

@@ -3676,6 +3676,12 @@ fn draw_session(f: &mut Frame, app: &mut App, ov: &MeshOverview, s: &MeshSession
             Span::raw("  "),
             Span::raw(t.target.url.clone()).fg(Color::Blue).dim(),
         ]));
+        if let Some(owner) = &t.target.owner {
+            lines.push(Line::from(vec![
+                Span::raw("  Owner: ").dim(),
+                Span::raw(owner.tab_label()).fg(Color::Magenta),
+            ]));
+        }
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::raw(format!("id {}", ss.id)).dim()));

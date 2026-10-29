@@ -38,6 +38,7 @@ pub async fn bridge_websockets(
     // Automation clients: one that sets its own download behaviour keeps it while
     // connected (see downloads.rs).
     downloads: Option<crate::downloads::Claim>,
+    ownership: Option<(Arc<crate::clients::Clients>, u64)>,
 ) {
     let downloads = std::sync::Mutex::new(downloads);
     let (client_tx, mut client_rx) = client_ws.split();
@@ -46,6 +47,7 @@ pub async fn bridge_websockets(
     let alias = std::sync::Mutex::new(ContextAlias::default());
     let targets = std::sync::Mutex::new(TargetMap::default());
     let visibility = Visibility::new(frame_source.port);
+    let ownership_tap = std::sync::Mutex::new(OwnershipTap::default());
 
     let client_to_server = async {
         while let Some(Ok(msg)) = client_rx.next().await {
@@ -54,6 +56,9 @@ pub async fn bridge_websockets(
             }
             let server_msg = match msg {
                 ClientMsg::Text(text) => {
+                    if ownership.is_some() {
+                        ownership_tap.lock().unwrap().request(text.as_str());
+                    }
                     if let Some(c) = downloads.lock().unwrap().as_mut() {
                         c.note(text.as_str());
                     }
@@ -101,6 +106,12 @@ pub async fn bridge_websockets(
         let current_title = initial_title;
 
         while let Some(Ok(msg)) = server_rx.next().await {
+            if let (Some((clients, client)), ServerMsg::Text(text)) = (&ownership, &msg) {
+                ownership_tap
+                    .lock()
+                    .unwrap()
+                    .event(text.as_str(), clients, *client);
+            }
             let msg = match (use_profile_context, msg) {
                 (true, ServerMsg::Text(text)) => {
                     let rewritten = alias.lock().unwrap().event(text.as_str());
@@ -194,6 +205,75 @@ pub async fn bridge_websockets(
     tokio::select! {
         _ = client_to_server => {},
         _ = server_to_client => {},
+    }
+}
+
+/// Match creation responses to the client that sent them, and retain popup
+/// opener relationships even when their events arrive before the response.
+#[derive(Default)]
+struct OwnershipTap {
+    creating: std::collections::HashSet<(Option<String>, u64)>,
+}
+
+impl OwnershipTap {
+    fn request(&mut self, text: &str) {
+        if !text.contains("Target.createTarget") {
+            return;
+        }
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+            if value["method"] == "Target.createTarget" {
+                if let Some(id) = value["id"].as_u64() {
+                    if self.creating.len() < 1024 {
+                        self.creating
+                            .insert((value["sessionId"].as_str().map(str::to_string), id));
+                    }
+                }
+            }
+        }
+    }
+
+    fn event(&mut self, text: &str, clients: &crate::clients::Clients, client: u64) {
+        if self.creating.is_empty()
+            && !text.contains("Target.targetCreated")
+            && !text.contains("Target.targetInfoChanged")
+            && !text.contains("Target.attachedToTarget")
+            && !text.contains("Target.targetDestroyed")
+        {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+            return;
+        };
+        if let Some(id) = value["id"].as_u64() {
+            if self
+                .creating
+                .remove(&(value["sessionId"].as_str().map(str::to_string), id))
+            {
+                if let Some(tab) = value["result"]["targetId"].as_str() {
+                    clients.claim_tab(tab, client);
+                }
+            }
+        }
+        match value["method"].as_str() {
+            Some(
+                "Target.targetCreated" | "Target.targetInfoChanged" | "Target.attachedToTarget",
+            ) => {
+                let info = &value["params"]["targetInfo"];
+                if info["type"] == "page" {
+                    if let (Some(tab), Some(opener)) =
+                        (info["targetId"].as_str(), info["openerId"].as_str())
+                    {
+                        clients.tab_opened(tab, opener);
+                    }
+                }
+            }
+            Some("Target.targetDestroyed") => {
+                if let Some(tab) = value["params"]["targetId"].as_str() {
+                    clients.tab_closed(tab);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -436,6 +516,46 @@ fn without_color_scheme_override(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ownership_matches_create_response_and_popup_opener() {
+        let clients = crate::clients::Clients::default();
+        let info = |name: &str| {
+            serde_json::from_value(serde_json::json!({
+                "kind": "Playwright", "agent": true, "from": "node", "since": 0,
+                "agent_name": name
+            }))
+            .unwrap()
+        };
+        let a = clients.add(info("A"));
+        let b = clients.add(info("B"));
+        let mut tap_a = OwnershipTap::default();
+        let mut tap_b = OwnershipTap::default();
+        tap_a.request(r#"{"id":1,"method":"Target.createTarget","params":{}}"#);
+        tap_b.request(r#"{"id":1,"method":"Target.createTarget","params":{}}"#);
+        tap_a.event(r#"{"method":"Target.targetCreated","params":{"targetInfo":{"type":"page","targetId":"popup","openerId":"page-a"}}}"#, &clients, a);
+        tap_b.event(r#"{"id":1,"result":{"targetId":"page-b"}}"#, &clients, b);
+        tap_a.event(r#"{"id":1,"result":{"targetId":"page-a"}}"#, &clients, a);
+        assert_eq!(
+            clients.tab_owner("popup").unwrap().agent_name.as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            clients.tab_owner("page-b").unwrap().agent_name.as_deref(),
+            Some("B")
+        );
+        tap_a.event(
+            r#"{"method":"Target.targetDestroyed","params":{"targetId":"page-a"}}"#,
+            &clients,
+            a,
+        );
+        assert_eq!(
+            clients.tab_owner("popup").unwrap().agent_name.as_deref(),
+            Some("A")
+        );
+        clients.remove(a);
+        assert!(clients.tab_owner("popup").is_none());
+    }
 
     #[test]
     fn the_clients_context_stands_for_the_profiles_own() {

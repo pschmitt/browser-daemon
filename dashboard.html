@@ -378,6 +378,7 @@ button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .tab-ico img { width: 16px; height: 16px; border-radius: 4px; object-fit: contain; }
 .tab-ico.more { width: auto; padding: 0 6px; font-size: 11.5px; font-weight: 700; color: var(--muted); }
 .tab-ico-sound { position: absolute; right: 2px; top: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
+.tab-ico-owner { position: absolute; left: 1px; bottom: 1px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--surface); }
 .scard-inds { display: inline-flex; align-items: center; gap: 0; flex: none; }
 .scard-sub .scard-inds { margin-left: 4px; }
 .scard-sub .ind { height: 18px; padding: 0 3px; }
@@ -2180,10 +2181,10 @@ function profileInfo(p) {
 const profileTargetName = (p, name) => (!p.id && p.engine === 'firefox' ? 'firefox_' + name : name);
 // An agent (Playwright, Puppeteer, ...) that is connected to a session; "" when none is.
 const driverOf = (s) => { const a = (s?.clients || []).find((c) => c.agent); return a ? agentLabel(a) : ''; };
-const drivenAttr = (s) => { const who = driverOf(s); return who ? ` data-driven="${esc(who)}" data-driven-session="${esc(s.id)}"` : ''; };
+const drivenAttr = (s, owner = null) => { const who = owner?.agent ? agentLabel(owner) : driverOf(s); return who ? ` data-driven="${esc(who)}" data-driven-session="${esc(s.id)}"${owner?.conversation ? ` data-driven-conversation="${esc(owner.conversation)}"` : ''}` : ''; };
 // Who is at the wheel: the agent, what it works on, where it runs and for how long.
-function driverCard(s, who) {
-  const c = (s?.clients || []).find((x) => x.agent);
+function driverCard(s, who, conversation) {
+  const c = (s?.clients || []).find((x) => x.agent && agentLabel(x) === who && (!conversation || x.conversation === conversation)) || (s?.clients || []).find((x) => x.agent);
   if (!c) return `<div class="ask-agent"><div class="ask-agent-ic">${icon('bot')}</div><div class="ask-agent-t"><b>${esc(who)}</b></div></div>`;
   const row = (label, value, mono = false) => (value ? `<dt>${label}</dt><dd${mono ? ' class="mono"' : ''}>${esc(value)}</dd>` : '');
   const ago = c.since ? `${formatUptime(Math.max(0, Math.floor(Date.now() / 1000 - c.since))).replace(/ \d+s$/, '')} ago` : '';
@@ -2193,10 +2194,10 @@ function driverCard(s, who) {
     <dl>${row('Session', s ? sessName(s) : '')}${row('Machine', c.machine || c.from)}${row('Project', c.cwd, true)}${row('Connected', ago)}</dl>
   </div>`;
 }
-const confirmTakeOver = (who, session) => ask({
+const confirmTakeOver = (who, session, conversation) => ask({
   title: 'Take over a session an agent is using?',
   text: 'It is driving this browser right now. What you click or type there happens while it works.',
-  html: driverCard(session, who),
+  html: driverCard(session, who, conversation),
   ok: 'Take over',
   okIcon: 'takeover',
 });
@@ -2211,7 +2212,7 @@ async function drivenClick(e) {
   if (!a || (e.type === 'auxclick' && e.button !== 1) || (e.type === 'click' && e.button !== 0)) return;
   e.preventDefault();
   const newTab = e.type === 'auxclick' || e.ctrlKey || e.metaKey || e.shiftKey;
-  if (!(await confirmTakeOver(a.dataset.driven, dashboardSessions().find((x) => x.id === a.dataset.drivenSession)))) return;
+  if (!(await confirmTakeOver(a.dataset.driven, dashboardSessions().find((x) => x.id === a.dataset.drivenSession), a.dataset.drivenConversation))) return;
   if (newTab) window.open(a.href, '_blank', 'noopener'); else location.href = a.href;
 }
 document.addEventListener('click', drivenClick);
@@ -2508,7 +2509,7 @@ function sessionCard(s) {
   const key = esc(keyOf.session(s)), drv = drivenAttr(s);
   const engine = s.engine === 'firefox' ? 'firefox' : 'chromium';
   const all = pagesOf(s);
-  const real = all.filter((p) => p.url && p.url !== 'about:blank');
+  const real = all.filter((p) => p.owner || (p.url && p.url !== 'about:blank'));
   const pages = real.length ? real : all;
   // The tab the picture shows (its screenshot says which), else the first.
   const front = pages.find((p) => p.id === shotPages.get(keyOf.session(s))) || pages[0];
@@ -2563,7 +2564,7 @@ function sessionCard(s) {
   ].filter(Boolean).join('');
 
   // Its tabs, as icons: each opens that tab.
-  const strip = pages.slice(0, 6).map((p) => `<a class="tab-ico" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="${esc(`${tabTitle(p)}\n${p.url}`)}" aria-label="${esc(`Take over the tab ${tabTitle(p)}`)}"${drv}>${favicon(p.url)}${p.audible ? '<span class="tab-ico-sound" aria-hidden="true"></span>' : ''}</a>`).join('')
+  const strip = pages.slice(0, 6).map((p) => `<a class="tab-ico" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="${esc(`${tabTitle(p)}\n${p.url}${p.owner ? `\nOwner: ${clientInfo(p.owner)}` : ''}`)}" aria-label="${esc(`Take over the tab ${tabTitle(p)}${p.owner ? `, owner ${p.owner.integration || agentLabel(p.owner) || p.owner.kind}` : ''}`)}"${drivenAttr(s, p.owner)}>${favicon(p.url)}${p.audible ? '<span class="tab-ico-sound" aria-hidden="true"></span>' : ''}${p.owner ? '<span class="tab-ico-owner" aria-hidden="true"></span>' : ''}</a>`).join('')
     + (pages.length > 6 ? `<span class="tab-ico more" title="${pages.length - 6} more tabs">+${pages.length - 6}</span>` : '');
 
   return `

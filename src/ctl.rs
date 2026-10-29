@@ -1433,12 +1433,17 @@ pub async fn session(args: SessionArgs) -> R<()> {
                     vec![
                         t.target.id.clone(),
                         yes_no(t.target.audible),
+                        t.target
+                            .owner
+                            .as_ref()
+                            .map(|owner| owner.tab_label())
+                            .unwrap_or_else(|| "-".into()),
                         t.target.title.clone().unwrap_or_default(),
                         t.target.url.clone(),
                     ]
                 })
                 .collect();
-            table(&["TAB", "SOUND", "TITLE", "URL"], &rows);
+            table(&["TAB", "SOUND", "OWNER", "TITLE", "URL"], &rows);
         }
         SessionCmd::Open {
             session,

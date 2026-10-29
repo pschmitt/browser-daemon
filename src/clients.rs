@@ -46,10 +46,41 @@ pub struct ClientInfo {
     pub topic: Option<String>,
 }
 
+impl ClientInfo {
+    /// A concise label for one tab's owner, including a conversation when known.
+    pub fn tab_label(&self) -> String {
+        let name = self
+            .integration
+            .as_deref()
+            .or(self.agent_name.as_deref())
+            .unwrap_or(&self.kind);
+        let topic = self
+            .topic
+            .as_deref()
+            .map(|t| format!(": {t}"))
+            .unwrap_or_default();
+        let conversation = self
+            .conversation
+            .as_deref()
+            .map(|c| format!(" · {}", c.chars().take(8).collect::<String>()))
+            .unwrap_or_default();
+        format!("{name}{topic}{conversation}")
+    }
+}
+
 #[derive(Default)]
 pub struct Clients {
     next: AtomicU64,
     list: Mutex<HashMap<u64, ClientInfo>>,
+    tabs: Mutex<TabOwners>,
+}
+
+/// Explicitly created tabs and their opener relationships. An opener can be
+/// reported before the creation response, so resolve the chain on lookup.
+#[derive(Default)]
+struct TabOwners {
+    owners: HashMap<String, u64>,
+    openers: HashMap<String, String>,
 }
 
 impl Clients {
@@ -61,6 +92,51 @@ impl Clients {
 
     pub fn remove(&self, id: u64) {
         self.list.lock().unwrap().remove(&id);
+        self.tabs
+            .lock()
+            .unwrap()
+            .owners
+            .retain(|_, owner| *owner != id);
+    }
+
+    pub fn claim_tab(&self, tab: &str, client: u64) {
+        let list = self.list.lock().unwrap();
+        if list.contains_key(&client) {
+            self.tabs.lock().unwrap().owners.insert(tab.into(), client);
+        }
+    }
+
+    pub fn tab_opened(&self, tab: &str, opener: &str) {
+        if tab != opener {
+            self.tabs
+                .lock()
+                .unwrap()
+                .openers
+                .insert(tab.into(), opener.into());
+        }
+    }
+
+    pub fn tab_closed(&self, tab: &str) {
+        let mut tabs = self.tabs.lock().unwrap();
+        // Preserve descendants' ownership if the opener closes first.
+        if let Some(owner) = tabs.owner(tab) {
+            let descendants: Vec<_> = tabs
+                .openers
+                .keys()
+                .filter(|id| tabs.owner(id) == Some(owner))
+                .cloned()
+                .collect();
+            for id in descendants {
+                tabs.owners.entry(id).or_insert(owner);
+            }
+        }
+        tabs.owners.remove(tab);
+        tabs.openers.remove(tab);
+    }
+
+    pub fn tab_owner(&self, tab: &str) -> Option<ClientInfo> {
+        let owner = self.tabs.lock().unwrap().owner(tab)?;
+        self.list.lock().unwrap().get(&owner).cloned()
     }
 
     /// Label the clients of `conversation`; how many there were.
@@ -81,6 +157,20 @@ impl Clients {
         let mut v: Vec<_> = self.list.lock().unwrap().values().cloned().collect();
         v.sort_by_key(|c| c.since);
         v
+    }
+}
+
+impl TabOwners {
+    fn owner(&self, tab: &str) -> Option<u64> {
+        let mut current = tab;
+        // Defend against malformed or cyclic opener relationships.
+        for _ in 0..=self.openers.len() {
+            if let Some(owner) = self.owners.get(current) {
+                return Some(*owner);
+            }
+            current = self.openers.get(current)?;
+        }
+        None
     }
 }
 
@@ -166,6 +256,57 @@ pub fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(crate) fn client(name: &str) -> ClientInfo {
+        ClientInfo {
+            kind: "Playwright".into(),
+            agent: true,
+            from: "node".into(),
+            addr: None,
+            user_agent: None,
+            since: 0,
+            agent_name: Some(name.into()),
+            conversation: None,
+            cwd: None,
+            machine: None,
+            integration: None,
+            topic: None,
+        }
+    }
+
+    #[test]
+    fn ownership_follows_openers_and_ends_with_client() {
+        let clients = Clients::default();
+        let a = clients.add(client("A"));
+        let b = clients.add(client("B"));
+        // Popup creation can arrive before the response that identifies its opener.
+        clients.tab_opened("popup", "parent");
+        clients.tab_opened("nested", "popup");
+        assert!(clients.tab_owner("nested").is_none());
+        clients.claim_tab("parent", a);
+        clients.claim_tab("other", b);
+        assert_eq!(
+            clients.tab_owner("nested").unwrap().agent_name.as_deref(),
+            Some("A")
+        );
+        clients.tab_closed("parent");
+        clients.tab_closed("popup");
+        assert_eq!(
+            clients.tab_owner("nested").unwrap().agent_name.as_deref(),
+            Some("A")
+        );
+        clients.remove(a);
+        assert!(clients.tab_owner("nested").is_none());
+        assert_eq!(
+            clients.tab_owner("other").unwrap().agent_name.as_deref(),
+            Some("B")
+        );
+        clients.claim_tab("late", a);
+        assert!(clients.tab_owner("late").is_none());
+        clients.tab_opened("cycle-a", "cycle-b");
+        clients.tab_opened("cycle-b", "cycle-a");
+        assert!(clients.tab_owner("cycle-a").is_none());
+    }
 
     #[test]
     fn kinds_from_user_agents() {

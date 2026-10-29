@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,7 +87,9 @@ pub struct McpArgs {
 const INSTRUCTIONS: &str = "Browsers run on a mesh of nodes. Without a choice you get a \
 throwaway browser on the node with the most room. To work in a saved profile (its logins and \
 cookies persist, e.g. `work` for Outlook and OpsGenie) call browser_use with its name; \
-browser_status lists the profiles you may open and the nodes. Switching closes the current browser. \
+browser_status lists the profiles you may open and the nodes. For a shared profile, \
+browser_profile_tabs lists tabs and their owners; leave other clients' tabs alone. \
+Switching closes the current browser. \
 For the user's own running browsers, browser_shared_nodes lists temporary extension registrations \
 and browser_shared_command acts on their explicitly shared tabs; browser_use selects managed browsers. \
 Never type a password, token or TOTP code yourself: use browser_fill_secret when it is listed. \
@@ -148,6 +150,31 @@ struct Child {
     next: AtomicU64,
     tools: std::sync::Mutex<Vec<Value>>,
     target: Target,
+    used: AtomicBool,
+}
+
+fn profile_warning(ov: &MeshOverview, target: &Target, min_clients: usize) -> Option<String> {
+    let profile = target.profile.as_ref()?;
+    let session = ov.sessions.iter().find(|s| {
+        s.node_name == target.node
+            && s.session.profile.as_ref() == Some(profile)
+            && s.session.clients.len() >= min_clients
+    })?;
+    Some(session_warning(&session.session))
+}
+
+fn session_warning(session: &crate::state::SessionSummary) -> String {
+    let people: Vec<_> = session
+        .clients
+        .iter()
+        .map(|client| client.tab_label())
+        .collect();
+    let who = if people.is_empty() {
+        String::new()
+    } else {
+        format!(" Connected clients: {}.", people.join(", "))
+    };
+    format!("Warning: this profile already has a running session.{who} You share its browser and tabs; avoid disturbing other clients' tabs.")
 }
 
 impl Child {
@@ -294,6 +321,12 @@ fn own_tools(
             "description": "What this browser can use: the browser in use now, the profiles you may open (saved logins and cookies) and the nodes with their load.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
             "annotations": { "title": "Browser status", "readOnlyHint": true }
+        }),
+        json!({
+            "name": "browser_profile_tabs",
+            "description": "List the tabs of the currently selected saved profile, including their advisory owners. Popups inherit their opener's owner when known. Use this to identify other clients' tabs before interacting; unknown owners are null. The target IDs are browser IDs, not Playwright tab indexes.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            "annotations": { "title": "Profile tabs and owners", "readOnlyHint": true }
         }),
         json!({
             "name": "browser_use",
@@ -661,6 +694,10 @@ impl State {
                 Ok(text) => text_result(text, false),
                 Err(e) => text_result(e, true),
             }),
+            "browser_profile_tabs" => Ok(match self.current_profile_tabs().await {
+                Ok(tabs) => text_result(tabs.to_string(), false),
+                Err(error) => text_result(error, true),
+            }),
             "browser_use" => Ok(match self.use_browser(&args).await {
                 Ok(text) => text_result(text, false),
                 Err(e) => text_result(e, true),
@@ -696,10 +733,47 @@ impl State {
                 })
             }
             _ => {
+                let is_browser_tabs = name == "browser_tabs";
                 let child = self.child_or_default().await.map_err(|e| (-32000, e))?;
-                child
+                let first =
+                    child.target.profile.is_some() && !child.used.swap(true, Ordering::SeqCst);
+                let mut result = child
                     .request("tools/call", params, Duration::from_secs(600))
+                    .await?;
+                // Both agents may select before either starts the profile. Check
+                // once more after connecting; this never blocks the operation.
+                let after = if first {
+                    tokio::time::timeout(
+                        Duration::from_secs(2),
+                        self.shared_profile_warning(&child.target, 2),
+                    )
                     .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .flatten()
+                } else {
+                    None
+                };
+                if let Some(warning) = after {
+                    if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
+                        content.push(json!({ "type": "text", "text": warning }));
+                    }
+                }
+                if is_browser_tabs && !result["isError"].as_bool().unwrap_or(false) {
+                    if let Ok(Ok(tabs)) = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        self.profile_tabs(&child.target),
+                    )
+                    .await
+                    {
+                        if let Some(content) =
+                            result.get_mut("content").and_then(Value::as_array_mut)
+                        {
+                            content.push(json!({ "type": "text", "text": format!("Profile tabs and owners (browser IDs, not Playwright indexes): {tabs}") }));
+                        }
+                    }
+                }
+                Ok(result)
             }
         }
     }
@@ -1387,6 +1461,76 @@ impl State {
             .map_err(|e| format!("Unexpected answer: {e}"))
     }
 
+    /// Read the hosting node directly: the mesh overview can still have its
+    /// cached, pre-connection snapshot when two clients attach concurrently.
+    async fn shared_profile_warning(
+        &self,
+        target: &Target,
+        min_clients: usize,
+    ) -> Result<Option<String>, reqwest::Error> {
+        let Some(profile) = target.profile.as_ref() else {
+            return Ok(None);
+        };
+        let mut req = self
+            .http
+            .get(format!("{}/api/sessions", target.url.trim_end_matches('/')));
+        if let Some(secret) = &self.secret {
+            req = req.header("X-Browser-Cluster-Secret", secret);
+        }
+        let sessions = req
+            .send()
+            .await?
+            .error_for_status()?
+            .json::<Vec<crate::state::SessionSummary>>()
+            .await?;
+        Ok(sessions
+            .iter()
+            .find(|session| {
+                session.profile.as_ref() == Some(profile) && session.clients.len() >= min_clients
+            })
+            .map(session_warning))
+    }
+
+    async fn current_profile_tabs(&self) -> Result<Value, String> {
+        let target = self
+            .child
+            .lock()
+            .await
+            .as_ref()
+            .map(|child| child.target.clone())
+            .ok_or("Select a saved profile with browser_use first")?;
+        self.profile_tabs(&target).await
+    }
+
+    async fn profile_tabs(&self, target: &Target) -> Result<Value, String> {
+        let profile = target
+            .profile
+            .as_ref()
+            .ok_or("Select a saved profile with browser_use first")?;
+        if !allows(&self.allow, profile) {
+            return Err("This profile is not open to agents here".into());
+        }
+        let mut req = self
+            .http
+            .get(format!("{}/json/list", target.url.trim_end_matches('/')));
+        if let Some(secret) = &self.secret {
+            req = req.header("X-Browser-Cluster-Secret", secret);
+        }
+        let tabs = req
+            .send()
+            .await
+            .map_err(|e| format!("Could not list profile tabs: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("Could not list profile tabs: {e}"))?
+            .json::<Vec<crate::json_api::DevToolsTarget>>()
+            .await
+            .map_err(|e| format!("Could not read profile tabs: {e}"))?;
+        let tabs: Vec<_> = tabs.into_iter().filter(|tab| tab.target_type == "page" && tab.profile.as_ref() == Some(profile))
+            .map(|tab| json!({ "id": tab.id, "session_id": tab.session_id, "title": tab.title, "url": tab.url, "owner": tab.owner }))
+            .collect();
+        Ok(json!({ "profile": profile, "node": target.node, "tabs": tabs }))
+    }
+
     /// (name, base URL, active sessions, capacity) of the nodes that take sessions.
     fn nodes(ov: &MeshOverview) -> Vec<(String, String, usize, usize)> {
         let mut nodes = vec![(
@@ -1580,14 +1724,26 @@ impl State {
                 }
             }
         };
+        let warning = match tokio::time::timeout(
+            Duration::from_secs(2),
+            self.shared_profile_warning(&target, 0),
+        )
+        .await
+        {
+            Ok(Ok(warning)) => warning,
+            _ => profile_warning(&ov, &target, 0),
+        }
+        .map(|warning| format!(" {warning}"))
+        .unwrap_or_default();
         let child = self.spawn_child(&target).await?;
         let old = self.child.lock().await.replace(child);
         if let Some(old) = old {
             old.stop().await;
         }
         Ok(format!(
-            "Now using {}. It starts when you first use a browser tool; the previous browser was closed.",
-            target.describe()
+            "Now using {}. It starts when you first use a browser tool; the previous browser was closed.{}",
+            target.describe(),
+            warning
         ))
     }
 
@@ -1676,6 +1832,7 @@ impl State {
             next: AtomicU64::new(1),
             tools: std::sync::Mutex::new(Vec::new()),
             target: target.clone(),
+            used: AtomicBool::new(false),
         });
         tokio::spawn(read_child(child.clone(), stdout));
 
@@ -1796,6 +1953,35 @@ mod tests {
             "total_storage_bytes": 0, "max_storage_bytes": 0
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn profile_warning_matches_node_profile_and_connected_clients() {
+        let mut ov = overview(&[("a", 0, 5, "online")]);
+        let target = Target {
+            node: "a".into(),
+            url: String::new(),
+            ws_base: String::new(),
+            profile: Some("work".into()),
+        };
+        assert!(profile_warning(&ov, &target, 0).is_none());
+        ov.sessions.push(serde_json::from_value(json!({
+            "id": "00000000-0000-0000-0000-000000000001", "port": 1, "ws_path": "",
+            "profile": "work", "persistent": true, "uptime_seconds": 0,
+            "client_count": 1, "tabs_count": 1, "is_recording": false,
+            "node_name": "a", "node_url": "", "is_local": true,
+            "clients": [{"kind": "Playwright", "agent": true, "from": "a", "since": 0, "agent_name": "AgentA"}]
+        })).unwrap());
+        assert!(profile_warning(&ov, &target, 0).unwrap().contains("AgentA"));
+        assert!(profile_warning(&ov, &target, 2).is_none());
+        let client = ov.sessions[0].session.clients[0].clone();
+        ov.sessions[0].session.clients.push(client);
+        assert!(profile_warning(&ov, &target, 2).is_some());
+        let other = Target {
+            node: "b".into(),
+            ..target
+        };
+        assert!(profile_warning(&ov, &other, 0).is_none());
     }
 
     #[test]

@@ -35,6 +35,7 @@
   .tab-strip-item { height: 33px; width: 36px; padding: 0; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 0 36px; min-width: 36px; max-width: 36px; overflow: hidden; text-decoration: none; user-select: none; }
   .tab-strip-item:not(.pinned) { width: auto; min-width: 84px; max-width: 220px; flex: 0 1 170px; justify-content: flex-start; gap: 7px; padding: 0 9px; }
   .tab-strip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .tab-strip-owner { flex: none; color: var(--accent); font-size: 11px; font-weight: 700; }
   .tab-strip-entry { position: relative; display: flex; flex: 0 1 170px; min-width: 84px; max-width: 220px; }
   .tab-strip-entry > .tab-strip-item { flex: 1; width: 100%; min-width: 0; max-width: none; padding-right: 33px; }
   .tab-strip-close { position: absolute; right: 6px; top: 6px; display: grid; place-items: center; width: 21px; height: 21px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .12s, background .12s; }
@@ -3234,7 +3235,7 @@ async function loadTabs() {
     for (const x of all) knownTabs.add(x.id);
     tabsAll = all;
     // Redrawn only when something shown changed: this also runs on a timer.
-    const sig = JSON.stringify([target?.id, sharedBrowser?.follow, all.map((x) => [x.id, x.title, x.url, x.favicon, x.audible, x.index, x.pinned])]);
+    const sig = JSON.stringify([target?.id, sharedBrowser?.follow, all.map((x) => [x.id, x.title, x.url, x.favicon, x.audible, x.index, x.pinned, x.owner])]);
     if (sig === tabsSig) return;
     tabsSig = sig;
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
@@ -3260,6 +3261,11 @@ setInterval(() => { if (document.visibilityState === "visible" && (target || sha
 let lastStripPages = [];
 let tabDragJustEnded = false;
 let contextTab = null;
+function tabOwnerLabel(owner) {
+  if (!owner) return "";
+  const name = owner.integration || owner.agent_name || owner.kind || "Client";
+  return [name, owner.topic, owner.conversation ? `conversation ${owner.conversation.slice(0, 8)}` : ""].filter(Boolean).join(" · ");
+}
 function closeTabContextMenu() {
   E.tabContextMenu.hidden = true;
   contextTab = null;
@@ -3289,8 +3295,9 @@ function renderTabStrip(pages) {
     if (p.pinned) item.classList.add("pinned");
     const fallback = p.url ? (() => { try { return new URL(p.url, location.href).hostname || p.url; } catch { return p.url; } })() : "New Tab";
     const tabLabel = p.title || fallback;
-    item.title = `${tabLabel}${p.url ? ` (${p.url})` : ""}${p.pinned ? " — Pinned" : ""}`;
-    item.setAttribute("aria-label", `${tabLabel}${p.pinned ? ", pinned" : ""}`);
+    const ownerLabel = tabOwnerLabel(p.owner);
+    item.title = `${tabLabel}${p.url ? ` (${p.url})` : ""}${p.pinned ? " — Pinned" : ""}${ownerLabel ? ` — Owner: ${ownerLabel}` : ""}`;
+    item.setAttribute("aria-label", `${tabLabel}${p.pinned ? ", pinned" : ""}${ownerLabel ? `, owner ${ownerLabel}` : ""}`);
     item.addEventListener("contextmenu", (e) => showTabContextMenu(e, p));
     const itemUrl = new URL(location.href);
     itemUrl.searchParams.set("page", p.id);
@@ -3350,6 +3357,13 @@ function renderTabStrip(pages) {
       label.className = "tab-strip-label";
       label.textContent = tabLabel;
       item.appendChild(label);
+    }
+    if (ownerLabel) {
+      const owner = document.createElement("span");
+      owner.className = "tab-strip-owner";
+      owner.textContent = "●";
+      owner.setAttribute("aria-hidden", "true");
+      item.appendChild(owner);
     }
     if (!p.pinned && (!sharedBrowserId || p.control)) {
       const entry = document.createElement('div');
@@ -3445,6 +3459,13 @@ function renderTabsModal(pages) {
 
     const metaWrap = document.createElement("div");
     metaWrap.className = "tab-meta";
+
+    if (p.owner) {
+      const ownerTag = document.createElement("span");
+      ownerTag.className = "tab-tag";
+      ownerTag.textContent = "Owner: " + tabOwnerLabel(p.owner);
+      metaWrap.appendChild(ownerTag);
+    }
 
     if (isCurrent) {
       const curTag = document.createElement("span");
