@@ -1,0 +1,184 @@
+create_session:
+  name: Create Session
+  description: Launch a new browser session on the mesh.
+  fields:
+    profile:
+      name: Profile
+      description: Name of saved profile to load (e.g., hrworks, work).
+      example: hrworks
+      selector:
+        text:
+    engine:
+      name: Browser Engine
+      description: Rendering engine to use.
+      example: chromium
+      selector:
+        select:
+          options:
+            - chromium
+            - firefox
+    node:
+      name: Node
+      description: Target mesh node (e.g. fnuc, rofl-13). Omit for local/auto.
+      example: fnuc
+      selector:
+        text:
+    name:
+      name: Session Name
+      description: Optional human-readable name or label for the session.
+      example: hrworks-fetch
+      selector:
+        text:
+    screen:
+      name: Screen Mode
+      description: Device profile / screen dimensions.
+      example: desktop
+      selector:
+        select:
+          options:
+            - desktop
+            - phone
+    idle_timeout_minutes:
+      name: Idle Timeout
+      description: Idle timeout in minutes before auto-stopping (0 = never).
+      example: 15
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: minutes
+    record:
+      name: Record
+      description: Record video of the session.
+      selector:
+        boolean:
+    adblock:
+      name: Ad Blocker
+      description: Enable ad blocker extension.
+      selector:
+        boolean:
+    default_tabs:
+      name: Open Default Tabs
+      description: Automatically open default tabs saved for the profile.
+      selector:
+        boolean:
+
+stop_session:
+  name: Stop Session
+  description: Terminate an active browser session.
+  fields:
+    session_id:
+      name: Session ID
+      description: UUID of the session to terminate.
+      required: true
+      example: "9dbfef82-5852-4139-8a53-80671d43dee1"
+      selector:
+        text:
+    node:
+      name: Node
+      description: Node where the session is running.
+      selector:
+        text:
+
+open_tab:
+  name: Open Tab
+  description: Open a new tab in the browser.
+  fields:
+    url:
+      name: URL
+      description: Web page URL to navigate to.
+      required: true
+      example: "https://ha.brkn.lol"
+      selector:
+        text:
+    node:
+      name: Node
+      description: Target mesh node.
+      selector:
+        text:
+
+close_tab:
+  name: Close Tab
+  description: Close an open tab by ID.
+  fields:
+    tab_id:
+      name: Tab ID
+      description: Chromium target / tab ID.
+      required: true
+      selector:
+        text:
+    node:
+      name: Node
+      description: Target mesh node.
+      selector:
+        text:
+
+export_auth:
+  name: Export Auth
+  description: Export cookies and localStorage state (Playwright storageState format) for a page or session.
+  fields:
+    page_id:
+      name: Page ID
+      description: Page ID to read storage state from.
+      required: true
+      selector:
+        text:
+    session_id:
+      name: Session ID
+      description: Associated browser session ID.
+      selector:
+        text:
+    storage:
+      name: Include Storage
+      description: Whether to include localStorage (Playwright storageState format).
+      default: true
+      selector:
+        boolean:
+    node:
+      name: Node
+      description: Target mesh node.
+      selector:
+        text:
+
+take_screenshot:
+  name: Take Screenshot
+  description: Capture a live JPEG screenshot of a session.
+  fields:
+    session_id:
+      name: Session ID
+      description: UUID of the session to capture.
+      required: true
+      selector:
+        text:
+    node:
+      name: Node
+      description: Target mesh node.
+      selector:
+        text:
+
+clear_profile:
+  name: Clear Profile
+  description: Reset cookies and stored state for a named profile.
+  fields:
+    profile:
+      name: Profile Name
+      description: Profile to clear.
+      required: true
+      example: hrworks
+      selector:
+        text:
+    node:
+      name: Node
+      description: Target mesh node.
+      selector:
+        text:
+
+vacuum_recordings:
+  name: Vacuum Recordings
+  description: Clean up expired session recordings across the node/mesh.
+  fields:
+    node:
+      name: Node
+      description: Target mesh node.
+      selector:
+        text:

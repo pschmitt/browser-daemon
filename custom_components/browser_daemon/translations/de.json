@@ -1,0 +1,88 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mit Browser-Daemon verbinden",
+        "description": "Gib die URL deiner Browser-Daemon-Instanz ein. Ein Cluster-Secret oder Token ist optional, wenn das Dashboard automatisch eines ausstellt.",
+        "data": {
+          "url": "Daemon-URL",
+          "cluster_secret": "Cluster-Secret (Optional)",
+          "verify_ssl": "SSL-Zertifikat prüfen"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zur Browser-Daemon-Instanz fehlgeschlagen. Überprüfe die URL und Netzwerkverbindung.",
+      "invalid_auth": "Authentifizierung fehlgeschlagen. Gib ein gültiges Cluster-Secret an.",
+      "unknown": "Unerwarteter Fehler aufgetreten."
+    },
+    "abort": {
+      "already_configured": "Dieser Browser-Daemon-Knoten ist bereits konfiguriert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Browser-Daemon Optionen",
+        "data": {
+          "poll_interval": "Abfrageintervall (Sekunden)",
+          "default_node": "Standardknoten für Aktionen",
+          "default_profile": "Standardprofil für Aktionen"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "online_nodes": {
+        "name": "Online-Knoten"
+      },
+      "total_nodes": {
+        "name": "Knoten gesamt"
+      },
+      "total_sessions": {
+        "name": "Aktive Sitzungen"
+      },
+      "total_profiles": {
+        "name": "Profile gesamt"
+      },
+      "total_storage_bytes": {
+        "name": "Speicherbelegung"
+      },
+      "max_storage_bytes": {
+        "name": "Speicherlimit"
+      },
+      "active_sessions": {
+        "name": "Aktive Sitzungen"
+      },
+      "storage_used_bytes": {
+        "name": "Speicherbelegung"
+      },
+      "uptime_seconds": {
+        "name": "Betriebszeit"
+      },
+      "latency_ms": {
+        "name": "Latenz"
+      }
+    },
+    "binary_sensor": {
+      "mesh_online": {
+        "name": "Mesh-Status"
+      },
+      "active_sessions": {
+        "name": "Laufende Sitzungen"
+      },
+      "node_online": {
+        "name": "Knoten-Status"
+      }
+    },
+    "button": {
+      "refresh_mesh": {
+        "name": "Mesh aktualisieren"
+      },
+      "vacuum_recordings": {
+        "name": "Alte Aufnahmen bereinigen"
+      }
+    }
+  }
+}
