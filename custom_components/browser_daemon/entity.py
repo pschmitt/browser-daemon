@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -61,13 +62,19 @@ class BrowserDaemonNodeEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
         version = node_info.get("version")
         url = node_info.get("url")
 
+        dev_reg = dr.async_get(coordinator.hass)
+        parent_device = dev_reg.async_get_device(
+            identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_mesh")}
+        )
+        via_device_id = parent_device.id if parent_device else None
+
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_node_{node_name}")},
             name=f"Browser Node {node_name}",
             manufacturer="pschmitt",
             model="Browser Daemon Node",
             sw_version=version,
-            via_device=(DOMAIN, f"{coordinator.entry.entry_id}_mesh"),
+            via_device_id=via_device_id,
             configuration_url=url or coordinator.client.base_url,
         )
 
