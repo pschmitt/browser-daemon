@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-30
+
 ### Added
 
 * Tab ownership logo and hover card in the live view: tabs owned by automation clients (Antigravity, Codex, Claude, Gemini, etc.) display the agent's logo on the tab instead of a generic dot. Hovering a tab displays a rich tab-specific card with agent ownership details (topic, conversation, origin, directory), status indicators, and quick actions, freeing up space in the tab bar.
