@@ -4456,9 +4456,14 @@ function renderProfileContext() {
 }
 function renderTabOwner() {
   const chip = $("profChipOwner");
-  if (chip) chip.hidden = true;
+  if (!sess || sharedBrowserId) { if (chip) chip.hidden = true; return; }
   const tab = currentTab(), owner = tab?.owner;
-  E.profChip.title = `Profile: ${sess?.profile || "Throwaway"}\nSession: ${sess?.name || "Session"}\nCurrent tab: ${tab ? (owner ? tabOwnerLabel(owner) : "Unowned") : "Checking…"}`;
+  const label = tab ? (owner ? (owner.integration || agentShort(owner) || owner.kind || "Client") : "Unowned") : "Checking…";
+  if (chip) {
+    chip.hidden = true;
+    chip.innerHTML = `${owner ? agentSvg(owner) : ''}<span>Tab: ${esc(label)}</span>`;
+  }
+  E.profChip.title = `Profile: ${sess.profile || "Throwaway"}\nSession: ${sess.name || "Session"}\nCurrent tab owner: ${tab ? (owner ? tabOwnerLabel(owner) : "Unowned") : "Checking…"}`;
   if (!$('profMenu').hidden) renderProfileContext();
 }
 function showProfMenu(open = $("profMenu").hidden) {
