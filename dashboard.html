@@ -1714,6 +1714,13 @@ let currentOverview = null;                   // same, for the player code
 let nodes = [];                               // local node first, then peers
 let filter = 'all';
 let extensionBrowserNodes = [];
+try {
+  const cachedNodes = localStorage.getItem('bd-extension-browser-nodes-cache');
+  if (cachedNodes) {
+    const parsed = JSON.parse(cachedNodes);
+    if (Array.isArray(parsed)) extensionBrowserNodes = parsed;
+  }
+} catch { /* ignore */ }
 const extensionNodeKey = n => `browser:${n.daemon || ''}:${n.id}`;
 const extensionNodeOf = name => extensionBrowserNodes.find(n => extensionNodeKey(n) === name);
 const addonBadge = () => `<span class="chip accent" title="Connected through the browser extension">${icon('addon', 'sm')}Addon</span>`;
@@ -1730,10 +1737,11 @@ function syncExtensionSessions() {
   byKey.sessions = new Map(dashboardSessions().map(s => [keyOf.session(s), s]));
 }
 // Browsers that connected since this page loaded: toasted once, highlighted for a few seconds.
-let knownExtensionNodes = null;
+let knownExtensionNodes = extensionBrowserNodes.length ? new Set(extensionBrowserNodes.map(extensionNodeKey)) : null;
 const freshExtensionNodes = new Map();
 window.addEventListener('browser-daemon-extension-nodes', event => {
   extensionBrowserNodes = event.detail;
+  try { localStorage.setItem('bd-extension-browser-nodes-cache', JSON.stringify(event.detail)); } catch { /* ignore */ }
   const keys = new Set(event.detail.map(extensionNodeKey));
   if (knownExtensionNodes) for (const n of event.detail) {
     const key = extensionNodeKey(n);

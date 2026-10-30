@@ -163,7 +163,7 @@ function agentLabel(c) {
   return c.topic ? `${agentShort(c)}: ${c.topic}` : `${agentShort(c)} · ${c.from}`;
 }
 function agentBrand(c) {
-  const n = String(c?.agent_name || '').toLowerCase();
+  const n = String(c?.agent_name || c?.integration || c?.kind || '').toLowerCase();
   if (/claude/.test(n)) return 'claude';
   if (/codex|openai|chatgpt/.test(n)) return 'codex';
   if (/gemini/.test(n)) return 'gemini';

@@ -21,20 +21,68 @@
       window.postMessage({source: 'browser-daemon-dashboard', id, action, ...extra}, location.origin);
     });
   }
+  const EXT_NODES_CACHE = 'bd-extension-browser-nodes-cache';
+  const EXT_PEERS_CACHE = 'bd-extension-peers-cache';
   let refreshing = false;
+
+  // Emit cached extension nodes immediately on load so the dashboard never has a blank delay.
+  try {
+    const cached = localStorage.getItem(EXT_NODES_CACHE);
+    if (cached) {
+      const list = JSON.parse(cached);
+      if (Array.isArray(list) && list.length) {
+        window.dispatchEvent(new CustomEvent('browser-daemon-extension-nodes', {detail: list}));
+      }
+    }
+  } catch { /* ignore */ }
+
   async function refreshBrowsers() {
     if (refreshing || document.hidden) return;
     refreshing = true;
     try {
       const headers = typeof authHeaders === 'function' ? authHeaders() : {};
-      const mesh = await fetch('/api/mesh/overview', {headers, cache: 'no-store', signal: AbortSignal.timeout(8000)}).then(r => { if (!r.ok) throw Error(); return r.json(); });
-      const bases = ['/api', ...mesh.peers.filter(p => p.status === 'online').map(p => `/api/peers/${encodeURIComponent(p.name)}`)];
-      const reports = await Promise.allSettled(bases.map(async base => {
+      const fetchBase = async base => {
         const response = await fetch(`${base}/extension/nodes`, {headers, cache: 'no-store', signal: AbortSignal.timeout(8000)});
         if (!response.ok) throw new Error();
         return (await response.json()).nodes.map(node => ({...node, daemon: base === '/api' ? '' : decodeURIComponent(base.slice('/api/peers/'.length))}));
-      }));
-      window.dispatchEvent(new CustomEvent('browser-daemon-extension-nodes', {detail: reports.flatMap(r => r.status === 'fulfilled' ? r.value : [])}));
+      };
+
+      // Query local daemon immediately without waiting for mesh overview
+      let cachedPeers = [];
+      try {
+        const cp = localStorage.getItem(EXT_PEERS_CACHE);
+        if (cp) cachedPeers = JSON.parse(cp);
+      } catch { /* ignore */ }
+
+      const initialBases = ['/api', ...cachedPeers.map(p => `/api/peers/${encodeURIComponent(p)}`)];
+      const initialFetches = initialBases.map(fetchBase);
+
+      // Concurrently query mesh overview to discover any updated peers
+      const meshPromise = fetch('/api/mesh/overview', {headers, cache: 'no-store', signal: AbortSignal.timeout(8000)})
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null);
+
+      const [initialReports, mesh] = await Promise.all([
+        Promise.allSettled(initialFetches),
+        meshPromise,
+      ]);
+
+      const onlinePeers = mesh?.peers?.filter(p => p.status === 'online').map(p => p.name) || [];
+      try { localStorage.setItem(EXT_PEERS_CACHE, JSON.stringify(onlinePeers)); } catch { /* ignore */ }
+
+      // If mesh discovered online peers that weren't in cachedPeers, query them now
+      const pendingBases = onlinePeers
+        .filter(p => !cachedPeers.includes(p))
+        .map(p => `/api/peers/${encodeURIComponent(p)}`);
+
+      let extraReports = [];
+      if (pendingBases.length) {
+        extraReports = await Promise.allSettled(pendingBases.map(fetchBase));
+      }
+
+      const allNodes = [...initialReports, ...extraReports].flatMap(r => r.status === 'fulfilled' ? r.value : []);
+      try { localStorage.setItem(EXT_NODES_CACHE, JSON.stringify(allNodes)); } catch { /* ignore */ }
+      window.dispatchEvent(new CustomEvent('browser-daemon-extension-nodes', {detail: allNodes}));
     } catch { /* Retried on the next round. */ }
     finally { refreshing = false; }
   }

@@ -35,7 +35,12 @@
   .tab-strip-item { height: 33px; width: 36px; padding: 0; border-radius: 9px 9px 0 0; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); cursor: pointer; border: 1px solid transparent; border-bottom: 0; background: transparent; transition: background .15s, color .15s; flex: 0 0 36px; min-width: 36px; max-width: 36px; overflow: hidden; text-decoration: none; user-select: none; }
   .tab-strip-item:not(.pinned) { width: auto; min-width: 84px; max-width: 220px; flex: 0 1 170px; justify-content: flex-start; gap: 7px; padding: 0 9px; }
   .tab-strip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-  .tab-strip-owner { flex: none; color: var(--accent); font-size: 11px; font-weight: 700; }
+  .tab-strip-owner { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; color: var(--fg); cursor: pointer; transition: transform .12s, background .12s; }
+  .tab-strip-owner svg { width: 14px; height: 14px; flex: none; }
+  .tab-strip-item:hover .tab-strip-owner { background: color-mix(in oklab, var(--btn) 80%, transparent); }
+  .tab-strip-item.pinned { position: relative; }
+  .tab-strip-owner.pinned-owner { position: absolute; bottom: 2px; right: 2px; width: 13px; height: 13px; border-radius: 3px; background: var(--bar); box-shadow: 0 0 0 1px var(--line); }
+  .tab-strip-owner.pinned-owner svg { width: 11px; height: 11px; }
   .tab-strip-entry { position: relative; display: flex; flex: 0 1 170px; min-width: 84px; max-width: 220px; }
   .tab-strip-entry > .tab-strip-item { flex: 1; width: 100%; min-width: 0; max-width: none; padding-right: 33px; }
   .tab-strip-close { position: absolute; right: 6px; top: 6px; display: grid; place-items: center; width: 21px; height: 21px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .12s, background .12s; }
@@ -62,8 +67,8 @@
   /* The profile this session runs (or "Throwaway"), at the start of the tab bar. */
   .prof-chip { height: 28px; max-width: min(340px, 70vw); padding: 0 9px; margin: 0 4px 3px 0; border-radius: 999px; border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent); background: color-mix(in oklab, var(--accent) 14%, transparent); color: var(--accent); font-size: 11.5px; font-weight: 700; cursor: pointer; flex: none; display: inline-flex; align-items: center; gap: 5px; align-self: center; overflow: hidden; }
   .prof-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #profChipText { min-width: 0; max-width: 80px; }
-  @media (max-width: 480px) { #profChipText { max-width: 52px; } }
+  #profChipText { min-width: 0; max-width: 140px; }
+  @media (max-width: 480px) { #profChipText { max-width: 70px; } }
   .prof-chip svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
   .prof-chip.throwaway { border-style: dashed; border-color: var(--line); background: transparent; color: var(--muted); font-weight: 600; }
   .prof-chip[hidden] { display: none; }
@@ -155,6 +160,30 @@
   #settingsDialog .sm-item { min-height: 44px; }
   #settingsDialog .sm-search { display: flex; }
   #profMenu { right: auto; left: 8px; width: 290px; }
+  #tabHoverMenu { position: fixed; z-index: 65; width: 310px; max-width: calc(100vw - 16px); padding: 8px;
+    max-height: max(0px, calc(100dvh - var(--tab-menu-top, 56px) - 8px)); overflow-y: auto; overscroll-behavior: contain;
+    background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.45);
+    font-family: system-ui, -apple-system, sans-serif; pointer-events: auto; animation: tabMenuFadeIn .12s ease-out; }
+  #tabHoverMenu[hidden] { display: none; }
+  @keyframes tabMenuFadeIn { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+  #tabHoverMenu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
+  .thm-head { display: flex; align-items: center; gap: 8px; padding: 4px 6px 2px; font-weight: 700; font-size: 13.5px; }
+  .thm-head .thm-favicon { flex: none; width: 20px; height: 20px; display: grid; place-items: center; }
+  .thm-head .thm-favicon img, .thm-head .thm-favicon svg { width: 16px; height: 16px; border-radius: 3px; }
+  .thm-head .thm-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thm-head .thm-badge { flex: none; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 999px; background: color-mix(in oklab, var(--accent) 20%, transparent); color: var(--accent); }
+  .thm-url { padding: 0 6px 6px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, monospace; }
+  .thm-owner-card { display: flex; gap: 8px; align-items: center; padding: 6px 8px; margin: 2px 4px 6px; border-radius: 8px; background: var(--btn); font-size: 11.5px; }
+  .thm-owner-card.current { outline: 1px solid color-mix(in oklab, var(--accent) 50%, transparent); }
+  .thm-owner-card.unowned { color: var(--muted); }
+  .thm-owner-card svg { width: 15px; height: 15px; flex: none; }
+  .thm-owner-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .thm-owner-name { font-weight: 700; color: var(--fg); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .thm-owner-topic { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thm-actions { display: flex; gap: 4px; padding: 2px 4px; }
+  .thm-actions .sm-item { flex: 1; justify-content: center; height: 28px; padding: 0 8px; font-size: 11.5px; border-radius: 7px; background: color-mix(in oklab, var(--btn) 85%, transparent); }
+  .thm-actions .sm-item:hover { background: var(--btn); }
+  .thm-actions .sm-item svg { width: 13px; height: 13px; }
   .pm-note { padding: 2px 10px 6px; font-size: 11.5px; color: var(--muted); }
   .pm-tabs { margin: 4px 6px 2px; padding: 8px; width: calc(100% - 12px); box-sizing: border-box; min-height: 120px; resize: vertical; border-radius: 9px; border: 1px solid var(--line); background: var(--btn); color: var(--fg); font: 12px ui-monospace, monospace; }
   .ib.chev { width: 28px; margin-left: -4px; border-radius: 8px; color: var(--muted); }
@@ -577,6 +606,7 @@
     <button class="sm-item" id="pmSave"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   </div>
 </div>
+<div id="tabHoverMenu" role="dialog" aria-label="Tab details" hidden></div>
 <div id="stage">
   <canvas id="view" tabindex="-1"></canvas>
   <div id="ripple"></div>
@@ -720,7 +750,7 @@ let sharedNewTab = false;
 const testHost = params.get("host");               // testing only: talk to another Browserless
 const E = {
   smSearch: $("smSearch"),
-  tabStrip: $("tabStrip"), profChip: $("profChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"),
+  tabStrip: $("tabStrip"), profChip: $("profChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"), tabHoverMenu: $("tabHoverMenu"),
   bar: $("bar"), stage: $("stage"), view: $("view"), ripple: $("ripple"), overlay: $("overlay"), msg: $("msg"), spin: $("spin"), retry: $("retry"), overlayDash: $("overlayDash"),
   dot: $("dot"), urlBar: $("urlBar"), urlInput: $("urlInput"), urlSuggest: $("urlSuggest"), urlClear: $("urlClear"), urlGo: $("urlGo"), urlCancel: $("urlCancel"),
   tabsModal: $("tabsModal"), tabsList: $("tabsList"), tabsSearch: $("tabsSearch"), newTabBtn: $("newTabBtn"), closeTabsBtn: $("closeTabsBtn"), tabContextMenu: $("tabContextMenu"), tabContextReload: $("tabContextReload"), tabContextPin: $("tabContextPin"), tabContextPinLabel: $("tabContextPinLabel"), tabContextClose: $("tabContextClose"),
@@ -3277,6 +3307,159 @@ setInterval(() => { if (document.visibilityState === "visible" && (target || sha
 let lastStripPages = [];
 let tabDragJustEnded = false;
 let contextTab = null;
+
+let tabHoverTimer = null;
+let tabHoverLeaveTimer = null;
+let currentHoveredTab = null;
+let currentHoveredAnchor = null;
+
+function agentSvg(c) {
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">${AGENT_SVG[agentBrand(c)]}</svg>`;
+}
+
+function scheduleTabHover(tab, anchorEl, delay = 250) {
+  clearTimeout(tabHoverLeaveTimer);
+  const menu = $("tabHoverMenu");
+  if (menu && !menu.hidden && currentHoveredTab?.id !== tab.id) {
+    showTabHoverMenu(tab, anchorEl);
+    return;
+  }
+  clearTimeout(tabHoverTimer);
+  tabHoverTimer = setTimeout(() => {
+    showTabHoverMenu(tab, anchorEl);
+  }, delay);
+}
+
+function cancelTabHover(delay = 200) {
+  clearTimeout(tabHoverTimer);
+  clearTimeout(tabHoverLeaveTimer);
+  tabHoverLeaveTimer = setTimeout(() => {
+    hideTabHoverMenu();
+  }, delay);
+}
+
+function hideTabHoverMenu(immediate = false) {
+  clearTimeout(tabHoverTimer);
+  clearTimeout(tabHoverLeaveTimer);
+  const menu = $("tabHoverMenu");
+  if (!menu) return;
+  menu.hidden = true;
+  currentHoveredTab = null;
+  currentHoveredAnchor = null;
+}
+
+function showTabHoverMenu(tab, anchorEl) {
+  const menu = $("tabHoverMenu");
+  if (!menu || !anchorEl) return;
+  currentHoveredTab = tab;
+  currentHoveredAnchor = anchorEl;
+
+  const isCurrent = tab.id === pageId && !sharedNewTab;
+  const fallback = tab.url ? (() => { try { return new URL(tab.url, location.href).hostname || tab.url; } catch { return tab.url; } })() : "New Tab";
+  const title = tab.title || fallback;
+  const owner = tab.owner;
+  const brand = owner ? agentBrand(owner) : null;
+  const brandTitle = brand ? (AGENT_TITLE[brand] || owner.integration || owner.agent_name || "Agent") : "";
+  const ownerName = owner ? (owner.integration || agentShort(owner) || owner.kind || brandTitle) : "";
+
+  let ownerHtml = "";
+  if (owner) {
+    ownerHtml = `
+      <div class="thm-owner-card current">
+        ${agentSvg(owner)}
+        <div class="thm-owner-info">
+          <div class="thm-owner-name">
+            <span>${esc(brandTitle || ownerName)}</span>
+            ${owner.conversation ? `<span style="font-size:10.5px;font-weight:normal;color:var(--muted);font-family:ui-monospace,monospace">#${esc(owner.conversation.slice(0, 8))}</span>` : ''}
+          </div>
+          ${owner.topic ? `<div class="thm-owner-topic" title="${esc(owner.topic)}">${esc(owner.topic)}</div>` : ''}
+        </div>
+      </div>
+      <div class="pm-context" style="padding: 2px 6px 6px;">
+        ${owner.topic ? `<div class="pm-context-row"><span>Topic</span><strong>${esc(owner.topic)}</strong></div>` : ''}
+        ${owner.conversation ? `<div class="pm-context-row"><span>Conversation</span><strong class="mono" title="${esc(owner.conversation)}">${esc(owner.conversation.length > 24 ? owner.conversation.slice(0, 8) + '…' + owner.conversation.slice(-4) : owner.conversation)}</strong></div>` : ''}
+        ${owner.since ? `<div class="pm-context-row"><span>Claimed</span><strong>${new Date(owner.since * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</strong></div>` : ''}
+        ${(owner.from || owner.machine) ? `<div class="pm-context-row"><span>Origin</span><strong>${esc(owner.machine ? `${owner.from} (${owner.machine})` : owner.from)}</strong></div>` : ''}
+        ${owner.cwd ? `<div class="pm-context-row"><span>Directory</span><strong class="mono" title="${esc(owner.cwd)}">${esc(owner.cwd.length > 28 ? '…' + owner.cwd.slice(-25) : owner.cwd)}</strong></div>` : ''}
+        ${owner.kind ? `<div class="pm-context-row"><span>Automation</span><strong>${esc(owner.kind)}</strong></div>` : ''}
+      </div>
+    `;
+  } else {
+    ownerHtml = `
+      <div class="thm-owner-card unowned">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        <div class="thm-owner-info">
+          <div class="thm-owner-name">Unowned tab</div>
+          <div class="thm-owner-topic">Available for automation or manual browsing</div>
+        </div>
+      </div>
+    `;
+  }
+
+  const iconEl = siteIcon(tab.url, 18, tab.favicon);
+  const displayUrl = tab.url || "about:blank";
+
+  menu.innerHTML = `
+    <div class="thm-head">
+      <span class="thm-favicon">${iconEl.outerHTML}</span>
+      <span class="thm-title" title="${esc(title)}">${esc(title)}</span>
+      ${isCurrent ? `<span class="thm-badge">Active</span>` : ''}
+      ${tab.pinned ? `<span class="thm-badge" style="background:var(--btn);color:var(--muted)">Pinned</span>` : ''}
+    </div>
+    <div class="thm-url" title="${esc(displayUrl)}">${esc(displayUrl)}</div>
+    <hr>
+    ${ownerHtml}
+    <div class="pm-context" style="padding: 2px 6px 4px; border-top: 1px solid var(--line); margin-top: 4px;">
+      ${tab.audible ? `<div class="pm-context-row"><span>Audio</span><strong>Playing sound 🔊</strong></div>` : ''}
+      <div class="pm-context-row"><span>Tab ID</span><strong class="mono">${esc(tab.id)}</strong></div>
+    </div>
+    <div class="thm-actions">
+      ${!isCurrent ? `<button class="sm-item" id="thmSwitch" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>Switch</button>` : ''}
+      <button class="sm-item" id="thmCopyUrl" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy URL</button>
+      <button class="sm-item" id="thmReload" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>Reload</button>
+    </div>
+  `;
+
+  const btnSwitch = $("thmSwitch");
+  if (btnSwitch) {
+    btnSwitch.onclick = (e) => {
+      e.stopPropagation();
+      hideTabHoverMenu(true);
+      switchTab(tab.id);
+    };
+  }
+  const btnCopy = $("thmCopyUrl");
+  if (btnCopy) {
+    btnCopy.onclick = (e) => {
+      e.stopPropagation();
+      hideTabHoverMenu(true);
+      if (tab.url) {
+        navigator.clipboard.writeText(tab.url).then(() => toast("Tab URL copied", 2000)).catch(() => {});
+      }
+    };
+  }
+  const btnReload = $("thmReload");
+  if (btnReload) {
+    btnReload.onclick = (e) => {
+      e.stopPropagation();
+      hideTabHoverMenu(true);
+      if (tab.id === pageId) reload();
+      else if (sharedBrowserId) void reloadSharedTab(tab.id);
+      else void reloadManagedTab(tab);
+    };
+  }
+
+  menu.hidden = false;
+  const r = anchorEl.getBoundingClientRect();
+  const width = menu.offsetWidth || 310;
+  const top = r.bottom + 6;
+  let left = r.left + (r.width / 2) - (width / 2);
+  left = Math.max(8, Math.min(left, innerWidth - width - 8));
+  menu.style.top = top + "px";
+  menu.style.setProperty("--tab-menu-top", top + "px");
+  menu.style.left = left + "px";
+}
+
 function tabOwnerLabel(owner) {
   if (!owner) return "";
   const name = owner.integration || owner.agent_name || owner.kind || "Client";
@@ -3300,6 +3483,10 @@ function showTabContextMenu(event, tab) {
 }
 function renderTabStrip(pages) {
   if (!E.tabsScroll) return;
+  if (currentHoveredTab && $("tabHoverMenu") && !$("tabHoverMenu").hidden) {
+    const fresh = pages.find((t) => t.id === currentHoveredTab.id);
+    if (!fresh) hideTabHoverMenu(true);
+  }
   noteClosedTabs(lastStripPages, pages);
   lastStripPages = pages;
   E.tabsScroll.innerHTML = "";
@@ -3313,13 +3500,17 @@ function renderTabStrip(pages) {
     const fallback = p.url ? (() => { try { return new URL(p.url, location.href).hostname || p.url; } catch { return p.url; } })() : "New Tab";
     const tabLabel = p.title || fallback;
     const ownerLabel = tabOwnerLabel(p.owner);
-    item.title = `${tabLabel}${p.url ? ` (${p.url})` : ""}${p.pinned ? " — Pinned" : ""}${ownerLabel ? ` — Owner: ${ownerLabel}` : ""}`;
     item.setAttribute("aria-label", `${tabLabel}${p.pinned ? ", pinned" : ""}${ownerLabel ? `, owner ${ownerLabel}` : ""}`);
+    if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
+      item.addEventListener("mouseenter", () => scheduleTabHover(p, item, 250));
+      item.addEventListener("mouseleave", () => cancelTabHover());
+    }
     item.addEventListener("contextmenu", (e) => showTabContextMenu(e, p));
     const itemUrl = new URL(location.href);
     itemUrl.searchParams.set("page", p.id);
     item.href = itemUrl.toString();
     item.onclick = (e) => {
+      hideTabHoverMenu(true);
       // Ctrl/middle click keeps opening it in a new browser tab.
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
       if (tabDragJustEnded) { e.preventDefault(); tabDragJustEnded = false; return; }
@@ -3328,6 +3519,7 @@ function renderTabStrip(pages) {
     };
     if (item.draggable) {
       item.addEventListener("dragstart", (e) => {
+        hideTabHoverMenu(true);
         item.dataset.dragged = "true";
         item.classList.add("dragging");
         e.dataTransfer.effectAllowed = "move";
@@ -3377,9 +3569,15 @@ function renderTabStrip(pages) {
     }
     if (ownerLabel) {
       const owner = document.createElement("span");
-      owner.className = "tab-strip-owner";
-      owner.textContent = "●";
-      owner.setAttribute("aria-hidden", "true");
+      owner.className = "tab-strip-owner" + (p.pinned ? " pinned-owner" : "");
+      owner.innerHTML = agentSvg(p.owner);
+      owner.setAttribute("aria-label", `Owned by ${ownerLabel}`);
+      if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
+        owner.addEventListener("mouseenter", (e) => {
+          e.stopPropagation();
+          scheduleTabHover(p, item, 80);
+        });
+      }
       item.appendChild(owner);
     }
     if (!p.pinned && (!sharedBrowserId || p.control)) {
@@ -3390,7 +3588,7 @@ function renderTabStrip(pages) {
       close.title = 'Close tab'; close.setAttribute('aria-label', `Close ${tabLabel}`);
       close.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg>';
       close.onpointerdown = event => event.stopPropagation();
-      close.onclick = event => { event.stopPropagation(); void closeTab(p.id); };
+      close.onclick = event => { event.stopPropagation(); hideTabHoverMenu(true); void closeTab(p.id); };
       entry.append(item, close);
       E.tabsScroll.appendChild(entry);
     } else E.tabsScroll.appendChild(item);
@@ -3567,6 +3765,7 @@ window.addEventListener("keydown", event => {
   let close;
   if (dialog) close = () => dialog.close('cancel');
   else if (!E.tabContextMenu.hidden) close = closeTabContextMenu;
+  else if (!$("tabHoverMenu").hidden) close = () => hideTabHoverMenu(true);
   else if (E.tabsModal.classList.contains('open')) close = closeTabsModal;
   else if (extOpen) close = closeExtPop;
   else if (!$("profMenu").hidden) close = () => showProfMenu(false);
@@ -3607,10 +3806,23 @@ E.tabContextPin.addEventListener("click", () => {
 });
 document.addEventListener("pointerdown", (e) => {
   if (!E.tabContextMenu.hidden && !E.tabContextMenu.contains(e.target)) closeTabContextMenu();
+  if (!$("tabHoverMenu").hidden && !e.target.closest("#tabHoverMenu, .tab-strip-item, .tab-strip-entry")) hideTabHoverMenu(true);
 });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeTabContextMenu(); });
-window.addEventListener("resize", closeTabContextMenu);
-window.addEventListener("scroll", closeTabContextMenu, true);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closeTabContextMenu(); hideTabHoverMenu(true); }
+});
+window.addEventListener("resize", () => { closeTabContextMenu(); hideTabHoverMenu(true); });
+window.addEventListener("scroll", () => { closeTabContextMenu(); hideTabHoverMenu(true); }, true);
+{
+  const thMenu = $("tabHoverMenu");
+  if (thMenu) {
+    thMenu.addEventListener("mouseenter", () => clearTimeout(tabHoverLeaveTimer));
+    thMenu.addEventListener("mouseleave", () => cancelTabHover());
+  }
+  if (E.tabsScroll) {
+    E.tabsScroll.addEventListener("scroll", () => hideTabHoverMenu(true), { passive: true });
+  }
+}
 
 async function reloadManagedTab(tab) {
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -4116,7 +4328,6 @@ function pickPage({ reason = "choose" } = {}) {
 
 /* ---------------------------------------------------------------- session menu: recording + stop */
 let sess = null, sessTimer = null, stopArmed = 0, stopping = false;
-const agentSvg = (c) => `<svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14">${AGENT_SVG[agentBrand(c)]}</svg>`;
 const ICON = {
   sound: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>',
   mute: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4zM22 9l-6 6M16 9l6 6"/></svg>',
@@ -4245,12 +4456,9 @@ function renderProfileContext() {
 }
 function renderTabOwner() {
   const chip = $("profChipOwner");
-  if (!sess || sharedBrowserId) { chip.hidden = true; return; }
+  if (chip) chip.hidden = true;
   const tab = currentTab(), owner = tab?.owner;
-  const label = tab ? (owner ? (owner.integration || agentShort(owner) || owner.kind || "Client") : "Unowned") : "Checking…";
-  chip.hidden = false;
-  chip.innerHTML = `${owner ? agentSvg(owner) : ''}<span>Tab: ${esc(label)}</span>`;
-  E.profChip.title = `Profile: ${sess.profile || "Throwaway"}\nSession: ${sess.name || "Session"}\nCurrent tab owner: ${tab ? (owner ? tabOwnerLabel(owner) : "Unowned") : "Checking…"}`;
+  E.profChip.title = `Profile: ${sess?.profile || "Throwaway"}\nSession: ${sess?.name || "Session"}\nCurrent tab: ${tab ? (owner ? tabOwnerLabel(owner) : "Unowned") : "Checking…"}`;
   if (!$('profMenu').hidden) renderProfileContext();
 }
 function showProfMenu(open = $("profMenu").hidden) {
