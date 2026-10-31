@@ -163,6 +163,9 @@ impl AppState {
             Slot::Attach(session) => {
                 info!(session_id = %session.id, engine = %engine, profile = ?session.profile, "Attaching to existing profile session");
                 session.activity.touch();
+                if let Some(minutes) = idle_timeout_minutes {
+                    session.activity.set_timeout_secs(idle::minutes_to_secs(minutes));
+                }
                 return Ok(*session);
             }
             Slot::Reserved(r) => r,
