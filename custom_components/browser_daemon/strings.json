@@ -1,0 +1,244 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Browser Daemon",
+        "description": "Enter the URL of your browser-daemon instance. A cluster secret or token is optional if the dashboard can issue one automatically.",
+        "data": {
+          "url": "Daemon URL",
+          "cluster_secret": "Cluster Secret (Optional)",
+          "verify_ssl": "Verify SSL Certificate"
+        }
+      },
+      "reconfigure": {
+        "title": "Change the connection",
+        "description": "The URL of the browser-daemon node and its cluster secret. A blank secret keeps the saved one. The cluster secret is needed for runs (`POST /api/run`), which other integrations such as HR WORKS use.",
+        "data": {
+          "url": "Daemon URL",
+          "cluster_secret": "Cluster Secret",
+          "verify_ssl": "Verify SSL Certificate"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the browser-daemon instance. Check the URL and network connection.",
+      "invalid_auth": "Authentication failed. Provide a valid cluster secret.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Browser Daemon node is already configured.",
+      "reconfigure_successful": "The connection was updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Browser Daemon Options",
+        "data": {
+          "poll_interval": "Polling Interval (seconds)",
+          "default_node": "Default Node for Actions",
+          "default_profile": "Default Profile for Actions"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "online_nodes": {
+        "name": "Online Nodes"
+      },
+      "total_nodes": {
+        "name": "Total Nodes"
+      },
+      "total_sessions": {
+        "name": "Active Sessions"
+      },
+      "total_profiles": {
+        "name": "Total Profiles"
+      },
+      "total_storage_bytes": {
+        "name": "Storage Used"
+      },
+      "max_storage_bytes": {
+        "name": "Storage Limit"
+      },
+      "active_sessions": {
+        "name": "Active Sessions"
+      },
+      "storage_used_bytes": {
+        "name": "Storage Used"
+      },
+      "uptime_seconds": {
+        "name": "Uptime"
+      },
+      "latency_ms": {
+        "name": "Latency"
+      }
+    },
+    "binary_sensor": {
+      "mesh_online": {
+        "name": "Mesh Status"
+      },
+      "active_sessions": {
+        "name": "Sessions Running"
+      },
+      "node_online": {
+        "name": "Node Status"
+      }
+    },
+    "button": {
+      "refresh_mesh": {
+        "name": "Refresh Mesh"
+      },
+      "vacuum_recordings": {
+        "name": "Vacuum Stale Recordings"
+      }
+    }
+  },
+  "services": {
+    "create_session": {
+      "name": "Create Session",
+      "description": "Launch a new browser session on the mesh.",
+      "fields": {
+        "profile": {
+          "name": "Profile",
+          "description": "Name of saved profile to load (e.g., hrworks, work)."
+        },
+        "engine": {
+          "name": "Browser Engine",
+          "description": "Rendering engine (chromium or firefox)."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Target mesh node."
+        },
+        "name": {
+          "name": "Session Name",
+          "description": "Optional human-readable label for the session."
+        },
+        "screen": {
+          "name": "Screen Mode",
+          "description": "Device dimensions profile (desktop or phone)."
+        },
+        "idle_timeout_minutes": {
+          "name": "Idle Timeout",
+          "description": "Inactivity timeout in minutes before stopping."
+        },
+        "record": {
+          "name": "Record Video",
+          "description": "Record session video."
+        },
+        "adblock": {
+          "name": "Ad Blocker",
+          "description": "Enable ad blocker extension."
+        },
+        "default_tabs": {
+          "name": "Open Default Tabs",
+          "description": "Open default tabs configured for the profile."
+        }
+      }
+    },
+    "stop_session": {
+      "name": "Stop Session",
+      "description": "Terminate an active browser session.",
+      "fields": {
+        "session_id": {
+          "name": "Session ID",
+          "description": "UUID of the session to terminate."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Node where the session is running."
+        }
+      }
+    },
+    "open_tab": {
+      "name": "Open Tab",
+      "description": "Open a new tab in the browser.",
+      "fields": {
+        "url": {
+          "name": "URL",
+          "description": "Web page URL to navigate to."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Target mesh node."
+        }
+      }
+    },
+    "close_tab": {
+      "name": "Close Tab",
+      "description": "Close an open tab by ID.",
+      "fields": {
+        "tab_id": {
+          "name": "Tab ID",
+          "description": "Chromium target / tab ID."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Target mesh node."
+        }
+      }
+    },
+    "export_auth": {
+      "name": "Export Auth",
+      "description": "Export cookies and localStorage state (Playwright storageState format) for a page or session.",
+      "fields": {
+        "page_id": {
+          "name": "Page ID",
+          "description": "Page ID to export auth from."
+        },
+        "session_id": {
+          "name": "Session ID",
+          "description": "Associated session ID."
+        },
+        "storage": {
+          "name": "Include Storage",
+          "description": "Whether to include localStorage entries."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Target mesh node."
+        }
+      }
+    },
+    "take_screenshot": {
+      "name": "Take Screenshot",
+      "description": "Capture a live JPEG screenshot of a session.",
+      "fields": {
+        "session_id": {
+          "name": "Session ID",
+          "description": "UUID of the session."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Target mesh node."
+        }
+      }
+    },
+    "clear_profile": {
+      "name": "Clear Profile",
+      "description": "Reset cookies and stored state for a named profile.",
+      "fields": {
+        "profile": {
+          "name": "Profile Name",
+          "description": "Profile to reset."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Target mesh node."
+        }
+      }
+    },
+    "vacuum_recordings": {
+      "name": "Vacuum Recordings",
+      "description": "Clean up expired session recordings across the node/mesh.",
+      "fields": {
+        "node": {
+          "name": "Node",
+          "description": "Target mesh node."
+        }
+      }
+    }
+  }
+}

@@ -9,3 +9,4 @@ __pycache__/
 *.egg-info/
 /browser/packages/*.xpi
 /browser/packages/*.crx
+*.py[cod]
