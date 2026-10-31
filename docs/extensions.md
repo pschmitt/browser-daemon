@@ -52,7 +52,7 @@ From the frame:
 | `cancel` | `id` | the answer is not wanted any more |
 | `size` | `height` | the content's height in pixels; the view sizes the frame to it (within its limits) |
 | `badge` | `text`, `tone` | the toolbar button's badge (up to 3 characters), `null` hides it; `tone` is `"danger"` (red) or `"warn"` (amber), else the accent |
-| `icon` | `path` | the toolbar button's image: a PNG of the bundle by relative path (e.g. `icons/locked.png`), `null` for the manifest's `icon` |
+| `icon` | `src` | the toolbar button's image: a PNG data URL (up to 100 kB) the bundle drew itself, `null` for the manifest's `icon` |
 | `close` | `focus` | close the popover; focus goes back to the `"button"` or to the `"view"` (after a fill) |
 | `toast` | `text`, `ms` | a note at the bottom of the view; `ms: 0` keeps it until the next |
 | `passkey.answer` | `id`, `use`, `entry`, `device` | the prompt's answer: use the vault (with the entry id picked, or `null` to let rbw pick or unlock first), or not; `device: true` lets the browser ask its own way (a security key, the phone) |

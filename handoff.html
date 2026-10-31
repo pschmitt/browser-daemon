@@ -5443,10 +5443,10 @@ addEventListener("message", (e) => {
       break;
     }
     case "icon": {
-      // A picture from the bundle (a PNG, by relative path), or null for the manifest's.
+      // A PNG data URL from the bundle (it draws its own states), or null for the manifest's.
       if (!f.button) break;
-      const path = typeof m.path === "string" && /^[\w\-]+(\/[\w\-.]+)*\.png$/.test(m.path) && !m.path.includes("..") ? m.path : f.ext.icon;
-      f.button.querySelector("img").src = f.ext.base + path;
+      const ok = typeof m.src === "string" && m.src.length < 100000 && /^data:image\/png;base64,[A-Za-z0-9+\/=]+$/.test(m.src);
+      f.button.querySelector("img").src = ok ? m.src : f.ext.base + f.ext.icon;
       break;
     }
     case "close":
