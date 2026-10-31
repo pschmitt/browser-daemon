@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-31
+
 ### Added
 
 * Extensions: the toolbar `badge` message takes a `tone`, `icon` swaps the
