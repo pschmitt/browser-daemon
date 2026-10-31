@@ -5498,7 +5498,12 @@ async function extRequest(f, m) {
     if (m.kind === "logins" && f.slot === "toolbar") {
       if (!pageHost() || !vaultReady()) throw new Error("There is no page to fill");
       const query = typeof m.query === "string" && m.query.trim() ? m.query.trim().slice(0, 200) : null;
-      result = await vaultCall({ unlock: m.unlock === true, query }, note, ac.signal);
+      // The master password, typed in the frame: only to unlock this session's own
+      // vault, never in a shared tab or a publicly shared session (visitors may watch).
+      let password = typeof m.password === "string" && m.password ? m.password.slice(0, 4096) : null;
+      if (password && (sharedBrowserId || sess?.share)) throw new Error("A master password is not taken here: unlock from your phone");
+      try { result = await vaultCall({ unlock: m.unlock === true, query, ...(password ? { password } : {}) }, note, ac.signal); }
+      finally { password = null; }
     } else if (m.kind === "fill" && f.slot === "toolbar") {
       if (!pageHost() || !vaultReady()) throw new Error("There is no page to fill");
       const fields = Array.isArray(m.fields) ? m.fields.filter((x) => typeof x === "string") : [];

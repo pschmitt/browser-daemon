@@ -487,6 +487,44 @@ fn for_entry<'a>(args: &'a SecretAgentArgs, cmd: &[&'a str], entry: &'a str) -> 
     out
 }
 
+/// Unlock rbw with the master password the user typed in the view: it goes to
+/// `rbw unlock --stdin` on standard input (never an argument or a log line).
+async fn unlock_with_password(
+    args: &SecretAgentArgs,
+    password: &crate::passkeys::Secret,
+) -> Result<(), String> {
+    use tokio::io::AsyncWriteExt;
+    let mut child = Command::new(&args.rbw)
+        .args(["unlock", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| format!("Could not run rbw: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("Could not talk to rbw")?;
+    stdin
+        .write_all(format!("{}\n", password.0).as_bytes())
+        .await
+        .map_err(|e| format!("Could not talk to rbw: {e}"))?;
+    drop(stdin);
+    let out = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
+        .await
+        .map_err(|_| "rbw took too long to unlock".to_string())?
+        .map_err(|e| format!("Could not run rbw: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // rbw's message, never the password (it does not echo it).
+    let said = String::from_utf8_lossy(&out.stderr);
+    let said = said
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("rbw refused the password");
+    Err(said.trim().to_string())
+}
+
 /// The login entries for the page's site (rp_id is its host), as rbw picks
 /// them for its browser extension: name, user and whether there's a TOTP, no
 /// secrets. A locked vault is reported, or unlocked first when the user asked.
@@ -497,7 +535,9 @@ async fn logins(
     client: &reqwest::Client,
     args: &SecretAgentArgs,
 ) -> Result<serde_json::Value, String> {
-    if req.unlock {
+    if let Some(password) = &req.password {
+        unlock_with_password(args, password).await?;
+    } else if req.unlock {
         ensure_unlocked(node, secret, req, client, args).await?;
     } else if !unlocked(&args.rbw).await {
         return Ok(serde_json::json!({ "locked": true }));

@@ -146,6 +146,9 @@ pub(crate) struct AutofillRequest {
     /// Listing: search the whole vault for this instead.
     #[serde(default)]
     pub(crate) query: Option<String>,
+    /// Listing: unlock the vault with this master password (typed in the view).
+    #[serde(default)]
+    pub(crate) password: Option<passkeys::Secret>,
     /// Filling: the user confirmed an entry that isn't saved for the site.
     #[serde(default)]
     pub(crate) any_site: bool,
@@ -198,6 +201,10 @@ pub(crate) async fn api_session_autofill(
             "Vault entry picked in the live view"
         );
     }
+    let password = req.password.filter(|p| !p.0.is_empty());
+    if password.is_some() {
+        info!(session_id = %id, host = %host, "Vault unlock with the master password asked in the live view");
+    }
     let query = req
         .query
         .map(|q| q.trim().chars().take(100).collect::<String>())
@@ -218,6 +225,7 @@ pub(crate) async fn api_session_autofill(
                 fields,
                 unlock: req.unlock,
                 query,
+                password,
                 any_site: req.any_site,
                 copy: req.copy,
                 url: Some(page_url.clone()),
@@ -240,6 +248,12 @@ pub(crate) async fn api_extension_autofill(
     state.check_auth(&headers)?;
     let shared = crate::extension::controlled(&state, id, tab)?;
     let (host, page_url) = page_address(&shared.url)?;
+    if req.password.is_some() {
+        return Err(api_error(
+            StatusCode::FORBIDDEN,
+            "A master password is not taken for a shared browser's tab: unlock from the phone",
+        ));
+    }
     if req.entry.is_some() {
         info!(browser = %id, host = %host, any_site = req.any_site, copy = req.copy, "Vault entry picked in a shared browser's live view");
     }
@@ -263,6 +277,7 @@ pub(crate) async fn api_extension_autofill(
                 fields,
                 unlock: req.unlock,
                 query,
+                password: None,
                 any_site: req.any_site,
                 copy: req.copy,
                 url: Some(page_url.clone()),

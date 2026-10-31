@@ -18,6 +18,18 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+/// The master password, on its way to rbw: never shown by Debug, so no log
+/// line or error can carry it.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(pub String);
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(..)")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Request {
     pub id: Uuid,
@@ -52,6 +64,10 @@ pub struct Request {
     /// "logins": search the whole vault for this instead of listing the site's entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
+    /// "logins": unlock the vault with this master password first (the user
+    /// typed it in the view). Goes to `rbw unlock --stdin`, nowhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<Secret>,
     /// "copy": the first of `fields` the entry has goes to the live view, for
     /// the clipboard of the device viewing (the user clicked copy).
     /// "fill": the user picked an entry not saved for the site (from a search) and
@@ -69,6 +85,8 @@ pub struct Autofill {
     pub fields: Vec<String>,
     pub unlock: bool,
     pub query: Option<String>,
+    /// The master password to unlock with (see Request::password).
+    pub password: Option<Secret>,
     pub any_site: bool,
     /// The page's address (see Request::url).
     pub url: Option<String>,
@@ -157,6 +175,7 @@ impl Broker {
                 fields: Vec::new(),
                 unlock: false,
                 query: None,
+                password: None,
                 any_site: false,
             },
             None,
@@ -191,6 +210,7 @@ impl Broker {
                 fields: a.fields,
                 unlock: a.unlock,
                 query: a.query,
+                password: a.password,
                 any_site: a.any_site,
             },
             session,

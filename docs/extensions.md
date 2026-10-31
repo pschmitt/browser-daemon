@@ -76,7 +76,7 @@ Requests (`vault` permission):
 
 | `kind` | From | Fields | Result |
 | --- | --- | --- | --- |
-| `logins` | toolbar | `query`, `unlock` | the site's logins (then, with a `query`, the rest of the vault's matches, `"site": false`), or `{"locked": true}`; `unlock: true` asks the phone first |
+| `logins` | toolbar | `query`, `unlock`, `password` | the site's logins (then, with a `query`, the rest of the vault's matches, `"site": false`), or `{"locked": true}`; `unlock: true` asks the phone first; `password` unlocks with the master password the user typed (sent to `rbw unlock --stdin` on the node, never logged; refused in a shared tab or a publicly shared session, so show the field only when `open`'s `warning` is `null`) |
 | `fill` | toolbar | `entry`, `fields` (`username`, `password`, `totp`), `any_site` | `{"filled": [...]}`; an entry saved for another site needs `any_site` (ask twice first) |
 | `copy` | toolbar | `entry`, `fields` | `{"copied": field}`: the first of `fields` (`username`, `password`, `totp`) the entry has went to this device's clipboard; the value never reaches the extension |
 | `passkey.find` | passkey, while its prompt is open | | the entries with a passkey for the prompt's site, or `{"locked": true}` |
