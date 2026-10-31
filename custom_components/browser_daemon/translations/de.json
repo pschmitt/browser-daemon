@@ -9,6 +9,15 @@
           "cluster_secret": "Cluster-Secret (Optional)",
           "verify_ssl": "SSL-Zertifikat prüfen"
         }
+      },
+      "reconfigure": {
+        "title": "Verbindung ändern",
+        "description": "Die URL des browser-daemon-Knotens und sein Cluster-Secret. Ein leeres Secret behält das gespeicherte. Das Cluster-Secret wird für Runs (`POST /api/run`) gebraucht, die andere Integrationen wie HR WORKS nutzen.",
+        "data": {
+          "url": "Daemon-URL",
+          "cluster_secret": "Cluster-Secret",
+          "verify_ssl": "SSL-Zertifikat prüfen"
+        }
       }
     },
     "error": {
@@ -17,7 +26,8 @@
       "unknown": "Unerwarteter Fehler aufgetreten."
     },
     "abort": {
-      "already_configured": "Dieser Browser-Daemon-Knoten ist bereits konfiguriert."
+      "already_configured": "Dieser Browser-Daemon-Knoten ist bereits konfiguriert.",
+      "reconfigure_successful": "Die Verbindung wurde aktualisiert."
     }
   },
   "options": {

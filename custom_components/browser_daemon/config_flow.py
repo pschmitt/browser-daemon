@@ -89,6 +89,55 @@ class BrowserDaemonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Change the URL or cluster secret; a blank secret keeps the saved one."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            data = {
+                **entry.data,
+                CONF_URL: user_input[CONF_URL].rstrip("/"),
+                CONF_VERIFY_SSL: user_input.get(CONF_VERIFY_SSL, True),
+            }
+            if user_input.get(CONF_CLUSTER_SECRET):
+                data[CONF_CLUSTER_SECRET] = user_input[CONF_CLUSTER_SECRET].strip()
+
+            client = BrowserDaemonClient(
+                session=async_get_clientsession(self.hass),
+                base_url=data[CONF_URL],
+                cluster_secret=data.get(CONF_CLUSTER_SECRET),
+                verify_ssl=data[CONF_VERIFY_SSL],
+            )
+            try:
+                await client.async_get_overview()
+            except BrowserDaemonAuthError:
+                errors["base"] = "invalid_auth"
+            except BrowserDaemonConnectionError:
+                errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected error reconfiguring browser-daemon")
+                errors["base"] = "unknown"
+            else:
+                return self.async_update_reload_and_abort(entry, data=data)
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_URL, default=entry.data.get(CONF_URL, DEFAULT_URL)
+                ): str,
+                vol.Optional(CONF_CLUSTER_SECRET): str,
+                vol.Optional(
+                    CONF_VERIFY_SSL, default=entry.data.get(CONF_VERIFY_SSL, True)
+                ): bool,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=schema, errors=errors
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(
@@ -122,7 +171,9 @@ class BrowserDaemonOptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry)
                 CONF_POLL_INTERVAL,
                 default=self.options.get(
                     CONF_POLL_INTERVAL,
-                    self.config_entry.data.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL),
+                    self.config_entry.data.get(
+                        CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL
+                    ),
                 ),
             ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
         }

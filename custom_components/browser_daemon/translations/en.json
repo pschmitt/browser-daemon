@@ -9,6 +9,15 @@
           "cluster_secret": "Cluster Secret (Optional)",
           "verify_ssl": "Verify SSL Certificate"
         }
+      },
+      "reconfigure": {
+        "title": "Change the connection",
+        "description": "The URL of the browser-daemon node and its cluster secret. A blank secret keeps the saved one. The cluster secret is needed for runs (`POST /api/run`), which other integrations such as HR WORKS use.",
+        "data": {
+          "url": "Daemon URL",
+          "cluster_secret": "Cluster Secret",
+          "verify_ssl": "Verify SSL Certificate"
+        }
       }
     },
     "error": {
@@ -17,7 +26,8 @@
       "unknown": "Unexpected error occurred."
     },
     "abort": {
-      "already_configured": "This Browser Daemon node is already configured."
+      "already_configured": "This Browser Daemon node is already configured.",
+      "reconfigure_successful": "The connection was updated."
     }
   },
   "options": {
