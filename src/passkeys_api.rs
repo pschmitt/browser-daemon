@@ -484,10 +484,34 @@ pub(crate) async fn api_secret_agent_next(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     state.check_auth(&headers)?;
-    Ok(match state.passkeys.next(Duration::from_secs(25)).await {
-        Some(req) => Json(req).into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
-    })
+    let rbw = headers
+        .get("X-Rbw-Version")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| {
+            v.len() <= 32
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
+        })
+        .map(str::to_string);
+    Ok(
+        match state.passkeys.next(Duration::from_secs(25), rbw).await {
+            Some(req) => Json(req).into_response(),
+            None => StatusCode::NO_CONTENT.into_response(),
+        },
+    )
+}
+
+/// Whether a secret agent is running and which rbw it uses, for the live view's
+/// version warning.
+pub(crate) async fn api_secret_agent_info(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    Ok(Json(serde_json::json!({
+        "running": state.passkeys.agent_running(),
+        "rbw": state.passkeys.agent_rbw(),
+    })))
 }
 
 pub(crate) async fn api_secret_agent_done(

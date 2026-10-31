@@ -5558,7 +5558,13 @@ function openExtPop(f) {
   placeExtPop();
   f.iframe.focus();
   extPost(f, "context", extContextNow());
-  extPost(f, "open", { warning: extMay(f, "vault") ? publicWarning("fill") : null });
+  const warning = extMay(f, "vault") ? publicWarning("fill") : null;
+  extPost(f, "open", { warning, rbw: null });
+  // Which rbw the node's secret agent uses, for the bundle's version warning.
+  if (!sharedBrowserId && extMay(f, "vault")) {
+    fetch("/api/secret-agent", { headers: authHeaders() }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      .then((info) => { if (info?.rbw && extOpen === f) extPost(f, "rbw", { rbw: info.rbw }); });
+  }
 }
 function closeExtPop() {
   const f = extOpen;

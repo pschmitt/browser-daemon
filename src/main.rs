@@ -999,6 +999,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/sessions/{id}/x-input", post(api_session_x_input))
         .route("/api/agent-topic", post(api_agent_topic))
         .route("/api/passkey/{req}", get(api_passkey_status))
+        .route("/api/secret-agent", get(api_secret_agent_info))
         .route("/api/secret-agent/next", get(api_secret_agent_next))
         .route("/api/secret-agent/{req}", post(api_secret_agent_done))
         .route("/api/secret-agent/{req}/note", post(api_secret_agent_note))

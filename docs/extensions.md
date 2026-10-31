@@ -66,6 +66,7 @@ To the frame:
 | `init` | `api`, `slot`, `theme`, `version` | `slot` is `toolbar` or `passkey`; `theme` is `light`, `dark` or `null` (follow the system); `version` is the manifest's |
 | `context` | `site`, `ready` | toolbar: after each page load and when opened. `site` is the page's host name (`""` off the web), `ready` whether the vault can fill it |
 | `open` | `warning` | the popover is shown |
+| `rbw` | `rbw` | toolbar, a moment after `open` once the node's secret agent has reported it: the version of the rbw it uses, to compare with the bundle's own |
 | `closed` | | it is hidden again |
 | `passkey` | `id`, `site`, `warning` | a passkey prompt for `site` |
 | `passkey.end` | `id` | the view closed that prompt (Escape) |

@@ -143,6 +143,8 @@ pub struct Broker {
     queue: Mutex<VecDeque<Request>>,
     tracked: Mutex<HashMap<Uuid, Tracked>>,
     agent_seen: Mutex<Option<Instant>>,
+    /// The rbw version the agent reports with each poll.
+    agent_rbw: Mutex<Option<String>>,
     wake: Notify,
 }
 
@@ -251,6 +253,11 @@ impl Broker {
             .is_some_and(|t| t.elapsed() <= AGENT_GONE)
     }
 
+    /// The version of the rbw the agent uses, as it last reported it.
+    pub fn agent_rbw(&self) -> Option<String> {
+        self.agent_rbw.lock().unwrap().clone()
+    }
+
     pub fn status(&self, id: Uuid) -> Option<Status> {
         let mut tracked = self.tracked.lock().unwrap();
         let t = tracked.get_mut(&id)?;
@@ -270,7 +277,10 @@ impl Broker {
     }
 
     /// The agent's long poll: the next request, or None after `wait`.
-    pub async fn next(&self, wait: Duration) -> Option<Request> {
+    pub async fn next(&self, wait: Duration, rbw: Option<String>) -> Option<Request> {
+        if rbw.is_some() {
+            *self.agent_rbw.lock().unwrap() = rbw;
+        }
         let deadline = Instant::now() + wait;
         loop {
             *self.agent_seen.lock().unwrap() = Some(Instant::now());
@@ -371,7 +381,7 @@ mod tests {
             .is_err(),
             "no agent yet"
         );
-        assert!(b.next(Duration::from_millis(10)).await.is_none());
+        assert!(b.next(Duration::from_millis(10), None).await.is_none());
         let id = b
             .start(
                 "p".into(),
@@ -381,7 +391,7 @@ mod tests {
                 Signing::default(),
             )
             .unwrap();
-        let req = b.next(Duration::from_secs(1)).await.unwrap();
+        let req = b.next(Duration::from_secs(1), None).await.unwrap();
         assert_eq!(req.rp_id, "x.test");
         assert!(
             !b.complete(
@@ -415,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn only_a_request_the_agent_took_can_be_answered_or_filled() {
         let b = Broker::default();
-        assert!(b.next(Duration::from_millis(1)).await.is_none());
+        assert!(b.next(Duration::from_millis(1), None).await.is_none());
         let id = b
             .start_autofill(
                 "page".into(),
@@ -435,7 +445,7 @@ mod tests {
         assert!(!b.complete(id, done()));
         assert!(!b.note(id, "x".into()));
         assert!(!b.authorize_fill(id, "page", "x.test", None));
-        b.next(Duration::from_secs(1)).await.unwrap();
+        b.next(Duration::from_secs(1), None).await.unwrap();
         // Another page or host gets nothing, and one fill is all there is.
         assert!(!b.authorize_fill(id, "other", "x.test", None));
         assert!(!b.authorize_fill(id, "page", "evil.test", None));
@@ -454,14 +464,14 @@ mod tests {
                 Signing::default(),
             )
             .unwrap();
-        b.next(Duration::from_secs(1)).await.unwrap();
+        b.next(Duration::from_secs(1), None).await.unwrap();
         assert!(!b.authorize_fill(find, "page", "x.test", None));
     }
 
     #[tokio::test]
     async fn a_fill_only_goes_to_the_session_it_was_made_for() {
         let b = Broker::default();
-        assert!(b.next(Duration::from_millis(1)).await.is_none());
+        assert!(b.next(Duration::from_millis(1), None).await.is_none());
         let (mine, other) = (Uuid::new_v4(), Uuid::new_v4());
         let id = b
             .start_autofill(
@@ -474,7 +484,7 @@ mod tests {
                 },
             )
             .unwrap();
-        b.next(Duration::from_secs(1)).await.unwrap();
+        b.next(Duration::from_secs(1), None).await.unwrap();
         assert!(!b.authorize_fill(id, "page", "x.test", Some(other)));
         assert!(!b.authorize_fill(id, "page", "x.test", None));
         assert!(b.authorize_fill(id, "page", "x.test", Some(mine)));

@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -161,11 +161,14 @@ async fn poll(
 ) {
     info!(node = %node, "Serving the vault");
     loop {
-        let res = client
+        let mut poll = client
             .get(format!("{node}/api/secret-agent/next"))
-            .header("X-Browser-Cluster-Secret", &secret)
-            .send()
-            .await;
+            .header("X-Browser-Cluster-Secret", &secret);
+        // Which rbw this is, for the live view's version warning.
+        if let Some(version) = rbw_version(&args.rbw).await {
+            poll = poll.header("X-Rbw-Version", version);
+        }
+        let res = poll.send().await;
         let req = match res {
             Ok(r) if r.status() == reqwest::StatusCode::NO_CONTENT => continue,
             Ok(r) if r.status().is_success() => match r.json::<Request>().await {
@@ -234,6 +237,33 @@ async fn poll(
                 .await;
         });
     }
+}
+
+/// The version of the rbw binary ("rbw 2.36.0" gives "2.36.0"), looked up once
+/// a minute.
+async fn rbw_version(rbw: &PathBuf) -> Option<String> {
+    static SEEN: std::sync::Mutex<Option<(Instant, Option<String>)>> = std::sync::Mutex::new(None);
+    if let Some((at, version)) = SEEN.lock().unwrap().as_ref() {
+        if at.elapsed() < Duration::from_secs(60) {
+            return version.clone();
+        }
+    }
+    let out = tokio::time::timeout(
+        Duration::from_secs(10),
+        Command::new(rbw)
+            .arg("--version")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let version = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .nth(1)
+        .map(str::to_string);
+    *SEEN.lock().unwrap() = Some((Instant::now(), version.clone()));
+    version
 }
 
 /// Which vault entry would serve `rp_id` (name and user only), or that the vault
