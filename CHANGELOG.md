@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Chromium sessions carry the passkey hook from the start, on every page, so
+  sites such as GitHub no longer warn of "partial passkey support" when the
+  sign-in page loads before `browser_passkey` is called. Signing is still only
+  possible while a session is armed.
+* Vault autofill leaves the username unmasked; the password and the TOTP code
+  stay masked.
+
 ## [0.9.4] - 2026-10-31
 
 ### Fixed

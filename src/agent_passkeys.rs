@@ -22,7 +22,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::passkeys::{Broker, Signing, Status};
@@ -110,6 +110,7 @@ pub struct Watchers {
 
 impl Watchers {
     /// Arms `session` for `sites` until `until`, or disarms it (`sites` empty).
+    /// The hook itself stays on the session either way: only signing is armed.
     /// Starts a watcher on the browser at `browser_ws` unless one runs already.
     pub fn arm(
         self: &Arc<Self>,
@@ -119,18 +120,44 @@ impl Watchers {
         sites: Vec<String>,
         until: Instant,
     ) {
-        let mut armed = self.armed.lock().unwrap();
-        if sites.is_empty() {
-            armed.remove(&session);
+        {
+            let mut armed = self.armed.lock().unwrap();
+            if let Some(a) = armed.get_mut(&session) {
+                a.until = if sites.is_empty() {
+                    Instant::now()
+                } else {
+                    until
+                };
+                a.sites = sites;
+                return;
+            }
+            if sites.is_empty() {
+                return;
+            }
+        }
+        self.start(broker, session, browser_ws, sites, until);
+    }
+
+    /// Puts the hook on every page of `session` for its whole life, so sites see
+    /// a platform authenticator before anyone asks to sign in. Signing stays
+    /// refused until `arm`.
+    pub fn hook(self: &Arc<Self>, broker: Arc<Broker>, session: Uuid, browser_ws: String) {
+        if self.armed.lock().unwrap().contains_key(&session) {
             return;
         }
-        if let Some(a) = armed.get_mut(&session) {
-            a.sites = sites;
-            a.until = until;
-            return;
-        }
+        self.start(broker, session, browser_ws, Vec::new(), Instant::now());
+    }
+
+    fn start(
+        self: &Arc<Self>,
+        broker: Arc<Broker>,
+        session: Uuid,
+        browser_ws: String,
+        sites: Vec<String>,
+        until: Instant,
+    ) {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst);
-        armed.insert(
+        self.armed.lock().unwrap().insert(
             session,
             Armed {
                 sites,
@@ -141,7 +168,7 @@ impl Watchers {
         let me = self.clone();
         tokio::spawn(async move {
             if let Err(e) = me.watch(&broker, session, &browser_ws).await {
-                warn!(session_id = %session, "Agent passkeys stopped: {e}");
+                debug!(session_id = %session, "Passkey hook stopped: {e}");
             }
             let mut armed = me.armed.lock().unwrap();
             if armed
@@ -153,11 +180,19 @@ impl Watchers {
         });
     }
 
-    /// The sites `session` is armed for now (none: not armed, or expired).
-    fn sites(&self, session: Uuid) -> Option<Vec<String>> {
+    /// Whether `session` has the hook.
+    fn hooked(&self, session: Uuid) -> bool {
+        self.armed.lock().unwrap().contains_key(&session)
+    }
+
+    /// The sites `session` may sign in to now (none: not armed, or expired).
+    fn sites(&self, session: Uuid) -> Vec<String> {
         let armed = self.armed.lock().unwrap();
-        let a = armed.get(&session)?;
-        (a.until > Instant::now()).then(|| a.sites.clone())
+        armed
+            .get(&session)
+            .filter(|a| a.until > Instant::now())
+            .map(|a| a.sites.clone())
+            .unwrap_or_default()
     }
 
     async fn watch(
@@ -202,15 +237,12 @@ impl Watchers {
             json!({ "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true }),
             None,
         );
-        info!(session_id = %session, "Agent passkeys armed");
-        // Runs while armed: sites() is None once the time is up or disarmed.
-        while let Some(left) = self
-            .sites(session)
-            .and_then(|_| self.until(session))
-            .map(|u| u.saturating_duration_since(Instant::now()))
-        {
+        debug!(session_id = %session, "Passkey hook started");
+        // Runs as long as the session has the hook; the browser going away ends it.
+        while self.hooked(session) {
+            let left = Duration::from_secs(30);
             let msg = match tokio::time::timeout(left, stream.next()).await {
-                Err(_) => continue, // expired, or armed for longer meanwhile
+                Err(_) => continue, // nothing to do: look at the state again
                 Ok(None) => return Err("The browser went away".into()),
                 Ok(Some(Err(e))) => return Err(e.to_string()),
                 Ok(Some(Ok(Message::Text(t)))) => t,
@@ -256,7 +288,7 @@ impl Watchers {
                 "Runtime.bindingCalled" if params["name"] == BINDING => {
                     // Disarmed meanwhile: answered all the same (no), so the
                     // page asks the browser instead of waiting.
-                    let sites = self.sites(session).unwrap_or_default();
+                    let sites = self.sites(session);
                     let Some(cdp_session) = cdp_session else {
                         continue;
                     };
@@ -272,14 +304,19 @@ impl Watchers {
                     let payload = params["payload"].as_str().unwrap_or_default().to_string();
                     let (cdp, broker) = (cdp.clone(), broker.clone());
                     tokio::spawn(async move {
-                        let (id, answer) =
-                            match sign(&broker, &target, &url, &payload, &sites).await {
-                                Ok((id, answer)) => (id, answer),
-                                Err((id, e)) => {
+                        let (id, answer) = match sign(&broker, &target, &url, &payload, &sites)
+                            .await
+                        {
+                            Ok((id, answer)) => (id, answer),
+                            Err((id, e)) => {
+                                if sites.is_empty() {
+                                    debug!(session_id = %session, "Passkey request left to the browser: {e}");
+                                } else {
                                     warn!(session_id = %session, "Agent passkey not signed: {e}");
-                                    (id, Value::Null)
                                 }
-                            };
+                                (id, Value::Null)
+                            }
+                        };
                         let Some(id) = id else { return };
                         let expr = format!(
                             "globalThis.__bdAgentPasskeyAnswer?.({}, {})",
@@ -296,12 +333,7 @@ impl Watchers {
                 _ => {}
             }
         }
-        info!(session_id = %session, "Agent passkeys disarmed");
         Ok(())
-    }
-
-    fn until(&self, session: Uuid) -> Option<Instant> {
-        self.armed.lock().unwrap().get(&session).map(|a| a.until)
     }
 }
 
@@ -464,6 +496,37 @@ impl Conn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hooked_session_signs_only_while_armed() {
+        let w = Watchers::default();
+        let id = Uuid::new_v4();
+        assert!(!w.hooked(id));
+        let entry = |sites: Vec<String>, until| Armed {
+            sites,
+            until,
+            generation: 0,
+        };
+        w.armed
+            .lock()
+            .unwrap()
+            .insert(id, entry(Vec::new(), Instant::now()));
+        assert!(w.hooked(id));
+        assert!(w.sites(id).is_empty());
+        w.armed.lock().unwrap().insert(
+            id,
+            entry(
+                vec!["github.com".into()],
+                Instant::now() + Duration::from_secs(60),
+            ),
+        );
+        assert_eq!(w.sites(id), vec!["github.com".to_string()]);
+        w.armed
+            .lock()
+            .unwrap()
+            .insert(id, entry(vec!["github.com".into()], Instant::now()));
+        assert!(w.hooked(id) && w.sites(id).is_empty());
+    }
 
     #[test]
     fn sites_cover_their_subdomains_only() {

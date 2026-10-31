@@ -269,6 +269,7 @@ impl AppState {
             guard.insert(session.id, session.clone());
         }
         crate::downloads::watch(self.clone(), &session);
+        self.hook_passkeys(&session);
         // In the map: the reservation is no longer needed.
         drop(reservation);
 
@@ -282,6 +283,23 @@ impl AppState {
         self.persist_session(&session).await;
 
         Ok(session)
+    }
+
+    /// Puts the passkey hook on a Chromium session (agent_passkeys.rs): sites
+    /// then see a platform authenticator on every page, armed or not.
+    fn hook_passkeys(&self, session: &ManagedSession) {
+        if session.bidi.is_some() {
+            return;
+        }
+        self.agent_passkeys.hook(
+            self.passkeys.clone(),
+            session.id,
+            format!(
+                "ws://127.0.0.1:{}/{}",
+                session.port,
+                session.ws_path.trim_start_matches('/')
+            ),
+        );
     }
 
     /// Claim a slot for a launch, or find the session the profile already has.
@@ -375,6 +393,7 @@ impl AppState {
                         .await
                         .insert(session.id, session.clone());
                     crate::downloads::watch(self.clone(), &session);
+                    self.hook_passkeys(&session);
                     if rec.recording {
                         self.start_recording(&session, rec.recording_audio).await;
                     }

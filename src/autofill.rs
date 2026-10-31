@@ -122,14 +122,14 @@ const FILL: &str = r#"(c) => {
     if (c.username) {
       const prior = texty.filter((el) => (!p.form || el.form === p.form) && before(el, p) && !otp.includes(el));
       const u = prior.findLast(userLike) || prior.at(-1);
-      if (u) { put(u, c.username); filled.push("username"); }
+      if (u) { put(u, c.username, false); filled.push("username"); }
     }
     put(p, c.password);
     filled.push("password");
   } else if (c.username && !otp.length) {
     const u = texty.find(userLike) || texty.find((el) => type(el) === "email")
       || texty.find((el) => /user|login|mail|account|identifier|benutzer|kennung|anmelde/.test(hint(el)));
-    if (u) { put(u, c.username); filled.push("username"); }
+    if (u) { put(u, c.username, false); filled.push("username"); }
   }
   if (otp.length === 1) put(otp[0], c.totp);
   else otp.forEach((el, i) => put(el, c.totp[i]));
