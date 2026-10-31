@@ -242,6 +242,21 @@ class BrowserDaemonClient:
             raise BrowserDaemonError(f"Failed to get session: HTTP {resp.status}")
         return await resp.json()
 
+    async def async_set_idle_timeout(
+        self, session_id: str, minutes: int, node: str | None = None
+    ) -> dict[str, Any]:
+        """Update idle timeout for an active session."""
+        resp = await self._async_request(
+            "POST",
+            f"/api/sessions/{session_id}/idle-timeout",
+            node=node,
+            params={"minutes": minutes},
+        )
+        if resp.status not in (200, 204):
+            text = await resp.text()
+            raise BrowserDaemonError(f"Failed to set idle timeout ({resp.status}): {text}")
+        return await resp.json()
+
     async def async_delete_session(
         self, session_id: str, node: str | None = None
     ) -> bool:
