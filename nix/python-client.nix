@@ -1,14 +1,22 @@
-{ python3Packages }:
-python3Packages.buildPythonPackage {
+{
+  lib,
+  buildPythonPackage,
+  setuptools,
+  aiohttp,
+  pytestCheckHook,
+  pytest-asyncio,
+}:
+buildPythonPackage {
   pname = "browser-daemon-client";
+  # The daemon's version: the client is released with it.
   version = (builtins.fromTOML (builtins.readFile ../python/pyproject.toml)).project.version;
   pyproject = true;
   src = ../python;
 
-  build-system = [ python3Packages.setuptools ];
-  dependencies = [ python3Packages.aiohttp ];
+  build-system = [ setuptools ];
+  dependencies = [ aiohttp ];
 
-  nativeCheckInputs = with python3Packages; [
+  nativeCheckInputs = [
     pytestCheckHook
     pytest-asyncio
   ];
@@ -17,6 +25,6 @@ python3Packages.buildPythonPackage {
   meta = {
     description = "Async client for browser-daemon: Playwright runs over HTTP, sessions and logins";
     homepage = "https://github.com/pschmitt/browser-daemon";
-    license = python3Packages.lib.licenses.gpl3Only;
+    license = lib.licenses.gpl3Only;
   };
 }

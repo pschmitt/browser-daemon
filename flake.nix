@@ -39,7 +39,7 @@
           browser = import ./nix/browser.nix { inherit pkgs; };
           adblock = pkgs.callPackage ./nix/adblock.nix { };
           # The Python client (python/), for Home Assistant integrations and scripts.
-          browser-daemon-client = pkgs.callPackage ./nix/python-client.nix { };
+          browser-daemon-client = pkgs.python3Packages.callPackage ./nix/python-client.nix { };
         in
         {
           packages = {
@@ -102,6 +102,13 @@
           inherit rev;
           craneLib = crane.mkLib prev;
         };
+        # python3Packages.browser-daemon-client (any Python of the package set), for
+        # Home Assistant integrations and scripts.
+        pythonPackagesExtensions = prev.pythonPackagesExtensions or [ ] ++ [
+          (pyFinal: _pyPrev: {
+            browser-daemon-client = pyFinal.callPackage ./nix/python-client.nix { };
+          })
+        ];
       };
 
       # The flake's own package is the default, so the module needs no overlay

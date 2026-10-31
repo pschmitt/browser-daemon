@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+* The flake's overlay adds `python3Packages.browser-daemon-client` (any Python
+  of the package set), next to `packages.browser-daemon-client`.
+
 ## [0.10.0] - 2026-10-31
 
 ### Changed
