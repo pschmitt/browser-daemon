@@ -12,6 +12,12 @@
   Node.js process under Node's permission model. Off unless the node has
   `--run-node` and `--playwright-core` (NixOS: `run.enable`). See
   [docs/run.md](docs/run.md).
+* `browser-daemon-client`, an async Python client with nothing but `aiohttp`
+  (`python/`, the flake's `packages.browser-daemon-client`): runs, sessions,
+  tabs and a page's login, for Home Assistant integrations and scripts.
+* `/api/peers/{node}/...` also forwards the session list, a session, a node's
+  tabs (`/json/list`) and a page's login (`POST /api/pages/{id}/auth`), so a
+  client can reach every node through one.
 
 ## [0.9.7] - 2026-10-31
 

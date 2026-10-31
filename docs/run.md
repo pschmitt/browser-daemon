@@ -123,7 +123,20 @@ What this does not protect: the script drives the browser, so it can do whatever
 
 ## Clients
 
-Any HTTP client works. With Home Assistant's `aiohttp` session:
+[`browser-daemon-client`](../python/README.md) is an async Python client with nothing but `aiohttp` (the flake's `packages.browser-daemon-client`): runs, sessions, tabs and a page's login, with builders for the steps.
+
+```python
+from browser_daemon_client import BrowserDaemon, step
+
+bd = BrowserDaemon(http, url, secret, client="Home Assistant · HR WORKS")
+res = await bd.run(profile="work", url="https://example.org", steps=[
+    step.fill("#password", arg="password"),
+    step.click("role=button[name='Sign in']"),
+    step.text(".balance", as_="balance"),
+], args={"password": password})
+```
+
+Any other HTTP client works too. With Home Assistant's `aiohttp` session:
 
 ```python
 async with session.post(
@@ -143,6 +156,5 @@ async with session.post(
 
 ## Plans
 
-- A small Python client (aiohttp only) for Home Assistant integrations: profiles, sessions, a profile's login (`/api/pages/{id}/auth`) and runs, so integrations stop carrying their own copies.
 - Vault helpers for scripts and steps (`fill_secret` with an rbw entry, as `browser_fill_secret` does for agents), so a client need not hold the password at all.
 - Firefox sessions.

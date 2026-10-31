@@ -60,6 +60,7 @@ let
         ../dashboard-profiles.png
         ../nix
         ../browser
+        ../python
         ../flake.nix
         ../flake.lock
         ../justfile

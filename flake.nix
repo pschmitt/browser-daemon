@@ -38,11 +38,13 @@
           };
           browser = import ./nix/browser.nix { inherit pkgs; };
           adblock = pkgs.callPackage ./nix/adblock.nix { };
+          # The Python client (python/), for Home Assistant integrations and scripts.
+          browser-daemon-client = pkgs.callPackage ./nix/python-client.nix { };
         in
         {
           packages = {
             default = browser-daemon;
-            inherit browser-daemon;
+            inherit browser-daemon browser-daemon-client;
             inherit (browser) firefox-addon chromium-addon browser-native-host;
             inherit (adblock) ublock-origin-lite ublock-origin-xpi;
             # The live view's vault (an --extension-dir), from rbw.
@@ -56,7 +58,8 @@
 
           # Builds the package (which runs the unit tests) and checks the Nix formatting.
           checks = {
-            inherit browser-daemon;
+            # The Python client's build runs its tests.
+            inherit browser-daemon browser-daemon-client;
             nixfmt =
               pkgs.runCommand "browser-daemon-nixfmt"
                 {
