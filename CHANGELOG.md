@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-31
+
 ### Fixed
 
 * Passkey hooks (agent passkeys, the live view and the node extension): the
