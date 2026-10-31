@@ -1,0 +1,18 @@
+name: nix-aarch64
+# aarch64-linux packages and checks, built natively on GitHub's arm runners
+# (nixbot on x86_64 would have to emulate them) and pushed to the niks3 S3 cache;
+# see pschmitt/ci-workflows. rbw-extension only re-exports rbw's own build.
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  aarch64:
+    uses: pschmitt/ci-workflows/.github/workflows/nix-aarch64.yaml@main
+    with:
+      exclude: '["rbw-extension"]'
+      pin-prefix: gh-browser-daemon-main
