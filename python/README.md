@@ -42,3 +42,10 @@ async with aiohttp.ClientSession() as http:
 
 Errors are `BrowserDaemonError` (with `status`), and for runs `RunError` and
 `RunTimeout` (with the whole answer in `.run`).
+
+## Releasing
+
+Bump `version` in `pyproject.toml`, commit, and push a signed tag
+`python-vX.Y.Z`: the `python-client` workflow tests, builds and publishes it to
+PyPI through trusted publishing (the `pypi` environment, tags `python-v*` only;
+no token is stored anywhere).

@@ -1,0 +1,59 @@
+name: python-client
+# The Python client (python/): tested on every change to it, published to PyPI
+# from a `python-vX.Y.Z` tag through PyPI's trusted publishing (no token: PyPI
+# trusts this workflow in the `pypi` environment of this repository).
+on:
+  push:
+    branches: [main]
+    paths: ['python/**', '.github/workflows/python-client.yaml']
+    tags: ['python-v*']
+  pull_request:
+    paths: ['python/**', '.github/workflows/python-client.yaml']
+  workflow_dispatch: {}
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+defaults:
+  run:
+    working-directory: python
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet . pytest pytest-asyncio
+          "$RUNNER_TEMP/venv/bin/pytest" -q
+      - name: Build
+        run: pipx run build --outdir dist
+      - name: Match tag and package version
+        if: startsWith(github.ref, 'refs/tags/python-v')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n1)
+          test "$GITHUB_REF_NAME" = "python-v$version" || { echo "::error::$GITHUB_REF_NAME does not match pyproject.toml's $version"; exit 1; }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: python-dist
+          path: python/dist/
+  publish:
+    if: startsWith(github.ref, 'refs/tags/python-v')
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/browser-daemon-client/
+    permissions:
+      # Trusted publishing: the job's OIDC token is PyPI's proof of who publishes.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

@@ -14,6 +14,12 @@ release workflow signs the browser extension, publishes it and then commits
 its hashes to `browser/packages/metadata.json` on `main`. Any extension source
 change needs a new version, because AMO signs each version only once.
 
+## Python client
+
+`python/` is published to PyPI as `browser-daemon-client` from a signed
+`python-vX.Y.Z` tag (`.github/workflows/python-client.yaml`, trusted
+publishing). It is versioned on its own, not with the daemon.
+
 ## Code shared with rbw
 
 rbw's browser extension and this repository share two self-contained files,
