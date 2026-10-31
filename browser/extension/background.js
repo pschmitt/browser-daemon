@@ -666,6 +666,14 @@ function passkeyHook() {
     Object.defineProperty(c, "get", { configurable: true, writable: true, value: hook });
     current = hook;
   };
+  // The vault is a platform authenticator with user verification: say so, or sites
+  // such as GitHub warn of "partial passkey support" in a browser without one.
+  const PKC = globalThis.PublicKeyCredential;
+  if (PKC) {
+    PKC.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(true);
+    const caps = PKC.getClientCapabilities?.bind(PKC);
+    if (caps) PKC.getClientCapabilities = () => caps().then((o) => ({ ...o, userVerifyingPlatformAuthenticator: true, passkeyPlatformAuthenticator: true }));
+  }
   globalThis.__bdPasskeyRepair = repair;
   repair();
 }

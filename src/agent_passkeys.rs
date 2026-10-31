@@ -59,6 +59,14 @@ const HOOK: &str = r#"(() => {
     Object.defineProperty(cred, "toJSON", { value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
     return cred;
   };
+  // The vault is a platform authenticator with user verification: say so, or sites
+  // such as GitHub warn of "partial passkey support" in a browser without one.
+  const PKC = globalThis.PublicKeyCredential;
+  if (PKC) {
+    PKC.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(true);
+    const caps = PKC.getClientCapabilities?.bind(PKC);
+    if (caps) PKC.getClientCapabilities = () => caps().then((o) => ({ ...o, userVerifyingPlatformAuthenticator: true, passkeyPlatformAuthenticator: true }));
+  }
   globalThis.__bdAgentPasskeyAnswer = (id, answer) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
   c.get = function (opts) {
     const pk = opts && opts.publicKey;
