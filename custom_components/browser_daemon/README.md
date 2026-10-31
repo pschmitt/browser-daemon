@@ -20,6 +20,7 @@ A state-of-the-art Home Assistant custom component for managing, observing, and 
   - `browser_daemon.take_screenshot`: Capture live JPEG screenshots from active browser sessions.
   - `browser_daemon.clear_profile`: Reset stored cookies and state for named profiles.
   - `browser_daemon.vacuum_recordings`: Clean up expired session recordings across the cluster.
+  - `browser_daemon.run`: Run a Playwright script or a list of steps in a browser of the mesh and return the result (see [Runs](#runs-browser_daemonrun)).
 - **Event Bus Integration**: Fires `browser_daemon_session_started` and `browser_daemon_session_stopped` events when sessions start or stop.
 - **Zero-Friction Authentication**: Automatically fetches and caches the `bd_auth` token from the dashboard, or accepts an explicit cluster secret (`X-Browser-Cluster-Secret`).
 - **Python API for Dependent Integrations**: Designed from the ground up as a foundation for other integrations (e.g., `hrworks`, `msteams`).
@@ -51,21 +52,21 @@ from custom_components.browser_daemon import (
 # Retrieve the client instance
 client = async_get_client(hass)
 if client:
-  # Launch a session for a profile
-  session = await client.async_create_session(
-      profile="hrworks",
-      engine="chromium",
-  )
-  session_id = session["id"]
+    # Launch a session for a profile
+    session = await client.async_create_session(
+        profile="hrworks",
+        engine="chromium",
+    )
+    session_id = session["id"]
 
-  # Export auth/storage state for a page
-  auth_state = await client.async_export_auth(
-      page_id=...,
-      storage=True,
-  )
+    # Export auth/storage state for a page
+    auth_state = await client.async_export_auth(
+        page_id=...,
+        storage=True,
+    )
 
-  # Close the session when done
-  await client.async_delete_session(session_id)
+    # Close the session when done
+    await client.async_delete_session(session_id)
 ```
 
 You can also inspect the coordinator:
@@ -73,14 +74,54 @@ You can also inspect the coordinator:
 ```python
 coordinator = async_get_coordinator(hass)
 if coordinator:
-  # Check if a profile is currently in use
-  active_session = coordinator.get_active_session_for_profile("hrworks")
+    # Check if a profile is currently in use
+    active_session = coordinator.get_active_session_for_profile("hrworks")
 
-  # Check online node availability
-  online_nodes = coordinator.get_online_nodes()
+    # Check online node availability
+    online_nodes = coordinator.get_online_nodes()
 ```
 
 ---
+
+## Runs (`browser_daemon.run`)
+
+Runs a Playwright script or a list of steps on the node that has the browser
+(see [docs/run.md](../../docs/run.md)) and returns the run's answer: `ok`,
+`result`, `error`, `url`, `steps`, `logs`. Runs need the **cluster secret** in
+the integration (Settings → Devices & services → Browser Daemon → Reconfigure);
+a viewer token is not enough, since a run executes code on the node.
+
+```yaml
+action: browser_daemon.run
+data:
+  profile: work
+  url: https://example.org/account
+  steps:
+    - action: fill
+      selector: "#password"
+      value_arg: password
+    - action: click
+      selector: "role=button[name='Sign in']"
+    - action: text
+      selector: .balance
+      as: balance
+  args:
+    password: !secret example_password
+response_variable: run
+```
+
+`run.result.balance` then holds the text. A failed run makes the action fail
+(`fail_on_error: false` returns the answer with `ok: false` instead), and a
+screenshot of the tab comes with it only with `screenshot_on_error: true`.
+Values in `args` are never logged by the daemon; a `script` gets them as `args`,
+steps take them with `value_arg`.
+
+## Installation
+
+Through HACS: add `https://github.com/pschmitt/browser-daemon` as a custom
+repository of type *Integration*, or copy `custom_components/browser_daemon` to
+your configuration. The integration is released with the daemon and has its
+version.
 
 ## Configuration
 

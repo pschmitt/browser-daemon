@@ -182,3 +182,106 @@ vacuum_recordings:
       description: Target mesh node.
       selector:
         text:
+
+run:
+  name: Run
+  description: >-
+    Run a Playwright script or a list of steps in a browser of the mesh and
+    return the result (see docs/run.md of browser-daemon). Needs the cluster
+    secret in the integration.
+  fields:
+    profile:
+      name: Profile
+      description: Run in this profile's browser (on whichever node has it).
+      example: hrworks
+      selector:
+        text:
+    session_id:
+      name: Session ID
+      description: Run in this running session instead.
+      selector:
+        text:
+    url:
+      name: URL
+      description: Address to open before the script or steps.
+      example: https://example.org
+      selector:
+        text:
+    steps:
+      name: Steps
+      description: >-
+        Actions run in order, e.g. [{"action": "click", "selector": "text=Sign in"},
+        {"action": "text", "selector": "h1", "as": "title"}]. Values of steps with
+        `as` end up in the result.
+      selector:
+        object:
+    script:
+      name: Script
+      description: >-
+        A JavaScript function expression, `async ({ page, context, args, log }) => value`,
+        instead of steps.
+      selector:
+        text:
+          multiline: true
+    args:
+      name: Arguments
+      description: Values for the script (`args`) and the steps (`value_arg`); never logged.
+      selector:
+        object:
+    tab:
+      name: Tab
+      description: A tab (page ID) of the session to run in; by default a new tab, closed afterwards.
+      selector:
+        text:
+    keep_open:
+      name: Keep Tab Open
+      description: Leave the run's tab open; its ID is returned as `page`.
+      selector:
+        boolean:
+    persistent:
+      name: Keep Session
+      description: A session the run starts stays when the run ends (until its idle timeout).
+      selector:
+        boolean:
+    timeout:
+      name: Timeout
+      description: The whole run.
+      default: 60
+      selector:
+        number:
+          min: 1
+          max: 600
+          unit_of_measurement: seconds
+    action_timeout:
+      name: Action Timeout
+      description: Each Playwright action (click, fill, wait).
+      selector:
+        number:
+          min: 1
+          max: 600
+          unit_of_measurement: seconds
+    screenshot_on_error:
+      name: Screenshot on Error
+      description: Return a screenshot (base64 PNG) of the tab when the run fails.
+      default: false
+      selector:
+        boolean:
+    fail_on_error:
+      name: Fail on Error
+      description: Make the action fail when the run fails; otherwise the answer has `ok` false.
+      default: true
+      selector:
+        boolean:
+    idle_timeout_minutes:
+      name: Idle Timeout
+      description: For a session the run starts, minutes without use before it stops.
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: minutes
+    node:
+      name: Node
+      description: Send the run to this mesh node.
+      selector:
+        text:

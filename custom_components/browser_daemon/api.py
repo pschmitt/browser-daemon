@@ -163,17 +163,23 @@ class BrowserDaemonClient:
         """Fetch daemon health status."""
         resp = await self._async_request("GET", "/health", timeout=5)
         if resp.status != 200:
-            raise BrowserDaemonConnectionError(f"Health check failed: HTTP {resp.status}")
+            raise BrowserDaemonConnectionError(
+                f"Health check failed: HTTP {resp.status}"
+            )
         return await resp.json()
 
     async def async_get_overview(self) -> dict[str, Any]:
         """Fetch complete mesh overview."""
         resp = await self._async_request("GET", "/api/mesh/overview", timeout=20)
         if resp.status == 401:
-            raise BrowserDaemonAuthError("Unauthorized: Invalid cluster secret or token")
+            raise BrowserDaemonAuthError(
+                "Unauthorized: Invalid cluster secret or token"
+            )
         if resp.status != 200:
             text = await resp.text()
-            raise BrowserDaemonError(f"Failed to fetch overview ({resp.status}): {text}")
+            raise BrowserDaemonError(
+                f"Failed to fetch overview ({resp.status}): {text}"
+            )
 
         data = await resp.json()
         local_node = data.get("local_node") or {}
@@ -181,7 +187,9 @@ class BrowserDaemonClient:
             self._local_node_name = local_node["name"]
         return data
 
-    async def async_list_sessions(self, node: str | None = None) -> list[dict[str, Any]]:
+    async def async_list_sessions(
+        self, node: str | None = None
+    ) -> list[dict[str, Any]]:
         """List active sessions (local or on peer)."""
         resp = await self._async_request("GET", "/api/sessions", node=node)
         if resp.status != 200:
@@ -227,7 +235,9 @@ class BrowserDaemonClient:
         )
         if resp.status not in (200, 201):
             text = await resp.text()
-            raise BrowserDaemonError(f"Failed to create session ({resp.status}): {text}")
+            raise BrowserDaemonError(
+                f"Failed to create session ({resp.status}): {text}"
+            )
 
         return await resp.json()
 
@@ -235,7 +245,9 @@ class BrowserDaemonClient:
         self, session_id: str, node: str | None = None
     ) -> dict[str, Any]:
         """Retrieve details of an active session."""
-        resp = await self._async_request("GET", f"/api/sessions/{session_id}", node=node)
+        resp = await self._async_request(
+            "GET", f"/api/sessions/{session_id}", node=node
+        )
         if resp.status == 404:
             raise BrowserDaemonError(f"Session {session_id} not found")
         if resp.status != 200:
@@ -254,14 +266,18 @@ class BrowserDaemonClient:
         )
         if resp.status not in (200, 204):
             text = await resp.text()
-            raise BrowserDaemonError(f"Failed to set idle timeout ({resp.status}): {text}")
+            raise BrowserDaemonError(
+                f"Failed to set idle timeout ({resp.status}): {text}"
+            )
         return await resp.json()
 
     async def async_delete_session(
         self, session_id: str, node: str | None = None
     ) -> bool:
         """Stop/delete an active session."""
-        resp = await self._async_request("DELETE", f"/api/sessions/{session_id}", node=node)
+        resp = await self._async_request(
+            "DELETE", f"/api/sessions/{session_id}", node=node
+        )
         if resp.status in (200, 204):
             return True
         if resp.status == 404:
@@ -269,18 +285,20 @@ class BrowserDaemonClient:
         text = await resp.text()
         raise BrowserDaemonError(f"Failed to delete session ({resp.status}): {text}")
 
-    async def async_screenshot(
-        self, session_id: str, node: str | None = None
-    ) -> bytes:
+    async def async_screenshot(self, session_id: str, node: str | None = None) -> bytes:
         """Capture screenshot JPEG bytes for a session."""
         resp = await self._async_request(
             "GET", f"/api/sessions/{session_id}/screenshot", node=node, timeout=20
         )
         if resp.status != 200:
-            raise BrowserDaemonError(f"Failed to capture screenshot: HTTP {resp.status}")
+            raise BrowserDaemonError(
+                f"Failed to capture screenshot: HTTP {resp.status}"
+            )
         return await resp.read()
 
-    async def async_list_profiles(self, node: str | None = None) -> list[dict[str, Any]]:
+    async def async_list_profiles(
+        self, node: str | None = None
+    ) -> list[dict[str, Any]]:
         """List profiles."""
         resp = await self._async_request("GET", "/api/profiles", node=node)
         if resp.status != 200:
@@ -291,14 +309,16 @@ class BrowserDaemonClient:
         self, name: str, node: str | None = None
     ) -> dict[str, Any]:
         """Get profile details."""
-        resp = await self._async_request("GET", f"/api/profiles/{quote(name)}", node=node)
+        resp = await self._async_request(
+            "GET", f"/api/profiles/{quote(name)}", node=node
+        )
         if resp.status != 200:
-            raise BrowserDaemonError(f"Failed to get profile {name}: HTTP {resp.status}")
+            raise BrowserDaemonError(
+                f"Failed to get profile {name}: HTTP {resp.status}"
+            )
         return await resp.json()
 
-    async def async_clear_profile(
-        self, name: str, node: str | None = None
-    ) -> bool:
+    async def async_clear_profile(self, name: str, node: str | None = None) -> bool:
         """Reset profile data and cookies."""
         resp = await self._async_request(
             "POST", f"/api/profiles/{quote(name)}/clear", node=node, timeout=20
@@ -306,7 +326,34 @@ class BrowserDaemonClient:
         if resp.status in (200, 204):
             return True
         text = await resp.text()
-        raise BrowserDaemonError(f"Failed to clear profile {name} ({resp.status}): {text}")
+        raise BrowserDaemonError(
+            f"Failed to clear profile {name} ({resp.status}): {text}"
+        )
+
+    async def async_run(
+        self, payload: dict[str, Any], *, node: str | None = None
+    ) -> dict[str, Any]:
+        """Run a Playwright script or steps on the mesh (`POST /api/run`).
+
+        Returns the run's answer, also for a failed or timed-out run (`ok` false).
+        Runs need the cluster secret; a viewer token is refused."""
+        timeout = int(payload.get("timeout_seconds") or 60) + 45
+        resp = await self._async_request(
+            "POST", "/api/run", node=node, json=payload, timeout=timeout
+        )
+        if resp.status in (200, 422, 504):
+            return await resp.json()
+        if resp.status in (401, 403):
+            raise BrowserDaemonAuthError(
+                "Runs need the cluster secret (reconfigure the integration)"
+            )
+        try:
+            message = (await resp.json()).get("error")
+        except (aiohttp.ContentTypeError, ValueError):
+            message = None
+        raise BrowserDaemonError(
+            f"Run refused ({resp.status}): {message or 'unknown error'}"
+        )
 
     async def async_export_auth(
         self,
@@ -327,7 +374,11 @@ class BrowserDaemonClient:
             payload["urls"] = urls
 
         resp = await self._async_request(
-            "POST", f"/api/pages/{quote(page_id)}/auth", node=node, json=payload, timeout=20
+            "POST",
+            f"/api/pages/{quote(page_id)}/auth",
+            node=node,
+            json=payload,
+            timeout=20,
         )
         if resp.status != 200:
             text = await resp.text()
@@ -360,11 +411,11 @@ class BrowserDaemonClient:
             raise BrowserDaemonError(f"Failed to open tab ({resp.status}): {text}")
         return await resp.json()
 
-    async def async_close_tab(
-        self, tab_id: str, node: str | None = None
-    ) -> bool:
+    async def async_close_tab(self, tab_id: str, node: str | None = None) -> bool:
         """Close an open tab."""
-        resp = await self._async_request("PUT", f"/json/close/{quote(tab_id)}", node=node)
+        resp = await self._async_request(
+            "PUT", f"/json/close/{quote(tab_id)}", node=node
+        )
         return resp.status in (200, 204)
 
     async def async_vacuum_recordings(self, node: str | None = None) -> dict[str, Any]:

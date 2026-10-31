@@ -4,6 +4,11 @@
 
 ### Added
 
+* The Home Assistant integration (`custom_components/browser_daemon`, HACS) now
+  lives in this repository and is released with the daemon, under its version.
+  It gains `browser_daemon.run` (a Playwright script or steps, with the result as
+  the action's response) and a reconfigure step for the URL and cluster secret,
+  which runs need.
 * The flake's overlay adds `python3Packages.browser-daemon-client` (any Python
   of the package set), next to `packages.browser-daemon-client`.
 

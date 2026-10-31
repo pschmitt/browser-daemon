@@ -40,6 +40,7 @@ SERVICE_EXPORT_AUTH: Final = "export_auth"
 SERVICE_TAKE_SCREENSHOT: Final = "take_screenshot"
 SERVICE_CLEAR_PROFILE: Final = "clear_profile"
 SERVICE_VACUUM_RECORDINGS: Final = "vacuum_recordings"
+SERVICE_RUN: Final = "run"
 
 # Attributes
 ATTR_SESSION_ID: Final = "session_id"

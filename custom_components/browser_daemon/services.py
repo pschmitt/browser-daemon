@@ -8,8 +8,10 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
+from .api import BrowserDaemonError
 from .const import (
     ATTR_ADBLOCK,
     ATTR_ENGINE,
@@ -31,6 +33,7 @@ from .const import (
     SERVICE_CREATE_SESSION,
     SERVICE_EXPORT_AUTH,
     SERVICE_OPEN_TAB,
+    SERVICE_RUN,
     SERVICE_STOP_SESSION,
     SERVICE_TAKE_SCREENSHOT,
     SERVICE_VACUUM_RECORDINGS,
@@ -123,6 +126,43 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             node=call.data.get(ATTR_NODE),
         )
         return auth
+
+    async def handle_run(call: ServiceCall) -> dict[str, Any]:
+        """Run a Playwright script or steps (docs/run.md) and answer with the result."""
+        coordinator = _get_coordinator(hass, call.data.get("entry_id"))
+        if not coordinator:
+            raise HomeAssistantError("No Browser Daemon entry is set up")
+        if ("script" in call.data) == ("steps" in call.data):
+            raise HomeAssistantError("Give a script or steps")
+        payload = {
+            "script": call.data.get("script"),
+            "steps": call.data.get("steps"),
+            # Values for the script and `value_arg` of steps: never logged.
+            "args": call.data.get("args"),
+            "profile": call.data.get(ATTR_PROFILE),
+            "session_id": call.data.get(ATTR_SESSION_ID),
+            "tab": call.data.get("tab"),
+            "url": call.data.get(ATTR_URL),
+            "keep_open": call.data.get("keep_open"),
+            "persistent": call.data.get("persistent"),
+            "timeout_seconds": call.data.get("timeout"),
+            "action_timeout_seconds": call.data.get("action_timeout"),
+            "screenshot_on_error": call.data.get("screenshot_on_error"),
+            "idle_timeout_minutes": call.data.get(ATTR_IDLE_TIMEOUT),
+            "client": "Home Assistant",
+        }
+        try:
+            answer = await coordinator.client.async_run(
+                {k: v for k, v in payload.items() if v is not None},
+                node=call.data.get(ATTR_NODE),
+            )
+        except BrowserDaemonError as err:
+            raise HomeAssistantError(str(err)) from err
+        if not answer.get("ok") and call.data.get("fail_on_error"):
+            raise HomeAssistantError(
+                f"Run failed: {answer.get('error') or 'unknown error'}"
+            )
+        return answer
 
     async def handle_take_screenshot(call: ServiceCall) -> dict[str, Any]:
         coordinator = _get_coordinator(hass, call.data.get("entry_id"))
@@ -242,6 +282,40 @@ async def async_setup_services(hass: HomeAssistant) -> None:
 
     hass.services.async_register(
         DOMAIN,
+        SERVICE_RUN,
+        handle_run,
+        schema=vol.Schema(
+            {
+                vol.Exclusive("script", "code"): cv.string,
+                vol.Exclusive("steps", "code"): vol.All(cv.ensure_list, [dict]),
+                vol.Optional("args"): dict,
+                vol.Exclusive(ATTR_PROFILE, "browser"): cv.string,
+                vol.Exclusive(ATTR_SESSION_ID, "browser"): cv.string,
+                vol.Optional("tab"): cv.string,
+                vol.Optional(ATTR_URL): cv.string,
+                vol.Optional("keep_open"): cv.boolean,
+                vol.Optional("persistent"): cv.boolean,
+                vol.Optional("timeout", default=60): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=600)
+                ),
+                vol.Optional("action_timeout"): vol.All(
+                    vol.Coerce(int), vol.Range(min=1, max=600)
+                ),
+                # A base64 PNG in every failed automation trace is too much by default.
+                vol.Optional("screenshot_on_error", default=False): cv.boolean,
+                vol.Optional("fail_on_error", default=True): cv.boolean,
+                vol.Optional(ATTR_IDLE_TIMEOUT): vol.All(
+                    vol.Coerce(int), vol.Range(min=0)
+                ),
+                vol.Optional(ATTR_NODE): cv.string,
+                vol.Optional("entry_id"): cv.string,
+            }
+        ),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
         SERVICE_TAKE_SCREENSHOT,
         handle_take_screenshot,
         schema=vol.Schema(
@@ -293,6 +367,7 @@ async def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_TAKE_SCREENSHOT,
         SERVICE_CLEAR_PROFILE,
         SERVICE_VACUUM_RECORDINGS,
+        SERVICE_RUN,
     ]
     for service in services:
         hass.services.async_remove(DOMAIN, service)

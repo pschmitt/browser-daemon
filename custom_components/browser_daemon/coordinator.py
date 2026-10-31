@@ -10,7 +10,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import BrowserDaemonAuthError, BrowserDaemonClient, BrowserDaemonConnectionError
+from .api import (
+    BrowserDaemonAuthError,
+    BrowserDaemonClient,
+    BrowserDaemonConnectionError,
+)
 from .const import (
     CONF_POLL_INTERVAL,
     DEFAULT_POLL_INTERVAL,
@@ -53,11 +57,17 @@ class BrowserDaemonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             overview = await self.client.async_get_overview()
         except BrowserDaemonAuthError as err:
-            raise UpdateFailed(f"Authentication failed with browser-daemon: {err}") from err
+            raise UpdateFailed(
+                f"Authentication failed with browser-daemon: {err}"
+            ) from err
         except BrowserDaemonConnectionError as err:
-            raise UpdateFailed(f"Connection error reaching browser-daemon: {err}") from err
+            raise UpdateFailed(
+                f"Connection error reaching browser-daemon: {err}"
+            ) from err
         except Exception as err:
-            raise UpdateFailed(f"Unexpected error fetching browser-daemon overview: {err}") from err
+            raise UpdateFailed(
+                f"Unexpected error fetching browser-daemon overview: {err}"
+            ) from err
 
         # Process and normalize mesh nodes
         local_node = overview.get("local_node") or {}
@@ -91,7 +101,9 @@ class BrowserDaemonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Detected new sessions
         for sid in current_ids - previous_ids:
             sess_data = sessions_by_id[sid]
-            _LOGGER.debug("Browser session started: %s (%s)", sess_data.get("name"), sid)
+            _LOGGER.debug(
+                "Browser session started: %s (%s)", sess_data.get("name"), sid
+            )
             self.hass.bus.async_fire(
                 EVENT_SESSION_STARTED,
                 {
@@ -136,14 +148,19 @@ class BrowserDaemonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "recordings": overview.get("recordings") or [],
             "total_sessions": overview.get("total_sessions", len(sessions)),
             "total_nodes": overview.get("total_nodes", len(all_nodes)),
-            "online_nodes": overview.get("online_nodes", len([n for n in all_nodes.values() if n.get("status") == "online"])),
+            "online_nodes": overview.get(
+                "online_nodes",
+                len([n for n in all_nodes.values() if n.get("status") == "online"]),
+            ),
             "total_profiles": overview.get("total_profiles", len(profiles)),
             "total_recordings": overview.get("total_recordings", 0),
             "total_storage_bytes": overview.get("total_storage_bytes", 0),
             "max_storage_bytes": overview.get("max_storage_bytes", 0),
         }
 
-    def get_active_session_for_profile(self, profile_name: str) -> dict[str, Any] | None:
+    def get_active_session_for_profile(
+        self, profile_name: str
+    ) -> dict[str, Any] | None:
         """Find an active browser session for the specified profile."""
         if not self.data:
             return None
@@ -158,9 +175,7 @@ class BrowserDaemonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self.data:
             return []
         nodes = self.data.get("nodes") or {}
-        return [
-            name for name, info in nodes.items() if info.get("status") == "online"
-        ]
+        return [name for name, info in nodes.items() if info.get("status") == "online"]
 
     def is_node_online(self, node_name: str) -> bool:
         """Check if a specific node is currently online."""

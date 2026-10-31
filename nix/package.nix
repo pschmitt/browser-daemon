@@ -61,6 +61,8 @@ let
         ../nix
         ../browser
         ../python
+        ../custom_components
+        ../hacs.json
         ../flake.nix
         ../flake.lock
         ../justfile
