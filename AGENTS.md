@@ -19,8 +19,8 @@ change needs a new version, because AMO signs each version only once.
 `python/` is published to PyPI as `browser-daemon-client` by the same release:
 it has the daemon's version (`tools/release-hooks.sh` bumps `python/pyproject.toml`
 with `Cargo.toml`), and the signed `vX.Y.Z` tag triggers
-`.github/workflows/python-client.yaml` (trusted publishing) next to the release
-workflow. Never version or tag it on its own.
+the `python` job of the release workflow (trusted publishing, after the
+release exists). Never version or tag it on its own.
 
 ## Code shared with rbw
 

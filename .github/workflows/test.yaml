@@ -19,6 +19,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+  # The Python client (python/), which has the daemon's version.
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet . pytest pytest-asyncio
+          "$RUNNER_TEMP/venv/bin/pytest" -q
+      - name: Build
+        run: pipx run build --outdir dist
   pin:
     uses: pschmitt/ci-workflows/.github/workflows/verify-pin.yaml@main
     with:
