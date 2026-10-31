@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-10-31
+
 ### Changed
 
 * Chromium sessions carry the passkey hook from the start, on every page, so
