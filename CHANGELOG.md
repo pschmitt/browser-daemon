@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-10-31
+
+### Fixed
+
+* Apply requested `idle_timeout_minutes` when attaching to an existing profile session so sessions auto-expire as intended.
+
 ## [0.9.6] - 2026-10-31
 
 ### Changed
