@@ -1194,8 +1194,8 @@ const fillLogin = (c, urls) => {
       || texty.find((el) => /user|login|mail|account|identifier|benutzer|kennung|anmelde/.test(hint(el)));
     if (u) { put(u, c.username, false); filled.push("username"); }
   }
-  if (otp.length === 1) put(otp[0], c.totp);
-  else otp.forEach((el, i) => put(el, c.totp[i]));
+  if (otp.length === 1) put(otp[0], c.totp, false);
+  else otp.forEach((el, i) => put(el, c.totp[i], false));
   if (otp.length) filled.push("totp");
   // Custom fields (text ones only; hidden, boolean and linked never come here), as
   // rbw's extension: an input whose id or name is the field's name, else one not
