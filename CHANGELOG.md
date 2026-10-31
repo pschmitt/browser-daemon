@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Passkey hooks (agent passkeys, the live view and the node extension): the
+  credential handed to the page has a writable `toJSON`, so sites that assign
+  it (GitHub) no longer end the sign-in with a TypeError.
+
 ## [0.9.3] - 2026-10-30
 
 ### Added
