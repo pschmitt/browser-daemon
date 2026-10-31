@@ -4,6 +4,15 @@
 
 ### Added
 
+* Extensions: the toolbar `badge` message takes a `tone`, `icon` swaps the
+  button's picture (a PNG data URL), manifests can declare `shortcuts` that the
+  view catches (before the page gets them) and sends to the toolbar frame, and
+  the frame hears the rbw version of the node's secret agent (`rbw` message) to
+  warn about a mismatch. A `logins` request may carry the master password to
+  unlock with (`rbw unlock --stdin` on the node, never logged; refused in
+  shared tabs and publicly shared sessions). Needed by rbw 2.37.0's vault bundle:
+  deploy this before it.
+
 * `POST /api/run` runs a Playwright script or a list of steps (goto, click,
   fill, wait, text, screenshot, ...) in a profile's browser, a session or a
   throwaway browser, and answers with the result, so clients such as Home
