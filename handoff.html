@@ -216,6 +216,8 @@
   .ext-count { position: absolute; top: 5px; right: 4px; min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box; border-radius: 99px;
     background: var(--accent-btn); color: #fff; font: 700 9.5px/15px system-ui, sans-serif; text-align: center; pointer-events: none; }
   .ext-count[hidden] { display: none; }
+  .ext-count[data-tone="danger"] { background: #b3261e; }
+  .ext-count[data-tone="warn"] { background: #87642a; }
   .ext-pop { position: fixed; z-index: 61; top: 52px; left: 8px; width: 380px; max-width: calc(100vw - 16px); overflow: hidden;
     background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 16px 48px #0006; }
   .ext-pop[hidden] { display: none; }
@@ -5437,6 +5439,14 @@ addEventListener("message", (e) => {
       const count = f.button.querySelector(".ext-count");
       count.textContent = typeof m.text === "string" ? m.text.slice(0, 3) : "";
       count.hidden = !count.textContent;
+      if (m.tone === "danger" || m.tone === "warn") count.dataset.tone = m.tone; else delete count.dataset.tone;
+      break;
+    }
+    case "icon": {
+      // A picture from the bundle (a PNG, by relative path), or null for the manifest's.
+      if (!f.button) break;
+      const path = typeof m.path === "string" && /^[\w\-]+(\/[\w\-.]+)*\.png$/.test(m.path) && !m.path.includes("..") ? m.path : f.ext.icon;
+      f.button.querySelector("img").src = f.ext.base + path;
       break;
     }
     case "close":
