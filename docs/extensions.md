@@ -17,7 +17,8 @@ A directory with a `manifest.json`:
   "icon": "icons/rbw-48.png",
   "permissions": ["vault"],
   "toolbar": { "entry": "popup.html", "label": "Fill a login from the vault (rbw)" },
-  "passkey": { "entry": "passkey.html" }
+  "passkey": { "entry": "passkey.html" },
+  "shortcuts": [{ "key": "Ctrl+Alt+L", "action": "fill" }]
 }
 ```
 
@@ -29,6 +30,7 @@ A directory with a `manifest.json`:
 | `icon` | the toolbar button's image |
 | `permissions` | what it may ask for: `vault` (logins, fills, passkey lookups) |
 | `toolbar` | a button left of the session menu; `entry` opens in a popover under it, `label` is its tooltip |
+| `shortcuts` | keys the view catches while a page is under its control (before the page gets them): `key` is modifiers and one key (`Ctrl+Alt+L`), `action` is sent to the toolbar frame as a `shortcut` message |
 | `passkey` | `entry` opens in a dialog when a page started from the view wants a passkey; needs `vault`. The first extension with one gets the passkeys |
 
 Paths are relative to the bundle and stay inside it. The node serves the files as they are on disk, so changes to a directory show on the next load of the live view (a changed manifest needs a restart). `GET /handoff/extensions` lists what is loaded.
@@ -68,6 +70,7 @@ To the frame:
 | `passkey` | `id`, `site`, `warning` | a passkey prompt for `site` |
 | `passkey.end` | `id` | the view closed that prompt (Escape) |
 | `reply` | `id`, `result` or `error` (`aborted`) | a request's answer |
+| `shortcut` | `action` | toolbar: one of the manifest's keys was pressed |
 | `note` | `id`, `note` | progress of a request ("confirm the unlock on your phone") |
 
 `warning` is `null` or `{"text", "watch"}`: the session is shared publicly, and `text` says what that means for a fill or a passkey (`watch`: visitors only look). Show it.

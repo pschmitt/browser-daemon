@@ -5367,6 +5367,24 @@ function extFrame(ext, slot, parent) {
   extFrames.push(f);
   return f;
 }
+// An extension's keys ("Ctrl+Alt+L"): caught before the remote page or the
+// mirror gets them, told to its toolbar frame.
+const extKeys = [];
+const keyMatches = (spec, e) => {
+  const parts = spec.split("+"), key = parts.pop().toLowerCase();
+  const has = (name) => parts.some((p) => p.toLowerCase() === name);
+  return e.ctrlKey === has("ctrl") && e.altKey === has("alt") && e.shiftKey === has("shift") && e.metaKey === has("meta")
+    && (e.key.toLowerCase() === key || e.code.toLowerCase() === `key${key}`);
+};
+window.addEventListener("keydown", (e) => {
+  for (const { f, key, action } of extKeys) {
+    if (!keyMatches(key, e) || !vaultReady() || !f.ready) continue;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    extPost(f, "shortcut", { action });
+    return;
+  }
+}, true);
 function addExtension(ext) {
   if (ext.toolbar) {
     const label = ext.toolbar.label || ext.title;
@@ -5388,6 +5406,7 @@ function addExtension(ext) {
     const f = extFrame(ext, "toolbar", pop);
     f.button = btn;
     f.pop = pop;
+    for (const { key, action } of ext.shortcuts || []) if (typeof key === "string" && typeof action === "string") extKeys.push({ f, key, action });
     btn.hidden = extHidden && extMay(f, "vault");
     btn.onclick = (e) => { e.stopPropagation(); if (extOpen === f) closeExtPop(); else openExtPop(f); };
   }

@@ -37,6 +37,18 @@ pub struct Manifest {
     /// Asked when a page started from the view wants a passkey: `entry` in a dialog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passkey: Option<Slot>,
+    /// Keys the view catches for the toolbar frame (it gets a `shortcut` message).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shortcuts: Vec<Shortcut>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shortcut {
+    /// Modifiers and one key, like `Ctrl+Alt+L`.
+    pub key: String,
+    /// What the frame is told (`shortcut`'s `action`).
+    pub action: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
