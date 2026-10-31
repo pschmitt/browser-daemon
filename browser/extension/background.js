@@ -593,31 +593,24 @@ async function addressSuggestions(query) {
   return items;
 }
 
+// rbw's shared extension files (vendor/rbw, copied into the package): their text
+// for the paths that evaluate code through CDP instead of injecting a file.
+const vendored = new Map();
+async function vendoredSource(name) {
+  if (!vendored.has(name)) vendored.set(name, fetch(api.runtime.getURL(name)).then(r => r.text()));
+  return vendored.get(name);
+}
 // The page asks a live view with control to use the vault while it is watching
 // (__bdPasskeyAlive stays fresh); otherwise the browser handles the request.
 function passkeyHook() {
+  const shim = globalThis.rbwPasskeyShim;
+  delete globalThis.rbwPasskeyShim;
   const c = navigator.credentials;
   if (!c || globalThis.__bdPasskeyRepair) return;
   const waiting = new Map();
   let current;
   const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf)))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const bytes = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4); return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0)).buffer; };
-  // A signed assertion (from the vault, signed outside the browser) as the
-  // PublicKeyCredential the page asked for.
-  const credential = (a) => {
-    const r = a.response, own = (o, props) => { for (const [k, v] of Object.entries(props)) Object.defineProperty(o, k, { value: v, enumerable: true }); return o; };
-    const response = own(Object.create(AuthenticatorAssertionResponse.prototype), {
-      clientDataJSON: bytes(r.clientDataJSON), authenticatorData: bytes(r.authenticatorData),
-      signature: bytes(r.signature), userHandle: r.userHandle ? bytes(r.userHandle) : null,
-    });
-    const cred = own(Object.create(PublicKeyCredential.prototype), {
-      id: a.id, rawId: bytes(a.rawId), type: "public-key", response, authenticatorAttachment: a.authenticatorAttachment || "platform",
-    });
-    Object.defineProperty(cred, "getClientExtensionResults", { writable: true, configurable: true, value: () => ({}) });
-    Object.defineProperty(cred, "toJSON", { writable: true, configurable: true, value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
-    return cred;
-  };
   // answer: true = let the browser handle it (its authenticator has the passkey now),
   // false = cancelled, an object = the signed assertion to resolve with.
   globalThis.__bdPasskeyAnswer = (id, answer = true) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
@@ -660,7 +653,7 @@ function passkeyHook() {
         }
         try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
       }).then((answer) => answer === true ? get(opts)
-        : answer && typeof answer === "object" ? credential(answer)
+        : answer && typeof answer === "object" ? shim.credential(answer, "get")
         : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
     };
     Object.defineProperty(c, "get", { configurable: true, writable: true, value: hook });
@@ -668,16 +661,11 @@ function passkeyHook() {
   };
   // The vault is a platform authenticator with user verification: say so, or sites
   // such as GitHub warn of "partial passkey support" in a browser without one.
-  const PKC = globalThis.PublicKeyCredential;
-  if (PKC) {
-    PKC.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(true);
-    const caps = PKC.getClientCapabilities?.bind(PKC);
-    if (caps) PKC.getClientCapabilities = () => caps().then((o) => ({ ...o, userVerifyingPlatformAuthenticator: true, passkeyPlatformAuthenticator: true }));
-  }
+  if (globalThis.PublicKeyCredential) shim.patchPlatformAuthenticator(async () => true);
   globalThis.__bdPasskeyRepair = repair;
   repair();
 }
-const PASSKEY_HOOK = `(${passkeyHook.toString()})();`;
+const passkeyHookSource = async () => `${await vendoredSource('passkey-shim.js')}\n(${passkeyHook.toString()})();`;
 // Only tabs shared with control; reinjected after each top-level navigation.
 const hooked = new Set();
 async function hookPasskeys(tab) {
@@ -700,6 +688,7 @@ async function hookPasskeys(tab) {
           void (globalThis.browser || globalThis.chrome).runtime.sendMessage({type: 'passkeyHook', payload: event.detail});
         });
       }});
+      await api.scripting.executeScript({target: {tabId: tab}, world: 'MAIN', files: ['passkey-shim.js']});
       await api.scripting.executeScript({target: {tabId: tab}, world: 'MAIN', func: passkeyHook});
     } catch (error) {
       hooked.delete(tab);
@@ -711,8 +700,9 @@ async function hookPasskeys(tab) {
   const send = (method, params = {}) => api.debugger.sendCommand({tabId: tab}, method, params);
   await send('Runtime.enable');
   await send('Runtime.addBinding', {name: '__bdPasskey'});
-  await send('Page.addScriptToEvaluateOnNewDocument', {source: PASSKEY_HOOK});
-  await send('Runtime.evaluate', {expression: PASSKEY_HOOK}).catch(() => {});
+  const source = await passkeyHookSource();
+  await send('Page.addScriptToEvaluateOnNewDocument', {source});
+  await send('Runtime.evaluate', {expression: source}).catch(() => {});
 }
 
 // One attachment per tab, shared by concurrent requests so input keeps its order.
@@ -1121,6 +1111,8 @@ function pageAction(action, params, expectedOrigin, documentToken) {
 // isolated world: the same fields as in a daemon's own sessions.
 // Only in a frame still at an address the daemon checked (`urls`).
 const fillLogin = (c, urls) => {
+  const rbwTargets = globalThis.rbwFillTargets;
+  delete globalThis.rbwFillTargets;
   if (!urls.includes(location.href)) return null;
   const inputs = [], areas = [];
   const walk = (root) => root.querySelectorAll("*").forEach((el) => {
@@ -1130,8 +1122,6 @@ const fillLogin = (c, urls) => {
   });
   walk(document);
   const type = (el) => (el.getAttribute("type") || "").toLowerCase();
-  const ac = (el) => (el.getAttribute("autocomplete") || "").toLowerCase();
-  const hint = (el) => [el.name, el.id, el.getAttribute("placeholder"), el.getAttribute("aria-label"), ac(el)].join(" ").toLowerCase();
   const shown = (el) => {
     if (el.disabled || el.readOnly) return false;
     const r = el.getBoundingClientRect();
@@ -1141,9 +1131,7 @@ const fillLogin = (c, urls) => {
   };
   const textTypes = new Set(["", "text", "email", "tel", "number", "url"]);
   const visible = inputs.filter(shown);
-  const pw = visible.filter((el) => type(el) === "password");
   const texty = visible.filter((el) => textTypes.has(type(el)));
-  const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
   const areaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
   const used = new Set();
@@ -1170,29 +1158,23 @@ const fillLogin = (c, urls) => {
     el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data: v }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
-  const userLike = (el) => /username|email/.test(ac(el));
   const filled = [];
-  let otp = [];
-  if (c.totp) {
+  // Which inputs are the login's own: rbw's rules (fill-targets.js). Several
+  // password fields leave no choice, so nothing is filled.
+  let t;
+  try { t = rbwTargets.loginTargets(visible); } catch { return { filled }; }
+  let otp = c.totp && t.otp ? [t.otp] : [];
+  if (c.totp && !otp.length) {
     const boxes = texty.filter((el) => el.maxLength === 1);
-    const otpHint = /one.?time|otp|2fa|mfa|two.?factor|verification|security.?code|auth.?code|passcode|token/;
-    const one = texty.find((el) => ac(el) === "one-time-code") || (!pw.length && texty.find((el) => otpHint.test(hint(el))));
-    if (one) otp = [one];
-    else if (boxes.length === c.totp.length) otp = boxes;
+    if (boxes.length === c.totp.length) otp = boxes;
   }
-  if (c.password && pw.length) {
-    const p = pw.find((el) => ac(el) !== "new-password") || pw[0];
-    if (c.username) {
-      const prior = texty.filter((el) => (!p.form || el.form === p.form) && before(el, p) && !otp.includes(el));
-      const u = prior.findLast(userLike) || prior.at(-1);
-      if (u) { put(u, c.username, false); filled.push("username"); }
-    }
-    put(p, c.password);
+  if (c.password && t.password) {
+    if (c.username && t.user) { put(t.user, c.username, false); filled.push("username"); }
+    put(t.password, c.password);
     filled.push("password");
-  } else if (c.username && !otp.length) {
-    const u = texty.find(userLike) || texty.find((el) => type(el) === "email")
-      || texty.find((el) => /user|login|mail|account|identifier|benutzer|kennung|anmelde/.test(hint(el)));
-    if (u) { put(u, c.username, false); filled.push("username"); }
+  } else if (c.username && !otp.length && t.user) {
+    put(t.user, c.username, false);
+    filled.push("username");
   }
   if (otp.length === 1) put(otp[0], c.totp, false);
   else otp.forEach((el, i) => put(el, c.totp[i], false));
@@ -1315,11 +1297,12 @@ async function execute(command) {
       const filled = new Set();
       for (const {frame} of frames) {
         const world = await cdp(tab, 'Page.createIsolatedWorld', {frameId: frame, worldName: 'browser-daemon-fill'});
-        const r = await cdp(tab, 'Runtime.evaluate', {expression: `(${fillLogin})(${JSON.stringify(creds)}, ${JSON.stringify(urls)})`, contextId: world.executionContextId, returnByValue: true});
+        const r = await cdp(tab, 'Runtime.evaluate', {expression: `${await vendoredSource('fill-targets.js')}\n(${fillLogin})(${JSON.stringify(creds)}, ${JSON.stringify(urls)})`, contextId: world.executionContextId, returnByValue: true});
         (r.result?.value?.filled || []).forEach(f => filled.add(f));
       }
       return {filled: [...filled]};
     }
+    await api.scripting.executeScript({target: {tabId: tab, frameIds: frames.map(f => f.frame)}, files: ['fill-targets.js']});
     const done = await api.scripting.executeScript({
       target: {tabId: tab, frameIds: frames.map(f => f.frame)},
       func: fillLogin,

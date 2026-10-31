@@ -69,10 +69,14 @@ pub(crate) const GUARD: &str = r#"(el, css) => {
 
 /// Runs in the page (as `(FILL)(creds)`): fills the visible login form and says
 /// which fields it filled, as a JSON string (a plain value for CDP and BiDi alike).
-/// A password field takes the password and the text field before it the username;
-/// without one (a username-first sign-in) only the username field is filled. A
-/// one-time code goes into a field marked for it (or a row of one-digit boxes).
+/// Which inputs are the login's (username, password, one-time code) is rbw's
+/// rule, vendored as fill-targets.js; a one-time code also fits a row of
+/// one-digit boxes. Without a password field (a username-first sign-in) only the
+/// username field is filled.
 const FILL: &str = r#"(c) => {
+  /*RBW_FILL_TARGETS*/
+  const rbwTargets = globalThis.rbwFillTargets;
+  delete globalThis.rbwFillTargets;
   const inputs = [], areas = [];
   const walk = (root) => root.querySelectorAll("*").forEach((el) => {
     if (el.tagName === "INPUT") inputs.push(el);
@@ -81,8 +85,6 @@ const FILL: &str = r#"(c) => {
   });
   walk(document);
   const type = (el) => (el.getAttribute("type") || "").toLowerCase();
-  const ac = (el) => (el.getAttribute("autocomplete") || "").toLowerCase();
-  const hint = (el) => [el.name, el.id, el.getAttribute("placeholder"), el.getAttribute("aria-label"), ac(el)].join(" ").toLowerCase();
   const shown = (el) => {
     if (el.disabled || el.readOnly) return false;
     const r = el.getBoundingClientRect();
@@ -92,9 +94,7 @@ const FILL: &str = r#"(c) => {
   };
   const textTypes = new Set(["", "text", "email", "tel", "number", "url"]);
   const visible = inputs.filter(shown);
-  const pw = visible.filter((el) => type(el) === "password");
   const texty = visible.filter((el) => textTypes.has(type(el)));
-  const before = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
   const areaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
   const used = new Set();
@@ -107,29 +107,23 @@ const FILL: &str = r#"(c) => {
     el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertReplacementText", data: v }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
-  const userLike = (el) => /username|email/.test(ac(el));
   const filled = [];
-  let otp = [];
-  if (c.totp) {
+  // Which inputs are the login's own: rbw's rules (fill-targets.js). Several
+  // password fields leave no choice, so nothing is filled.
+  let t;
+  try { t = rbwTargets.loginTargets(visible); } catch { return JSON.stringify({ filled }); }
+  let otp = c.totp && t.otp ? [t.otp] : [];
+  if (c.totp && !otp.length) {
     const boxes = texty.filter((el) => el.maxLength === 1);
-    const otpHint = /one.?time|otp|2fa|mfa|two.?factor|verification|security.?code|auth.?code|passcode|token/;
-    const one = texty.find((el) => ac(el) === "one-time-code") || (!pw.length && texty.find((el) => otpHint.test(hint(el))));
-    if (one) otp = [one];
-    else if (boxes.length === c.totp.length) otp = boxes;
+    if (boxes.length === c.totp.length) otp = boxes;
   }
-  if (c.password && pw.length) {
-    const p = pw.find((el) => ac(el) !== "new-password") || pw[0];
-    if (c.username) {
-      const prior = texty.filter((el) => (!p.form || el.form === p.form) && before(el, p) && !otp.includes(el));
-      const u = prior.findLast(userLike) || prior.at(-1);
-      if (u) { put(u, c.username, false); filled.push("username"); }
-    }
-    put(p, c.password);
+  if (c.password && t.password) {
+    if (c.username && t.user) { put(t.user, c.username, false); filled.push("username"); }
+    put(t.password, c.password);
     filled.push("password");
-  } else if (c.username && !otp.length) {
-    const u = texty.find(userLike) || texty.find((el) => type(el) === "email")
-      || texty.find((el) => /user|login|mail|account|identifier|benutzer|kennung|anmelde/.test(hint(el)));
-    if (u) { put(u, c.username, false); filled.push("username"); }
+  } else if (c.username && !otp.length && t.user) {
+    put(t.user, c.username, false);
+    filled.push("username");
   }
   if (otp.length === 1) put(otp[0], c.totp, false);
   else otp.forEach((el, i) => put(el, c.totp[i], false));
@@ -166,7 +160,13 @@ fn expression(creds: &Creds, firefox: bool) -> String {
         "totp": creds.totp,
         "custom": creds.custom,
     });
-    format!("({})({c})", FILL.replace("/*GUARD*/", GUARD))
+    format!(
+        "({})({c})",
+        FILL.replace("/*GUARD*/", GUARD).replace(
+            "/*RBW_FILL_TARGETS*/",
+            include_str!("../vendor/rbw/fill-targets.js")
+        )
+    )
 }
 
 /// The fields the script filled, from its JSON answer.

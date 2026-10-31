@@ -878,29 +878,18 @@ const CLIPBOARD_HOOK = `(() => {
     send(e.defaultPrevented && e.clipboardData ? e.clipboardData.getData("text/plain") : String(getSelection()));
   });
 })()`;
-const PASSKEY_HOOK = `(() => {
+// rbw's passkey shim (vendor/rbw), put in by the daemon when it serves this page.
+const PASSKEY_SHIM = "/*RBW_PASSKEY_SHIM*/";
+const PASSKEY_HOOK = `${PASSKEY_SHIM}
+(() => {
+  const shim = globalThis.rbwPasskeyShim;
+  delete globalThis.rbwPasskeyShim;
   const c = navigator.credentials;
   if (!c || globalThis.__bdPasskeyRepair) return;
   const waiting = new Map();
   let current;
   const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf.buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf)))
     .replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/, "");
-  const bytes = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4); return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0)).buffer; };
-  // A signed assertion (from the vault, signed outside the browser) as the
-  // PublicKeyCredential the page asked for.
-  const credential = (a) => {
-    const r = a.response, own = (o, props) => { for (const [k, v] of Object.entries(props)) Object.defineProperty(o, k, { value: v, enumerable: true }); return o; };
-    const response = own(Object.create(AuthenticatorAssertionResponse.prototype), {
-      clientDataJSON: bytes(r.clientDataJSON), authenticatorData: bytes(r.authenticatorData),
-      signature: bytes(r.signature), userHandle: r.userHandle ? bytes(r.userHandle) : null,
-    });
-    const cred = own(Object.create(PublicKeyCredential.prototype), {
-      id: a.id, rawId: bytes(a.rawId), type: "public-key", response, authenticatorAttachment: a.authenticatorAttachment || "platform",
-    });
-    Object.defineProperty(cred, "getClientExtensionResults", { writable: true, configurable: true, value: () => ({}) });
-    Object.defineProperty(cred, "toJSON", { writable: true, configurable: true, value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
-    return cred;
-  };
   // answer: true = let the browser handle it (its authenticator has the passkey now),
   // false = cancelled, an object = the signed assertion to resolve with.
   globalThis.__bdPasskeyAnswer = (id, answer = true) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
@@ -943,12 +932,14 @@ const PASSKEY_HOOK = `(() => {
         }
         try { globalThis.__bdPasskey(JSON.stringify(req)); } catch { globalThis.__bdPasskeyAnswer(id); }
       }).then((answer) => answer === true ? get(opts)
-        : answer && typeof answer === "object" ? credential(answer)
+        : answer && typeof answer === "object" ? shim.credential(answer, "get")
         : Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")));
     };
     Object.defineProperty(c, "get", { configurable: true, writable: true, value: hook });
     current = hook;
   };
+  // The vault is a platform authenticator: say so, or sites warn of partial passkey support.
+  if (globalThis.PublicKeyCredential) shim.patchPlatformAuthenticator(async () => true);
   globalThis.__bdPasskeyRepair = repair;
   repair();
 })()`;

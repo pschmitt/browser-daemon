@@ -418,7 +418,9 @@ test('extension and daemon CDP allowlists agree', () => {
 test('the extension fills logins exactly as the daemon does', () => {
   const rust = readFileSync(new URL('../src/autofill.rs', import.meta.url), 'utf8');
   const raw = name => rust.match(new RegExp(`const ${name}: &str = r#"([\\s\\S]*?)"#;`))[1];
-  const body = raw('FILL').replace('/*GUARD*/', raw('GUARD')).replace('return JSON.stringify({ filled });', 'return { filled };').replace('(c) => {\n', '');
+  // The extension takes rbw's fill-targets.js before its address check; the daemon at the top.
+  const takeTargets = '  /*RBW_FILL_TARGETS*/\n  const rbwTargets = globalThis.rbwFillTargets;\n  delete globalThis.rbwFillTargets;\n';
+  const body = raw('FILL').replace(takeTargets, '').replace('/*GUARD*/', raw('GUARD')).replaceAll('return JSON.stringify({ filled });', 'return { filled };').replace('(c) => {\n', '');
   assert.ok(source('background.js').includes(body), 'fillLogin in background.js drifted from FILL in src/autofill.rs');
 });
 test('the extension and live views share the passkey request and answer flow', () => {

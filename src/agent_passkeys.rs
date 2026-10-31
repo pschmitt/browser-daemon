@@ -39,34 +39,17 @@ const BINDING: &str = "__bdAgentPasskey";
 /// goes to the binding, and the answer becomes a PublicKeyCredential. No
 /// binding (disarmed) or no answer: the browser's own `get()`.
 const HOOK: &str = r#"(() => {
+  /*RBW_PASSKEY_SHIM*/
+  const shim = globalThis.rbwPasskeyShim;
+  delete globalThis.rbwPasskeyShim;
   const c = navigator.credentials;
   if (!c || c.__bdAgentHooked) return;
   Object.defineProperty(c, "__bdAgentHooked", { value: true });
   const get = c.get.bind(c), waiting = new Map();
   const b64url = (b) => btoa(String.fromCharCode(...new Uint8Array(b.buffer ? b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) : b))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const bytes = (s) => { s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4); return Uint8Array.from(atob(s), (ch) => ch.charCodeAt(0)).buffer; };
-  const own = (o, props) => { for (const [k, v] of Object.entries(props)) Object.defineProperty(o, k, { value: v, enumerable: true }); return o; };
-  const credential = (a) => {
-    const r = a.response;
-    const response = own(Object.create(AuthenticatorAssertionResponse.prototype), {
-      clientDataJSON: bytes(r.clientDataJSON), authenticatorData: bytes(r.authenticatorData),
-      signature: bytes(r.signature), userHandle: r.userHandle ? bytes(r.userHandle) : null,
-    });
-    const cred = own(Object.create(PublicKeyCredential.prototype), {
-      id: a.id, rawId: bytes(a.rawId), type: "public-key", response, authenticatorAttachment: a.authenticatorAttachment || "platform",
-    });
-    Object.defineProperty(cred, "getClientExtensionResults", { writable: true, configurable: true, value: () => ({}) });
-    Object.defineProperty(cred, "toJSON", { writable: true, configurable: true, value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
-    return cred;
-  };
   // The vault is a platform authenticator with user verification: say so, or sites
   // such as GitHub warn of "partial passkey support" in a browser without one.
-  const PKC = globalThis.PublicKeyCredential;
-  if (PKC) {
-    PKC.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(true);
-    const caps = PKC.getClientCapabilities?.bind(PKC);
-    if (caps) PKC.getClientCapabilities = () => caps().then((o) => ({ ...o, userVerifyingPlatformAuthenticator: true, passkeyPlatformAuthenticator: true }));
-  }
+  if (globalThis.PublicKeyCredential) shim.patchPlatformAuthenticator(async () => true);
   globalThis.__bdAgentPasskeyAnswer = (id, answer) => { const go = waiting.get(id); waiting.delete(id); go?.(answer); };
   c.get = function (opts) {
     const pk = opts && opts.publicKey;
@@ -78,12 +61,16 @@ const HOOK: &str = r#"(() => {
       waiting.set(id, go);
       setTimeout(() => globalThis.__bdAgentPasskeyAnswer(id, null), PAGE_WAIT_MS);
       try { globalThis.__bdAgentPasskey(JSON.stringify(req)); } catch { globalThis.__bdAgentPasskeyAnswer(id, null); }
-    }).then((answer) => answer ? credential(answer) : get(opts));
+    }).then((answer) => answer ? shim.credential(answer, "get") : get(opts));
   };
 })()"#;
 
 fn hook() -> String {
-    HOOK.replace("PAGE_WAIT_MS", &PAGE_WAIT.as_millis().to_string())
+    HOOK.replace(
+        "/*RBW_PASSKEY_SHIM*/",
+        include_str!("../vendor/rbw/passkey-shim.js"),
+    )
+    .replace("PAGE_WAIT_MS", &PAGE_WAIT.as_millis().to_string())
 }
 
 /// Whether `rp_id` is one of `sites` (or a subdomain of one); `*` allows any.

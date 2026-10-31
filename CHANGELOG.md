@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The fake passkey credential, the platform-authenticator answers and the
+  rules that find a login's username, password and one-time-code inputs now
+  come from rbw's extension (`vendor/rbw`, see `tools/sync-rbw-shared.sh`)
+  instead of copies here. The vault fill therefore skips search boxes and
+  API-key fields and no longer fills a page with several password fields.
+
 ## [0.9.5] - 2026-10-31
 
 ### Changed

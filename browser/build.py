@@ -21,6 +21,9 @@ def main():
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(ROOT / "extension", destination)
+        # rbw's shared extension files, vendored (tools/sync-rbw-shared.sh).
+        for name in ("passkey-shim.js", "fill-targets.js"):
+            shutil.copyfile(ROOT.parent / "vendor" / "rbw" / name, destination / name)
         # The icons live with the daemon's other logo assets (assets/icons).
         icons = ROOT.parent / "assets" / "icons"
         shutil.copyfile(icons / "icon-192.png", destination / "icon.png")

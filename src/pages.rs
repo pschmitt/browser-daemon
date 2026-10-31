@@ -2,7 +2,14 @@
 
 use super::*;
 
-pub(crate) static HANDOFF_HTML: &str = include_str!("../handoff.html");
+/// The live view, with rbw's passkey shim (vendor/rbw) as the string its page
+/// script injects into the pages it controls.
+pub(crate) static HANDOFF_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let shim = serde_json::to_string(include_str!("../vendor/rbw/passkey-shim.js"))
+        .unwrap_or_default()
+        .replace("</", "<\\/");
+    include_str!("../handoff.html").replace("\"/*RBW_PASSKEY_SHIM*/\"", &shim)
+});
 
 pub(crate) static DASHBOARD_HTML: &str = include_str!("../dashboard.html");
 
@@ -220,10 +227,10 @@ pub(crate) async fn handoff_page(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
-    let html = if query.contains_key("sessions") {
+    let html: &str = if query.contains_key("sessions") {
         DASHBOARD_HTML
     } else {
-        HANDOFF_HTML
+        &HANDOFF_HTML
     };
     login_page(&state, &headers, html)
 }
@@ -243,4 +250,16 @@ pub(crate) async fn api_auth_token(
             "expires_at": issued.as_ref().map(|(_, e)| e),
         })),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_live_view_carries_rbws_passkey_shim() {
+        assert!(!HANDOFF_HTML.contains("/*RBW_PASSKEY_SHIM*/"));
+        assert!(HANDOFF_HTML.contains("function patchPlatformAuthenticator"));
+        assert!(!HANDOFF_HTML.contains("</script></script>"));
+    }
 }

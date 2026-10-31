@@ -18,10 +18,11 @@ jobs:
     uses: pschmitt/ci-workflows/.github/workflows/extension-lint.yaml@main
     with:
       check-command: |
-        for script in browser/extension/*.js assets/extension.js
+        for script in browser/extension/*.js vendor/rbw/*.js assets/extension.js
         do
           node --check "$script"
         done
+        tools/sync-rbw-shared.sh --check
         node --test browser/check.mjs
         python3 browser/check_companion.py
   release-script:
