@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.9.6] - 2026-10-31
+
 ### Changed
 
 * The fake passkey credential, the platform-authenticator answers and the
