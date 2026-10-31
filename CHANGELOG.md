@@ -4,6 +4,11 @@
 
 ## [0.10.0] - 2026-10-31
 
+### Changed
+
+* The Python client (`browser-daemon-client`) now has the daemon's version and is
+  published to PyPI by the same release (`vX.Y.Z` tag), starting with 0.10.0.
+
 ### Added
 
 * Extensions: the toolbar `badge` message takes a `tone`, `icon` swaps the

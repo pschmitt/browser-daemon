@@ -45,7 +45,7 @@ Errors are `BrowserDaemonError` (with `status`), and for runs `RunError` and
 
 ## Releasing
 
-Bump `version` in `pyproject.toml`, commit, and push a signed tag
-`python-vX.Y.Z`: the `python-client` workflow tests, builds and publishes it to
-PyPI through trusted publishing (the `pypi` environment, tags `python-v*` only;
-no token is stored anywhere).
+The client has the daemon's version and is released with it: `just release-prepare X.Y.Z`
+bumps `pyproject.toml` with `Cargo.toml`, and the signed `vX.Y.Z` tag makes the
+`python-client` workflow test, build and publish it to PyPI through trusted
+publishing (the `pypi` environment; no token is stored anywhere).

@@ -1,12 +1,13 @@
 name: python-client
 # The Python client (python/): tested on every change to it, published to PyPI
-# from a `python-vX.Y.Z` tag through PyPI's trusted publishing (no token: PyPI
+# from the daemon's `vX.Y.Z` release tag (the client has the daemon's version)
+# through PyPI's trusted publishing (no token: PyPI
 # trusts this workflow in the `pypi` environment of this repository).
 on:
   push:
     branches: [main]
     paths: ['python/**', '.github/workflows/python-client.yaml']
-    tags: ['python-v*']
+    tags: ['v*']
   pull_request:
     paths: ['python/**', '.github/workflows/python-client.yaml']
   workflow_dispatch: {}
@@ -31,16 +32,16 @@ jobs:
       - name: Build
         run: pipx run build --outdir dist
       - name: Match tag and package version
-        if: startsWith(github.ref, 'refs/tags/python-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n1)
-          test "$GITHUB_REF_NAME" = "python-v$version" || { echo "::error::$GITHUB_REF_NAME does not match pyproject.toml's $version"; exit 1; }
+          test "$GITHUB_REF_NAME" = "v$version" || { echo "::error::$GITHUB_REF_NAME does not match pyproject.toml's $version"; exit 1; }
       - uses: actions/upload-artifact@v7
         with:
           name: python-dist
           path: python/dist/
   publish:
-    if: startsWith(github.ref, 'refs/tags/python-v')
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: ubuntu-latest
     environment:
