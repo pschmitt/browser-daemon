@@ -334,6 +334,20 @@ in
       };
     };
 
+    run = {
+      enable = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Serve `POST /api/run`: Playwright scripts and steps sent by clients run on this
+          node, in a Node.js process per run under Node's permission model. Needs a
+          cluster secret; only the secret (not a viewer token) may start runs.
+        '';
+      };
+      nodePackage = lib.mkPackageOption pkgs "nodejs-slim" { };
+      playwrightCorePackage = lib.mkPackageOption pkgs "playwright-driver" { };
+    };
+
     audio = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -480,6 +494,10 @@ in
         {
           assertion = builtins.match "([[][0-9a-fA-F:.]+[]]|[0-9.]+):[0-9]{1,5}" cfg.bind != null;
           message = "services.browser-daemon.bind must be IP:PORT (or [IPv6]:PORT), got `${cfg.bind}`.";
+        }
+        {
+          assertion = cfg.run.enable -> (cfg.clusterSecret != null || cfg.clusterSecretFile != null);
+          message = "services.browser-daemon.run needs a cluster secret (clusterSecretFile): runs execute code on the node.";
         }
         {
           assertion = cfg.video.enable -> cfg.displayMode == "per-session";
@@ -689,6 +707,12 @@ in
               ++ lib.optionals (cfg.firefoxPackage != null) [
                 "--firefox"
                 (lib.getExe cfg.firefoxPackage)
+              ]
+              ++ lib.optionals cfg.run.enable [
+                "--run-node"
+                (lib.getExe cfg.run.nodePackage)
+                "--playwright-core"
+                "${cfg.run.playwrightCorePackage}"
               ]
               ++ lib.optionals (cfg.sessionMemoryMaxMB != null) [
                 "--max-session-memory-mb"

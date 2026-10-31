@@ -254,6 +254,8 @@ pub struct AppState {
     pub extensions: Arc<extension::Broker>,
     /// The live view's extensions (UI bundles such as the rbw vault).
     pub view_extensions: Arc<crate::view_extensions::Registry>,
+    /// Node and Playwright for `POST /api/run`, when enabled (run_api.rs).
+    pub runner: Option<Arc<crate::run_api::Runner>>,
 }
 
 /// How long a profile directory's size is taken as it was.

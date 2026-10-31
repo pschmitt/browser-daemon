@@ -157,6 +157,7 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("POST", ["extension", "nodes", _, "command"]) => (false, Short),
         ("POST", ["extension", "nodes", _, "tabs", _, "auth"]) => (false, Short),
         ("POST", ["sessions"]) => (false, Short),
+        ("POST", ["run"]) => (false, Long),
         ("DELETE", ["sessions", _]) => (false, Short),
         ("GET", ["sessions", _, "screenshot"]) => (false, Short),
         ("POST", ["sessions", _, "save-as-profile"]) => (false, Long),

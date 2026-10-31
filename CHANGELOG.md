@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+* `POST /api/run` runs a Playwright script or a list of steps (goto, click,
+  fill, wait, text, screenshot, ...) in a profile's browser, a session or a
+  throwaway browser, and answers with the result, so clients such as Home
+  Assistant integrations need no Playwright of their own. Runs are forwarded
+  to the node that has the profile, need the cluster secret, and each runs in a
+  Node.js process under Node's permission model. Off unless the node has
+  `--run-node` and `--playwright-core` (NixOS: `run.enable`). See
+  [docs/run.md](docs/run.md).
+
 ## [0.9.7] - 2026-10-31
 
 ### Fixed

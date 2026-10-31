@@ -44,6 +44,7 @@ The flake's own package is the module's default, so no overlay is needed. More o
 | `video.enable`, `video.encoder`, `video.vaapiDevice` | H.264 live view (needs `per-session`); `x264` on the CPU or `vaapi` on the GPU |
 | `gpu.enable` | render Chromium on the GPU (ANGLE on Vulkan) instead of in software |
 | `audio.enable` | a PulseAudio server for the browsers, streamed to the handoff and recorded |
+| `run.enable` | serve [`POST /api/run`](run.md): Playwright scripts and steps run on the node (Node.js and playwright-core from nixpkgs, `run.nodePackage`, `run.playwrightCorePackage`); off by default, needs a cluster secret |
 | `adblock.enable`, `adblock.default` | uBlock Origin (Lite) for the sessions, on by default |
 | `recordSessions`, `recordAudio` | record new sessions (with sound); `recordingMax{StorageMB,AgeHours,Count}` are the cleanup limits |
 | `maxSessions`, `sessionMemoryMaxMB`, `idleTimeoutMinutes` | per-node and per-session limits |

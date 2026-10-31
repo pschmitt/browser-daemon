@@ -43,6 +43,7 @@ mod rec_export;
 mod recorder;
 mod recordings_api;
 mod relay;
+mod run_api;
 mod secret_agent;
 mod secrets;
 mod session_actions;
@@ -160,6 +161,14 @@ pub struct Args {
 
     #[arg(long)]
     pub firefox: Option<PathBuf>,
+
+    /// Node.js (22 or newer) for `POST /api/run`; runs stay off without it.
+    #[arg(long)]
+    pub run_node: Option<PathBuf>,
+
+    /// The playwright-core package (its directory) the runs use.
+    #[arg(long)]
+    pub playwright_core: Option<PathBuf>,
 
     #[arg(long)]
     pub display: Option<String>,
@@ -651,6 +660,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (args.browser_forget_after_hours > 0)
             .then(|| Duration::from_secs(args.browser_forget_after_hours * 3600)),
     ));
+    let runner = match (args.run_node.clone(), args.playwright_core.clone()) {
+        (Some(node), Some(core)) => match run_api::Runner::new(node, core, args.bind).await {
+            Ok(runner) => Some(Arc::new(runner)),
+            Err(e) => {
+                eprintln!("Runs disabled: {e}");
+                None
+            }
+        },
+        (None, None) => None,
+        _ => {
+            eprintln!("Runs disabled: --run-node and --playwright-core go together");
+            None
+        }
+    };
     let state = AppState {
         config,
         max_sessions: args.max_sessions,
@@ -690,6 +713,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         downloads: Arc::default(),
         extensions,
         view_extensions,
+        runner,
     };
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
@@ -1077,6 +1101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Peer-to-Peer Mesh APIs
         .route("/api/mesh/node", get(api_mesh_node))
         .route("/api/mesh/overview", get(api_mesh_overview))
+        .route("/api/run", post(run_api::api_run))
         .route("/api/ws/overview", get(handle_overview_ws))
         .route("/api/peers", get(api_list_peers).post(api_add_peer))
         .route("/api/peers/{peer}", delete(api_remove_peer))

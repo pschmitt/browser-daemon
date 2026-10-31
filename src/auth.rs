@@ -346,6 +346,15 @@ pub fn secret_only(method: &Method, path: &str) -> bool {
     if method == Method::POST && path.starts_with("/api/pages/") && path.ends_with("/autofill") {
         return true;
     }
+    // Runs execute code on the node (directly or on a peer).
+    if method == Method::POST
+        && (path == "/api/run"
+            || (path.starts_with("/api/peers/")
+                && path.ends_with("/run")
+                && path.matches('/').count() == 4))
+    {
+        return true;
+    }
     // Every request to a peer carries the cluster secret.
     (path == "/api/peers" && method == Method::POST)
         || (method == Method::DELETE
@@ -851,6 +860,12 @@ mod tests {
         assert!(!secret_only(&Method::GET, "/api/peers"));
         assert!(!secret_only(&Method::DELETE, "/api/peers/rofl-13/sessions"));
         assert!(!secret_only(&Method::POST, "/api/peers/rofl-13/sessions"));
+        assert!(secret_only(&Method::POST, "/api/run"));
+        assert!(secret_only(&Method::POST, "/api/peers/rofl-13/run"));
+        assert!(!secret_only(
+            &Method::GET,
+            "/api/peers/rofl-13/sessions/x/run"
+        ));
     }
 
     #[test]

@@ -22,6 +22,11 @@ Runs Chromium with native CDP and Firefox with WebDriver BiDi (`/firefox`). Fire
 
 Runs headful Chromium inside an X11 virtual display (`Xvfb`) with `--disable-blink-features=AutomationControlled` natively. Cleanly passes Google Botguard, Cloudflare Turnstile, and other bot detection systems.
 
+## Without Playwright on the client
+
+[`POST /api/run`](run.md) runs a Playwright script or a list of steps on the
+node and answers with the result.
+
 ## Tabs over HTTP
 
 `PUT /json/new` opens a tab in the session named by `session_id`, or in the one

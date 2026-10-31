@@ -24,6 +24,8 @@
 - **Recordings** with sound, a scrubbing player, WebM export and merging.
 - **Persistent profiles** with free-text names, backups, exports and transfers
   between nodes, per-profile proxies.
+- **Playwright over HTTP**: `POST /api/run` runs a script or a list of steps
+  in a session and answers with the result, for clients without Playwright.
 - **A mesh of nodes** with one dashboard, CLI, terminal UI and MCP server for
   AI agents across all of them.
 - **Your own desktop browser as a node**: the browser extension shares its tabs
@@ -75,6 +77,7 @@ live view.
 |---|---|
 | [NixOS module](docs/nixos.md) | Options, mesh, resource limits |
 | [Automation](docs/automation.md) | CDP and BiDi endpoints, engines, Playwright on shared browsers |
+| [Runs](docs/run.md) | Playwright scripts and steps over HTTP, for clients without Playwright |
 | [Live view](docs/live-view.md) | Handoff, downloads, vault logins |
 | [rbw vault](docs/rbw.md) | Secret agent, logins and passkeys from rbw, styling |
 | [Live-view extensions](docs/extensions.md) | The vault's UI as a sandboxed bundle, its manifest and messages |
