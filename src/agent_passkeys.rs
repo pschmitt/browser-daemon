@@ -55,8 +55,8 @@ const HOOK: &str = r#"(() => {
     const cred = own(Object.create(PublicKeyCredential.prototype), {
       id: a.id, rawId: bytes(a.rawId), type: "public-key", response, authenticatorAttachment: a.authenticatorAttachment || "platform",
     });
-    Object.defineProperty(cred, "getClientExtensionResults", { value: () => ({}) });
-    Object.defineProperty(cred, "toJSON", { value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
+    Object.defineProperty(cred, "getClientExtensionResults", { writable: true, configurable: true, value: () => ({}) });
+    Object.defineProperty(cred, "toJSON", { writable: true, configurable: true, value: () => ({ id: a.id, rawId: a.id, type: "public-key", authenticatorAttachment: a.authenticatorAttachment || "platform", response: r, clientExtensionResults: {} }) });
     return cred;
   };
   // The vault is a platform authenticator with user verification: say so, or sites
