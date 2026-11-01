@@ -306,6 +306,7 @@ impl AppState {
         let offer = self.http_proxy.as_ref()?;
         let mut value = serde_json::to_value(offer).ok()?;
         value["proxies"] = self.proxy_choices();
+        value["node"] = serde_json::json!(self.node_name);
         Some(value)
     }
 

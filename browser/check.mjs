@@ -469,7 +469,8 @@ const {NodeProxy: np} = proxyContext;
 
 test('the daemon proxy offer is checked, and the login names the proxy', () => {
   const offer = np.offer({port: 3128, password: 'abc123', proxies: [{id: 'node:a', name: 'a (node)'}]}, 'https://Daemon.example:8443');
-  assert.deepEqual({...offer, proxies: offer.proxies.length}, {host: 'daemon.example', port: 3128, password: 'abc123', proxies: 1});
+  assert.deepEqual({...offer, proxies: offer.proxies.length}, {host: 'daemon.example', port: 3128, password: 'abc123', node: '', proxies: 1});
+  assert.equal(np.offer({port: 1, password: 'x', node: 'fnuc'}, 'https://d.example').node, 'fnuc');
   assert.equal(np.offer({host: '[fd00::1]', port: 1, password: 'x'}, 'https://d.example').host, 'fd00::1');
   for (const bad of [null, {}, {port: 0, password: 'x'}, {port: 70000, password: 'x'}, {port: 1, password: ''}, {port: 1, password: 'a b'},
     {port: 1, password: 'x', host: 'a/b'}, {port: 1, password: 'x', host: 'evil.example\r\nX: y'},

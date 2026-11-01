@@ -2078,7 +2078,7 @@ async function localMessage(message, sender) {
     const permissions = await api.permissions.contains({permissions: ['history', 'bookmarks']});
     const savedSuggestions = await api.storage.local.get('addressSuggestions');
     const addressSuggestions = permissions && savedSuggestions.addressSuggestions === true;
-    const proxy = proxyOffer ? {choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, permitted: await api.permissions.contains(proxyPermissions())} : null;
+    const proxy = proxyOffer ? {choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, permitted: await api.permissions.contains(proxyPermissions())} : null;
     return {proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }

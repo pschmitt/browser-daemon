@@ -88,7 +88,7 @@ pub async fn start(
             tokio::spawn(async move {
                 let _ = client.set_nodelay(true);
                 if let Err(e) = serve(client, &config, &own, policy).await {
-                    debug!(peer = %peer, error = %e, "HTTP proxy connection ended");
+                    info!(peer = %peer, error = %e, "HTTP proxy connection refused or failed");
                 }
             });
         }
@@ -190,16 +190,29 @@ fn decode(user: &str) -> Option<String> {
         .map(|u| u.into_owned())
 }
 
-async fn reply(client: &mut TcpStream, code: u16, reason: &str) -> std::io::Result<()> {
+/// An error answer that says what went wrong (no login or address in it), in a
+/// header and in the body, so a browser's error page tells which hop failed.
+async fn reply(
+    client: &mut TcpStream,
+    code: u16,
+    reason: &str,
+    detail: &str,
+) -> std::io::Result<()> {
     let challenge = if code == 407 {
         "Proxy-Authenticate: Basic realm=\"browser-daemon\"\r\n"
     } else {
         ""
     };
+    let detail: String = detail
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .take(200)
+        .collect();
     client
         .write_all(
             format!(
-                "HTTP/1.1 {code} {reason}\r\n{challenge}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 {code} {reason}\r\n{challenge}X-Browser-Daemon-Error: {detail}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{detail}",
+                detail.len()
             )
             .as_bytes(),
         )
@@ -216,7 +229,13 @@ async fn serve(
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "request head"))??;
     let Some(user) = login(&head, config.password.as_deref()) else {
-        reply(&mut client, 407, "Proxy Authentication Required").await?;
+        reply(
+            &mut client,
+            407,
+            "Proxy Authentication Required",
+            "wrong or missing login",
+        )
+        .await?;
         return Err(invalid("wrong credentials"));
     };
     let upstream = if proxies::DIRECT.contains(&user.trim()) {
@@ -224,7 +243,13 @@ async fn serve(
     } else if let Some(proxy) = proxies::find(own, user.trim()) {
         Some(proxy)
     } else {
-        reply(&mut client, 502, "Unknown Proxy").await?;
+        reply(
+            &mut client,
+            502,
+            "Unknown Proxy",
+            &format!("this node does not know the proxy {:?}", user.trim()),
+        )
+        .await?;
         return Err(invalid("unknown proxy"));
     };
 
@@ -244,7 +269,7 @@ async fn serve(
                 std::io::ErrorKind::TimedOut => (504, "Gateway Timeout"),
                 _ => (502, "Bad Gateway"),
             };
-            reply(&mut client, code, reason).await?;
+            reply(&mut client, code, reason, &format!("{host}:{port}: {e}")).await?;
             return Err(e);
         }
     };

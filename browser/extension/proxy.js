@@ -26,7 +26,9 @@ globalThis.NodeProxy = (() => {
         !text(value.password, 255) || /\s/.test(value.password)) throw new Error('Invalid proxy offer');
     const host = value.host === undefined ? new URL(server).hostname : value.host;
     if (!text(host, 253) || !/^(\[[0-9a-f:.]+\]|[a-z0-9._-]+)$/i.test(host)) throw new Error('Invalid proxy offer');
-    return {host: bare(host), port: value.port, password: value.password, proxies: choices(value.proxies ?? [])};
+    // The daemon's own name, to call its network by.
+    const node = value.node !== undefined && text(value.node, 80) ? value.node : '';
+    return {host: bare(host), port: value.port, password: value.password, node, proxies: choices(value.proxies ?? [])};
   }
 
   // `Proxy-Authorization`: the user names the proxy, percent-encoded because

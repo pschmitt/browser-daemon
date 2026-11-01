@@ -201,10 +201,10 @@ function renderProxy() {
   const proxy = state.proxy;
   $('proxyCard').hidden = !proxy;
   if (!proxy) { renderedProxy = ''; return; }
-  const key = JSON.stringify([proxy.choices, proxy.selected]);
+  const key = JSON.stringify([proxy.choices, proxy.selected, proxy.node]);
   if (key === renderedProxy || document.activeElement === $('proxyChoice')) return;
   renderedProxy = key;
-  const options = [['', 'Nothing: this browser connects directly'], ['direct', 'The daemon’s own network'],
+  const options = [['', 'Nothing: this browser connects directly'], ['direct', proxy.node ? `${proxy.node} (this daemon)` : 'The daemon’s own network'],
     ...proxy.choices.map(c => [c.id, c.name])];
   if (proxy.selected && !options.some(([id]) => id === proxy.selected)) options.push([proxy.selected, `${proxy.selected} (not offered now)`]);
   $('proxyChoice').replaceChildren(...options.map(([id, name]) => Object.assign(document.createElement('option'), {value: id, textContent: name})));
