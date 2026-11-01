@@ -154,6 +154,15 @@ async function dashboardMessage(message, sender) {
   if (registration) throw new Error('Already connected. Stop sharing in the extension before pairing again.');
   if (Date.now() - lastDashboardRequest < 5000) throw new Error('A pairing request is already being shown.');
   lastDashboardRequest = Date.now();
+  // The popup started this: its Connect click was the approval.
+  const {pairIntent: intent} = await api.storage.session.get('pairIntent');
+  if (intent?.expires > Date.now() && intent.server === url.origin) {
+    await api.storage.session.remove('pairIntent');
+    sharing.control = intent.control;
+    await api.storage.local.set({shareControl: sharing.control});
+    await connect({server: url.origin, code: message.code, name: intent.name, remember: intent.remember});
+    return {pending: false, connected: true, where: 'connected'};
+  }
   await api.storage.session.set({dashboardPairing: {server: url.origin, code: message.code, remember: message.remember === true, control: message.control !== false, expires: Date.now() + 300000}});
   approvalPending = Date.now() + 300000;
   await badge();
@@ -2183,6 +2192,25 @@ async function localMessage(message, sender) {
   if (message.type === 'configureDashboard') {
     const server = await requireDaemon(message.server);
     await api.storage.local.set({server, name: message.name || ''});
+    await installDashboardBridge();
+    return {ok: true};
+  }
+  if (message.type === 'prepareDashboard') {
+    const server = NodePolicy.serverURL(message.server);
+    const name = (message.name || '').trim() || await defaultName();
+    if (name.length > 80) throw new Error('Use a browser name of at most 80 characters.');
+    const current = await daemonPolicy();
+    if (!current.origins.includes(server)) {
+      if (current.managed) throw new Error('Your administrator allows only specific daemons, and this is not one of them.');
+      // Typing the address into this popup is the consent; a web page cannot do this.
+      await api.storage.local.set({daemonAllowlist: [...current.origins, server], daemonAllowlistMode: 'custom'});
+      policyCache = null;
+    }
+    await api.storage.local.set({server, name});
+    await api.storage.session.set({pairIntent: {server, name, remember: message.remember === true, control: message.control !== false, expires: Date.now() + 300000}});
+    return {ok: true};
+  }
+  if (message.type === 'finishDashboard') {
     await installDashboardBridge();
     return {ok: true};
   }

@@ -6693,7 +6693,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // #nodes/add: the browser-pairing sheet (the extension's "Pair" button opens it).
-const addNodeLink = () => { if (location.hash !== '#nodes/add') return false; setView('nodes'); openModal('addNodeModal'); return true; };
+const addNodeLink = () => { if (!['#nodes/add', '#nodes/add/connect'].includes(location.hash)) return false; setView('nodes'); openModal('addNodeModal'); return true; };
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
 if (handoffPicker) setView('sessions');

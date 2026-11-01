@@ -109,27 +109,52 @@
       }
     }
   }
+  // Asks the extension for its origin, has the daemon issue a code for it, and hands the
+  // code over. The extension approves at once when its own popup started this.
+  async function pair() {
+    const browser = await extension('discover');
+    if (browser.connected) {
+      status.textContent = 'Already paired: pick tabs to share in the extension.';
+      void identify();
+      return true;
+    }
+    const response = await fetch('/api/extension/pair', {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({origin: browser.origin, remember: true}),
+    });
+    if (!response.ok) throw Object.assign(new Error(`Pairing failed (${response.status}). Sign in to this dashboard and try again.`), {signIn: [401, 403].includes(response.status)});
+    const pair = await response.json();
+    const opened = await extension('approve', {code: pair.code, remember: pair.remember, control: true});
+    status.textContent = opened.where === 'connected' ? 'Connected: pick tabs to share in the extension.'
+      : opened.where === 'popup' ? 'Answer in the extension popup (top right of this window).'
+      : 'Answer in the extension tab that just opened.';
+    void closeWhenConnected();
+    return true;
+  }
   button.addEventListener('click', async () => {
     button.disabled = true;
     status.textContent = 'Looking for the extension…';
-    try {
-      const browser = await extension('discover');
-      if (browser.connected) {
-        status.textContent = 'Already paired: pick tabs to share in the extension.';
-        void identify();
-        return;
-      }
-      const response = await fetch('/api/extension/pair', {
-        method: 'POST', credentials: 'same-origin', cache: 'no-store',
-        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({origin: browser.origin, remember: true}),
-      });
-      if (!response.ok) throw new Error(`Pairing failed (${response.status}). Sign in to this dashboard and try again.`);
-      const pair = await response.json();
-      const opened = await extension('approve', {code: pair.code, remember: pair.remember, control: true});
-      status.textContent = opened.where === 'popup' ? 'Answer in the extension popup (top right of this window).'
-        : 'Answer in the extension tab that just opened.';
-      void closeWhenConnected();
-    } catch (error) { status.textContent = error.message; }
+    try { await pair(); }
+    catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   });
+  // The extension's Connect button opens this page with #nodes/add/connect: pair on
+  // our own, waiting for a sign-in if the dashboard asks for one.
+  async function autoPair() {
+    button.disabled = true;
+    try {
+      for (let i = 0; i < 90; i++) {
+        status.textContent = i ? 'Sign in to this dashboard to finish connecting…' : 'Connecting this browser…';
+        try { if (await pair()) return; }
+        catch (error) {
+          if (!error.signIn) { status.textContent = error.message; return; }
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    } finally { button.disabled = false; }
+  }
+  if (location.hash === '#nodes/add/connect') {
+    history.replaceState(null, '', '#nodes/add');
+    void autoPair();
+  }
 })();

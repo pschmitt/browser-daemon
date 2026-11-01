@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Connecting the browser extension is one step: type the daemon's URL and click
+  **Connect**. The daemon is added to the allowed daemons (unless an
+  administrator's policy lists the daemons, in which case it must already be
+  there), the dashboard opens and pairs this browser as soon as you are signed in,
+  and the click in the popup stands for the approval. Pairing started from the
+  dashboard itself, or with a code, still asks for approval in the extension.
+
 ## [0.11.1] - 2026-11-01
 
 ### Fixed

@@ -58,10 +58,15 @@
   <details id="newConnection" class="card">
     <summary id="newConnectionTitle">Connect this browser</summary>
     <p id="setupSharing" class="muted small"></p>
-    <label class="field">Daemon<select id="serverChoice"></select><input id="server" type="url" placeholder="https://browser.example.org"></label>
+    <label class="field">Daemon<input id="server" type="text" inputmode="url" list="serverList" autocomplete="off" spellcheck="false" placeholder="browser.example.org"><datalist id="serverList"></datalist></label>
     <label class="field">Browser name<input id="name" maxlength="80" placeholder="My laptop"></label>
-    <button id="enableDashboard" type="button" class="primary wide"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg>Pair</button>
-    <p class="muted small">Opens the dashboard's <b>Add node</b> sheet. Click <b>Pair browser</b> there, then approve here.</p>
+    <button id="enableDashboard" type="button" class="primary wide"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg>Connect</button>
+    <p class="muted small">Opens the daemon's dashboard, which adds this browser once you are signed in. The daemon is added to your allowed daemons.</p>
+    <details class="card">
+      <summary>Options</summary>
+      <label class="row"><span><b>Remote control</b><small>Let the daemon drive the tabs you share</small></span><input id="quickControl" type="checkbox" class="switch" checked></label>
+      <label class="row"><span><b>Disable key expiry</b><small>Reconnects after a browser restart</small></span><input id="quickRemember" type="checkbox" class="switch" checked></label>
+    </details>
     <details class="card">
       <summary>Pair with a code instead</summary>
       <form id="connect">

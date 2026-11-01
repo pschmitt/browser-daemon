@@ -761,3 +761,42 @@ test('the popup loads on Firefox for Android, which rejects the history and book
   // Turning suggestions on there says no, instead of throwing a type error.
   assert.match((await h.message({type: 'addressSuggestions', enabled: true})).error, /Grant history and bookmark access first/);
 });
+
+test('Connect in the popup is the approval; a dashboard-started pairing still asks', async () => {
+  // Requests are rate limited to one per five seconds, so each case has its own browser.
+  function popupBrowser() {
+    const h = harness();
+    const session = {};
+    h.api.storage.session = {get: async key => ({[key]: session[key]}), set: async data => Object.assign(session, data), remove: async key => { delete session[key]; }};
+    Object.assign(h.api.scripting, {getRegisteredContentScripts: async () => [], registerContentScripts: async () => {}, unregisterContentScripts: async () => {}});
+    return {h, session};
+  }
+  let {h, session} = popupBrowser();
+  const dashboard = {id: 'test', frameId: 0, tab: {id: 9, windowId: 1}, url: 'https://daemon.example/'};
+  const approve = () => h.message({type: 'dashboardPair', action: 'approve', code: 'b'.repeat(64), remember: true}, dashboard);
+
+  // Without the popup's Connect, the dashboard's request waits for approval.
+  assert.equal((await approve()).pending, true);
+  assert.ok(session.dashboardPairing);
+  assert.equal(h.sockets.length, 0);
+  await h.message({type: 'rejectDashboard'});
+  ({h, session} = popupBrowser());
+
+  // A daemon the administrator did not list cannot be added from the popup.
+  assert.match((await h.message({type: 'prepareDashboard', server: 'https://other.example', name: 'x', remember: true, control: true})).error, /administrator/);
+  assert.equal(session.pairIntent, undefined);
+
+  // After Connect, the same request pairs at once, with the popup's choices.
+  assert.deepEqual(plain(await h.message({type: 'prepareDashboard', server: 'https://daemon.example', name: 'Laptop', remember: false, control: false})), {ok: true});
+  assert.deepEqual(plain(await h.message({type: 'finishDashboard'})), {ok: true});
+  assert.equal(session.pairIntent.name, 'Laptop');
+  const answer = await approve();
+  assert.equal(answer.connected, true, JSON.stringify(answer));
+  assert.equal(session.pairIntent, undefined);
+  assert.equal(session.dashboardPairing, undefined);
+  const socket = h.sockets.at(-1); socket.onopen();
+  await h.flush();
+  assert.equal(socket.sent[0].name, 'Laptop');
+  assert.equal(socket.sent[0].remember, false);
+  assert.equal(socket.sent[0].code, 'b'.repeat(64));
+});

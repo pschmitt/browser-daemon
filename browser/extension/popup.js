@@ -21,11 +21,18 @@ const draftReady = api.storage.session.get('pairingDraft').then(saved => {
   else void api.storage.session.remove('pairingDraft');
 });
 
-const server = () => ($('serverChoice').hidden ? $('server').value : $('serverChoice').value).trim();
+// What was typed, as the daemon's origin: https unless said otherwise, no path.
+function daemonAddress(value) {
+  value = value.trim();
+  if (!value) throw new Error('Enter your daemon URL.');
+  try { return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`).origin; }
+  catch { throw new Error('Enter a valid daemon URL.'); }
+}
+const server = () => $('server').value.trim();
 function saveSettings() {
   return api.storage.local.set({server: server(), name: $('name').value, rememberPreference: $('rememberKey').checked});
 }
-for (const id of ['server', 'serverChoice', 'name', 'rememberKey']) $(id).addEventListener('input', () => void saveSettings().catch(showError));
+for (const id of ['server', 'name', 'rememberKey']) $(id).addEventListener('input', () => void saveSettings().catch(showError));
 $('code').addEventListener('input', () => {
   const code = $('code').value;
   void (code ? api.storage.session.set({pairingDraft: {code, expires: Date.now() + 300000}})
@@ -254,14 +261,11 @@ async function refresh() {
 
   // Setup
   const origins = state.allowlist.origins;
-  $('serverChoice').hidden = !origins.length;
-  $('server').hidden = !!origins.length;
-  if (JSON.stringify([...$('serverChoice').options].map(o => o.value)) !== JSON.stringify(origins)) {
-    $('serverChoice').replaceChildren(...origins.map(o => new Option(new URL(o).host, o)));
+  if (JSON.stringify([...$('serverList').options].map(o => o.value)) !== JSON.stringify(origins)) {
+    $('serverList').replaceChildren(...origins.map(o => new Option(o)));
   }
   if (!initialized) {
-    $('server').value = state.saved.server || '';
-    if (origins.includes(state.saved.server)) $('serverChoice').value = state.saved.server;
+    $('server').value = state.saved.server || (origins.length === 1 ? origins[0] : '');
     $('name').value = state.saved.name || '';
     $('name').placeholder = state.defaultName;
     $('rememberKey').checked = state.saved.rememberPreference === true;
@@ -406,7 +410,7 @@ $('connect').addEventListener('submit', async event => {
   if (busy) return;
   busy = true; clearError();
   try {
-    const address = NodePolicy.approvedServer(server(), state?.allowlist.origins || []);
+    const address = NodePolicy.approvedServer(daemonAddress(server()), state?.allowlist.origins || []);
     const prepared = message({type: 'prepareConnect', server: address, code: $('code').value.trim(), name: $('name').value || state.defaultName, remember: $('rememberKey').checked});
     const permission = api.permissions.request({origins: [permissionPattern(address)]});
     await prepared;
@@ -459,21 +463,29 @@ $('copyOrigin').addEventListener('click', event => {
   const button = event.currentTarget;
   void copyWithFeedback(button, $('origin').textContent.trim(), 'extension origin');
 });
-async function pairFromDashboard(address, name) {
+// One click: the daemon joins the allowed daemons (unless an administrator's
+// policy forbids it), then its dashboard pairs this browser and this popup's
+// click stands for the approval.
+async function pairFromDashboard(address, name, {remember = true, control = true} = {}) {
   clearError();
   try {
-    address = NodePolicy.approvedServer(address, state?.allowlist.origins || []);
-    const configured = message({type: 'configureDashboard', server: address, name});
-    // Every allowed daemon at once: any of their dashboards can pair afterwards.
-    const origins = [...new Set([address, ...state.allowlist.origins].map(permissionPattern))];
-    const permission = api.permissions.request({origins});
-    await configured;
-    if (!(await permission)) throw new Error('Allow access to your daemons to pair from their dashboards.');
-    await message({type: 'configureDashboard', server: address, name});
-    await api.tabs.create({url: `${address}/#nodes/add`});
+    address = daemonAddress(address);
+    NodePolicy.serverURL(address);
+    if (state.allowlist.managed && !state.allowlist.origins.includes(address)) {
+      throw new Error('Your administrator allows only specific daemons, and this is not one of them.');
+    }
+    // The permission prompt needs this click, so it is the first thing asked.
+    const permission = api.permissions.request({origins: [permissionPattern(address)]});
+    const prepared = message({type: 'prepareDashboard', server: address, name, remember, control});
+    await prepared.catch(async error => { await permission.catch(() => {}); throw error; });
+    if (!(await permission)) throw new Error('Allow access to the daemon to connect.');
+    await message({type: 'finishDashboard'});
+    $('server').value = address;
+    await api.tabs.create({url: `${address}/#nodes/add/connect`});
   } catch (error) { showError(error); }
 }
-$('enableDashboard').addEventListener('click', () => pairFromDashboard(server(), $('name').value || state.defaultName));
+const quickOptions = () => ({remember: $('quickRemember').checked, control: $('quickControl').checked});
+$('enableDashboard').addEventListener('click', () => pairFromDashboard(server(), $('name').value || state.defaultName, quickOptions()));
 $('repairRemembered').addEventListener('click', () => pairFromDashboard(state.rememberedBrowser.server, state.rememberedBrowser.name));
 $('approvePairing').addEventListener('click', async () => {
   try {
