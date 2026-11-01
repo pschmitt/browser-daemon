@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-01
+
 ### Fixed
 
 * The extension's popup failed to load on Firefox for Android ("Type error for
