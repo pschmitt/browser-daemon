@@ -29,7 +29,8 @@
   instead of going direct. On Firefox, a tab's right-click menu picks the proxy
   of that tab (over SOCKS5 on the same port, the proxy named in the login's user)
   and shares or unshares the tab, and the popup shows the proxy of the tab in
-  front in a card, while the toolbar icon gets a purple dot with an arrow. The extension asks for the optional `proxy` permission
+  front in a card, while the toolbar icon gets a purple dot with an arrow. A tab's pick is kept on
+  the tab (Firefox's session store), so it survives a restart. The extension asks for the optional `proxy` permission
   (Chromium also `webRequest`, `webRequestAuthProvider`) when a proxy is picked.
 * The Home Assistant integration (`custom_components/browser_daemon`, HACS) now
   lives in this repository and is released with the daemon, under its version.

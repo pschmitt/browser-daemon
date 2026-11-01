@@ -109,6 +109,9 @@ function harness(firefox = false, stored = {shareAll: false}) {
     }},
     permissions: {contains: async () => true, request: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
   };
+  const tabValues = new Map();
+  if (firefox) api.sessions = {setTabValue: async (tab, key, value) => { tabValues.set(`${tab}:${key}`, value); }, removeTabValue: async (tab, key) => { tabValues.delete(`${tab}:${key}`); },
+    getTabValue: async (tab, key) => tabValues.get(`${tab}:${key}`)};
   const menu = {created: [], updated: []};
   if (firefox) api.menus = {removeAll: async () => { menu.created.length = 0; }, create: o => { menu.created.push(o); }, update: async (id, o) => { menu.updated.push([id, o]); }, refresh: async () => {},
     onShown: event('menuShown'), onClicked: event('menuClicked')};
@@ -143,7 +146,7 @@ function harness(firefox = false, stored = {shareAll: false}) {
     return socket;
   }
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  return {listeners, calls, sockets, tabs, message, pair, flush, api, menu};
+  return {listeners, calls, sockets, tabs, message, pair, flush, api, menu, tabValues};
 }
 
 test('setup tab can manage sharing, but other extension pages cannot', async () => {
@@ -713,4 +716,34 @@ test('Chromium says so when another extension controls the proxy settings, and l
   await h.message({type: 'setProxy', id: 'node:a'});
   assert.deepEqual(calls, []);
   assert.equal(plain((await h.message({type: 'state'})).proxy).blocked, true);
+});
+
+test('a tab keeps its own proxy over a restart: it is stored on the tab and read back', async () => {
+  const offer = {port: 3128, password: 'pw', user: 'browser-1', proxies: [{id: 'node:a', name: 'a'}, {id: 'node:b', name: 'b'}]};
+  const connect = async h => {
+    h.api.proxy = {onRequest: {hasListener: () => false, addListener: fn => { h.route = fn; }}};
+    await h.message({type: 'connect', server: 'https://daemon.example', code: 'a'.repeat(64), name: 'Test browser'});
+    const socket = h.sockets.at(-1); socket.onopen();
+    socket.receive({type: 'registered', id: 'node', expires_at: Math.floor(Date.now() / 1000) + 600, proxy: offer});
+    await h.flush();
+  };
+  const h = harness(true);
+  await connect(h);
+  const click = id => h.listeners.menuClicked({menuItemId: id}, {id: 1, url: 'https://one.example/'});
+  click('bd-proxy:node:b'); await h.flush();
+  assert.equal(h.tabValues.get('1:proxy'), 'node:b');
+  click('bd-proxy:none'); await h.flush();
+  assert.equal(h.tabValues.get('1:proxy'), 'none');
+  click('bd-proxy:follow'); await h.flush();
+  assert.equal(h.tabValues.has('1:proxy'), false);
+  // After a restart (a new extension, the tab's value still on the tab).
+  const again = harness(true);
+  again.tabValues.set('1:proxy', 'node:b');
+  again.tabValues.set('4:proxy', 'none');
+  again.tabValues.set('3:proxy', 'node:gone');
+  await connect(again);
+  assert.equal(plain(again.route({tabId: 1, url: 'https://x.example/'})).username, 'node:b');
+  assert.equal(plain(again.route({tabId: 4, url: 'https://x.example/'})).type, 'direct');
+  // A pick for a proxy the daemon no longer offers is not restored.
+  assert.equal(again.route({tabId: 3, url: 'https://x.example/'}), undefined);
 });

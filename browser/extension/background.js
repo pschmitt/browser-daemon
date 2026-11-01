@@ -542,6 +542,30 @@ async function applyProxy() {
   }}});
 }
 
+// A tab's pick is kept on the tab itself (Firefox's session store), so it survives a
+// restart or a reopened tab; the tab ids change, the stored value follows the tab.
+async function saveTabProxy(tab, pick) {
+  try {
+    if (!api.sessions?.setTabValue) return;
+    if (pick === undefined) await api.sessions.removeTabValue(tab, 'proxy');
+    else await api.sessions.setTabValue(tab, 'proxy', pick === null ? 'none' : pick);
+  } catch { /* The tab is gone. */ }
+}
+async function loadTabProxy(tab) {
+  if (!api.sessions?.getTabValue || !proxyOffer || tabProxies.has(tab)) return;
+  try {
+    const value = await api.sessions.getTabValue(tab, 'proxy');
+    if (value === 'none') tabProxies.set(tab, null);
+    else if (typeof value === 'string' && (value === NodeProxy.DIRECT || proxyOffer.proxies.some(p => p.id === value))) tabProxies.set(tab, value);
+    else return;
+    void badge();
+  } catch { /* The tab is gone. */ }
+}
+async function restoreTabProxies() {
+  if (!api.sessions?.getTabValue) return;
+  for (const tab of await api.tabs.query({})) await loadTabProxy(tab.id);
+}
+
 // The tab's context menu (Firefox), on the tab and on its page: share it, and pick
 // its proxy.
 const MENU_CONTEXTS = ['tab', 'page'];
@@ -598,6 +622,7 @@ async function tabMenuClicked(info, tab) {
     ensureProxyListeners();
     if (id === 'follow') tabProxies.delete(tab.id);
     else tabProxies.set(tab.id, id === 'none' ? null : id);
+    void saveTabProxy(tab.id, id === 'follow' ? undefined : id === 'none' ? null : id);
     // Open connections of the tab keep their route; its next ones follow the pick.
     await api.webRequest?.handlerBehaviorChanged?.();
     void badge();
@@ -612,6 +637,7 @@ async function takeProxyOffer(value, origins) {
     try { return [new URL(url).hostname]; } catch { return []; }
   });
   proxyOffer = {...offer, bypass: [...daemons, offer.host]};
+  await restoreTabProxies();
   buildTabMenu();
   await applyProxy();
   void badge();
@@ -2398,6 +2424,8 @@ api.tabs.onMoved.addListener(() => { if (registration) publishSoon(); });
 // Which shared tab is in front: recordings follow it.
 api.tabs.onActivated.addListener(() => { if (registration) publishSoon(); });
 api.tabs.onCreated.addListener(tab => {
+  // A restored tab gets its stored pick back once the session store has filled it in.
+  setTimeout(() => { void loadTabProxy(tab.id); }, 400);
   if (!registration || !(sharing.all || sharing.autoShare) || tab.incognito) return;
   // Paused until it shows a shareable page; then listed like any other shared tab.
   shared.set(tab.id, {origin: null, control: sharing.control, paused: true});
