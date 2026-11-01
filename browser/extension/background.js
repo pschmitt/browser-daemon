@@ -439,15 +439,18 @@ const proxyReady = api.storage.local.get('proxyChoice').then(saved => {
   proxyChoice = typeof saved.proxyChoice === 'string' && saved.proxyChoice ? saved.proxyChoice : null;
 });
 
-function proxyLogin(details, callback) {
+// The daemon proxy's login, when the browser is asked for it (a 407).
+function proxyCredentials(details) {
   const offer = proxyOffer;
-  if (!details.isProxy || details.challenger?.host !== offer?.host || details.challenger?.port !== offer?.port || !proxyChoice) return callback({});
+  if (!details.isProxy || details.challenger?.host !== offer?.host || details.challenger?.port !== offer?.port || !proxyChoice) return {};
   // A login the proxy refused is not offered again for the same request.
-  if (proxyTried.has(details.requestId)) return callback({cancel: true});
+  if (proxyTried.has(details.requestId)) return {cancel: true};
   if (proxyTried.size > 512) proxyTried.clear();
   proxyTried.add(details.requestId);
-  callback({authCredentials: {username: encodeURIComponent(proxyChoice), password: offer.password}});
+  return {authCredentials: {username: encodeURIComponent(proxyChoice), password: offer.password}};
 }
+// Chromium answers asynchronously (asyncBlocking), Firefox with a return value.
+const proxyLogin = chromium ? (details, callback) => callback(proxyCredentials(details)) : proxyCredentials;
 
 function proxyRoute(details) {
   const offer = proxyOffer;
@@ -460,10 +463,11 @@ function proxyRoute(details) {
 
 // Listeners exist only once the optional permissions are granted.
 function ensureProxyListeners() {
-  if (chromium) {
-    const auth = api.webRequest?.onAuthRequired;
-    if (auth && !auth.hasListener(proxyLogin)) auth.addListener(proxyLogin, {urls: ['<all_urls>']}, ['asyncBlocking']);
-  } else if (api.proxy?.onRequest && !api.proxy.onRequest.hasListener(proxyRoute)) {
+  // Both ask for the login when the proxy answers 407: Firefox does not always
+  // send the header proxyRoute gives it, and would show its own prompt.
+  const auth = api.webRequest?.onAuthRequired;
+  if (auth && !auth.hasListener(proxyLogin)) auth.addListener(proxyLogin, {urls: ['<all_urls>']}, [chromium ? 'asyncBlocking' : 'blocking']);
+  if (!chromium && api.proxy?.onRequest && !api.proxy.onRequest.hasListener(proxyRoute)) {
     api.proxy.onRequest.addListener(proxyRoute, {urls: ['<all_urls>']});
   }
 }

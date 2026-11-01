@@ -537,3 +537,25 @@ test('a daemon without a proxy offers none', async () => {
   await h.pair();
   assert.equal((await h.message({type: 'state'})).proxy, null);
 });
+
+for (const firefox of [false, true]) {
+  test(`${firefox ? 'Firefox' : 'Chromium'} answers the proxy's login with the proxy's name and password`, async () => {
+    const h = harness(firefox);
+    let answer;
+    h.api.webRequest = {onAuthRequired: {hasListener: () => false, addListener: listener => { answer = listener; }}};
+    h.api.proxy = {settings: {set: async () => {}, clear: async () => {}}, onRequest: {hasListener: () => false, addListener() {}}};
+    await h.message({type: 'connect', server: 'https://daemon.example', code: 'a'.repeat(64), name: 'Test browser'});
+    const socket = h.sockets.at(-1); socket.onopen();
+    socket.receive({type: 'registered', id: 'node', expires_at: Math.floor(Date.now() / 1000) + 600,
+      proxy: {port: 3128, password: 'pw123', proxies: [{id: 'node:peer', name: 'peer'}]}});
+    await h.flush();
+    await h.message({type: 'setProxy', id: 'node:peer'});
+    const ask = details => firefox ? answer(details) : new Promise(resolve => answer(details, resolve));
+    const proxy = {isProxy: true, challenger: {host: 'daemon.example', port: 3128}, requestId: '1'};
+    assert.deepEqual(plain(await ask(proxy)), {authCredentials: {username: 'node%3Apeer', password: 'pw123'}});
+    // Not offered again for a request the proxy refused, nor to another server.
+    assert.deepEqual(plain(await ask(proxy)), {cancel: true});
+    assert.deepEqual(plain(await ask({...proxy, requestId: '2', isProxy: false})), {});
+    assert.deepEqual(plain(await ask({...proxy, requestId: '3', challenger: {host: 'evil.example', port: 3128}})), {});
+  });
+}
