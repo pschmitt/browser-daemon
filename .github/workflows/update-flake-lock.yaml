@@ -9,11 +9,4 @@ permissions:
   pull-requests: write
 jobs:
   update:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v23
-      - uses: DeterminateSystems/update-flake-lock@v29
-        with:
-          pr-title: "flake: update inputs"
-          pr-labels: dependencies
+    uses: pschmitt/ci-workflows/.github/workflows/nix-flake-lock.yaml@61598d55796c6d3cdaabc2d61d5381dacf39d3f5
