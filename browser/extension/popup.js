@@ -230,6 +230,7 @@ async function refresh() {
   if (state.dashboardRequest) $('approvalHost').textContent = new URL(state.dashboardRequest.server).host;
   document.body.classList.toggle('asking', !!state.dashboardRequest);
   $('connected').hidden = !reg;
+  $('dashboard').hidden = !reg;
   renderProxy();
   $('setup').hidden = !!reg || !!state.dashboardRequest;
 
@@ -278,9 +279,8 @@ async function refresh() {
     if (document.activeElement !== $('shareAudio')) $('shareAudio').checked = state.sharing.audio;
     if (document.activeElement !== $('addressSuggestions')) $('addressSuggestions').checked = state.addressSuggestions;
     $('autoShareRow').hidden = state.sharing.all;
-    $('serverHost').textContent = new URL(reg.server).host;
-    $('serverHost').title = reg.server;
     $('dashboard').href = `${reg.server}/#nodes`;
+    $('dashboard').title = `Open dashboard (${new URL(reg.server).host})`;
     renderTabs();
   } else renderedTabs = '';
 

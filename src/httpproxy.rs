@@ -151,36 +151,43 @@ async fn read_head(client: &mut TcpStream) -> std::io::Result<Head> {
     })
 }
 
-/// The proxy's name from the login, if the password is right.
+/// The proxy's name from the login, if the password is right. The password is
+/// known, so it is taken off the end: an id with a colon (`node:name`) works
+/// whether the client percent-encoded it or sent it as it is.
 fn login(head: &Head, password: Option<&str>) -> Option<String> {
-    let raw = head.header("proxy-authorization");
+    let raw = head.header("proxy-authorization").and_then(basic);
     let Some(password) = password else {
         // Loopback without a password: whoever is there may use it; the user
         // part still names the proxy, if the browser sent one.
-        return Some(raw.and_then(user_of).unwrap_or_default());
+        let user = raw
+            .as_deref()
+            .and_then(|r| r.split_once(':'))
+            .map_or("", |(u, _)| u);
+        return decode(user);
     };
-    let (user, given) = credentials_of(raw?)?;
-    relay::constant_time_eq(given.as_bytes(), password.as_bytes()).then_some(user)
+    let raw = raw?;
+    let at = raw.len().checked_sub(password.len() + 1)?;
+    let ok = raw.as_bytes()[at] == b':'
+        && relay::constant_time_eq(&raw.as_bytes()[at + 1..], password.as_bytes());
+    ok.then(|| decode(raw.get(..at)?)).flatten()
 }
 
-fn credentials_of(header: &str) -> Option<(String, String)> {
+/// `user:password` of a Basic header.
+fn basic(header: &str) -> Option<String> {
     let token = header
         .strip_prefix("Basic ")
         .or_else(|| header.strip_prefix("basic "))?;
     let raw = base64::engine::general_purpose::STANDARD
         .decode(token.trim())
         .ok()?;
-    let raw = String::from_utf8(raw).ok()?;
-    let (user, pass) = raw.split_once(':')?;
-    let user = percent_encoding::percent_decode_str(user)
-        .decode_utf8()
-        .ok()?
-        .into_owned();
-    Some((user, pass.to_string()))
+    String::from_utf8(raw).ok()
 }
 
-fn user_of(header: &str) -> Option<String> {
-    credentials_of(header).map(|(user, _)| user)
+fn decode(user: &str) -> Option<String> {
+    percent_encoding::percent_decode_str(user)
+        .decode_utf8()
+        .ok()
+        .map(|u| u.into_owned())
 }
 
 async fn reply(client: &mut TcpStream, code: u16, reason: &str) -> std::io::Result<()> {
@@ -483,6 +490,34 @@ mod tests {
         assert_eq!(&back, b"via");
         let (_s, answer) = ask(port, connect_to(echo, &basic("node%3Anobody", "secret"))).await;
         assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
+    }
+
+    #[tokio::test]
+    async fn an_id_with_a_colon_works_encoded_or_not() {
+        let echo = echo_server().await;
+        let socks = free_port().await;
+        egress::start(
+            egress::Config {
+                listen: ([127, 0, 0, 1], socks).into(),
+                allow: vec![],
+                credentials: vec![],
+            },
+            Policy::permissive(),
+        )
+        .await
+        .unwrap();
+        let own = vec![Proxy {
+            id: "node:peer".into(),
+            name: "peer (node)".into(),
+            url: format!("socks5://127.0.0.1:{socks}"),
+        }];
+        let port = listener(Some("se:cret"), own, Policy::permissive()).await;
+        for user in ["node:peer", "node%3Apeer"] {
+            let (_s, answer) = ask(port, connect_to(echo, &basic(user, "se:cret"))).await;
+            assert!(answer.starts_with("HTTP/1.1 200"), "{user}: {answer}");
+        }
+        let (_s, answer) = ask(port, connect_to(echo, &basic("node:peer", "se:wrong"))).await;
+        assert!(answer.starts_with("HTTP/1.1 407"), "{answer}");
     }
 
     #[tokio::test]
