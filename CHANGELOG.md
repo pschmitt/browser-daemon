@@ -4,6 +4,9 @@
 
 ### Fixed
 
+* A new tab opened from the handover page's tab bar no longer shows the previous
+  tab's address when the address bar loses focus: a late answer for the old tab was
+  written over the new one, and a blank tab never cleared the remembered address.
 * Page titles with `&`, `<`, quotes and the like showed escaped in the dashboard
   and live views (`Nix &amp; NixOS`): Chromium's target list HTML-escapes titles
   for its inspector, and the daemon passed that on. They are decoded once where

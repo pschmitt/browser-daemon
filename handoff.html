@@ -1822,6 +1822,11 @@ const handlers = {
     if (url && url !== "about:blank") {
       currentUrl = url;
       if (document.activeElement !== E.urlInput) E.urlInput.value = currentUrl;
+    } else if (url === "about:blank") {
+      // A blank tab has no address: the previous tab's must not come back (when the
+      // bar loses focus it shows currentUrl).
+      currentUrl = "";
+      if (document.activeElement !== E.urlInput) E.urlInput.value = "";
     }
     refreshInfo();
   },
@@ -2113,12 +2118,17 @@ async function drawFrame(data, frameMeta, mime = "image/jpeg", seq = ++frameSeq)
 
 async function refreshInfo() {
   if (!drv) return;
+  const forPage = pageId;
   try {
     const sharedTab = sharedBrowser?.tabs.find(t => String(t.id) === pageId);
     const info = sharedBrowserId ? (sharedTab && {u: sharedTab.url, t: sharedTab.title}) : await drv.evaluate("({ u: location.href, t: document.title })");
+    // The answer of a tab that is no longer the one shown (the tab was switched while
+    // it was on its way) would put that tab's address on the new one.
+    if (forPage !== pageId) return;
     if (info) {
       if (info.u && info.u !== "about:blank") currentUrl = info.u;
-      if (document.activeElement !== E.urlInput && currentUrl) E.urlInput.value = currentUrl;
+      else if (info.u === "about:blank") currentUrl = "";
+      if (document.activeElement !== E.urlInput && (currentUrl || info.u === "about:blank")) E.urlInput.value = currentUrl;
       document.title = (info.t ? info.t + " · " : "") + "Browser handoff";
       extContext();
     }
