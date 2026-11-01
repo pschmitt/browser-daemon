@@ -10,10 +10,10 @@
   parameter permissions"): Android has no history or bookmarks, so asking for those
   permissions throws. The address-suggestions switch is hidden there, and the
   `commands` and `menus` events Android lacks no longer stop the extension at start.
-* The Python client reaches PyPI again: its publish job moved back to
-  `python-client.yaml` (PyPI's trusted publisher is bound to that file) and runs on
-  the tag, because the `pypi` environment only deploys from version tags. 0.11.0 was
-  not published to PyPI.
+* The Python client reaches PyPI again: the 0.11.0 publish was refused because the
+  trusted publisher on PyPI was still bound to the retired `python-client.yaml`.
+  It is bound to the release workflow now, whose `python` job publishes (0.11.0
+  was published by rerunning that job).
 
 ## [0.11.0] - 2026-11-01
 
