@@ -58,6 +58,7 @@ pub(crate) async fn session_targets(
     };
     let mut targets = res.json::<Vec<DevToolsTarget>>().await.unwrap_or_default();
     for target in &mut targets {
+        target.title = target.title.take().map(|t| unescape_devtools_title(&t));
         target.web_socket_debugger_url = Some(format!("/devtools/page/{}", target.id));
         target.session_id = Some(session.id);
         target.profile = session.profile.clone();
@@ -65,6 +66,18 @@ pub(crate) async fn session_targets(
         target.owner = session.clients.tab_owner(&target.id);
     }
     targets
+}
+
+/// Chromium's `/json/list` HTML-escapes page titles (the list feeds its inspector
+/// page). Everything here shows a title as text and escapes it itself, so it is
+/// decoded once where it comes in; `&amp;` goes last so `&amp;lt;` stays `&lt;`.
+pub(crate) fn unescape_devtools_title(title: &str) -> String {
+    title
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
 }
 
 pub(crate) async fn snapshot_sessions(state: &AppState) -> Vec<ManagedSession> {
@@ -357,6 +370,17 @@ pub(crate) async fn json_activate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chromiums_escaped_titles_are_decoded_once() {
+        assert_eq!(
+            super::unescape_devtools_title("Nix &amp; NixOS | &lt;b&gt; &quot;x&quot; &#39;y&#39;"),
+            "Nix & NixOS | <b> \"x\" 'y'"
+        );
+        // A title that really contains "&lt;" arrives as "&amp;lt;".
+        assert_eq!(super::unescape_devtools_title("a &amp;lt; b"), "a &lt; b");
+        assert_eq!(super::unescape_devtools_title("plain"), "plain");
+    }
+
     use super::*;
 
     fn page(id: &str, session: Uuid) -> DevToolsTarget {

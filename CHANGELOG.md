@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Page titles with `&`, `<`, quotes and the like showed escaped in the dashboard
+  and live views (`Nix &amp; NixOS`): Chromium's target list HTML-escapes titles
+  for its inspector, and the daemon passed that on. They are decoded once where
+  they come in.
+
 ### Added
 
 * The Home Assistant integration (`custom_components/browser_daemon`, HACS) now

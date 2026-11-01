@@ -1114,6 +1114,13 @@ pub(crate) fn page_candidates(targets: Vec<serde_json::Value>) -> Vec<serde_json
             t.get("type").and_then(|v| v.as_str()) == Some("page")
                 && t.get("webSocketDebuggerUrl").is_some()
         })
+        .map(|mut t| {
+            // Chromium HTML-escapes the titles of its target list.
+            if let Some(title) = t.get("title").and_then(|v| v.as_str()) {
+                t["title"] = crate::json_api::unescape_devtools_title(title).into();
+            }
+            t
+        })
         .collect();
     pages.sort_by_key(|t| u8::from(is_blank_target(t)));
     pages
