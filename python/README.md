@@ -47,6 +47,6 @@ Errors are `BrowserDaemonError` (with `status`), and for runs `RunError` and
 
 The client has the daemon's version and is released with it: `just release-prepare X.Y.Z`
 bumps `pyproject.toml` with `Cargo.toml`, and the signed `vX.Y.Z` tag makes the
-`python-client` workflow publish it to PyPI once the release exists,
+`python-client` workflow publish it to PyPI once the release workflow has finished,
 through trusted publishing (the `pypi` environment; no token is stored anywhere;
 PyPI trusts that workflow file by name). `test.yaml` tests it on every change.
