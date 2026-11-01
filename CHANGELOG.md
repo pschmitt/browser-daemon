@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-01
+
 ### Fixed
 
 * A new tab opened from the handover page's tab bar no longer shows the previous
