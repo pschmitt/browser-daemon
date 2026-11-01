@@ -6,6 +6,14 @@
 
 ### Fixed
 
+* The extension's popup failed to load on Firefox for Android ("Type error for
+  parameter permissions"): Android has no history or bookmarks, so asking for those
+  permissions throws. The address-suggestions switch is hidden there, and the
+  `commands` and `menus` events Android lacks no longer stop the extension at start.
+* The Python client reaches PyPI again: its publish job moved back to
+  `python-client.yaml` (PyPI's trusted publisher is bound to that file) and runs on
+  the tag, because the `pypi` environment only deploys from version tags. 0.11.0 was
+  not published to PyPI.
 * A new tab opened from the handover page's tab bar no longer shows the previous
   tab's address when the address bar loses focus: a late answer for the old tab was
   written over the new one, and a blank tab never cleared the remembered address.

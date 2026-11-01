@@ -65,7 +65,7 @@ test('malformed and oversized commands are rejected', () => {
 });
 
 // Manual sharing unless a test says otherwise: most check per-tab grants.
-function harness(firefox = false, stored = {shareAll: false}) {
+function harness(firefox = false, stored = {shareAll: false}, userAgent = '') {
   const listeners = {};
   const calls = [];
   const sockets = [];
@@ -125,7 +125,7 @@ function harness(firefox = false, stored = {shareAll: false}) {
         : name === 'putImageData' ? () => {} : (...args) => { drawn.push(String(name)); }, set: () => true});
     }
   }
-  const context = vm.createContext({URL, console, crypto: webcrypto, chrome: api, WebSocket: Socket,
+  const context = vm.createContext({URL, console, crypto: webcrypto, chrome: api, WebSocket: Socket, navigator: {userAgent},
     OffscreenCanvas: FakeCanvas, createImageBitmap: async () => ({}), fetch: async () => ({blob: async () => ({})}),
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}});
   vm.runInContext(source('policy.js'), context);
@@ -746,4 +746,18 @@ test('a tab keeps its own proxy over a restart: it is stored on the tab and read
   assert.equal(plain(again.route({tabId: 4, url: 'https://x.example/'})).type, 'direct');
   // A pick for a proxy the daemon no longer offers is not restored.
   assert.equal(again.route({tabId: 3, url: 'https://x.example/'}), undefined);
+});
+
+test('the popup loads on Firefox for Android, which rejects the history and bookmarks permissions', async () => {
+  const h = harness(true, {shareAll: false}, 'Mozilla/5.0 (Android 15; Mobile; rv:150.0) Gecko/150.0 Firefox/150.0');
+  h.api.permissions.contains = async request => {
+    if (request.permissions?.some(p => p === 'history' || p === 'bookmarks')) throw new TypeError('Type error for parameter permissions (Value "history" must either be one of ...)');
+    return true;
+  };
+  const state = await h.message({type: 'state'});
+  assert.equal(state.error, undefined);
+  assert.equal(state.android, true);
+  assert.equal(state.addressSuggestions, false);
+  // Turning suggestions on there says no, instead of throwing a type error.
+  assert.match((await h.message({type: 'addressSuggestions', enabled: true})).error, /Grant history and bookmark access first/);
 });

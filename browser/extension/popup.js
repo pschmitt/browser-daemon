@@ -296,6 +296,8 @@ async function refresh() {
     if (document.activeElement !== $('sharePublic')) $('sharePublic').checked = state.sharing.public;
     if (document.activeElement !== $('shareAudio')) $('shareAudio').checked = state.sharing.audio;
     if (document.activeElement !== $('addressSuggestions')) $('addressSuggestions').checked = state.addressSuggestions;
+    // Not on Firefox for Android: it has no history or bookmarks to suggest from.
+    $('addressSuggestions').closest('label').hidden = state.android === true;
     $('autoShareRow').hidden = state.sharing.all;
     $('dashboard').href = `${reg.server}/#nodes`;
     $('dashboard').title = `Open dashboard (${new URL(reg.server).host})`;

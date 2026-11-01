@@ -2,6 +2,13 @@
 if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
+// Firefox for Android has no history or bookmarks, and asking for those permissions
+// throws a type error (which made the popup fail to load).
+const android = typeof navigator !== 'undefined' && /Android/.test(navigator.userAgent || '');
+async function hasHistoryAccess() {
+  if (android) return false;
+  try { return await api.permissions.contains({permissions: ['history', 'bookmarks']}); } catch { return false; }
+}
 void api.storage.local.setAccessLevel?.({accessLevel: 'TRUSTED_CONTEXTS'});
 let socket = null;
 let registration = null;
@@ -792,6 +799,7 @@ async function grantFor(command) {
 }
 
 async function addressSuggestions(query) {
+  if (android) return [];
   const saved = await api.storage.local.get('addressSuggestions');
   if (saved.addressSuggestions !== true) return [];
   const text = query.trim().slice(0, 200);
@@ -2243,12 +2251,12 @@ async function localMessage(message, sender) {
       control: shared.get(t.id)?.control || false, shared: shared.has(t.id)}));
     const {dashboardPairing} = await api.storage.session.get('dashboardPairing');
     const {rememberedNode} = await api.storage.local.get('rememberedNode');
-    const permissions = await api.permissions.contains({permissions: ['history', 'bookmarks']});
+    const permissions = await hasHistoryAccess();
     const savedSuggestions = await api.storage.local.get('addressSuggestions');
     const addressSuggestions = permissions && savedSuggestions.addressSuggestions === true;
     const [activeTab] = proxyOffer ? await api.tabs.query({active: true, lastFocusedWindow: true}) : [];
     const proxy = proxyOffer ? {perTab: !chromium, tab: activeTab ? (tabProxies.has(activeTab.id) ? {own: true, pick: tabProxies.get(activeTab.id)} : {own: false}) : null, choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, blocked: proxyBlocked, permitted: await api.permissions.contains(proxyPermissions())} : null;
-    return {proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions};
+    return {proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions, android};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -2317,7 +2325,7 @@ async function localMessage(message, sender) {
   }
   if (message.type === 'addressSuggestions') {
     const enabled = message.enabled === true;
-    if (enabled && !(await api.permissions.contains({permissions: ['history', 'bookmarks']}))) {
+    if (enabled && !(await hasHistoryAccess())) {
       throw new Error('Grant history and bookmark access first.');
     }
     await api.storage.local.set({addressSuggestions: enabled});
@@ -2471,7 +2479,7 @@ if (chromium) api.debugger.onDetach.addListener((source, reason) => {
 });
 api.permissions.onAdded.addListener(() => { ensureProxyListeners(); void historyReady.then(async () => { await connectPrepared(); await installDashboardBridge(); }).catch(() => stop('Could not start connection after permission grant')); });
 api.permissions.onRemoved.addListener(() => { void stop('Permissions removed'); });
-api.commands.onCommand.addListener(command => { if (command === 'stop-sharing') {
+api.commands?.onCommand.addListener(command => { if (command === 'stop-sharing') {
   void api.storage.local.get('rememberedNode').then(async ({rememberedNode}) => {
     if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
     await stop('Sharing stopped by keyboard shortcut — automatic reconnect paused');
@@ -2482,7 +2490,8 @@ void badge();
 // worker holds no connection yet (the proxy returns once it has one).
 void proxyReady.then(() => { ensureProxyListeners(); return clearBrowserProxy(); }).catch(() => {});
 buildTabMenu();
-if (api.menus) {
+// (Firefox for Android has the menus API without the tab menu's events.)
+if (api.menus?.onShown && api.menus?.onClicked) {
   api.menus.onShown.addListener(tabMenuShown);
   api.menus.onClicked.addListener((info, tab) => { void tabMenuClicked(info, tab).catch(error => record(`Tab menu failed: ${error.message}`)); });
 }
