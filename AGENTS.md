@@ -1,5 +1,18 @@
 # Agent notes
 
+## Project and validation
+
+Browser Daemon is a Rust browser automation daemon with a browser extension,
+Python client, and Home Assistant integration. Keep their versions and shared
+assets aligned with the release instructions below.
+
+- Run `just check` for Rust checks and formatting, `just test` for Rust tests,
+  and `just browser-check` for extension checks.
+- Use the narrowest relevant checks for changes in Python, Nix, or the
+  Home Assistant integration; follow that component's README and CI workflow.
+- CI reuses workflows and actions from
+  [ci-workflows](https://github.com/pschmitt/ci-workflows).
+
 ## Releases
 
 Before every release, try to land the open dependency PRs (Renovate,
