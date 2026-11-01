@@ -113,7 +113,17 @@ function harness(firefox = false, stored = {shareAll: false}) {
   if (firefox) api.menus = {removeAll: async () => { menu.created.length = 0; }, create: o => { menu.created.push(o); }, update: async (id, o) => { menu.updated.push([id, o]); }, refresh: async () => {},
     onShown: event('menuShown'), onClicked: event('menuClicked')};
   if (firefox) api.runtime.getBrowserInfo = async () => ({name: 'Firefox'});
+  // A canvas that remembers what was drawn on it, for the toolbar icon.
+  class FakeCanvas {
+    constructor(w, h) { this.w = w; this.h = h; this.drawn = []; }
+    getContext() {
+      const drawn = this.drawn;
+      return new Proxy({}, {get: (_, name) => name === 'getImageData' ? () => ({drawn: [...drawn], data: new Uint8ClampedArray(4)})
+        : name === 'putImageData' ? () => {} : (...args) => { drawn.push(String(name)); }, set: () => true});
+    }
+  }
   const context = vm.createContext({URL, console, crypto: webcrypto, chrome: api, WebSocket: Socket,
+    OffscreenCanvas: FakeCanvas, createImageBitmap: async () => ({}), fetch: async () => ({blob: async () => ({})}),
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}});
   vm.runInContext(source('policy.js'), context);
   vm.runInContext(source('proxy.js'), context);
@@ -651,4 +661,37 @@ test('Firefox routes each tab by its own pick, and the tab menu sets it and shar
   h.tabs.get(1).active = true;
   const state = plain((await h.message({type: 'state'})).proxy);
   assert.equal(state.perTab, true);
+});
+
+test('the toolbar icon gets the proxy emblem for a tab that goes through a proxy, and loses it again', async () => {
+  const h = harness(true);
+  const icons = [];
+  h.api.action.setIcon = async o => { icons.push(o); };
+  h.api.proxy = {onRequest: {hasListener: () => false, addListener() {}}};
+  await h.message({type: 'connect', server: 'https://daemon.example', code: 'a'.repeat(64), name: 'Test browser'});
+  const socket = h.sockets.at(-1); socket.onopen();
+  socket.receive({type: 'registered', id: 'node', expires_at: Math.floor(Date.now() / 1000) + 600,
+    proxy: {port: 3128, password: 'pw', user: 'browser-1', proxies: [{id: 'node:a', name: 'a'}]}});
+  await h.flush();
+  const emblem = o => o.imageData && Object.values(o.imageData).every(frame => frame.drawn.includes('arc') && frame.drawn.includes('stroke') && frame.drawn.filter(d => d === 'arc').length >= 2);
+  const plain = o => o.imageData && Object.values(o.imageData).every(frame => !frame.drawn.includes('stroke'));
+  // No pick: the plain icon.
+  assert.ok(icons.filter(o => !('tabId' in o)).every(o => !o.imageData || plain(o) || !emblem(o)));
+  // A tab picks a proxy: that tab's icon gets the emblem.
+  icons.length = 0;
+  h.listeners.menuClicked({menuItemId: 'bd-proxy:node:a'}, {id: 1, url: 'https://one.example/'});
+  await h.flush();
+  const forTab = icons.filter(o => o.tabId === 1).at(-1);
+  assert.ok(forTab && emblem(forTab), 'emblem on the tab');
+  // Back to the default: the tab's own icon is removed.
+  icons.length = 0;
+  h.listeners.menuClicked({menuItemId: 'bd-proxy:follow'}, {id: 1, url: 'https://one.example/'});
+  await h.flush();
+  assert.equal(icons.filter(o => o.tabId === 1).at(-1)?.imageData, null);
+  // A browser-wide pick puts it on the icon itself.
+  icons.length = 0;
+  await h.message({type: 'setProxy', id: 'node:a'});
+  await h.flush();
+  const global = icons.filter(o => !('tabId' in o) && o.imageData).at(-1);
+  assert.ok(global && emblem(global), 'emblem on the browser icon');
 });

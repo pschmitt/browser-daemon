@@ -174,5 +174,11 @@ body.asking #advanced { display: none; }
 .daemon-origin-form .field { margin-bottom: 8px; }
 #proxyCard { margin-bottom: 14px; }
 #proxyCard[hidden] { display: none; }
-.tab-proxy { margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; }
-.tab-proxy[hidden] { display: none; }
+.proxy-card { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.proxy-card .glyph { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 10px; background: var(--accent); color: #fff; }
+.proxy-card .glyph svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.proxy-card .txt { min-width: 0; display: grid; }
+.proxy-card small { color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.proxy-card b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proxy-card .tag { margin-left: auto; padding: 3px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.proxy-card .tag.mute { background: transparent; border: 1px solid var(--line); color: var(--muted); }

@@ -355,7 +355,20 @@ async function toolbarBitmaps() {
 // viewer watches, a red one while it may also control, a purple "?" while a
 // dashboard asks to pair and a red "!" after a failure. Offline is the
 // mascot gray and dimmed.
-function toolbarFrame(bitmap, size, state) {
+// While traffic goes through a proxy: a purple dot with an arrow in the bottom-right corner.
+function proxyEmblem(ctx, size) {
+  const r = size * 0.27, cx = size - r - size * 0.02, cy = size - r - size * 0.02, lw = Math.max(1, size / 16), g = r * 0.55;
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.beginPath(); ctx.arc(cx, cy, r + lw * 0.9, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#7c5cff';
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = lw * 1.1; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - g, cy); ctx.lineTo(cx + g, cy);
+  ctx.moveTo(cx + g * 0.1, cy - g * 0.85); ctx.lineTo(cx + g, cy); ctx.lineTo(cx + g * 0.1, cy + g * 0.85);
+  ctx.stroke();
+}
+function toolbarFrame(bitmap, size, state, proxied = false) {
   const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext('2d', {willReadFrequently: true});
   ctx.drawImage(bitmap, 0, 0, size, size);
@@ -383,14 +396,16 @@ function toolbarFrame(bitmap, size, state) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(glyph, cx, cy + size * 0.03);
   }
+  if (proxied) proxyEmblem(ctx, size);
   return ctx.getImageData(0, 0, size, size);
 }
-async function drawToolbarIcon(state) {
+async function drawToolbarIcon(state, proxied = false, tabId = null) {
   try {
     const bitmaps = await toolbarBitmaps();
     await api.action.setIcon({imageData: Object.fromEntries(bitmaps.map(([size, bitmap]) =>
-      [size, toolbarFrame(bitmap, size, state)]))});
+      [size, toolbarFrame(bitmap, size, state, proxied)])), ...(tabId === null ? {} : {tabId})});
   } catch {
+    if (tabId !== null) throw new Error('tab icon');
     // Cosmetic only: fall back to the plain mascot.
     await api.action.setIcon({path: api.runtime.getManifest().action?.default_icon || 'icon.png'}).catch(() => {});
   }
@@ -408,12 +423,28 @@ const toolbarTitles = {
   view: 'Browser node: connected — a client is viewing this browser',
   control: 'Browser node: connected — a client is controlling this browser',
 };
+// Whether traffic goes through a proxy: for every tab by the browser's own pick,
+// and on Firefox tab by tab where a tab has its own.
+const proxiedBy = pick => !!(registration && proxyOffer && pick);
+const iconTabs = new Set();
+async function syncTabIcons() {
+  if (chromium) return;
+  const state = toolbarState(), global = proxiedBy(proxyChoice);
+  for (const id of new Set([...iconTabs, ...tabProxies.keys()])) {
+    const want = proxiedBy(pickFor(id));
+    try {
+      if (want !== global) { await drawToolbarIcon(state, want, id); iconTabs.add(id); }
+      else if (iconTabs.delete(id)) await api.action.setIcon({tabId: id, imageData: null});
+    } catch { iconTabs.delete(id); }
+  }
+}
 async function badge() {
-  const state = toolbarState();
+  const state = toolbarState(), proxied = proxiedBy(proxyChoice);
   await api.action.setBadgeText({text: ''});
   await api.action.setBadgeBackgroundColor({color: [0, 0, 0, 0]});
-  await drawToolbarIcon(state);
-  await api.action.setTitle({title: toolbarTitles[state]});
+  await drawToolbarIcon(state, proxied);
+  await api.action.setTitle({title: toolbarTitles[state] + (proxied ? ' — traffic goes through a proxy' : '')});
+  await syncTabIcons();
 }
 
 async function detach(tab) {
@@ -553,6 +584,7 @@ async function tabMenuClicked(info, tab) {
     else tabProxies.set(tab.id, id === 'none' ? null : id);
     // Open connections of the tab keep their route; its next ones follow the pick.
     await api.webRequest?.handlerBehaviorChanged?.();
+    void badge();
   }
 }
 
@@ -566,6 +598,7 @@ async function takeProxyOffer(value, origins) {
   proxyOffer = {...offer, bypass: [...daemons, offer.host]};
   buildTabMenu();
   await applyProxy();
+  void badge();
 }
 
 async function stop(reason = 'Disconnected', retry = false) {
@@ -2230,6 +2263,7 @@ async function localMessage(message, sender) {
     proxyChoice = id;
     await api.storage.local.set({proxyChoice: id});
     await applyProxy();
+    void badge();
     return {ok: true};
   }
   if (message.type === 'shareAudio') {
@@ -2306,7 +2340,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     value => respond(value), error => respond({error: error.message}));
   return true;
 });
-api.tabs.onRemoved.addListener(id => { tabProxies.delete(id); protectedNavigations.delete(id); shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
+api.tabs.onRemoved.addListener(id => { tabProxies.delete(id); iconTabs.delete(id); protectedNavigations.delete(id); shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
 let publishTimer = null;
 function publishSoon() { clearTimeout(publishTimer); publishTimer = setTimeout(publishSafely, 150); }
 // Stop interception and other debugger overrides before a protected document

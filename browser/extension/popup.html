@@ -27,7 +27,11 @@
 </section>
 
 <main id="connected" hidden>
-  <p id="tabProxy" class="tab-proxy" hidden></p>
+  <div id="tabProxy" class="proxy-card" hidden>
+    <span class="glyph"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 12h14M12 6l6 6-6 6"/><path d="M21 5v14"/></svg></span>
+    <span class="txt"><small id="tabProxyLabel">This tab goes through</small><b id="tabProxyName"></b></span>
+    <span id="tabProxyTag" class="tag"></span>
+  </div>
   <details id="tabList" class="tab-card">
     <summary class="section-summary"><span class="section-summary-title"><svg class="summary-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg><svg class="summary-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 3v4M16 3v4"/></svg><span>Tabs <span id="sharedCount" class="count"></span></span></span><button id="shareAllTabs" type="button" class="link">Share all</button></summary>
     <ul id="tabs" class="tabs"></ul>

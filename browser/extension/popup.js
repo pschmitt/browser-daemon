@@ -220,12 +220,15 @@ function renderTabProxy() {
   const label = pick => !pick ? 'no proxy' : pick === 'direct' ? (proxy.node ? `${proxy.node} (this daemon)` : 'the daemon’s own network')
     : proxy.choices.find(c => c.id === pick)?.name || pick;
   // Only when a proxy is active for the tab: nothing to say about a direct one.
-  let text = '';
   const own = proxy.perTab && proxy.tab?.own;
   const active = own ? proxy.tab.pick : proxy.selected;
-  if (active) text = !proxy.perTab ? `All tabs: ${label(active)}` : own ? `This tab: ${label(active)}` : `This tab: ${label(active)} (default)`;
-  line.hidden = !text;
-  line.textContent = text;
+  line.hidden = !active;
+  if (!active) return;
+  $('tabProxyLabel').textContent = proxy.perTab ? 'This tab goes through' : 'All tabs go through';
+  $('tabProxyName').textContent = label(active);
+  const tag = $('tabProxyTag');
+  tag.textContent = !proxy.perTab ? 'All tabs' : own ? 'This tab' : 'Default';
+  tag.classList.toggle('mute', !own);
 }
 
 async function refresh() {
