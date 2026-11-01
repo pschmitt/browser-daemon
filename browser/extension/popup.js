@@ -201,7 +201,7 @@ function renderProxy() {
   const proxy = state.proxy;
   $('proxyCard').hidden = !proxy;
   if (!proxy) { renderedProxy = ''; return; }
-  const key = JSON.stringify([proxy.choices, proxy.selected, proxy.node]);
+  const key = JSON.stringify([proxy.choices, proxy.selected, proxy.node, proxy.blocked]);
   if (key === renderedProxy || document.activeElement === $('proxyChoice')) return;
   renderedProxy = key;
   const options = [['', 'Nothing: this browser connects directly'], ['direct', proxy.node ? `${proxy.node} (this daemon)` : 'The daemon’s own network'],
@@ -209,7 +209,7 @@ function renderProxy() {
   if (proxy.selected && !options.some(([id]) => id === proxy.selected)) options.push([proxy.selected, `${proxy.selected} (not offered now)`]);
   $('proxyChoice').replaceChildren(...options.map(([id, name]) => Object.assign(document.createElement('option'), {value: id, textContent: name})));
   $('proxyChoice').value = proxy.selected || '';
-  $('proxyHint').textContent = proxy.selected
+  $('proxyHint').textContent = proxy.blocked ? 'Another extension controls this browser’s proxy settings. Turn it off to route through the daemon.' : proxy.selected
     ? 'Web pages go through this proxy while connected; local and private addresses stay direct. The daemon sees the traffic.'
     : 'Active only while connected; local and private addresses stay direct.';
 }

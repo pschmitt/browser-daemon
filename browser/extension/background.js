@@ -487,13 +487,19 @@ const proxyLogin = chromium ? (details, callback) => callback(proxyCredentials(d
 // all) over the browser's.
 const tabProxies = new Map();
 const pickFor = tab => tabProxies.has(tab) ? tabProxies.get(tab) : proxyChoice;
+// Nothing is returned for a request this extension has no say in (no pick, a local
+// address, the daemon): Firefox then passes it on to the next proxy extension
+// (FoxyProxy and the like) or connects directly. Only a tab's explicit "No proxy"
+// is answered with a direct connection.
 function proxyRoute(details) {
   const offer = proxyOffer;
+  if (!registration || !offer) return undefined;
+  if (tabProxies.has(details.tabId) && tabProxies.get(details.tabId) === null) return {type: 'direct'};
   const pick = pickFor(details.tabId);
-  if (!registration || !offer || !pick) return {type: 'direct'};
+  if (!pick) return undefined;
   let host;
-  try { host = new URL(details.url).hostname; } catch { return {type: 'direct'}; }
-  if (NodeProxy.direct(host, offer.bypass)) return {type: 'direct'};
+  try { host = new URL(details.url).hostname; } catch { return undefined; }
+  if (NodeProxy.direct(host, offer.bypass)) return undefined;
   return NodeProxy.socks(offer, pick);
 }
 
@@ -512,6 +518,9 @@ async function clearBrowserProxy() {
   if (chromium && api.proxy?.settings) await api.proxy.settings.clear({scope: 'regular'});
 }
 
+// Chromium lets one extension control the proxy settings (FoxyProxy and the like
+// compete for them): when another has them, ours cannot take effect.
+let proxyBlocked = false;
 async function applyProxy() {
   await proxyReady;
   ensureProxyListeners();
@@ -519,7 +528,14 @@ async function applyProxy() {
   if (registration && proxyOffer?.user) send({type: 'proxy', choice: proxyChoice});
   if (!chromium || !api.proxy?.settings) return;
   const offer = proxyOffer;
+  proxyBlocked = false;
   if (!registration || !offer || !proxyChoice) return clearBrowserProxy();
+  const control = await Promise.resolve(api.proxy.settings.get?.({})).catch(() => null);
+  if (control?.levelOfControl === 'controlled_by_other_extensions' || control?.levelOfControl === 'not_controllable') {
+    proxyBlocked = true;
+    record('Another extension controls the browser\'s proxy settings: turn it off to route through the daemon');
+    return;
+  }
   await api.proxy.settings.set({scope: 'regular', value: {mode: 'fixed_servers', rules: {
     singleProxy: {scheme: 'http', host: offer.host, port: offer.port},
     bypassList: NodeProxy.bypass(offer.bypass),
@@ -2205,7 +2221,7 @@ async function localMessage(message, sender) {
     const savedSuggestions = await api.storage.local.get('addressSuggestions');
     const addressSuggestions = permissions && savedSuggestions.addressSuggestions === true;
     const [activeTab] = proxyOffer ? await api.tabs.query({active: true, lastFocusedWindow: true}) : [];
-    const proxy = proxyOffer ? {perTab: !chromium, tab: activeTab ? (tabProxies.has(activeTab.id) ? {own: true, pick: tabProxies.get(activeTab.id)} : {own: false}) : null, choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, permitted: await api.permissions.contains(proxyPermissions())} : null;
+    const proxy = proxyOffer ? {perTab: !chromium, tab: activeTab ? (tabProxies.has(activeTab.id) ? {own: true, pick: tabProxies.get(activeTab.id)} : {own: false}) : null, choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, blocked: proxyBlocked, permitted: await api.permissions.contains(proxyPermissions())} : null;
     return {proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
