@@ -12,7 +12,10 @@
 ### Added
 
 * A node can serve a SOCKS5 proxy (`--socks-listen`, `services.browser-daemon.socksProxy`)
-  that other nodes use as an upstream: connections leave from its network. Clients
+  that other nodes use as an upstream: connections leave from its network. The
+  peers find it by themselves (it is in the node info) and offer it as the proxy
+  `node:<name>`, logged in with a login derived from the cluster secret; the list
+  follows the mesh. Clients
   are limited by network (`--socks-allow`) and/or a login (`--socks-credentials-file`,
   RFC 1929), and destinations like a session's relay's. Upstream proxy URLs can now
   carry a login (SOCKS5 user/password, HTTP Basic), and a proxy's URL can be kept in

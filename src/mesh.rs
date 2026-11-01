@@ -21,6 +21,9 @@ pub struct NodeInfo {
     pub supported_engines: Vec<BrowserEngine>,
     #[serde(default)]
     pub proxies: Vec<proxies::ProxyInfo>,
+    /// The SOCKS5 listener it offers its peers (see `egress`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<crate::egress::Advert>,
     #[serde(default)]
     pub settings: settings::NodeSettings,
 }
@@ -135,6 +138,7 @@ pub(crate) async fn api_mesh_node(
         max_storage_bytes,
         supported_engines,
         proxies: state.proxy_infos(),
+        egress: state.egress.clone(),
         settings: state.settings.get(),
     }))
 }
@@ -170,6 +174,44 @@ pub(crate) async fn peer_poll<T: serde::de::DeserializeOwned + Default>(
         Ok(r) => r.json().await.unwrap_or_default(),
         Err(_) => T::default(),
     }
+}
+
+/// Offers the SOCKS5 listener a peer advertises as a proxy of this node, logged
+/// in with the mesh's login (needs the cluster secret, which the peers share).
+fn learn_egress(state: &AppState, peer_url: &str, info: &NodeInfo) {
+    let proxy = match (&state.cluster_secret, &info.egress) {
+        (Some(secret), Some(advert)) if info.name != state.node_name => {
+            proxies::mesh_proxy(&info.name, peer_url, advert, &egress::mesh_login(secret))
+        }
+        _ => None,
+    };
+    proxies::set_mesh_proxy(peer_url, proxy);
+}
+
+/// Asks every peer for its node info only, so the proxies of the mesh follow it
+/// without a dashboard being open. A peer that does not answer loses its proxy.
+pub(crate) async fn refresh_mesh_proxies(state: &AppState) {
+    let peers: Vec<String> = state.peers.read().await.values().cloned().collect();
+    proxies::retain_mesh_proxies(&peers);
+    futures_util::future::join_all(peers.iter().map(|url| async move {
+        let info = async {
+            let res = state
+                .peer_request(state.http_client.get(format!("{url}/api/mesh/node")))
+                .timeout(PEER_POLL_TIMEOUT)
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?;
+            res.json::<NodeInfo>().await.ok()
+        }
+        .await;
+        match info {
+            Some(info) => learn_egress(state, url, &info),
+            None => proxies::set_mesh_proxy(url, None),
+        }
+    }))
+    .await;
 }
 
 pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> PeerReport {
@@ -218,6 +260,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
     let info: Option<NodeInfo> = res.json().await.ok();
     if let Some(ref info) = info {
         learn_peer_name(state, &name, &url, &info.name).await;
+        learn_egress(state, &url, info);
     }
 
     // The rest at once: a slow peer costs one wait, not four.
@@ -357,6 +400,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         max_storage_bytes: state.recorder_config.max_storage_bytes,
         supported_engines: local_supported_engines,
         proxies: state.proxy_infos(),
+        egress: state.egress.clone(),
         settings: state.settings.get(),
     };
 

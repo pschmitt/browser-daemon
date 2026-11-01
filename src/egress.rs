@@ -9,6 +9,8 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{debug, info};
@@ -83,18 +85,41 @@ pub fn parse_credentials(raw: &str) -> Result<(String, String), String> {
     Ok((user.to_string(), pass.to_string()))
 }
 
+/// What a node tells its peers about its listener (in its node info).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Advert {
+    /// Where peers reach it; absent: the host they know the node by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    pub port: u16,
+}
+
+/// The login the nodes of a mesh use on each other's listeners: derived from the
+/// cluster secret, so nothing has to be configured per node, and useless without it.
+pub fn mesh_login(cluster_secret: &str) -> (String, String) {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac =
+        Hmac::<sha2::Sha256>::new_from_slice(cluster_secret.as_bytes()).expect("any key length");
+    mac.update(b"browser-daemon socks5 egress login");
+    let tag = mac.finalize().into_bytes();
+    let password: String = tag.iter().take(16).map(|b| format!("{b:02x}")).collect();
+    ("mesh".to_string(), password)
+}
+
 pub struct Config {
     pub listen: SocketAddr,
     /// Clients outside these networks are dropped without a word.
     pub allow: Vec<Network>,
-    pub credentials: Option<(String, String)>,
+    /// Logins that are accepted; none: no login asked for.
+    pub credentials: Vec<(String, String)>,
 }
 
 impl Config {
     /// What a listener needs to be safe to start: anyone who can reach it must
     /// be limited by network or by login, unless it only listens on loopback.
     pub fn check(&self) -> Result<(), String> {
-        if self.listen.ip().is_loopback() || !self.allow.is_empty() || self.credentials.is_some() {
+        if self.listen.ip().is_loopback() || !self.allow.is_empty() || !self.credentials.is_empty()
+        {
             return Ok(());
         }
         Err(format!(
@@ -112,7 +137,7 @@ pub async fn start(config: Config, policy: Policy) -> std::io::Result<tokio::tas
     let listener = TcpListener::bind(config.listen).await?;
     info!(
         listen = %listener.local_addr()?,
-        login = config.credentials.is_some(),
+        login = !config.credentials.is_empty(),
         allowed = config.allow.len(),
         "SOCKS5 egress listening"
     );
@@ -129,9 +154,7 @@ pub async fn start(config: Config, policy: Policy) -> std::io::Result<tokio::tas
             let (rx, config) = (rx.clone(), config.clone());
             tokio::spawn(async move {
                 let _ = client.set_nodelay(true);
-                if let Err(e) =
-                    relay::serve_as(client, rx, policy, config.credentials.as_ref()).await
-                {
+                if let Err(e) = relay::serve_as(client, rx, policy, &config.credentials).await {
                     debug!(peer = %peer, error = %e, "SOCKS5 egress connection ended");
                 }
             });
@@ -178,19 +201,28 @@ mod tests {
     }
 
     #[test]
+    fn the_mesh_login_follows_the_secret() {
+        let a = mesh_login("one");
+        assert_eq!(a, mesh_login("one"));
+        assert_ne!(a.1, mesh_login("two").1);
+        assert_eq!(a.0, "mesh");
+        assert_eq!(a.1.len(), 32);
+    }
+
+    #[test]
     fn an_open_listener_is_refused() {
         let mut c = Config {
             listen: "0.0.0.0:1080".parse().unwrap(),
             allow: vec![],
-            credentials: None,
+            credentials: vec![],
         };
         assert!(c.check().is_err());
         c.allow.push(net("10.0.0.0/8"));
         assert!(c.check().is_ok());
         c.allow.clear();
-        c.credentials = Some(("u".into(), "p".into()));
+        c.credentials = vec![("u".into(), "p".into())];
         assert!(c.check().is_ok());
-        c.credentials = None;
+        c.credentials.clear();
         c.listen = "127.0.0.1:1080".parse().unwrap();
         assert!(c.check().is_ok());
     }
@@ -273,7 +305,7 @@ mod tests {
         let config = |allow: Vec<Network>| Config {
             listen: format!("127.0.0.1:{listen}").parse().unwrap(),
             allow,
-            credentials: Some(("node".into(), "s3cret".into())),
+            credentials: vec![("node".into(), "s3cret".into())],
         };
 
         // Loopback targets are for tests only: a permissive policy.
@@ -317,13 +349,13 @@ mod tests {
     async fn a_relay_logs_in_to_a_node_through_its_proxy_url() {
         let echo = echo_server().await;
         let listen = free_port().await;
-        let serve = |login: Option<(String, String)>| Config {
+        let serve = |login: Vec<(String, String)>| Config {
             listen: format!("127.0.0.1:{listen}").parse().unwrap(),
             allow: vec![],
             credentials: login,
         };
         let task = start(
-            serve(Some(("node".into(), "s3cret".into()))),
+            serve(vec![("node".into(), "s3cret".into())]),
             Policy::permissive(),
         )
         .await
@@ -357,7 +389,7 @@ mod tests {
             Config {
                 listen: format!("127.0.0.1:{listen}").parse().unwrap(),
                 allow: vec![],
-                credentials: None,
+                credentials: vec![],
             },
             Policy::strict(),
         )

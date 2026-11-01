@@ -179,7 +179,7 @@ impl AppState {
             .settings
             .get()
             .default_proxy
-            .filter(|k| self.config.proxies.iter().any(|p| &p.id == k));
+            .filter(|k| proxies::find(&self.config.proxies, k).is_some());
         let proxy_key = proxy
             .map(str::trim)
             .map(str::to_string)
@@ -189,10 +189,7 @@ impl AppState {
             None => None,
             Some(k) if proxies::DIRECT.contains(&k) => None,
             Some(k) => Some(
-                self.config
-                    .proxies
-                    .iter()
-                    .find(|p| p.id == k)
+                proxies::find(&self.config.proxies, k)
                     .ok_or((StatusCode::BAD_REQUEST, "Unknown proxy on this node"))?,
             ),
         };
@@ -215,7 +212,7 @@ impl AppState {
             height,
             max_memory_mb,
             adblock,
-            proxy,
+            proxy.as_ref(),
             color_scheme,
             start_tab,
             default_tabs,

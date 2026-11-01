@@ -209,6 +209,8 @@ pub struct AppState {
     pub extension_origins: Vec<String>,
     /// Base URL of public share links.
     pub share_url: String,
+    /// The SOCKS5 listener this node offers its peers, if it has one.
+    pub egress: Option<crate::egress::Advert>,
     /// Public links to recordings and sessions (see shares.rs).
     pub shares: Arc<shares::Store>,
     pub peers: Arc<RwLock<HashMap<String, String>>>,
@@ -297,8 +299,7 @@ impl DirSizes {
 
 impl AppState {
     pub fn proxy_infos(&self) -> Vec<proxies::ProxyInfo> {
-        self.config
-            .proxies
+        proxies::all(&self.config.proxies)
             .iter()
             .map(proxies::Proxy::info)
             .collect()
@@ -310,7 +311,7 @@ impl AppState {
         if proxies::DIRECT.contains(&key) {
             return Ok(None);
         }
-        if self.config.proxies.iter().any(|p| p.id == key) {
+        if proxies::find(&self.config.proxies, key).is_some() {
             Ok(Some(key.to_string()))
         } else {
             Err(api_error(

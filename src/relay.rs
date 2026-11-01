@@ -235,17 +235,17 @@ async fn serve(
     rx: watch::Receiver<Option<Proxy>>,
     policy: Policy,
 ) -> io::Result<()> {
-    serve_as(client, rx, policy, None).await
+    serve_as(client, rx, policy, &[]).await
 }
 
-/// Serves one client; with `auth`, only one that logs in with those credentials.
+/// Serves one client; with `logins`, only one that logs in with one of them.
 pub(crate) async fn serve_as(
     mut client: TcpStream,
     mut rx: watch::Receiver<Option<Proxy>>,
     policy: Policy,
-    auth: Option<&(String, String)>,
+    logins: &[(String, String)],
 ) -> io::Result<()> {
-    let (target, port) = tokio::time::timeout(HANDSHAKE, socks5_accept(&mut client, auth))
+    let (target, port) = tokio::time::timeout(HANDSHAKE, socks5_accept(&mut client, logins))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "client handshake"))??;
     if policy.denies(&target) {
@@ -276,11 +276,11 @@ pub(crate) async fn serve_as(
     }
 }
 
-/// SOCKS5 server side, CONNECT only: no authentication, or with `auth` the
+/// SOCKS5 server side, CONNECT only: no authentication, or with `logins` the
 /// username/password method (RFC 1929).
 async fn socks5_accept(
     s: &mut TcpStream,
-    auth: Option<&(String, String)>,
+    logins: &[(String, String)],
 ) -> io::Result<(Target, u16)> {
     let mut head = [0u8; 2];
     s.read_exact(&mut head).await?;
@@ -289,25 +289,28 @@ async fn socks5_accept(
     }
     let mut methods = vec![0u8; head[1] as usize];
     s.read_exact(&mut methods).await?;
-    let method = if auth.is_some() { 2 } else { 0 };
+    let method = if logins.is_empty() { 0 } else { 2 };
     if !methods.contains(&method) {
         s.write_all(&[5, 0xff]).await?;
-        return Err(invalid(if auth.is_some() {
-            "client does not offer a password login"
-        } else {
+        return Err(invalid(if logins.is_empty() {
             "client wants authentication"
+        } else {
+            "client does not offer a password login"
         }));
     }
     s.write_all(&[5, method]).await?;
-    if let Some(expected) = auth {
+    if !logins.is_empty() {
         let ver = s.read_u8().await?;
         let mut user = vec![0u8; s.read_u8().await? as usize];
         s.read_exact(&mut user).await?;
         let mut pass = vec![0u8; s.read_u8().await? as usize];
         s.read_exact(&mut pass).await?;
+        // Every login is compared, so the time says nothing about which was close.
         let ok = ver == 1
-            && constant_time_eq(&user, expected.0.as_bytes())
-                & constant_time_eq(&pass, expected.1.as_bytes());
+            && logins.iter().fold(false, |any, (u, p)| {
+                any | (constant_time_eq(&user, u.as_bytes())
+                    & constant_time_eq(&pass, p.as_bytes()))
+            });
         s.write_all(&[1, if ok { 0 } else { 1 }]).await?;
         if !ok {
             return Err(invalid("wrong credentials"));

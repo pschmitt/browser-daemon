@@ -634,11 +634,15 @@ impl ActiveBrowser {
             ),
             None => None,
         };
-        let proxy = rec
-            .proxy
-            .as_ref()
-            .and_then(|id| config.proxies.iter().find(|p| &p.id == id))
-            .cloned();
+        // A proxy that is gone (a peer's, before the mesh was asked again) must not
+        // turn into a direct connection: the browser gets one that refuses.
+        let proxy = rec.proxy.as_ref().map(|id| {
+            proxies::find(&config.proxies, id).unwrap_or_else(|| Proxy {
+                id: id.clone(),
+                name: id.clone(),
+                url: "socks5://127.0.0.1:1".to_string(),
+            })
+        });
         let relay = Relay::start_on(rec.relay_port, proxy).await?;
         relay.set_owner(proc.pid, proc.start);
         let audio = match (&config.audio, &rec.audio) {

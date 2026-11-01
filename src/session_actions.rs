@@ -338,7 +338,7 @@ pub(crate) async fn api_session_set_proxy(
     state.check_auth(&headers)?;
     let proxy = state
         .check_proxy(&req.proxy)?
-        .and_then(|id| state.config.proxies.iter().find(|p| p.id == id).cloned());
+        .and_then(|id| proxies::find(&state.config.proxies, &id));
     let session = state
         .sessions
         .read()

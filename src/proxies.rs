@@ -4,7 +4,9 @@
 //! (`relay.rs`), so the upstream can change while the session runs.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{OnceLock, RwLock};
 use url::Url;
 
 /// Keys a request uses to ask for no proxy, overriding a profile's default.
@@ -18,6 +20,93 @@ pub struct Proxy {
     pub name: String,
     /// `socks5://host:port` (also `socks5h://`), `socks4://…` or `http://…`.
     pub url: String,
+}
+
+/// Proxies that exist because a peer serves one (see `egress`), by the peer's
+/// URL: they come and go with the peers, and are never in the proxies file.
+fn mesh_proxies() -> &'static RwLock<BTreeMap<String, Proxy>> {
+    static PROXIES: OnceLock<RwLock<BTreeMap<String, Proxy>>> = OnceLock::new();
+    PROXIES.get_or_init(Default::default)
+}
+
+/// Id of the proxy that goes through a node.
+pub fn mesh_id(node: &str) -> String {
+    format!("node:{node}")
+}
+
+/// The proxy through the SOCKS5 listener a peer advertises, logged in with the
+/// mesh's login. `None` when the advertised address is not one a peer may have.
+pub fn mesh_proxy(
+    node: &str,
+    peer_url: &str,
+    advert: &crate::egress::Advert,
+    login: &(String, String),
+) -> Option<Proxy> {
+    let host = match advert.host {
+        Some(ref h) => h.clone(),
+        None => Url::parse(peer_url).ok()?.host_str()?.to_string(),
+    };
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    // Like a peer's own address: a node cannot send its peers to this machine.
+    if !crate::relay::peer_url_ok(&format!("http://{}", bracketed(&host))) {
+        return None;
+    }
+    let proxy = Proxy {
+        id: mesh_id(node),
+        name: format!("{node} (node)"),
+        url: format!(
+            "socks5://{}:{}@{}:{}",
+            login.0,
+            login.1,
+            bracketed(&host),
+            advert.port
+        ),
+    };
+    parse(&proxy.url).ok()?;
+    Some(proxy)
+}
+
+fn bracketed(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    }
+}
+
+/// Sets (or, with `None`, removes) the proxy of the peer at `peer_url`.
+pub fn set_mesh_proxy(peer_url: &str, proxy: Option<Proxy>) {
+    let mut all = mesh_proxies().write().unwrap();
+    match proxy {
+        Some(p) => all.insert(peer_url.to_string(), p),
+        None => all.remove(peer_url),
+    };
+}
+
+/// Forgets the proxies of peers that are not in `peer_urls` any more.
+pub fn retain_mesh_proxies(peer_urls: &[String]) {
+    mesh_proxies()
+        .write()
+        .unwrap()
+        .retain(|url, _| peer_urls.contains(url));
+}
+
+/// The node's own proxies, then the mesh's (an id the file has wins).
+pub fn all(own: &[Proxy]) -> Vec<Proxy> {
+    let mut all = own.to_vec();
+    for p in mesh_proxies().read().unwrap().values() {
+        if !all.iter().any(|o| o.id == p.id) {
+            all.push(p.clone());
+        }
+    }
+    all
+}
+
+pub fn find(own: &[Proxy], id: &str) -> Option<Proxy> {
+    all(own).into_iter().find(|p| p.id == id)
 }
 
 /// What the API exposes: never the credentials a URL might carry.
@@ -268,6 +357,40 @@ mod tests {
         assert!(validate(vec![proxy("a", "socks5://u:p@a:1")]).is_ok());
         assert!(validate(vec![proxy("a", "socks4://u@a:1")]).is_err());
         assert!(validate(vec![proxy("a", "http://a")]).is_ok());
+    }
+
+    #[test]
+    fn peers_proxies_come_and_go_and_never_point_at_this_machine() {
+        let login = ("mesh".to_string(), "pw".to_string());
+        let advert = |host: Option<&str>| crate::egress::Advert {
+            host: host.map(str::to_string),
+            port: 1080,
+        };
+        let own = [proxy("vpn", "socks5://a:1")];
+
+        let p = mesh_proxy(
+            "rofl-13",
+            "https://browser.rofl-13.example",
+            &advert(None),
+            &login,
+        )
+        .unwrap();
+        assert_eq!(p.id, "node:rofl-13");
+        assert_eq!(p.url, "socks5://mesh:pw@browser.rofl-13.example:1080");
+        let v6 = mesh_proxy("x", "https://a.example", &advert(Some("fd00::5")), &login).unwrap();
+        assert_eq!(v6.upstream().host, "fd00::5");
+        assert!(mesh_proxy("x", "https://a.example", &advert(Some("127.0.0.1")), &login).is_none());
+        assert!(mesh_proxy("x", "https://a.example", &advert(Some("localhost")), &login).is_none());
+
+        set_mesh_proxy("https://peer-a.test", Some(p));
+        let ids: Vec<_> = all(&own).into_iter().map(|p| p.id).collect();
+        assert!(ids.contains(&"vpn".to_string()) && ids.contains(&"node:rofl-13".to_string()));
+        assert!(find(&own, "node:rofl-13").is_some());
+        // A file's id beats a peer's.
+        set_mesh_proxy("https://peer-b.test", Some(proxy("vpn", "socks5://evil:1")));
+        assert_eq!(find(&own, "vpn").unwrap().url, "socks5://a:1");
+        retain_mesh_proxies(&[]);
+        assert!(find(&own, "node:rofl-13").is_none());
     }
 
     #[test]

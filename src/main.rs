@@ -284,6 +284,12 @@ pub struct Args {
     pub socks_listen: Option<SocketAddr>,
 
     #[arg(
+        long,
+        help = "Address peers reach --socks-listen at, when it is not the host they know this node by"
+    )]
+    pub socks_advertise: Option<String>,
+
+    #[arg(
         long = "socks-allow",
         help = "Network (CIDR or address) allowed to use --socks-listen; repeatable. Others are dropped"
     )]
@@ -673,20 +679,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for url in peer_map.values() {
         relay::deny_url(url);
     }
-    if let Some(listen) = args.socks_listen {
-        let credentials = match args.socks_credentials_file {
-            Some(ref path) => match std::fs::read_to_string(path)
+    let egress_advert = if let Some(listen) = args.socks_listen {
+        // The mesh's own login (from the cluster secret) always works, so peers
+        // find this node's proxy without any setup; a file adds a login for others.
+        let mut credentials: Vec<(String, String)> = cluster_secret
+            .iter()
+            .map(|s| egress::mesh_login(s))
+            .collect();
+        if let Some(ref path) = args.socks_credentials_file {
+            match std::fs::read_to_string(path)
                 .map_err(|e| e.to_string())
                 .and_then(|raw| egress::parse_credentials(&raw))
             {
-                Ok(login) => Some(login),
+                Ok(login) => credentials.push(login),
                 Err(e) => {
                     eprintln!("Invalid --socks-credentials-file {}: {e}", path.display());
                     std::process::exit(1);
                 }
-            },
-            None => None,
-        };
+            }
+        }
         let config = egress::Config {
             listen,
             allow: args.socks_allow.clone(),
@@ -700,7 +711,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Cannot start the SOCKS5 listener on {listen}: {e}");
             std::process::exit(1);
         }
-    }
+        Some(egress::Advert {
+            host: args.socks_advertise.clone(),
+            port: listen.port(),
+        })
+    } else {
+        None
+    };
     let auth = Arc::new(auth::Auth::new(cluster_secret.clone(), hosts));
     let extensions = Arc::new(extension::Broker::load(
         &config.state_dir().join("browser-keys.json"),
@@ -735,6 +752,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         public_url,
         extension_origins,
         share_url,
+        egress: egress_advert,
         shares,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),
@@ -765,7 +783,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sessions of the previous run keep their browsers (the service does not
     // kill them on a restart): adopt them before anything else touches the nodes.
     let known_displays = persist::display_numbers(state.config.state_dir()).await;
+    // The peers' proxies first: a session that was routed through one must find it.
+    let _ = tokio::time::timeout(Duration::from_secs(4), mesh::refresh_mesh_proxies(&state)).await;
     state.adopt_sessions().await;
+    let mesh_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            mesh::refresh_mesh_proxies(&mesh_state).await;
+        }
+    });
     {
         let adopted = snapshot_sessions(&state).await;
         let mut keep = std::collections::HashSet::new();

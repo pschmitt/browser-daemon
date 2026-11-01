@@ -342,10 +342,22 @@ in
         description = ''
           Serve a SOCKS5 proxy on this `IP:PORT` (or `[IPv6]:PORT`), so other nodes
           (their `proxies`) and any SOCKS5 client can route through this node's
-          network. Off when null. Destinations are limited like a session's: never
+          network. Off when null. With a cluster secret, the other nodes of the mesh
+          log in with a login derived from it and offer this proxy as `node:<name>`,
+          with nothing else configured. Destinations are limited like a session's: never
           this machine, link-local addresses or the mesh's daemons. Anything but
           loopback needs `allow` or `credentialsFile`. Open the port in the firewall
           yourself.
+        '';
+      };
+      advertise = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "10.0.0.5";
+        description = ''
+          Address the peers reach the listener at, when it is not the host they know
+          this node by (its `publicUrl` often is a reverse proxy that does not serve
+          this port). Peers offer the listener as a proxy named `node:<this node>`.
         '';
       };
       allow = lib.mkOption {
@@ -758,6 +770,10 @@ in
                 [
                   "--socks-listen"
                   cfg.socksProxy.listen
+                ]
+                ++ lib.optionals (cfg.socksProxy.advertise != null) [
+                  "--socks-advertise"
+                  cfg.socksProxy.advertise
                 ]
                 ++ lib.concatMap (n: [
                   "--socks-allow"
