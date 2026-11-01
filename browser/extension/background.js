@@ -541,6 +541,14 @@ async function tabMenuClicked(info, tab) {
     await applyShare({tabs: [...ids], urls, control: sharing.control});
   } else if (typeof info.menuItemId === 'string' && info.menuItemId.startsWith('bd-proxy:')) {
     const id = info.menuItemId.slice('bd-proxy:'.length);
+    // The browser gives requests to the extension only with this permission, which
+    // a fresh install lacks: ask for it in the click itself (it resolves true
+    // when it is granted already).
+    if (id !== 'follow' && id !== 'none' && !(await api.permissions.request(proxyPermissions()))) {
+      record('Proxy access was not granted: the tab keeps its connection');
+      return;
+    }
+    ensureProxyListeners();
     if (id === 'follow') tabProxies.delete(tab.id);
     else tabProxies.set(tab.id, id === 'none' ? null : id);
     // Open connections of the tab keep their route; its next ones follow the pick.

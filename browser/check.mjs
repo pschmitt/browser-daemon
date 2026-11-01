@@ -107,7 +107,7 @@ function harness(firefox = false, stored = {shareAll: false}) {
       }
       return [{frameId: 0, result: 'snapshot'}];
     }},
-    permissions: {contains: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
+    permissions: {contains: async () => true, request: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
   };
   const menu = {created: [], updated: []};
   if (firefox) api.menus = {removeAll: async () => { menu.created.length = 0; }, create: o => { menu.created.push(o); }, update: async (id, o) => { menu.updated.push([id, o]); }, refresh: async () => {},
