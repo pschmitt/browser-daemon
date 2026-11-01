@@ -214,6 +214,19 @@ function renderProxy() {
     : 'Active only while connected; local and private addresses stay direct.';
 }
 
+// Which proxy the tab in front goes through: its own pick, or the browser's.
+function renderTabProxy() {
+  const proxy = state.proxy, line = $('tabProxy');
+  const label = pick => !pick ? 'no proxy' : pick === 'direct' ? (proxy.node ? `${proxy.node} (this daemon)` : 'the daemon’s own network')
+    : proxy.choices.find(c => c.id === pick)?.name || pick;
+  let text = '';
+  if (proxy && proxy.perTab && proxy.tab?.own) text = `This tab: ${label(proxy.tab.pick)}`;
+  else if (proxy && proxy.perTab && proxy.tab) text = `This tab: ${label(proxy.selected)} (default)`;
+  else if (proxy && proxy.selected) text = `All tabs: ${label(proxy.selected)}`;
+  line.hidden = !text;
+  line.textContent = text;
+}
+
 async function refresh() {
   await draftReady;
   state = await message({type: 'state'});
@@ -232,6 +245,7 @@ async function refresh() {
   $('connected').hidden = !reg;
   $('dashboard').hidden = !reg;
   renderProxy();
+  if (state.proxy) renderTabProxy(); else $('tabProxy').hidden = true;
   $('setup').hidden = !!reg || !!state.dashboardRequest;
 
   // Setup

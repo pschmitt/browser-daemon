@@ -276,12 +276,67 @@ pub(crate) async fn serve_as(
     }
 }
 
+/// Serves a SOCKS5 client that names its upstream in the login's user: `route`
+/// gives the proxy for it (`Some(None)`: direct), `None` for one that does not
+/// exist, which fails the connection. With a `password`, that is what the client
+/// logs in with; without, there is no login and the user is empty.
+pub(crate) async fn serve_routed<F>(
+    mut client: TcpStream,
+    policy: Policy,
+    password: Option<&str>,
+    route: F,
+) -> io::Result<()>
+where
+    F: Fn(&str) -> Option<Option<Proxy>>,
+{
+    let (target, port, user) =
+        tokio::time::timeout(HANDSHAKE, socks5_accept_as(&mut client, &[], password))
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "client handshake"))??;
+    if policy.denies(&target) {
+        client.write_all(&[5, 2, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+        return Err(invalid("destination not allowed"));
+    }
+    let Some(upstream) = route(&user) else {
+        client.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+        return Err(invalid(&format!("unknown proxy {user:?}")));
+    };
+    let connected =
+        tokio::time::timeout(HANDSHAKE, open(upstream.as_ref(), &target, port, policy)).await;
+    let mut remote = match connected {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            client.write_all(&[5, 5, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+            return Err(e);
+        }
+        Err(_) => {
+            client.write_all(&[5, 4, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "connect"));
+        }
+    };
+    client.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+    tokio::io::copy_bidirectional(&mut client, &mut remote)
+        .await
+        .map(|_| ())
+}
+
 /// SOCKS5 server side, CONNECT only: no authentication, or with `logins` the
 /// username/password method (RFC 1929).
 async fn socks5_accept(
     s: &mut TcpStream,
     logins: &[(String, String)],
 ) -> io::Result<(Target, u16)> {
+    let (target, port, _) = socks5_accept_as(s, logins, None).await?;
+    Ok((target, port))
+}
+
+/// As `socks5_accept`, and with a `password`: any user may log in with it, and
+/// is returned (a client names what it wants in the user).
+async fn socks5_accept_as(
+    s: &mut TcpStream,
+    logins: &[(String, String)],
+    password: Option<&str>,
+) -> io::Result<(Target, u16, String)> {
     let mut head = [0u8; 2];
     s.read_exact(&mut head).await?;
     if head[0] != 5 {
@@ -289,17 +344,19 @@ async fn socks5_accept(
     }
     let mut methods = vec![0u8; head[1] as usize];
     s.read_exact(&mut methods).await?;
-    let method = if logins.is_empty() { 0 } else { 2 };
+    let open = logins.is_empty() && password.is_none();
+    let method = if open { 0 } else { 2 };
     if !methods.contains(&method) {
         s.write_all(&[5, 0xff]).await?;
-        return Err(invalid(if logins.is_empty() {
+        return Err(invalid(if open {
             "client wants authentication"
         } else {
             "client does not offer a password login"
         }));
     }
     s.write_all(&[5, method]).await?;
-    if !logins.is_empty() {
+    let mut who = String::new();
+    if !open {
         let ver = s.read_u8().await?;
         let mut user = vec![0u8; s.read_u8().await? as usize];
         s.read_exact(&mut user).await?;
@@ -307,14 +364,18 @@ async fn socks5_accept(
         s.read_exact(&mut pass).await?;
         // Every login is compared, so the time says nothing about which was close.
         let ok = ver == 1
-            && logins.iter().fold(false, |any, (u, p)| {
-                any | (constant_time_eq(&user, u.as_bytes())
-                    & constant_time_eq(&pass, p.as_bytes()))
-            });
+            && match password {
+                Some(password) => constant_time_eq(&pass, password.as_bytes()),
+                None => logins.iter().fold(false, |any, (u, p)| {
+                    any | (constant_time_eq(&user, u.as_bytes())
+                        & constant_time_eq(&pass, p.as_bytes()))
+                }),
+            };
         s.write_all(&[1, if ok { 0 } else { 1 }]).await?;
         if !ok {
             return Err(invalid("wrong credentials"));
         }
+        who = String::from_utf8_lossy(&user).into_owned();
     }
 
     let mut req = [0u8; 4];
@@ -326,7 +387,7 @@ async fn socks5_accept(
     }
     let target = read_addr(s, req[3]).await?;
     let port = s.read_u16().await?;
-    Ok((target, port))
+    Ok((target, port, who))
 }
 
 /// Compares without stopping at the first difference.

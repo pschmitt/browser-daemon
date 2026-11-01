@@ -41,6 +41,13 @@ globalThis.NodeProxy = (() => {
     return offer.user || encodeURIComponent(choice);
   }
 
+  // Firefox's answer for one request: SOCKS5 to the daemon, the login's user naming
+  // the proxy. Unlike an HTTP proxy's login (which Firefox remembers per proxy),
+  // the SOCKS login is given per request, so every tab can have its own.
+  function socks(offer, pick) {
+    return {type: 'socks', host: offer.host, port: offer.port, username: pick, password: offer.password, proxyDNS: true};
+  }
+
   // `Proxy-Authorization`.
   function login(user, password) {
     return 'Basic ' + btoa(`${user}:${password}`);
@@ -78,5 +85,5 @@ globalThis.NodeProxy = (() => {
     return ['<local>', '*.local', '*.localhost', ...NETWORKS, '[::1]', ...new Set(daemons.map(bare))];
   }
 
-  return {DIRECT, choices, offer, identity, login, direct, bypass};
+  return {DIRECT, choices, offer, identity, login, socks, direct, bypass};
 })();

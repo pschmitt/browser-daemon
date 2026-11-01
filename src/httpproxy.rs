@@ -228,7 +228,59 @@ async fn reply(
         .await
 }
 
+/// What a login's user stands for: the browser's pick kept on this side, or the
+/// name of a proxy (`direct` for none).
+enum Route {
+    Via(Option<Proxy>),
+    NoChoice,
+    Unknown(String),
+}
+
+fn route(config: &Config, own: &[Proxy], user: &str) -> Route {
+    let chosen = config.choices.read().unwrap().get(user.trim()).cloned();
+    let wanted = match chosen {
+        Some(Some(id)) => id,
+        Some(None) => return Route::NoChoice,
+        None => user.to_string(),
+    };
+    if proxies::DIRECT.contains(&wanted.trim()) {
+        Route::Via(None)
+    } else if let Some(proxy) = proxies::find(own, wanted.trim()) {
+        Route::Via(Some(proxy))
+    } else {
+        Route::Unknown(wanted.trim().to_string())
+    }
+}
+
 async fn serve(
+    client: TcpStream,
+    config: &Config,
+    own: &[Proxy],
+    policy: Policy,
+) -> std::io::Result<()> {
+    // SOCKS5 starts with its version byte, HTTP with a method's letter: the
+    // same port serves both. Firefox takes a SOCKS login per request, so each
+    // tab can name its own proxy there; HTTP is for browsers that cannot.
+    let mut first = [0u8; 1];
+    tokio::time::timeout(HEAD_TIMEOUT, client.peek(&mut first))
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "first byte"))??;
+    if first[0] == 5 {
+        return relay::serve_routed(
+            client,
+            policy,
+            config.password.as_deref(),
+            |user| match route(config, own, user) {
+                Route::Via(proxy) => Some(proxy),
+                _ => None,
+            },
+        )
+        .await;
+    }
+    serve_http(client, config, own, policy).await
+}
+
+async fn serve_http(
     mut client: TcpStream,
     config: &Config,
     own: &[Proxy],
@@ -247,11 +299,9 @@ async fn serve(
         .await?;
         return Err(invalid("wrong credentials"));
     };
-    // Looked up first: the lock is not held while answering.
-    let chosen = config.choices.read().unwrap().get(user.trim()).cloned();
-    let wanted = match chosen {
-        Some(Some(id)) => id.clone(),
-        Some(None) => {
+    let upstream = match route(config, own, &user) {
+        Route::Via(proxy) => proxy,
+        Route::NoChoice => {
             reply(
                 &mut client,
                 502,
@@ -261,21 +311,16 @@ async fn serve(
             .await?;
             return Err(invalid("no proxy chosen"));
         }
-        None => user.clone(),
-    };
-    let upstream = if proxies::DIRECT.contains(&wanted.trim()) {
-        None
-    } else if let Some(proxy) = proxies::find(own, wanted.trim()) {
-        Some(proxy)
-    } else {
-        reply(
-            &mut client,
-            502,
-            "Unknown Proxy",
-            &format!("this node does not know the proxy {:?}", wanted.trim()),
-        )
-        .await?;
-        return Err(invalid(&format!("unknown proxy {:?}", wanted.trim())));
+        Route::Unknown(id) => {
+            reply(
+                &mut client,
+                502,
+                "Unknown Proxy",
+                &format!("this node does not know the proxy {id:?}"),
+            )
+            .await?;
+            return Err(invalid(&format!("unknown proxy {id:?}")));
+        }
     };
 
     let connect = head.method.eq_ignore_ascii_case("CONNECT");
@@ -602,6 +647,79 @@ mod tests {
             .insert("browser-1".into(), Some("node:gone".into()));
         let (_s, answer) = ask(port, connect_to(echo, &basic("browser-1", "secret"))).await;
         assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
+    }
+
+    /// A SOCKS5 login with `user`/`pass`, then CONNECT to 127.0.0.1:port; the reply code.
+    async fn socks_via(
+        listen: u16,
+        user: &str,
+        pass: &str,
+        port: u16,
+    ) -> std::io::Result<(TcpStream, u8)> {
+        let mut s = TcpStream::connect(("127.0.0.1", listen)).await?;
+        s.write_all(&[5, 1, 2]).await?;
+        let mut m = [0u8; 2];
+        s.read_exact(&mut m).await?;
+        let mut login = vec![1, user.len() as u8];
+        login.extend(user.as_bytes());
+        login.push(pass.len() as u8);
+        login.extend(pass.as_bytes());
+        s.write_all(&login).await?;
+        let mut ok = [0u8; 2];
+        s.read_exact(&mut ok).await?;
+        if ok[1] != 0 {
+            return Ok((s, 0xff));
+        }
+        let mut req = vec![5, 1, 0, 1, 127, 0, 0, 1];
+        req.extend(port.to_be_bytes());
+        s.write_all(&req).await?;
+        let mut reply = [0u8; 10];
+        s.read_exact(&mut reply).await?;
+        Ok((s, reply[1]))
+    }
+
+    #[tokio::test]
+    async fn a_socks_client_names_its_proxy_in_the_user_for_each_connection() {
+        let echo = echo_server().await;
+        let socks = free_port().await;
+        egress::start(
+            egress::Config {
+                listen: ([127, 0, 0, 1], socks).into(),
+                allow: vec![],
+                credentials: vec![],
+            },
+            Policy::permissive(),
+        )
+        .await
+        .unwrap();
+        let own = vec![Proxy {
+            id: "node:peer".into(),
+            name: "peer (node)".into(),
+            url: format!("socks5://127.0.0.1:{socks}"),
+        }];
+        let port = listener(Some("secret"), own, Policy::permissive()).await;
+        // Two tabs, two proxies, one login password.
+        for user in ["direct", "node:peer"] {
+            let (mut s, code) = socks_via(port, user, "secret", echo).await.unwrap();
+            assert_eq!(code, 0, "{user}");
+            s.write_all(b"ok").await.unwrap();
+            let mut back = [0u8; 2];
+            s.read_exact(&mut back).await.unwrap();
+            assert_eq!(&back, b"ok");
+        }
+        // A proxy that does not exist fails; it is never direct.
+        assert_eq!(
+            socks_via(port, "node:gone", "secret", echo)
+                .await
+                .unwrap()
+                .1,
+            5
+        );
+        // Nor does a wrong password get anywhere.
+        assert_eq!(
+            socks_via(port, "direct", "wrong", echo).await.unwrap().1,
+            0xff
+        );
     }
 
     #[tokio::test]

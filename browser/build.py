@@ -61,7 +61,7 @@ def main():
             # These are core node features, so managed installs should not
             # require separate per-permission approvals after installation.
             manifest["permissions"].extend([
-                "nativeMessaging", "webRequest", "webRequestBlocking",
+                "nativeMessaging", "menus", "webRequest", "webRequestBlocking",
                 "webRequestFilterResponse", "history", "bookmarks",
                 # The daemon's authExport (an agent's tool reads a tab's login).
                 "cookies",

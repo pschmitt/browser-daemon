@@ -452,13 +452,18 @@ function proxyCredentials(details) {
 // Chromium answers asynchronously (asyncBlocking), Firefox with a return value.
 const proxyLogin = chromium ? (details, callback) => callback(proxyCredentials(details)) : proxyCredentials;
 
+// Firefox only: a tab's own pick (a proxy id, `direct`, or null for no proxy at
+// all) over the browser's.
+const tabProxies = new Map();
+const pickFor = tab => tabProxies.has(tab) ? tabProxies.get(tab) : proxyChoice;
 function proxyRoute(details) {
   const offer = proxyOffer;
-  if (!registration || !offer || !proxyChoice) return {type: 'direct'};
+  const pick = pickFor(details.tabId);
+  if (!registration || !offer || !pick) return {type: 'direct'};
   let host;
   try { host = new URL(details.url).hostname; } catch { return {type: 'direct'}; }
   if (NodeProxy.direct(host, offer.bypass)) return {type: 'direct'};
-  return {type: 'http', host: offer.host, port: offer.port, proxyAuthorizationHeader: NodeProxy.login(NodeProxy.identity(offer, proxyChoice), offer.password)};
+  return NodeProxy.socks(offer, pick);
 }
 
 // Listeners exist only once the optional permissions are granted.
@@ -490,14 +495,66 @@ async function applyProxy() {
   }}});
 }
 
+// The tab's context menu (Firefox): share it, and pick its proxy.
+const menuProxies = [];
+function proxyLabel(pick) {
+  if (!pick) return 'No proxy';
+  if (pick === NodeProxy.DIRECT) return proxyOffer?.node ? `${proxyOffer.node} (this daemon)` : 'The daemon’s own network';
+  return proxyOffer?.proxies.find(p => p.id === pick)?.name || pick;
+}
+function buildTabMenu() {
+  if (!api.menus) return;
+  api.menus.removeAll().then(() => {
+    menuProxies.length = 0;
+    api.menus.create({id: 'bd-share', title: 'Share this tab with the daemon', contexts: ['tab'], type: 'checkbox', enabled: false});
+    if (!proxyOffer) return;
+    api.menus.create({id: 'bd-proxy', title: 'Proxy for this tab', contexts: ['tab']});
+    const entries = [['follow', 'Default'], ['none', 'No proxy'], [NodeProxy.DIRECT, proxyLabel(NodeProxy.DIRECT)],
+      ...proxyOffer.proxies.map(p => [p.id, p.name])];
+    for (const [id, title] of entries) {
+      menuProxies.push(id);
+      api.menus.create({id: `bd-proxy:${id}`, parentId: 'bd-proxy', title, contexts: ['tab'], type: 'radio'});
+    }
+  }).catch(() => {});
+}
+function tabMenuShown(info, tab) {
+  if (!tab || !(info.contexts || []).includes('tab')) return;
+  const ready = !!registration && safeTab(tab);
+  void api.menus.update('bd-share', {checked: shared.has(tab.id), enabled: ready, title: shared.has(tab.id) ? 'Stop sharing this tab' : 'Share this tab with the daemon'});
+  if (menuProxies.length) {
+    const own = tabProxies.has(tab.id) ? (tabProxies.get(tab.id) ?? 'none') : 'follow';
+    void api.menus.update('bd-proxy:follow', {title: `Default (${proxyLabel(proxyChoice)})`});
+    for (const id of menuProxies) void api.menus.update(`bd-proxy:${id}`, {checked: id === own});
+  }
+  void api.menus.refresh();
+}
+async function tabMenuClicked(info, tab) {
+  if (!tab) return;
+  if (info.menuItemId === 'bd-share') {
+    if (!registration) return;
+    const ids = new Set(shared.keys());
+    if (ids.has(tab.id)) ids.delete(tab.id); else ids.add(tab.id);
+    const urls = {};
+    for (const id of ids) urls[id] = (await api.tabs.get(id)).url;
+    await applyShare({tabs: [...ids], urls, control: sharing.control});
+  } else if (typeof info.menuItemId === 'string' && info.menuItemId.startsWith('bd-proxy:')) {
+    const id = info.menuItemId.slice('bd-proxy:'.length);
+    if (id === 'follow') tabProxies.delete(tab.id);
+    else tabProxies.set(tab.id, id === 'none' ? null : id);
+    // Open connections of the tab keep their route; its next ones follow the pick.
+    await api.webRequest?.handlerBehaviorChanged?.();
+  }
+}
+
 async function takeProxyOffer(value, origins) {
   await proxyReady;
-  if (!value) { proxyOffer = null; return clearBrowserProxy(); }
+  if (!value) { proxyOffer = null; buildTabMenu(); return clearBrowserProxy(); }
   const offer = NodeProxy.offer(value, registration.server);
   const daemons = [registration.server, ...(Array.isArray(origins) ? origins : [])].flatMap(url => {
     try { return [new URL(url).hostname]; } catch { return []; }
   });
   proxyOffer = {...offer, bypass: [...daemons, offer.host]};
+  buildTabMenu();
   await applyProxy();
 }
 
@@ -514,6 +571,8 @@ async function stop(reason = 'Disconnected', retry = false) {
   socket = null;
   registration = null;
   proxyOffer = null;
+  tabProxies.clear();
+  buildTabMenu();
   void clearBrowserProxy().catch(() => {});
   clearInterval(heartbeat);
   clearTimeout(expiryTimer);
@@ -1995,6 +2054,28 @@ async function restoreRemembered(force = false) {
   finally { restoring = false; }
 }
 
+async function applyShare(message) {
+  if (!registration || (registration.expires_at !== 0 && Date.now() >= registration.expires_at * 1000)) throw new Error('Pair first.');
+  if (!Array.isArray(message.tabs) || message.tabs.length > 128) throw new Error('Select at most 128 tabs.');
+  const next = new Map();
+  for (const id of new Set(message.tabs)) {
+    const tab = await api.tabs.get(id);
+    if (!safeTab(tab)) throw new Error('This tab cannot be shared.');
+    if (message.urls?.[id] !== tab.url) throw new Error('Tab changed since it was displayed. Reopen the popup and select it again.');
+    // An unchanged tab keeps its grant object, so its live views stay open.
+    const previous = shared.get(id);
+    next.set(id, previous?.control === (message.control === true) ? previous : {origin: new URL(tab.url).origin, control: message.control === true, paused: false});
+  }
+  shared = next;
+  sharing.control = message.control === true;
+  await api.storage.local.set({shareControl: sharing.control});
+  if (chromium) for (const id of shared.keys()) void attach(id).catch(() => {});
+  else for (const id of shared.keys()) void hookPasskeys(id).catch(() => hooked.delete(id));
+  await Promise.all([...attached].filter(id => !shared.has(id)).map(detach));
+  await publish();
+  return {ok: true};
+}
+
 async function localMessage(message, sender) {
   // Accept only our own extension UI, never a content script or web page.
   if (message.type === 'fileBridge') return fileBridgeMessage(message, sender);
@@ -2080,7 +2161,8 @@ async function localMessage(message, sender) {
     const permissions = await api.permissions.contains({permissions: ['history', 'bookmarks']});
     const savedSuggestions = await api.storage.local.get('addressSuggestions');
     const addressSuggestions = permissions && savedSuggestions.addressSuggestions === true;
-    const proxy = proxyOffer ? {choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, permitted: await api.permissions.contains(proxyPermissions())} : null;
+    const [activeTab] = proxyOffer ? await api.tabs.query({active: true, lastFocusedWindow: true}) : [];
+    const proxy = proxyOffer ? {perTab: !chromium, tab: activeTab ? (tabProxies.has(activeTab.id) ? {own: true, pick: tabProxies.get(activeTab.id)} : {own: false}) : null, choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, permitted: await api.permissions.contains(proxyPermissions())} : null;
     return {proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
@@ -2103,27 +2185,7 @@ async function localMessage(message, sender) {
     else { disconnectNative(); publishSafely(); }
     return {ok: true};
   }
-  if (message.type === 'share') {
-    if (!registration || (registration.expires_at !== 0 && Date.now() >= registration.expires_at * 1000)) throw new Error('Pair first.');
-    if (!Array.isArray(message.tabs) || message.tabs.length > 128) throw new Error('Select at most 128 tabs.');
-    const next = new Map();
-    for (const id of new Set(message.tabs)) {
-      const tab = await api.tabs.get(id);
-      if (!safeTab(tab)) throw new Error('This tab cannot be shared.');
-      if (message.urls?.[id] !== tab.url) throw new Error('Tab changed since it was displayed. Reopen the popup and select it again.');
-      // An unchanged tab keeps its grant object, so its live views stay open.
-      const previous = shared.get(id);
-      next.set(id, previous?.control === (message.control === true) ? previous : {origin: new URL(tab.url).origin, control: message.control === true, paused: false});
-    }
-    shared = next;
-    sharing.control = message.control === true;
-    await api.storage.local.set({shareControl: sharing.control});
-    if (chromium) for (const id of shared.keys()) void attach(id).catch(() => {});
-    else for (const id of shared.keys()) void hookPasskeys(id).catch(() => hooked.delete(id));
-    await Promise.all([...attached].filter(id => !shared.has(id)).map(detach));
-    await publish();
-    return {ok: true};
-  }
+  if (message.type === 'share') return applyShare(message);
   if (message.type === 'autoShare') {
     sharing.autoShare = message.enabled === true;
     await api.storage.local.set({autoShare: sharing.autoShare});
@@ -2234,7 +2296,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     value => respond(value), error => respond({error: error.message}));
   return true;
 });
-api.tabs.onRemoved.addListener(id => { protectedNavigations.delete(id); shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
+api.tabs.onRemoved.addListener(id => { tabProxies.delete(id); protectedNavigations.delete(id); shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
 let publishTimer = null;
 function publishSoon() { clearTimeout(publishTimer); publishTimer = setTimeout(publishSafely, 150); }
 // Stop interception and other debugger overrides before a protected document
@@ -2331,6 +2393,11 @@ void badge();
 // Whatever the last run left in the browser's proxy settings is stale: this
 // worker holds no connection yet (the proxy returns once it has one).
 void proxyReady.then(() => { ensureProxyListeners(); return clearBrowserProxy(); }).catch(() => {});
+buildTabMenu();
+if (api.menus) {
+  api.menus.onShown.addListener(tabMenuShown);
+  api.menus.onClicked.addListener((info, tab) => { void tabMenuClicked(info, tab).catch(error => record(`Tab menu failed: ${error.message}`)); });
+}
 
 // An update waits until the extension is idle, which a connected browser never
 // is: apply it at once. A remembered browser reconnects by itself afterwards.
