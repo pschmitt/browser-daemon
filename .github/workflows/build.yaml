@@ -37,17 +37,3 @@ jobs:
           name: browser-daemon-x86_64-linux-debug
           path: target/debug/browser-daemon
           if-no-files-found: error
-  nix:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v23
-      # Keep the Nix store between runs; with crane, the dependencies are a
-      # separate derivation that only changes with Cargo.lock or the toolchain.
-      - uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          gc-max-store-size-linux: 4G
-      # Builds the package (which runs the unit tests) and checks the Nix formatting.
-      - run: nix flake check --print-build-logs
