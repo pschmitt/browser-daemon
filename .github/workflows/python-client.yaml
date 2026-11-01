@@ -2,25 +2,21 @@ name: python-client
 # Publishes the Python client (python/) to PyPI once the daemon's release exists
 # (the client has the daemon's version; test.yaml tests it). PyPI's trusted
 # publisher is bound to this file's name and to the `pypi` environment: there is no
-# token, and a job of another workflow file (release.yaml) is refused.
+# token, and a job of another workflow file (release.yaml) is refused. The
+# environment only deploys from version tags, so this runs on the tag, not after the
+# release workflow: it waits for the release to appear.
 on:
-  workflow_run:
-    workflows: [release]
-    types: [completed]
-  # (Re)publish a tag: a rerun skips what PyPI already has.
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Version tag to publish (vX.Y.Z)
-        required: true
+  # Runs on the tag itself: the `pypi` environment only deploys from version tags.
+  push:
+    tags: ['v*']
 permissions:
   contents: read
 jobs:
   publish:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v')) }}
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
     environment:
       name: pypi
       url: https://pypi.org/project/browser-daemon-client/
@@ -30,8 +26,13 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.TAG }}
+      - name: Wait for the release
+        run: |
+          for _ in $(seq 60); do
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
+            sleep 30
+          done
+          echo "::error::no release for $TAG after 30 minutes"; exit 1
       - name: Match tag and package version
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' python/pyproject.toml | head -n1)
