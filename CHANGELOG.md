@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-11-01
-
 ### Fixed
 
 * The extension's popup failed to load on Firefox for Android ("Type error for
@@ -14,6 +12,11 @@
   `python-client.yaml` (PyPI's trusted publisher is bound to that file) and runs on
   the tag, because the `pypi` environment only deploys from version tags. 0.11.0 was
   not published to PyPI.
+
+## [0.11.0] - 2026-11-01
+
+### Fixed
+
 * A new tab opened from the handover page's tab bar no longer shows the previous
   tab's address when the address bar loses focus: a late answer for the old tab was
   written over the new one, and a blank tab never cleared the remembered address.
