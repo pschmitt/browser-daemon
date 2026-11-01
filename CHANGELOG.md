@@ -20,6 +20,14 @@
   RFC 1929), and destinations like a session's relay's. Upstream proxy URLs can now
   carry a login (SOCKS5 user/password, HTTP Basic), and a proxy's URL can be kept in
   a file (`url_file`, NixOS `urlFile`) so a sops-nix or agenix secret stays out of the Nix store.
+* A node can serve an HTTP proxy (`--http-proxy-listen`, `services.browser-daemon.httpProxy`)
+  for the browsers of paired extensions. The extension's popup gets **Route this
+  browser through**: the proxies of the node (its `proxies`, the peers' `node:<name>`,
+  or the node's own network); the daemon hands the extension the login (derived
+  from the cluster secret) and the list over its connection. Routing lasts while
+  connected, local and private networks stay direct, a proxy that is down fails
+  instead of going direct. The extension asks for the optional `proxy` permission
+  (Chromium also `webRequest`, `webRequestAuthProvider`) when a proxy is picked.
 * The Home Assistant integration (`custom_components/browser_daemon`, HACS) now
   lives in this repository and is released with the daemon, under its version.
   It gains `browser_daemon.run` (a Playwright script or steps, with the result as

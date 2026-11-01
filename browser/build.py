@@ -50,7 +50,9 @@ def main():
         if target == "chromium":
             manifest["storage"] = {"managed_schema": "managed-schema.json"}
             manifest["minimum_chrome_version"] = "116"
-            manifest["optional_permissions"] = ["history", "bookmarks"]
+            # Routing the browser through the daemon's proxy asks for these
+            # when the user picks a proxy.
+            manifest["optional_permissions"] = ["history", "bookmarks", "proxy", "webRequest", "webRequestAuthProvider"]
             # Chrome excludes debugger from optional permissions. Installation
             # permits the API; actual tab/control grants remain explicit.
             manifest["permissions"].append("debugger")
@@ -65,7 +67,8 @@ def main():
                 "cookies",
             ])
             manifest["host_permissions"] = ["<all_urls>"]
-            manifest["background"] = {"scripts": ["policy.js", "audio.js", "files-page.js", "files.js", "favicon.js", "background.js"]}
+            manifest["optional_permissions"] = ["proxy"]
+            manifest["background"] = {"scripts": ["policy.js", "proxy.js", "audio.js", "files-page.js", "files.js", "favicon.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
                 "id": "browser-daemon-node@pschmitt.dev",
                 "strict_min_version": "142.0",

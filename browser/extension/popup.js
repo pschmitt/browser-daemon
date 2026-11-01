@@ -14,6 +14,7 @@ let popupError = '';
 let dismissedConnectionStatus = '';
 let renderedTabs = '';
 let renderedAllowlist = '';
+let renderedProxy = '';
 let approvalIdentity = '';
 const draftReady = api.storage.session.get('pairingDraft').then(saved => {
   if (saved.pairingDraft?.expires > Date.now()) $('code').value = saved.pairingDraft.code;
@@ -194,6 +195,25 @@ function renderDaemonAllowlist(origins) {
   if (state.allowlist.error) $('allowlistStatus').textContent = state.allowlist.error;
 }
 
+// The daemon's proxy, if it offers one: traffic of this whole browser goes out
+// through the proxy picked here, for as long as the browser stays connected.
+function renderProxy() {
+  const proxy = state.proxy;
+  $('proxyCard').hidden = !proxy;
+  if (!proxy) { renderedProxy = ''; return; }
+  const key = JSON.stringify([proxy.choices, proxy.selected]);
+  if (key === renderedProxy || document.activeElement === $('proxyChoice')) return;
+  renderedProxy = key;
+  const options = [['', 'Nothing: this browser connects directly'], ['direct', 'The daemon’s own network'],
+    ...proxy.choices.map(c => [c.id, c.name])];
+  if (proxy.selected && !options.some(([id]) => id === proxy.selected)) options.push([proxy.selected, `${proxy.selected} (not offered now)`]);
+  $('proxyChoice').replaceChildren(...options.map(([id, name]) => Object.assign(document.createElement('option'), {value: id, textContent: name})));
+  $('proxyChoice').value = proxy.selected || '';
+  $('proxyHint').textContent = proxy.selected
+    ? 'Web pages go through this proxy while connected; local and private addresses stay direct. The daemon sees the traffic.'
+    : 'Active only while connected; local and private addresses stay direct.';
+}
+
 async function refresh() {
   await draftReady;
   state = await message({type: 'state'});
@@ -210,6 +230,7 @@ async function refresh() {
   if (state.dashboardRequest) $('approvalHost').textContent = new URL(state.dashboardRequest.server).host;
   document.body.classList.toggle('asking', !!state.dashboardRequest);
   $('connected').hidden = !reg;
+  renderProxy();
   $('setup').hidden = !!reg || !!state.dashboardRequest;
 
   // Setup
@@ -524,4 +545,15 @@ $('addressSuggestions').addEventListener('click', () => {
     if (!allowed) throw new Error('History and bookmark access is needed for address suggestions.');
     return message({type: 'addressSuggestions', enabled}).then(refresh);
   }).catch(error => { $('addressSuggestions').checked = !enabled; showError(error); });
+});
+
+$('proxyChoice').addEventListener('change', () => {
+  const id = $('proxyChoice').value;
+  const requested = {permissions: state.chromium ? ['proxy', 'webRequest', 'webRequestAuthProvider'] : ['proxy']};
+  const permission = id ? api.permissions.contains(requested).then(granted =>
+    granted || api.permissions.request(requested)) : Promise.resolve(true);
+  void permission.then(allowed => {
+    if (!allowed) throw new Error('Proxy access is needed to route this browser.');
+    return message({type: 'setProxy', id});
+  }).then(refresh, error => { renderedProxy = ''; showError(error); void refresh(); });
 });

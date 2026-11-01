@@ -113,6 +113,7 @@ function harness(firefox = false, stored = {shareAll: false}) {
   const context = vm.createContext({URL, console, crypto: webcrypto, chrome: api, WebSocket: Socket,
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}});
   vm.runInContext(source('policy.js'), context);
+  vm.runInContext(source('proxy.js'), context);
   vm.runInContext(source('files-page.js'), context);
   vm.runInContext(source('files.js'), context);
   vm.runInContext(source('favicon.js'), context);
@@ -460,4 +461,79 @@ test('passkey repair wraps later providers and falls back without asking twice',
   assert.equal(offers, 1, 'unwatched requests must go straight to the provider');
   assert.equal(providerCalls, 2);
   assert.equal(nativeCalls, 2);
+});
+
+const proxyContext = vm.createContext({URL, btoa});
+vm.runInContext(source('proxy.js'), proxyContext);
+const {NodeProxy: np} = proxyContext;
+
+test('the daemon proxy offer is checked, and the login names the proxy', () => {
+  const offer = np.offer({port: 3128, password: 'abc123', proxies: [{id: 'node:a', name: 'a (node)'}]}, 'https://Daemon.example:8443');
+  assert.deepEqual({...offer, proxies: offer.proxies.length}, {host: 'daemon.example', port: 3128, password: 'abc123', proxies: 1});
+  assert.equal(np.offer({host: '[fd00::1]', port: 1, password: 'x'}, 'https://d.example').host, 'fd00::1');
+  for (const bad of [null, {}, {port: 0, password: 'x'}, {port: 70000, password: 'x'}, {port: 1, password: ''}, {port: 1, password: 'a b'},
+    {port: 1, password: 'x', host: 'a/b'}, {port: 1, password: 'x', host: 'evil.example\r\nX: y'},
+    {port: 1, password: 'x', proxies: [{id: 'direct', name: 'x'}]}, {port: 1, password: 'x', proxies: [{id: '', name: 'x'}]},
+    {port: 1, password: 'x', proxies: 'nope'}]) {
+    assert.throws(() => np.offer(bad, 'https://d.example'), undefined, JSON.stringify(bad));
+  }
+  // The colon of an id would end the user name: it travels percent-encoded.
+  assert.equal(np.login('node:a', 'pw'), 'Basic ' + btoa('node%3Aa:pw'));
+});
+
+test('local names and private networks never go through the proxy', () => {
+  const daemons = ['daemon.example'];
+  for (const host of ['localhost', 'printer', 'nas.local', 'a.localhost', '127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1',
+    '100.64.9.9', '169.254.1.1', '[::1]', 'fd00::5', 'fe80::1', 'daemon.example', 'DAEMON.example.']) {
+    assert.equal(np.direct(host, daemons), true, host);
+  }
+  for (const host of ['example.com', '8.8.8.8', '172.32.0.1', '100.128.0.1', '11.0.0.1', '2001:db8::1']) {
+    assert.equal(np.direct(host, daemons), false, host);
+  }
+  const rules = np.bypass(['daemon.example', 'daemon.example']);
+  assert.ok(rules.includes('10.0.0.0/8') && rules.includes('<local>'));
+  assert.equal(rules.filter(r => r === 'daemon.example').length, 1);
+});
+
+const plain = value => JSON.parse(JSON.stringify(value));
+test('a paired browser routes through the proxy it picks, only while connected', async () => {
+  const h = harness();
+  const applied = [];
+  h.api.proxy = {settings: {set: async value => { applied.push(['set', value]); }, clear: async () => { applied.push(['clear']); }}};
+  await h.message({type: 'connect', server: 'https://daemon.example', code: 'a'.repeat(64), name: 'Test browser'});
+  const socket = h.sockets.at(-1); socket.onopen();
+  socket.receive({type: 'registered', id: 'node', expires_at: Math.floor(Date.now() / 1000) + 600, origins: ['https://peer.example'],
+    proxy: {port: 3128, password: 'secret-login', proxies: [{id: 'node:peer', name: 'peer (node)'}]}});
+  await h.flush();
+  let state = await h.message({type: 'state'});
+  assert.deepEqual(plain(state.proxy.choices), [{id: 'node:peer', name: 'peer (node)'}]);
+  assert.equal(state.proxy.selected, null);
+  // The login stays out of everything the popup is handed.
+  assert.doesNotMatch(JSON.stringify(state), /secret-login/);
+  assert.equal(applied.some(([what]) => what === 'set'), false);
+
+  assert.ok((await h.message({type: 'setProxy', id: 'node:nobody'})).error);
+  assert.deepEqual(plain(await h.message({type: 'setProxy', id: 'node:peer'})), {ok: true});
+  const [, set] = applied.findLast(([what]) => what === 'set');
+  assert.deepEqual(plain(set.value.rules.singleProxy), {scheme: 'http', host: 'daemon.example', port: 3128});
+  assert.ok(set.value.rules.bypassList.includes('peer.example') && set.value.rules.bypassList.includes('daemon.example'));
+  assert.equal((await h.message({type: 'state'})).proxy.selected, 'node:peer');
+
+  // The heartbeat refreshes the choices.
+  socket.receive({type: 'heartbeat', proxies: [{id: 'node:other', name: 'other (node)'}]});
+  await h.flush();
+  assert.deepEqual(plain((await h.message({type: 'state'})).proxy.choices), [{id: 'node:other', name: 'other (node)'}]);
+
+  // Leaving the daemon leaves the proxy: nothing else would answer for it.
+  applied.length = 0;
+  await h.message({type: 'stop'});
+  await h.flush();
+  assert.deepEqual(plain(applied.at(-1)), ['clear']);
+  assert.equal((await h.message({type: 'state'})).proxy, null);
+});
+
+test('a daemon without a proxy offers none', async () => {
+  const h = harness();
+  await h.pair();
+  assert.equal((await h.message({type: 'state'})).proxy, null);
 });

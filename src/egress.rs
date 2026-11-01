@@ -97,13 +97,21 @@ pub struct Advert {
 /// The login the nodes of a mesh use on each other's listeners: derived from the
 /// cluster secret, so nothing has to be configured per node, and useless without it.
 pub fn mesh_login(cluster_secret: &str) -> (String, String) {
+    (
+        "mesh".to_string(),
+        derive_password(cluster_secret, b"browser-daemon socks5 egress login"),
+    )
+}
+
+/// A password for one purpose (`label`) from the cluster secret: 16 bytes of
+/// HMAC-SHA256, hex.
+pub fn derive_password(cluster_secret: &str, label: &[u8]) -> String {
     use hmac::{Hmac, KeyInit, Mac};
     let mut mac =
         Hmac::<sha2::Sha256>::new_from_slice(cluster_secret.as_bytes()).expect("any key length");
-    mac.update(b"browser-daemon socks5 egress login");
+    mac.update(label);
     let tag = mac.finalize().into_bytes();
-    let password: String = tag.iter().take(16).map(|b| format!("{b:02x}")).collect();
-    ("mesh".to_string(), password)
+    tag.iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
 pub struct Config {

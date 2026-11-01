@@ -379,6 +379,52 @@ in
       };
     };
 
+    httpProxy = {
+      listen = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "10.0.0.5:3128";
+        description = ''
+          Serve an HTTP proxy on this `IP:PORT` (or `[IPv6]:PORT`) that the browsers
+          of paired extensions route their traffic through, by any of this node's
+          proxies (`proxies` and the peers' `node:<name>`) or by this node's own
+          network. Off when null. Browsers log in with a password derived from the
+          cluster secret, which a paired extension is handed over its connection
+          (or `passwordFile`); the user part picks the proxy. A proxy that is down
+          fails the connection, it never falls back to a direct one. Destinations are
+          limited like a session's: never this machine, link-local addresses or the
+          mesh's daemons. Anything but loopback needs a cluster secret or
+          `passwordFile`. Open the port in the firewall yourself.
+        '';
+      };
+      advertise = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "10.0.0.5";
+        description = ''
+          Host the browser reaches the listener at, when it is not the host the
+          extension knows this daemon by (a reverse proxy in front of it does not
+          serve this port).
+        '';
+      };
+      allow = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "10.0.0.0/8" ];
+        description = "Networks (CIDR or single addresses) allowed to connect; others are dropped.";
+      };
+      passwordFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/run/secrets/browser-daemon/http-proxy-password";
+        description = ''
+          Absolute path of a file with the password browsers log in with, instead of
+          the one derived from the cluster secret. Give a string, not a Nix path
+          literal (that would copy it into the Nix store).
+        '';
+      };
+    };
+
     run = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -569,6 +615,21 @@ in
               && !(lib.hasPrefix "${builtins.storeDir}/" cfg.socksProxy.credentialsFile)
             );
           message = "services.browser-daemon.socksProxy.credentialsFile must be an absolute path outside the Nix store (a string, not a path literal).";
+        }
+        {
+          assertion =
+            cfg.httpProxy.passwordFile == null
+            || (
+              lib.hasPrefix "/" cfg.httpProxy.passwordFile
+              && !(lib.hasPrefix "${builtins.storeDir}/" cfg.httpProxy.passwordFile)
+            );
+          message = "services.browser-daemon.httpProxy.passwordFile must be an absolute path outside the Nix store (a string, not a path literal).";
+        }
+        {
+          assertion =
+            cfg.httpProxy.listen == null
+            || builtins.match "([[][0-9a-fA-F:.]+[]]|[0-9.]+):[0-9]{1,5}" cfg.httpProxy.listen != null;
+          message = "services.browser-daemon.httpProxy.listen must be IP:PORT (or [IPv6]:PORT).";
         }
         {
           assertion =
@@ -782,6 +843,24 @@ in
                 ++ lib.optionals (cfg.socksProxy.credentialsFile != null) [
                   "--socks-credentials-file"
                   cfg.socksProxy.credentialsFile
+                ]
+              )
+              ++ lib.optionals (cfg.httpProxy.listen != null) (
+                [
+                  "--http-proxy-listen"
+                  cfg.httpProxy.listen
+                ]
+                ++ lib.optionals (cfg.httpProxy.advertise != null) [
+                  "--http-proxy-advertise"
+                  cfg.httpProxy.advertise
+                ]
+                ++ lib.concatMap (n: [
+                  "--http-proxy-allow"
+                  n
+                ]) cfg.httpProxy.allow
+                ++ lib.optionals (cfg.httpProxy.passwordFile != null) [
+                  "--http-proxy-password-file"
+                  cfg.httpProxy.passwordFile
                 ]
               )
               ++ lib.optionals (cfg.publicUrl != null) [

@@ -211,6 +211,8 @@ pub struct AppState {
     pub share_url: String,
     /// The SOCKS5 listener this node offers its peers, if it has one.
     pub egress: Option<crate::egress::Advert>,
+    /// The HTTP proxy paired browser extensions can route through, if any.
+    pub http_proxy: Option<crate::httpproxy::Offer>,
     /// Public links to recordings and sessions (see shares.rs).
     pub shares: Arc<shares::Store>,
     pub peers: Arc<RwLock<HashMap<String, String>>>,
@@ -298,6 +300,23 @@ impl DirSizes {
 }
 
 impl AppState {
+    /// What a paired extension is told about routing its browser through this
+    /// node: where, the login, and the proxies it may name (not where they lead).
+    pub fn proxy_offer(&self) -> Option<serde_json::Value> {
+        let offer = self.http_proxy.as_ref()?;
+        let mut value = serde_json::to_value(offer).ok()?;
+        value["proxies"] = self.proxy_choices();
+        Some(value)
+    }
+
+    /// `[{id, name}]` of the proxies a browser may pick.
+    pub fn proxy_choices(&self) -> serde_json::Value {
+        proxies::all(&self.config.proxies)
+            .iter()
+            .map(|p| serde_json::json!({"id": p.id, "name": p.name}))
+            .collect()
+    }
+
     pub fn proxy_infos(&self) -> Vec<proxies::ProxyInfo> {
         proxies::all(&self.config.proxies)
             .iter()

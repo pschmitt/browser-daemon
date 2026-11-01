@@ -18,6 +18,7 @@ mod egress;
 mod extension;
 mod favicon;
 mod history;
+mod httpproxy;
 mod idle;
 mod json_api;
 mod live_ws;
@@ -300,6 +301,30 @@ pub struct Args {
         help = "File with `user:password` clients of --socks-listen must log in with (RFC 1929)"
     )]
     pub socks_credentials_file: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Serve an HTTP proxy on this address (HOST:PORT) that paired browser extensions route their traffic through, via any of this node's proxies"
+    )]
+    pub http_proxy_listen: Option<SocketAddr>,
+
+    #[arg(
+        long,
+        help = "Host a browser reaches --http-proxy-listen at, when it is not the host it knows this daemon by"
+    )]
+    pub http_proxy_advertise: Option<String>,
+
+    #[arg(
+        long = "http-proxy-allow",
+        help = "Network (CIDR or address) allowed to use --http-proxy-listen; repeatable. Others are dropped"
+    )]
+    pub http_proxy_allow: Vec<egress::Network>,
+
+    #[arg(
+        long,
+        help = "File with the password browsers log in to --http-proxy-listen with (default: derived from the cluster secret)"
+    )]
+    pub http_proxy_password_file: Option<PathBuf>,
 
     #[arg(
         long = "extension-dir",
@@ -718,6 +743,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    let http_proxy = if let Some(listen) = args.http_proxy_listen {
+        let password = match args.http_proxy_password_file {
+            Some(ref path) => match std::fs::read_to_string(path) {
+                Ok(raw) if !raw.trim().is_empty() => Some(raw.trim().to_string()),
+                Ok(_) => {
+                    eprintln!("--http-proxy-password-file {} is empty", path.display());
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Cannot read --http-proxy-password-file {}: {e}",
+                        path.display()
+                    );
+                    std::process::exit(1);
+                }
+            },
+            None => cluster_secret.as_deref().map(httpproxy::login_password),
+        };
+        let proxy_config = httpproxy::Config {
+            listen,
+            allow: args.http_proxy_allow.clone(),
+            password: password.clone(),
+        };
+        if let Err(e) = proxy_config.check() {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        if let Err(e) = httpproxy::start(
+            proxy_config,
+            config.proxies.clone(),
+            relay::Policy::strict(),
+        )
+        .await
+        {
+            eprintln!("Cannot start the HTTP proxy on {listen}: {e}");
+            std::process::exit(1);
+        }
+        password.map(|password| httpproxy::Offer {
+            host: args.http_proxy_advertise.clone(),
+            port: listen.port(),
+            password,
+        })
+    } else {
+        None
+    };
     let auth = Arc::new(auth::Auth::new(cluster_secret.clone(), hosts));
     let extensions = Arc::new(extension::Broker::load(
         &config.state_dir().join("browser-keys.json"),
@@ -753,6 +823,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         extension_origins,
         share_url,
         egress: egress_advert,
+        http_proxy,
         shares,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),

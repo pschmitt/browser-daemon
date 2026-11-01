@@ -330,7 +330,7 @@ async fn socks5_accept(
 }
 
 /// Compares without stopping at the first difference.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let mut diff = (a.len() ^ b.len()) as u8;
     for (x, y) in a.iter().zip(b) {
         diff |= x ^ y;
@@ -406,6 +406,32 @@ async fn open(
         Upstream::Http => http_connect(&mut s, target, port, up.auth.as_ref()).await?,
     }
     Ok(s)
+}
+
+/// A connection to `host:port` for a client that asked by name or address (the
+/// HTTP proxy front-end): through `upstream`, or direct, unless the policy
+/// refuses the destination.
+pub(crate) async fn open_host(
+    upstream: Option<&Proxy>,
+    host: &str,
+    port: u16,
+    policy: Policy,
+) -> io::Result<TcpStream> {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let target = match host.parse::<IpAddr>() {
+        Ok(ip) => Target::Ip(ip),
+        Err(_) if !host.is_empty() && host.len() <= 255 => Target::Name(host.to_string()),
+        Err(_) => return Err(invalid("bad host name")),
+    };
+    if policy.denies(&target) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "destination not allowed",
+        ));
+    }
+    tokio::time::timeout(HANDSHAKE, open(upstream, &target, port, policy))
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connect"))?
 }
 
 async fn socks5_connect(

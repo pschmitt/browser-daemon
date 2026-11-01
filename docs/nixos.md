@@ -50,6 +50,21 @@ services.browser-daemon.socksProxy = {
 
 (`--socks-listen`, `--socks-allow`, `--socks-advertise`, `--socks-credentials-file`.) With a cluster secret that is all there is to set up: the node tells its peers about the listener (`egress` in its node info, at the address in `advertise`, else the host they know the node by), they log in with a login derived from the secret, and each of them offers it as a proxy named `node:<name>` next to its own `proxies`, for sessions, profiles and `GET /api/proxies`. The list follows the mesh (peers are asked every 30 seconds, a node that stops answering loses its entry), and the login is never shown. A session restored after a restart whose proxy has not been found yet gets a connection that refuses, never a direct one. `credentialsFile` adds a login for other SOCKS5 clients; a proxy of a node outside the mesh goes into `proxies` with the login in a secret file, so it stays out of the Nix store (`{ id = "exit"; name = "Exit node"; urlFile = "/run/secrets/browser-daemon/exit-url"; }`, the file holding `socks5://user:password@10.0.0.5:1080`; `--proxies-file` entries take `url_file` the same way). It speaks CONNECT only (no UDP), names are resolved on the serving node, and it refuses what a session's relay refuses: this machine (loopback), link-local addresses and the mesh's daemons, however they are reached. Private LAN ranges are reachable: that is the point of exiting from that node. A listener that would be open to anyone (not loopback, no `allow`, no credentials) does not start.
 
+### HTTP proxy for your real browser
+
+A paired [browser extension](../browser/README.md) can send its whole browser's traffic out through one of the node's proxies (its `proxies`, a peer's `node:<name>`, or the node's own network):
+
+```nix
+services.browser-daemon.httpProxy = {
+  listen = "10.0.0.5:3128";           # not loopback: needs a cluster secret or passwordFile
+  allow = [ "10.0.0.0/8" ];           # clients outside are dropped without an answer
+};
+```
+
+(`--http-proxy-listen`, `--http-proxy-allow`, `--http-proxy-advertise`, `--http-proxy-password-file`.) The password browsers log in with (Basic) is derived from the cluster secret, or read from `passwordFile`; a paired extension is handed it, with the list of proxies it may name, over its connection (`registered`, and the list again in every heartbeat), so nothing is configured in the browser. The user part of the login picks the proxy (percent-encoded, as ids hold colons; `direct` or empty for the node's own network). A proxy that is unknown or down fails the connection with a 502, never falls back to a direct one. It serves CONNECT (HTTPS, WebSockets) and plain `http://` requests, which it forwards one at a time, and refuses what a session's relay refuses: this machine, link-local addresses and the mesh's daemons. A listener that would be open to anyone (not loopback, no password) does not start. Open the port in the firewall yourself.
+
+In the extension's popup, **Route this browser through** lists the choices; nothing is routed until one is picked, and the extension asks for the optional `proxy` permission (Chromium also `webRequest` and `webRequestAuthProvider`, to answer the proxy's login) at that moment. Routing lasts only while the browser is connected to the daemon: leaving it, or a restart of the extension, gives the browser its direct connection back. Local names and private networks (and the daemons themselves) always stay direct. The daemon whose proxy is picked can see the traffic that is not HTTPS-protected, so pick the daemon you trust.
+
 The flake's own package is the module's default, so no overlay is needed. More options (see [`nix/module.nix`](../nix/module.nix) for all of them):
 
 | Option | What it does |

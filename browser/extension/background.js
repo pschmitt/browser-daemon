@@ -1,5 +1,5 @@
 /* Local extension code only; dashboard bridge requires explicit daemon approval. */
-if (typeof importScripts === 'function') importScripts('policy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js');
+if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
 void api.storage.local.setAccessLevel?.({accessLevel: 'TRUSTED_CONTEXTS'});
@@ -427,6 +427,74 @@ async function detach(tab) {
   try { await api.debugger.detach({tabId: tab}); } catch { /* Already closed/detached. */ }
 }
 
+// Routing this browser through the daemon's HTTP proxy (proxy.js), only while
+// connected: the choice is remembered, the daemon's offer (with its login) is
+// not kept past the connection. Chromium takes one browser-wide setting and
+// answers the proxy's login itself; Firefox decides for every request.
+let proxyChoice = null;
+let proxyOffer = null;
+const proxyTried = new Set();
+const proxyPermissions = () => ({permissions: chromium ? ['proxy', 'webRequest', 'webRequestAuthProvider'] : ['proxy']});
+const proxyReady = api.storage.local.get('proxyChoice').then(saved => {
+  proxyChoice = typeof saved.proxyChoice === 'string' && saved.proxyChoice ? saved.proxyChoice : null;
+});
+
+function proxyLogin(details, callback) {
+  const offer = proxyOffer;
+  if (!details.isProxy || details.challenger?.host !== offer?.host || details.challenger?.port !== offer?.port || !proxyChoice) return callback({});
+  // A login the proxy refused is not offered again for the same request.
+  if (proxyTried.has(details.requestId)) return callback({cancel: true});
+  if (proxyTried.size > 512) proxyTried.clear();
+  proxyTried.add(details.requestId);
+  callback({authCredentials: {username: encodeURIComponent(proxyChoice), password: offer.password}});
+}
+
+function proxyRoute(details) {
+  const offer = proxyOffer;
+  if (!registration || !offer || !proxyChoice) return {type: 'direct'};
+  let host;
+  try { host = new URL(details.url).hostname; } catch { return {type: 'direct'}; }
+  if (NodeProxy.direct(host, offer.bypass)) return {type: 'direct'};
+  return {type: 'http', host: offer.host, port: offer.port, proxyAuthorizationHeader: NodeProxy.login(proxyChoice, offer.password)};
+}
+
+// Listeners exist only once the optional permissions are granted.
+function ensureProxyListeners() {
+  if (chromium) {
+    const auth = api.webRequest?.onAuthRequired;
+    if (auth && !auth.hasListener(proxyLogin)) auth.addListener(proxyLogin, {urls: ['<all_urls>']}, ['asyncBlocking']);
+  } else if (api.proxy?.onRequest && !api.proxy.onRequest.hasListener(proxyRoute)) {
+    api.proxy.onRequest.addListener(proxyRoute, {urls: ['<all_urls>']});
+  }
+}
+
+async function clearBrowserProxy() {
+  if (chromium && api.proxy?.settings) await api.proxy.settings.clear({scope: 'regular'});
+}
+
+async function applyProxy() {
+  await proxyReady;
+  ensureProxyListeners();
+  if (!chromium || !api.proxy?.settings) return;
+  const offer = proxyOffer;
+  if (!registration || !offer || !proxyChoice) return clearBrowserProxy();
+  await api.proxy.settings.set({scope: 'regular', value: {mode: 'fixed_servers', rules: {
+    singleProxy: {scheme: 'http', host: offer.host, port: offer.port},
+    bypassList: NodeProxy.bypass(offer.bypass),
+  }}});
+}
+
+async function takeProxyOffer(value, origins) {
+  await proxyReady;
+  if (!value) { proxyOffer = null; return clearBrowserProxy(); }
+  const offer = NodeProxy.offer(value, registration.server);
+  const daemons = [registration.server, ...(Array.isArray(origins) ? origins : [])].flatMap(url => {
+    try { return [new URL(url).hostname]; } catch { return []; }
+  });
+  proxyOffer = {...offer, bypass: [...daemons, offer.host]};
+  await applyProxy();
+}
+
 async function stop(reason = 'Disconnected', retry = false) {
   generation++;
   const clearedAlarm = api.alarms.clear('node-reconnect');
@@ -439,6 +507,8 @@ async function stop(reason = 'Disconnected', retry = false) {
   const old = socket;
   socket = null;
   registration = null;
+  proxyOffer = null;
+  void clearBrowserProxy().catch(() => {});
   clearInterval(heartbeat);
   clearTimeout(expiryTimer);
   shared.clear();
@@ -1835,7 +1905,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
       if (!Number.isSafeInteger(message.expires_at) || message.expires_at !== 0 &&
           (message.expires_at * 1000 <= Date.now() || message.expires_at * 1000 > Date.now() + 28800000)) { void stop('Invalid grant'); return; }
       clearTimeout(timeout);
-      const {remember_key: savedKey, ...grant} = message;
+      const {remember_key: savedKey, proxy: proxyMessage, ...grant} = message;
       if (savedKey) {
         if (!/^[a-f0-9]{64}$/.test(savedKey)) { void stop('Invalid remembered browser key'); return; }
         await api.storage.local.set({rememberedNode: {server, name: name.trim(), key: savedKey,
@@ -1847,6 +1917,7 @@ async function connect({server, code = '', key = '', name, remember = false}) {
         }
       }
       registration = {...grant, server};
+      void takeProxyOffer(proxyMessage, message.origins).catch(error => record(`Daemon proxy unavailable: ${error.message}`));
       if (Array.isArray(message.origins)) void updateAutoOrigins(message.origins).catch(error => record(`Daemon origin update failed: ${error.message}`));
       clientConnected = false;
       status = 'Connected';
@@ -1868,6 +1939,9 @@ async function connect({server, code = '', key = '', name, remember = false}) {
     } else if (message.type === 'heartbeat') {
       lastAnswer = Date.now();
       if (Array.isArray(message.origins)) void updateAutoOrigins(message.origins).catch(error => record(`Daemon origin update failed: ${error.message}`));
+      if (proxyOffer && message.proxies !== undefined) {
+        try { proxyOffer.proxies = NodeProxy.choices(message.proxies); } catch { /* Keep the last good list. */ }
+      }
       if (typeof message.client_connected === 'boolean' && clientConnected !== message.client_connected) {
         clientConnected = message.client_connected;
         await badge();
@@ -2000,7 +2074,8 @@ async function localMessage(message, sender) {
     const permissions = await api.permissions.contains({permissions: ['history', 'bookmarks']});
     const savedSuggestions = await api.storage.local.get('addressSuggestions');
     const addressSuggestions = permissions && savedSuggestions.addressSuggestions === true;
-    return {allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions};
+    const proxy = proxyOffer ? {choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, permitted: await api.permissions.contains(proxyPermissions())} : null;
+    return {proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -2066,6 +2141,17 @@ async function localMessage(message, sender) {
     for (const state of mediaAudio.values()) { state.publicRing = []; state.publicUntil = 0; }
     await api.storage.local.set({sharePublic: sharing.public});
     publishSoon();
+    return {ok: true};
+  }
+  if (message.type === 'setProxy') {
+    await proxyReady;
+    const id = typeof message.id === 'string' && message.id ? message.id : null;
+    if (id && id !== NodeProxy.DIRECT && !proxyOffer?.proxies.some(p => p.id === id)) throw new Error('This daemon does not offer that proxy.');
+    if (id && !proxyOffer) throw new Error('Connect to a daemon that offers a proxy first.');
+    if (id && !(await api.permissions.contains(proxyPermissions()))) throw new Error('Grant proxy access first.');
+    proxyChoice = id;
+    await api.storage.local.set({proxyChoice: id});
+    await applyProxy();
     return {ok: true};
   }
   if (message.type === 'shareAudio') {
@@ -2227,7 +2313,7 @@ if (chromium) api.debugger.onDetach.addListener((source, reason) => {
   for (const [channel, tab] of channels) if (tab === source.tabId) channels.delete(channel);
   publishSafely();
 });
-api.permissions.onAdded.addListener(() => { void historyReady.then(async () => { await connectPrepared(); await installDashboardBridge(); }).catch(() => stop('Could not start connection after permission grant')); });
+api.permissions.onAdded.addListener(() => { ensureProxyListeners(); void historyReady.then(async () => { await connectPrepared(); await installDashboardBridge(); }).catch(() => stop('Could not start connection after permission grant')); });
 api.permissions.onRemoved.addListener(() => { void stop('Permissions removed'); });
 api.commands.onCommand.addListener(command => { if (command === 'stop-sharing') {
   void api.storage.local.get('rememberedNode').then(async ({rememberedNode}) => {
@@ -2236,6 +2322,9 @@ api.commands.onCommand.addListener(command => { if (command === 'stop-sharing') 
   });
 } });
 void badge();
+// Whatever the last run left in the browser's proxy settings is stale: this
+// worker holds no connection yet (the proxy returns once it has one).
+void proxyReady.then(() => { ensureProxyListeners(); return clearBrowserProxy(); }).catch(() => {});
 
 // An update waits until the extension is idle, which a connected browser never
 // is: apply it at once. A remembered browser reconnects by itself afterwards.

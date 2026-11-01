@@ -1160,6 +1160,7 @@ pub async fn connect(
                 &state.peers,
                 &origin,
                 &mut ws,
+                &|| state.proxy_offer(),
             )
             .await;
             let _ = ws.close().await;
@@ -1193,6 +1194,7 @@ async fn serve(
     peers: &tokio::sync::RwLock<HashMap<String, String>>,
     origin: &str,
     ws: &mut WebSocket,
+    proxy_offer: &(dyn Fn() -> Option<Value> + Sync),
 ) -> Result<(), ()> {
     // The code never appears in a URL, a cookie, or a log. No reconnect credential
     // is issued: losing the socket ends the grant, and pairing must be repeated.
@@ -1340,11 +1342,11 @@ async fn serve(
     let _registration = Registration(broker.clone(), id, node.clone());
     broker.touch(id);
     let origins = current_extension_origins(extension_origins, peers).await?;
-    send(
-        ws,
-        json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key, "origins": origins}),
-    )
-    .await?;
+    let mut registered = json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key, "origins": origins});
+    if let Some(offer) = proxy_offer() {
+        registered["proxy"] = offer;
+    }
+    send(ws, registered).await?;
     let mut last_seen = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     loop {
@@ -1370,7 +1372,11 @@ async fn serve(
                             Some("forget") => { broker.forget(id)?; break; }
                             Some("heartbeat") => {
                                 let origins = current_extension_origins(extension_origins, peers).await?;
-                                send(ws, json!({"type": "heartbeat", "client_connected": node.client_connected(), "origins": origins})).await?;
+                                let mut beat = json!({"type": "heartbeat", "client_connected": node.client_connected(), "origins": origins});
+                                if let Some(offer) = proxy_offer() {
+                                    beat["proxies"] = offer["proxies"].clone();
+                                }
+                                send(ws, beat).await?;
                             }
                             Some("tabs") => {
                                 let tabs: Vec<Tab> = serde_json::from_value(value["tabs"].clone()).map_err(|_| ())?;
@@ -1829,7 +1835,7 @@ mod tests {
                     let origin = headers.get("origin").unwrap().to_str().unwrap().to_string();
                     upgrade.on_upgrade(move |mut ws| async move {
                         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-                        let _ = serve(&broker, &[], &peers, &origin, &mut ws).await;
+                        let _ = serve(&broker, &[], &peers, &origin, &mut ws, &|| None).await;
                         let _ = ws.close().await;
                     })
                 }
