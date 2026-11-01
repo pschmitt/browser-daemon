@@ -23,9 +23,10 @@ pub struct Proxy {
 }
 
 /// Proxies that exist because a peer serves one (see `egress`), by the peer's
-/// URL: they come and go with the peers, and are never in the proxies file.
-fn mesh_proxies() -> &'static RwLock<BTreeMap<String, Proxy>> {
-    static PROXIES: OnceLock<RwLock<BTreeMap<String, Proxy>>> = OnceLock::new();
+/// URL, with the number of polls in a row the peer missed: they come and go with
+/// the peers, and are never in the proxies file.
+fn mesh_proxies() -> &'static RwLock<BTreeMap<String, (Proxy, u32)>> {
+    static PROXIES: OnceLock<RwLock<BTreeMap<String, (Proxy, u32)>>> = OnceLock::new();
     PROXIES.get_or_init(Default::default)
 }
 
@@ -77,13 +78,28 @@ fn bracketed(host: &str) -> String {
     }
 }
 
-/// Sets (or, with `None`, removes) the proxy of the peer at `peer_url`.
+/// Polls in a row a peer may miss before its proxy goes: one slow answer must
+/// not make a working proxy flicker out of the lists.
+const MISSES_ALLOWED: u32 = 3;
+
+/// A peer answered: sets (or, with `None`, removes) its proxy.
 pub fn set_mesh_proxy(peer_url: &str, proxy: Option<Proxy>) {
     let mut all = mesh_proxies().write().unwrap();
     match proxy {
-        Some(p) => all.insert(peer_url.to_string(), p),
+        Some(p) => all.insert(peer_url.to_string(), (p, 0)),
         None => all.remove(peer_url),
     };
+}
+
+/// A peer did not answer: its proxy stays for a few polls, then goes.
+pub fn miss_mesh_proxy(peer_url: &str) {
+    let mut all = mesh_proxies().write().unwrap();
+    if let Some(entry) = all.get_mut(peer_url) {
+        entry.1 += 1;
+        if entry.1 >= MISSES_ALLOWED {
+            all.remove(peer_url);
+        }
+    }
 }
 
 /// Forgets the proxies of peers that are not in `peer_urls` any more.
@@ -97,7 +113,7 @@ pub fn retain_mesh_proxies(peer_urls: &[String]) {
 /// The node's own proxies, then the mesh's (an id the file has wins).
 pub fn all(own: &[Proxy]) -> Vec<Proxy> {
     let mut all = own.to_vec();
-    for p in mesh_proxies().read().unwrap().values() {
+    for (p, _) in mesh_proxies().read().unwrap().values() {
         if !all.iter().any(|o| o.id == p.id) {
             all.push(p.clone());
         }
@@ -391,6 +407,25 @@ mod tests {
         assert_eq!(find(&own, "vpn").unwrap().url, "socks5://a:1");
         retain_mesh_proxies(&[]);
         assert!(find(&own, "node:rofl-13").is_none());
+    }
+
+    #[test]
+    fn a_peer_that_misses_a_poll_keeps_its_proxy_for_a_while() {
+        let url = "https://flaky-peer.test";
+        let p = proxy("node:flaky", "socks5://mesh:pw@flaky.test:1080");
+        set_mesh_proxy(url, Some(p.clone()));
+        miss_mesh_proxy(url);
+        miss_mesh_proxy(url);
+        assert!(find(&[], "node:flaky").is_some());
+        // An answer starts the count again.
+        set_mesh_proxy(url, Some(p));
+        miss_mesh_proxy(url);
+        miss_mesh_proxy(url);
+        assert!(find(&[], "node:flaky").is_some());
+        miss_mesh_proxy(url);
+        assert!(find(&[], "node:flaky").is_none());
+        // Nothing to miss for a peer without a proxy.
+        miss_mesh_proxy("https://never-had-one.test");
     }
 
     #[test]

@@ -188,8 +188,13 @@ fn learn_egress(state: &AppState, peer_url: &str, info: &NodeInfo) {
     proxies::set_mesh_proxy(peer_url, proxy);
 }
 
+/// A peer's node info can take over a second (behind the reverse proxy); this
+/// runs in the background, so it may wait.
+const MESH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Asks every peer for its node info only, so the proxies of the mesh follow it
-/// without a dashboard being open. A peer that does not answer loses its proxy.
+/// without a dashboard being open. A peer that misses a few polls in a row loses its
+/// proxy.
 pub(crate) async fn refresh_mesh_proxies(state: &AppState) {
     let peers: Vec<String> = state.peers.read().await.values().cloned().collect();
     proxies::retain_mesh_proxies(&peers);
@@ -197,7 +202,7 @@ pub(crate) async fn refresh_mesh_proxies(state: &AppState) {
         let info = async {
             let res = state
                 .peer_request(state.http_client.get(format!("{url}/api/mesh/node")))
-                .timeout(PEER_POLL_TIMEOUT)
+                .timeout(MESH_REFRESH_TIMEOUT)
                 .send()
                 .await
                 .ok()?
@@ -208,7 +213,7 @@ pub(crate) async fn refresh_mesh_proxies(state: &AppState) {
         .await;
         match info {
             Some(info) => learn_egress(state, url, &info),
-            None => proxies::set_mesh_proxy(url, None),
+            None => proxies::miss_mesh_proxy(url),
         }
     }))
     .await;
