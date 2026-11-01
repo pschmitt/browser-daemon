@@ -45,6 +45,8 @@ pub struct UpstreamAddr {
     pub kind: Upstream,
     pub host: String,
     pub port: u16,
+    /// Username and password from the URL, for SOCKS5 (RFC 1929) and HTTP (Basic).
+    pub auth: Option<(String, String)>,
 }
 
 fn parse(url: &str) -> Result<UpstreamAddr, String> {
@@ -55,9 +57,24 @@ fn parse(url: &str) -> Result<UpstreamAddr, String> {
         "http" => (Upstream::Http, 80),
         other => return Err(format!("unsupported scheme {other}")),
     };
-    if !u.username().is_empty() || u.password().is_some() {
-        return Err("proxy credentials are not supported".to_string());
-    }
+    let decode = |s: &str| {
+        percent_encoding::percent_decode_str(s)
+            .decode_utf8()
+            .map(|c| c.into_owned())
+            .map_err(|_| "credentials are not UTF-8".to_string())
+    };
+    let auth = if u.username().is_empty() && u.password().is_none() {
+        None
+    } else if kind == Upstream::Socks4 {
+        return Err("SOCKS4 has no credentials".to_string());
+    } else {
+        let (user, pass) = (decode(u.username())?, decode(u.password().unwrap_or(""))?);
+        // RFC 1929 carries each in a field with a one-byte length.
+        if user.len() > 255 || pass.len() > 255 {
+            return Err("credentials are too long".to_string());
+        }
+        Some((user, pass))
+    };
     let host = u
         .host_str()
         .ok_or("missing host")?
@@ -68,6 +85,7 @@ fn parse(url: &str) -> Result<UpstreamAddr, String> {
         kind,
         host,
         port: u.port().unwrap_or(default_port),
+        auth,
     })
 }
 
@@ -197,12 +215,24 @@ mod tests {
     }
 
     #[test]
+    fn credentials_are_decoded_and_never_exposed() {
+        let p = proxy("c", "socks5://alice:p%40ss%3A@node.example:1080");
+        assert_eq!(
+            p.upstream().auth,
+            Some(("alice".to_string(), "p@ss:".to_string()))
+        );
+        let info = serde_json::to_string(&p.info()).unwrap();
+        assert!(!info.contains("alice") && !info.contains("p@ss"));
+    }
+
+    #[test]
     fn validation_rejects_bad_entries() {
         assert!(validate(vec![proxy("none", "socks5://a:1")]).is_err());
         assert!(validate(vec![proxy("a", "socks5://a:1"), proxy("a", "socks5://b:1")]).is_err());
         assert!(validate(vec![proxy("a", "ftp://a:1")]).is_err());
         assert!(validate(vec![proxy("a", "https://a:1")]).is_err());
-        assert!(validate(vec![proxy("a", "socks5://u:p@a:1")]).is_err());
+        assert!(validate(vec![proxy("a", "socks5://u:p@a:1")]).is_ok());
+        assert!(validate(vec![proxy("a", "socks4://u@a:1")]).is_err());
         assert!(validate(vec![proxy("a", "http://a")]).is_ok());
     }
 

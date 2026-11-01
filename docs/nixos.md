@@ -36,6 +36,20 @@ Enable the service in your NixOS configuration:
 }
 ```
 
+### SOCKS5 egress
+
+A node can offer its network to the rest of the mesh as a plain SOCKS5 proxy:
+
+```nix
+services.browser-daemon.socksProxy = {
+  listen = "10.0.0.5:1080";           # not loopback: needs allow and/or credentialsFile
+  allow = [ "10.0.0.0/8" ];           # clients outside are dropped without an answer
+  credentialsFile = "/run/secrets/browser-daemon/socks-credentials";   # user:password
+};
+```
+
+(`--socks-listen`, `--socks-allow`, `--socks-credentials-file`.) Other nodes list it in their `proxies` (`socks5://user:password@10.0.0.5:1080`), then sessions and profiles pick it like any proxy, and any other SOCKS5 client can use it too. It speaks CONNECT only (no UDP), names are resolved on the serving node, and it refuses what a session's relay refuses: this machine (loopback), link-local addresses and the mesh's daemons, however they are reached. Private LAN ranges are reachable: that is the point of exiting from that node. A listener that would be open to anyone (not loopback, no `allow`, no credentials) does not start.
+
 The flake's own package is the module's default, so no overlay is needed. More options (see [`nix/module.nix`](../nix/module.nix) for all of them):
 
 | Option | What it does |

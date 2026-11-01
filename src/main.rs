@@ -14,6 +14,7 @@ mod clients;
 mod ctl;
 mod display;
 mod downloads;
+mod egress;
 mod extension;
 mod favicon;
 mod history;
@@ -275,6 +276,24 @@ pub struct Args {
         help = "JSON list of upstream proxies sessions can use: [{\"id\", \"name\", \"url\"}]"
     )]
     pub proxies_file: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Serve a SOCKS5 proxy on this address (HOST:PORT) so other nodes can route sessions through this node's network"
+    )]
+    pub socks_listen: Option<SocketAddr>,
+
+    #[arg(
+        long = "socks-allow",
+        help = "Network (CIDR or address) allowed to use --socks-listen; repeatable. Others are dropped"
+    )]
+    pub socks_allow: Vec<egress::Network>,
+
+    #[arg(
+        long,
+        help = "File with `user:password` clients of --socks-listen must log in with (RFC 1929)"
+    )]
+    pub socks_credentials_file: Option<PathBuf>,
 
     #[arg(
         long = "extension-dir",
@@ -653,6 +672,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     relay::deny_hosts(hosts.names());
     for url in peer_map.values() {
         relay::deny_url(url);
+    }
+    if let Some(listen) = args.socks_listen {
+        let credentials = match args.socks_credentials_file {
+            Some(ref path) => match std::fs::read_to_string(path)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| egress::parse_credentials(&raw))
+            {
+                Ok(login) => Some(login),
+                Err(e) => {
+                    eprintln!("Invalid --socks-credentials-file {}: {e}", path.display());
+                    std::process::exit(1);
+                }
+            },
+            None => None,
+        };
+        let config = egress::Config {
+            listen,
+            allow: args.socks_allow.clone(),
+            credentials,
+        };
+        if let Err(e) = config.check() {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        if let Err(e) = egress::start(config, relay::Policy::strict()).await {
+            eprintln!("Cannot start the SOCKS5 listener on {listen}: {e}");
+            std::process::exit(1);
+        }
     }
     let auth = Arc::new(auth::Auth::new(cluster_secret.clone(), hosts));
     let extensions = Arc::new(extension::Broker::load(

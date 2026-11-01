@@ -25,6 +25,7 @@ tempfile = "3"
 tower-http = { version = "0.7", features = ["fs"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
+percent-encoding = "2"
 hmac = "0.13"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 sha2 = "0.11"

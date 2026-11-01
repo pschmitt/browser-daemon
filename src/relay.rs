@@ -109,7 +109,7 @@ impl Policy {
 
     /// For tests, which talk to servers on loopback.
     #[cfg(test)]
-    fn permissive() -> Self {
+    pub(crate) fn permissive() -> Self {
         Self { enforce: false }
     }
 
@@ -146,7 +146,7 @@ impl Relay {
         Self::start_with(port, upstream, Policy::strict()).await
     }
 
-    async fn start_with(
+    pub(crate) async fn start_with(
         port: u16,
         upstream: Option<Proxy>,
         policy: Policy,
@@ -231,11 +231,21 @@ impl std::fmt::Display for Target {
 }
 
 async fn serve(
+    client: TcpStream,
+    rx: watch::Receiver<Option<Proxy>>,
+    policy: Policy,
+) -> io::Result<()> {
+    serve_as(client, rx, policy, None).await
+}
+
+/// Serves one client; with `auth`, only one that logs in with those credentials.
+pub(crate) async fn serve_as(
     mut client: TcpStream,
     mut rx: watch::Receiver<Option<Proxy>>,
     policy: Policy,
+    auth: Option<&(String, String)>,
 ) -> io::Result<()> {
-    let (target, port) = tokio::time::timeout(HANDSHAKE, socks5_accept(&mut client))
+    let (target, port) = tokio::time::timeout(HANDSHAKE, socks5_accept(&mut client, auth))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "client handshake"))??;
     if policy.denies(&target) {
@@ -266,8 +276,12 @@ async fn serve(
     }
 }
 
-/// SOCKS5 server side, no authentication, CONNECT only.
-async fn socks5_accept(s: &mut TcpStream) -> io::Result<(Target, u16)> {
+/// SOCKS5 server side, CONNECT only: no authentication, or with `auth` the
+/// username/password method (RFC 1929).
+async fn socks5_accept(
+    s: &mut TcpStream,
+    auth: Option<&(String, String)>,
+) -> io::Result<(Target, u16)> {
     let mut head = [0u8; 2];
     s.read_exact(&mut head).await?;
     if head[0] != 5 {
@@ -275,11 +289,30 @@ async fn socks5_accept(s: &mut TcpStream) -> io::Result<(Target, u16)> {
     }
     let mut methods = vec![0u8; head[1] as usize];
     s.read_exact(&mut methods).await?;
-    if !methods.contains(&0) {
+    let method = if auth.is_some() { 2 } else { 0 };
+    if !methods.contains(&method) {
         s.write_all(&[5, 0xff]).await?;
-        return Err(invalid("client wants authentication"));
+        return Err(invalid(if auth.is_some() {
+            "client does not offer a password login"
+        } else {
+            "client wants authentication"
+        }));
     }
-    s.write_all(&[5, 0]).await?;
+    s.write_all(&[5, method]).await?;
+    if let Some(expected) = auth {
+        let ver = s.read_u8().await?;
+        let mut user = vec![0u8; s.read_u8().await? as usize];
+        s.read_exact(&mut user).await?;
+        let mut pass = vec![0u8; s.read_u8().await? as usize];
+        s.read_exact(&mut pass).await?;
+        let ok = ver == 1
+            && constant_time_eq(&user, expected.0.as_bytes())
+                & constant_time_eq(&pass, expected.1.as_bytes());
+        s.write_all(&[1, if ok { 0 } else { 1 }]).await?;
+        if !ok {
+            return Err(invalid("wrong credentials"));
+        }
+    }
 
     let mut req = [0u8; 4];
     s.read_exact(&mut req).await?;
@@ -291,6 +324,15 @@ async fn socks5_accept(s: &mut TcpStream) -> io::Result<(Target, u16)> {
     let target = read_addr(s, req[3]).await?;
     let port = s.read_u16().await?;
     Ok((target, port))
+}
+
+/// Compares without stopping at the first difference.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 async fn read_addr<R: AsyncReadExt + Unpin>(s: &mut R, atyp: u8) -> io::Result<Target> {
@@ -356,19 +398,44 @@ async fn open(
     let up = proxy.upstream();
     let mut s = connect_any(&up.host, up.port, None).await?;
     match up.kind {
-        Upstream::Socks5 => socks5_connect(&mut s, target, port).await?,
+        Upstream::Socks5 => socks5_connect(&mut s, target, port, up.auth.as_ref()).await?,
         Upstream::Socks4 => socks4_connect(&mut s, target, port).await?,
-        Upstream::Http => http_connect(&mut s, target, port).await?,
+        Upstream::Http => http_connect(&mut s, target, port, up.auth.as_ref()).await?,
     }
     Ok(s)
 }
 
-async fn socks5_connect(s: &mut TcpStream, target: &Target, port: u16) -> io::Result<()> {
-    s.write_all(&[5, 1, 0]).await?;
+async fn socks5_connect(
+    s: &mut TcpStream,
+    target: &Target,
+    port: u16,
+    auth: Option<&(String, String)>,
+) -> io::Result<()> {
+    match auth {
+        None => s.write_all(&[5, 1, 0]).await?,
+        Some(_) => s.write_all(&[5, 2, 0, 2]).await?,
+    }
     let mut r = [0u8; 2];
     s.read_exact(&mut r).await?;
-    if r != [5, 0] {
-        return Err(invalid("upstream SOCKS5 wants authentication"));
+    match (r, auth) {
+        ([5, 0], _) => {}
+        ([5, 2], Some((user, pass))) => {
+            // `parse` bounds both at 255 bytes.
+            let mut login = vec![1, user.len() as u8];
+            login.extend(user.as_bytes());
+            login.push(pass.len() as u8);
+            login.extend(pass.as_bytes());
+            s.write_all(&login).await?;
+            let mut ok = [0u8; 2];
+            s.read_exact(&mut ok).await?;
+            if ok[1] != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "upstream SOCKS5 refused the credentials",
+                ));
+            }
+        }
+        _ => return Err(invalid("upstream SOCKS5 wants authentication")),
     }
     let mut req = vec![5, 1, 0];
     match target {
@@ -430,10 +497,22 @@ async fn socks4_connect(s: &mut TcpStream, target: &Target, port: u16) -> io::Re
     Ok(())
 }
 
-async fn http_connect(s: &mut TcpStream, target: &Target, port: u16) -> io::Result<()> {
+async fn http_connect(
+    s: &mut TcpStream,
+    target: &Target,
+    port: u16,
+    auth: Option<&(String, String)>,
+) -> io::Result<()> {
+    use base64::Engine;
     let authority = format!("{target}:{port}");
-    s.write_all(format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n").as_bytes())
-        .await?;
+    let login = auth.map_or_else(String::new, |(user, pass)| {
+        let token = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
+        format!("Proxy-Authorization: Basic {token}\r\n")
+    });
+    s.write_all(
+        format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n{login}\r\n").as_bytes(),
+    )
+    .await?;
     // Read the response head byte-wise-buffered, without consuming tunnel data.
     let mut reader = BufReader::new(&mut *s);
     let mut status = String::new();
@@ -502,7 +581,7 @@ mod tests {
 
     async fn via_relay(relay: u16, host: &str, port: u16) -> io::Result<TcpStream> {
         let mut s = TcpStream::connect(("127.0.0.1", relay)).await?;
-        socks5_connect(&mut s, &Target::Name(host.into()), port).await?;
+        socks5_connect(&mut s, &Target::Name(host.into()), port, None).await?;
         Ok(s)
     }
 

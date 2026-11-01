@@ -334,6 +334,39 @@ in
       };
     };
 
+    socksProxy = {
+      listen = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "10.0.0.5:1080";
+        description = ''
+          Serve a SOCKS5 proxy on this `IP:PORT` (or `[IPv6]:PORT`), so other nodes
+          (their `proxies`) and any SOCKS5 client can route through this node's
+          network. Off when null. Destinations are limited like a session's: never
+          this machine, link-local addresses or the mesh's daemons. Anything but
+          loopback needs `allow` or `credentialsFile`. Open the port in the firewall
+          yourself.
+        '';
+      };
+      allow = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [ "10.0.0.0/8" ];
+        description = "Networks (CIDR or single addresses) allowed to connect; others are dropped.";
+      };
+      credentialsFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/run/secrets/browser-daemon/socks-credentials";
+        description = ''
+          Absolute path of a file with `user:password`; clients must log in with it
+          (SOCKS5 user/password). Give a string, not a Nix path literal (that would
+          copy it into the Nix store). Users of this proxy put the same login in
+          their `proxies` URL (`socks5://user:password@host:1080`).
+        '';
+      };
+    };
+
     run = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -375,7 +408,9 @@ in
               example = "socks5://proxy.example:1080";
               description = ''
                 Proxy URL: `socks5://`, `socks5h://`, `socks4://`, `http://` or `https://`.
-                Credentials are not supported.
+                `socks5://user:password@host:port` and `http://user:password@host:port` log in,
+                but the URL (the password with it) ends up in the Nix store: only use that for
+                logins you are fine with there.
               '';
             };
           };
@@ -490,6 +525,21 @@ in
               && !(lib.hasPrefix "${builtins.storeDir}/" cfg.clusterSecretFile)
             );
           message = "services.browser-daemon.clusterSecretFile must be an absolute path outside the Nix store (a string, not a path literal).";
+        }
+        {
+          assertion =
+            cfg.socksProxy.credentialsFile == null
+            || (
+              lib.hasPrefix "/" cfg.socksProxy.credentialsFile
+              && !(lib.hasPrefix "${builtins.storeDir}/" cfg.socksProxy.credentialsFile)
+            );
+          message = "services.browser-daemon.socksProxy.credentialsFile must be an absolute path outside the Nix store (a string, not a path literal).";
+        }
+        {
+          assertion =
+            cfg.socksProxy.listen == null
+            || builtins.match "([[][0-9a-fA-F:.]+[]]|[0-9.]+):[0-9]{1,5}" cfg.socksProxy.listen != null;
+          message = "services.browser-daemon.socksProxy.listen must be IP:PORT (or [IPv6]:PORT).";
         }
         {
           assertion = builtins.match "([[][0-9a-fA-F:.]+[]]|[0-9.]+):[0-9]{1,5}" cfg.bind != null;
@@ -672,6 +722,20 @@ in
                 "--proxies-file"
                 "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" cfg.proxies}"
               ]
+              ++ lib.optionals (cfg.socksProxy.listen != null) (
+                [
+                  "--socks-listen"
+                  cfg.socksProxy.listen
+                ]
+                ++ lib.concatMap (n: [
+                  "--socks-allow"
+                  n
+                ]) cfg.socksProxy.allow
+                ++ lib.optionals (cfg.socksProxy.credentialsFile != null) [
+                  "--socks-credentials-file"
+                  cfg.socksProxy.credentialsFile
+                ]
+              )
               ++ lib.optionals (cfg.publicUrl != null) [
                 "--public-url"
                 cfg.publicUrl
