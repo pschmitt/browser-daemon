@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-01
+
 ### Changed
 
 * Connecting the browser extension is one step: type the daemon's URL and click
