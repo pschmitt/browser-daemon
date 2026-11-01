@@ -18,4 +18,7 @@ Route a session through a SOCKS or HTTP proxy configured on its node (`services.
 
 sessions, profiles and recordings take notes (short texts with their time, in Markdown: emphasis, code, links, lists and task boxes, quotes; rendered without HTML, links only to http(s) and mailto): the dashboard's menus (**Notes…**) and the note badges on cards and rows, the live view's session menu, `browser-daemon session|profile|recording note TARGET [TEXT|-]` (without TEXT: list), `GET|POST /api/notes/<sessions|profiles|recordings>/<id>`, `PUT|DELETE /api/notes/<kind>/<id>/<note>`. A profile's notes live in its directory (`bd-notes.json`: they move, back up and export with it, and clearing its data keeps them), a recording's in its directory, a session's in the state directory until the session ends. The overview carries each item's count and latest note, and the search fields find notes.
 
-![Profiles with free-text names and per-profile proxies](../dashboard-profiles.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../dashboard-profiles-dark.png">
+  <img src="../dashboard-profiles.png" alt="Profiles with free-text names and per-profile proxies">
+</picture>

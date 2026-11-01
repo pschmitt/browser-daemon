@@ -13,7 +13,10 @@
   A fast, lightweight, native remote browser daemon written in Rust for CDP automation, AI agents, Firefox WebDriver BiDi, screencasting, and interactive browser handoff across a peer-to-peer cluster mesh.
 </p>
 
-![Dashboard: running sessions across two nodes, with their tabs](dashboard.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="dashboard-dark.png">
+  <img src="dashboard.png" alt="Dashboard: running sessions across two nodes, with their tabs">
+</picture>
 
 ## Features
 

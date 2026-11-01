@@ -22,6 +22,13 @@ with `Cargo.toml`), and the signed `vX.Y.Z` tag triggers
 the `python` job of the release workflow (trusted publishing, after the
 release exists). Never version or tag it on its own.
 
+## Screenshots
+
+The README and docs pictures (`dashboard*.png`, light and dark) come from a
+throwaway demo mesh with made-up data, never from a real one, so nothing private
+can end up in them: `tools/screenshots/run.sh` (see its header) starts two
+nodes, seeds them and takes all four. Rerun it after a dashboard redesign.
+
 ## Code shared with rbw
 
 rbw's browser extension and this repository share two self-contained files,
