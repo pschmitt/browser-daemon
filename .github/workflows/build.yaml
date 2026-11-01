@@ -40,7 +40,7 @@ jobs:
   # aarch64-linux packages and checks, built natively on GitHub's arm runners
   # (nixbot on x86_64 would have to emulate them) and pushed to the niks3 S3 cache;
   # see pschmitt/ci-workflows. rbw-extension only re-exports rbw's own build.
-  aarch64:
+  nix-aarch64:
     permissions:
       contents: read
       id-token: write
