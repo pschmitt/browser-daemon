@@ -14,7 +14,7 @@ concurrency:
 jobs:
   # Unsigned packages for temporary loading (Firefox about:debugging, Chromium
   # "Load unpacked" after unzipping). Releases ship the checked-in signed ones.
-  browser:
+  browser-extensions:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
