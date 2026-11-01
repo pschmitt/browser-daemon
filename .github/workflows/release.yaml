@@ -95,7 +95,7 @@ jobs:
   # (unlisted) for Firefox, the CRX key for Chromium. AMO signs each version
   # once: after a later job fails, rerun only the failed jobs.
   # AMO signs a version only once: a rerun reuses the tag's release assets.
-  browser:
+  browser-extensions:
     uses: pschmitt/ci-workflows/.github/workflows/sign-extension.yaml@main
     with:
       tag: ${{ inputs.tag || github.ref_name }}
@@ -107,7 +107,7 @@ jobs:
       amo_api_secret: ${{ secrets.BROWSER_NODE_AMO_API_SECRET }}
       chromium_signing_key: ${{ secrets.BROWSER_NODE_CHROMIUM_SIGNING_KEY }}
   release:
-    needs: [build, browser]
+    needs: [build, browser-extensions]
     if: ${{ !inputs.dry-run }}
     runs-on: ubuntu-latest
     permissions:
