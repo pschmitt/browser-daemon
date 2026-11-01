@@ -28,13 +28,22 @@ globalThis.NodeProxy = (() => {
     if (!text(host, 253) || !/^(\[[0-9a-f:.]+\]|[a-z0-9._-]+)$/i.test(host)) throw new Error('Invalid proxy offer');
     // The daemon's own name, to call its network by.
     const node = value.node !== undefined && text(value.node, 80) ? value.node : '';
-    return {host: bare(host), port: value.port, password: value.password, node, proxies: choices(value.proxies ?? [])};
+    // This browser's login, issued by the daemon (absent: an older daemon).
+    const user = value.user !== undefined && text(value.user, 80) && /^[\w.-]+$/.test(value.user) ? value.user : '';
+    return {host: bare(host), port: value.port, password: value.password, node, user, proxies: choices(value.proxies ?? [])};
   }
 
-  // `Proxy-Authorization`: the user names the proxy, percent-encoded because
-  // ids hold colons (`node:name`).
-  function login(choice, password) {
-    return 'Basic ' + btoa(`${encodeURIComponent(choice)}:${password}`);
+  // The login's user. The daemon keeps each browser's pick and knows the browser
+  // by it, so it does not change with the pick: Firefox remembers the first login
+  // it gives a proxy. An older daemon takes the proxy's name there (percent-encoded,
+  // as ids hold colons).
+  function identity(offer, choice) {
+    return offer.user || encodeURIComponent(choice);
+  }
+
+  // `Proxy-Authorization`.
+  function login(user, password) {
+    return 'Basic ' + btoa(`${user}:${password}`);
   }
 
   function address(host) {
@@ -69,5 +78,5 @@ globalThis.NodeProxy = (() => {
     return ['<local>', '*.local', '*.localhost', ...NETWORKS, '[::1]', ...new Set(daemons.map(bare))];
   }
 
-  return {DIRECT, choices, offer, login, direct, bypass};
+  return {DIRECT, choices, offer, identity, login, direct, bypass};
 })();

@@ -1160,7 +1160,11 @@ pub async fn connect(
                 &state.peers,
                 &origin,
                 &mut ws,
-                &|| state.proxy_offer(),
+                &ProxyOps {
+                    offer: &|| state.proxy_offer(),
+                    choose: &|user, choice| state.set_proxy_choice(user, choice),
+                    forget: &|user| state.forget_proxy_choice(user),
+                },
             )
             .await;
             let _ = ws.close().await;
@@ -1188,13 +1192,34 @@ async fn current_extension_origins(
     Ok(origins)
 }
 
+/// What a paired extension may do with this node's HTTP proxy (see `httpproxy`).
+pub(crate) struct ProxyOps<'a> {
+    /// The offer (where, login, choices), when the node serves one.
+    pub offer: &'a (dyn Fn() -> Option<Value> + Sync),
+    /// The browser (by id) picks a proxy; false when this node does not know it.
+    pub choose: &'a (dyn Fn(&str, Option<&str>) -> bool + Sync),
+    /// The browser left.
+    pub forget: &'a (dyn Fn(&str) + Sync),
+}
+
+impl ProxyOps<'static> {
+    #[cfg(test)]
+    fn none() -> Self {
+        Self {
+            offer: &|| None,
+            choose: &|_, _| false,
+            forget: &|_| {},
+        }
+    }
+}
+
 async fn serve(
     broker: &Arc<Broker>,
     extension_origins: &[String],
     peers: &tokio::sync::RwLock<HashMap<String, String>>,
     origin: &str,
     ws: &mut WebSocket,
-    proxy_offer: &(dyn Fn() -> Option<Value> + Sync),
+    proxy: &ProxyOps<'_>,
 ) -> Result<(), ()> {
     // The code never appears in a URL, a cookie, or a log. No reconnect credential
     // is issued: losing the socket ends the grant, and pairing must be repeated.
@@ -1343,7 +1368,16 @@ async fn serve(
     broker.touch(id);
     let origins = current_extension_origins(extension_origins, peers).await?;
     let mut registered = json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key, "origins": origins});
-    if let Some(offer) = proxy_offer() {
+    // The browser's login is its id: its pick is kept on this side under it.
+    struct Forget<'a>(&'a (dyn Fn(&str) + Sync), String);
+    impl Drop for Forget<'_> {
+        fn drop(&mut self) {
+            (self.0)(&self.1);
+        }
+    }
+    let _forget = Forget(proxy.forget, id.to_string());
+    if let Some(mut offer) = (proxy.offer)() {
+        offer["user"] = json!(id.to_string());
         registered["proxy"] = offer;
     }
     send(ws, registered).await?;
@@ -1370,10 +1404,14 @@ async fn serve(
                         last_seen = Instant::now();
                         match value["type"].as_str() {
                             Some("forget") => { broker.forget(id)?; break; }
+                            Some("proxy") => {
+                                let ok = (proxy.choose)(&id.to_string(), value["choice"].as_str());
+                                send(ws, json!({"type": "proxy", "ok": ok})).await?;
+                            }
                             Some("heartbeat") => {
                                 let origins = current_extension_origins(extension_origins, peers).await?;
                                 let mut beat = json!({"type": "heartbeat", "client_connected": node.client_connected(), "origins": origins});
-                                if let Some(offer) = proxy_offer() {
+                                if let Some(offer) = (proxy.offer)() {
                                     beat["proxies"] = offer["proxies"].clone();
                                 }
                                 send(ws, beat).await?;
@@ -1835,7 +1873,8 @@ mod tests {
                     let origin = headers.get("origin").unwrap().to_str().unwrap().to_string();
                     upgrade.on_upgrade(move |mut ws| async move {
                         let peers = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
-                        let _ = serve(&broker, &[], &peers, &origin, &mut ws, &|| None).await;
+                        let _ =
+                            serve(&broker, &[], &peers, &origin, &mut ws, &ProxyOps::none()).await;
                         let _ = ws.close().await;
                     })
                 }

@@ -447,7 +447,7 @@ function proxyCredentials(details) {
   if (proxyTried.has(details.requestId)) return {cancel: true};
   if (proxyTried.size > 512) proxyTried.clear();
   proxyTried.add(details.requestId);
-  return {authCredentials: {username: encodeURIComponent(proxyChoice), password: offer.password}};
+  return {authCredentials: {username: NodeProxy.identity(offer, proxyChoice), password: offer.password}};
 }
 // Chromium answers asynchronously (asyncBlocking), Firefox with a return value.
 const proxyLogin = chromium ? (details, callback) => callback(proxyCredentials(details)) : proxyCredentials;
@@ -458,7 +458,7 @@ function proxyRoute(details) {
   let host;
   try { host = new URL(details.url).hostname; } catch { return {type: 'direct'}; }
   if (NodeProxy.direct(host, offer.bypass)) return {type: 'direct'};
-  return {type: 'http', host: offer.host, port: offer.port, proxyAuthorizationHeader: NodeProxy.login(proxyChoice, offer.password)};
+  return {type: 'http', host: offer.host, port: offer.port, proxyAuthorizationHeader: NodeProxy.login(NodeProxy.identity(offer, proxyChoice), offer.password)};
 }
 
 // Listeners exist only once the optional permissions are granted.
@@ -479,6 +479,8 @@ async function clearBrowserProxy() {
 async function applyProxy() {
   await proxyReady;
   ensureProxyListeners();
+  // The daemon routes by what this browser told it (see proxy.js, identity).
+  if (registration && proxyOffer?.user) send({type: 'proxy', choice: proxyChoice});
   if (!chromium || !api.proxy?.settings) return;
   const offer = proxyOffer;
   if (!registration || !offer || !proxyChoice) return clearBrowserProxy();

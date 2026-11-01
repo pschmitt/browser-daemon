@@ -469,7 +469,7 @@ const {NodeProxy: np} = proxyContext;
 
 test('the daemon proxy offer is checked, and the login names the proxy', () => {
   const offer = np.offer({port: 3128, password: 'abc123', proxies: [{id: 'node:a', name: 'a (node)'}]}, 'https://Daemon.example:8443');
-  assert.deepEqual({...offer, proxies: offer.proxies.length}, {host: 'daemon.example', port: 3128, password: 'abc123', node: '', proxies: 1});
+  assert.deepEqual({...offer, proxies: offer.proxies.length}, {host: 'daemon.example', port: 3128, password: 'abc123', node: '', user: '', proxies: 1});
   assert.equal(np.offer({port: 1, password: 'x', node: 'fnuc'}, 'https://d.example').node, 'fnuc');
   assert.equal(np.offer({host: '[fd00::1]', port: 1, password: 'x'}, 'https://d.example').host, 'fd00::1');
   for (const bad of [null, {}, {port: 0, password: 'x'}, {port: 70000, password: 'x'}, {port: 1, password: ''}, {port: 1, password: 'a b'},
@@ -479,7 +479,10 @@ test('the daemon proxy offer is checked, and the login names the proxy', () => {
     assert.throws(() => np.offer(bad, 'https://d.example'), undefined, JSON.stringify(bad));
   }
   // The colon of an id would end the user name: it travels percent-encoded.
-  assert.equal(np.login('node:a', 'pw'), 'Basic ' + btoa('node%3Aa:pw'));
+  assert.equal(np.identity({user: ''}, 'node:a'), 'node%3Aa');
+  assert.equal(np.identity({user: 'abc-1'}, 'node:a'), 'abc-1');
+  assert.equal(np.login('node%3Aa', 'pw'), 'Basic ' + btoa('node%3Aa:pw'));
+  assert.equal(np.offer({port: 1, password: 'x', user: 'bad user'}, 'https://d.example').user, '');
 });
 
 test('local names and private networks never go through the proxy', () => {
@@ -560,3 +563,23 @@ for (const firefox of [false, true]) {
     assert.deepEqual(plain(await ask({...proxy, requestId: '3', challenger: {host: 'evil.example', port: 3128}})), {});
   });
 }
+
+test('a daemon that issues the browser its login gets the pick over the connection, under a login that stays', async () => {
+  const h = harness();
+  let answer;
+  h.api.webRequest = {onAuthRequired: {hasListener: () => false, addListener: listener => { answer = listener; }}};
+  h.api.proxy = {settings: {set: async () => {}, clear: async () => {}}};
+  await h.message({type: 'connect', server: 'https://daemon.example', code: 'a'.repeat(64), name: 'Test browser'});
+  const socket = h.sockets.at(-1); socket.onopen();
+  socket.receive({type: 'registered', id: 'node', expires_at: Math.floor(Date.now() / 1000) + 600,
+    proxy: {port: 3128, password: 'pw123', user: 'browser-1', proxies: [{id: 'node:a', name: 'a'}, {id: 'node:b', name: 'b'}]}});
+  await h.flush();
+  const picks = () => socket.sent.filter(m => m.type === 'proxy').map(m => m.choice);
+  const ask = id => new Promise(resolve => answer({isProxy: true, challenger: {host: 'daemon.example', port: 3128}, requestId: id}, resolve));
+  await h.message({type: 'setProxy', id: 'node:a'});
+  assert.equal(plain(await ask('1')).authCredentials.username, 'browser-1');
+  await h.message({type: 'setProxy', id: 'node:b'});
+  assert.equal(plain(await ask('2')).authCredentials.username, 'browser-1');
+  await h.message({type: 'setProxy', id: ''});
+  assert.deepEqual(plain(picks()), [null, 'node:a', 'node:b', null]);
+});

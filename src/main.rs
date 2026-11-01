@@ -743,6 +743,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    let http_proxy_choices = httpproxy::Choices::default();
     let http_proxy = if let Some(listen) = args.http_proxy_listen {
         let password = match args.http_proxy_password_file {
             Some(ref path) => match std::fs::read_to_string(path) {
@@ -765,6 +766,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             listen,
             allow: args.http_proxy_allow.clone(),
             password: password.clone(),
+            choices: http_proxy_choices.clone(),
         };
         if let Err(e) = proxy_config.check() {
             eprintln!("{e}");
@@ -824,6 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         share_url,
         egress: egress_advert,
         http_proxy,
+        http_proxy_choices,
         shares,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),

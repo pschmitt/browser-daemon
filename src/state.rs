@@ -213,6 +213,8 @@ pub struct AppState {
     pub egress: Option<crate::egress::Advert>,
     /// The HTTP proxy paired browser extensions can route through, if any.
     pub http_proxy: Option<crate::httpproxy::Offer>,
+    /// What each paired browser picked to route through (see `httpproxy::Choices`).
+    pub http_proxy_choices: crate::httpproxy::Choices,
     /// Public links to recordings and sessions (see shares.rs).
     pub shares: Arc<shares::Store>,
     pub peers: Arc<RwLock<HashMap<String, String>>>,
@@ -308,6 +310,26 @@ impl AppState {
         value["proxies"] = self.proxy_choices();
         value["node"] = serde_json::json!(self.node_name);
         Some(value)
+    }
+
+    /// A paired browser's pick: a proxy of this node, `direct` for the node's own
+    /// network, or nothing. False (and unchanged) for a proxy this node does not know.
+    pub fn set_proxy_choice(&self, user: &str, choice: Option<&str>) -> bool {
+        let value = match choice.map(str::trim) {
+            None | Some("") => None,
+            Some(id) if proxies::DIRECT.contains(&id) => Some("direct".to_string()),
+            Some(id) if proxies::find(&self.config.proxies, id).is_some() => Some(id.to_string()),
+            Some(_) => return false,
+        };
+        self.http_proxy_choices
+            .write()
+            .unwrap()
+            .insert(user.to_string(), value);
+        true
+    }
+
+    pub fn forget_proxy_choice(&self, user: &str) {
+        self.http_proxy_choices.write().unwrap().remove(user);
     }
 
     /// `[{id, name}]` of the proxies a browser may pick.

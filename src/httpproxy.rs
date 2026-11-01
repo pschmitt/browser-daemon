@@ -8,8 +8,9 @@
 //! the connection, never falls back to a direct one. Destinations are limited
 //! like a session relay's (`relay::Policy::strict`).
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use base64::Engine;
@@ -40,12 +41,20 @@ pub fn login_password(cluster_secret: &str) -> String {
     egress::derive_password(cluster_secret, b"browser-daemon http proxy login")
 }
 
+/// Which proxy each paired browser routes through: its login's user (the
+/// browser's id) to a proxy id (`direct` for none, `None` for no choice yet).
+/// Kept here rather than in the login because Firefox remembers the first login
+/// it gives a proxy: a user that changed with the choice would never take effect.
+/// A user that is not in it names the proxy itself (curl and the like).
+pub type Choices = Arc<RwLock<HashMap<String, Option<String>>>>;
+
 pub struct Config {
     pub listen: SocketAddr,
     /// Clients outside these networks are dropped without a word.
     pub allow: Vec<Network>,
     /// What clients log in with; none: only loopback may listen without one.
     pub password: Option<String>,
+    pub choices: Choices,
 }
 
 impl Config {
@@ -238,19 +247,35 @@ async fn serve(
         .await?;
         return Err(invalid("wrong credentials"));
     };
-    let upstream = if proxies::DIRECT.contains(&user.trim()) {
+    // Looked up first: the lock is not held while answering.
+    let chosen = config.choices.read().unwrap().get(user.trim()).cloned();
+    let wanted = match chosen {
+        Some(Some(id)) => id.clone(),
+        Some(None) => {
+            reply(
+                &mut client,
+                502,
+                "No Proxy Chosen",
+                "this browser has not picked a proxy",
+            )
+            .await?;
+            return Err(invalid("no proxy chosen"));
+        }
+        None => user.clone(),
+    };
+    let upstream = if proxies::DIRECT.contains(&wanted.trim()) {
         None
-    } else if let Some(proxy) = proxies::find(own, user.trim()) {
+    } else if let Some(proxy) = proxies::find(own, wanted.trim()) {
         Some(proxy)
     } else {
         reply(
             &mut client,
             502,
             "Unknown Proxy",
-            &format!("this node does not know the proxy {:?}", user.trim()),
+            &format!("this node does not know the proxy {:?}", wanted.trim()),
         )
         .await?;
-        return Err(invalid("unknown proxy"));
+        return Err(invalid(&format!("unknown proxy {:?}", wanted.trim())));
     };
 
     let connect = head.method.eq_ignore_ascii_case("CONNECT");
@@ -399,6 +424,7 @@ mod tests {
             listen: ([127, 0, 0, 1], port).into(),
             allow: vec![],
             password: password.map(String::from),
+            choices: Choices::default(),
         };
         start(config, own, policy).await.unwrap();
         port
@@ -439,6 +465,7 @@ mod tests {
             listen: "0.0.0.0:3128".parse().unwrap(),
             allow: vec![],
             password: None,
+            choices: Choices::default(),
         };
         assert!(c.check().is_err());
         c.password = Some("x".into());
@@ -543,6 +570,38 @@ mod tests {
         }
         let (_s, answer) = ask(port, connect_to(echo, &basic("node:peer", "se:wrong"))).await;
         assert!(answer.starts_with("HTTP/1.1 407"), "{answer}");
+    }
+
+    #[tokio::test]
+    async fn a_browsers_choice_lives_on_the_daemon_not_in_its_login() {
+        let echo = echo_server().await;
+        let port = free_port().await;
+        let choices = Choices::default();
+        let config = Config {
+            listen: ([127, 0, 0, 1], port).into(),
+            allow: vec![],
+            password: Some("secret".into()),
+            choices: choices.clone(),
+        };
+        start(config, vec![], Policy::permissive()).await.unwrap();
+        // Not chosen yet: refused, never direct.
+        choices.write().unwrap().insert("browser-1".into(), None);
+        let (_s, answer) = ask(port, connect_to(echo, &basic("browser-1", "secret"))).await;
+        assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
+        // The same login, once the browser picked the node's own network.
+        choices
+            .write()
+            .unwrap()
+            .insert("browser-1".into(), Some("direct".into()));
+        let (_s, answer) = ask(port, connect_to(echo, &basic("browser-1", "secret"))).await;
+        assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+        // And a proxy that does not exist.
+        choices
+            .write()
+            .unwrap()
+            .insert("browser-1".into(), Some("node:gone".into()));
+        let (_s, answer) = ask(port, connect_to(echo, &basic("browser-1", "secret"))).await;
+        assert!(answer.starts_with("HTTP/1.1 502"), "{answer}");
     }
 
     #[tokio::test]
