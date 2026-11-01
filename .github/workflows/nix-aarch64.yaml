@@ -16,3 +16,7 @@ jobs:
     with:
       exclude: '["rbw-extension"]'
       pin-prefix: gh-browser-daemon-main
+    secrets:
+      s3_store: ${{ secrets.NIKS3_S3_STORE }}
+      s3_access_key: ${{ secrets.NIKS3_S3_ACCESS_KEY }}
+      s3_secret_key: ${{ secrets.NIKS3_S3_SECRET_KEY }}
