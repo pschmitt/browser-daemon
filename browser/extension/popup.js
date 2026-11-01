@@ -550,8 +550,9 @@ $('addressSuggestions').addEventListener('click', () => {
 $('proxyChoice').addEventListener('change', () => {
   const id = $('proxyChoice').value;
   const requested = {permissions: state.chromium ? ['proxy', 'webRequest', 'webRequestAuthProvider'] : ['proxy']};
-  const permission = id ? api.permissions.contains(requested).then(granted =>
-    granted || api.permissions.request(requested)) : Promise.resolve(true);
+  // Called at once: Firefox only allows the request inside the click's own turn
+  // (it resolves true when the permissions are already granted).
+  const permission = id ? api.permissions.request(requested) : Promise.resolve(true);
   void permission.then(allowed => {
     if (!allowed) throw new Error('Proxy access is needed to route this browser.');
     return message({type: 'setProxy', id});
