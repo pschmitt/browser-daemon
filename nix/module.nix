@@ -404,13 +404,24 @@ in
               description = "Name shown in the dashboard.";
             };
             url = lib.mkOption {
-              type = lib.types.str;
+              type = lib.types.nullOr lib.types.str;
+              default = null;
               example = "socks5://proxy.example:1080";
               description = ''
                 Proxy URL: `socks5://`, `socks5h://`, `socks4://`, `http://` or `https://`.
                 `socks5://user:password@host:port` and `http://user:password@host:port` log in,
-                but the URL (the password with it) ends up in the Nix store: only use that for
-                logins you are fine with there.
+                but the URL (the password with it) ends up in the Nix store: for a login use
+                `urlFile`. Set exactly one of `url` and `urlFile`.
+              '';
+            };
+            urlFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              example = "/run/secrets/browser-daemon/exit-proxy-url";
+              description = ''
+                Absolute path of a file holding the proxy URL (read when the daemon starts;
+                for example a sops-nix or agenix secret). Give a string, not a Nix path
+                literal (that would copy it into the Nix store).
               '';
             };
           };
@@ -525,6 +536,18 @@ in
               && !(lib.hasPrefix "${builtins.storeDir}/" cfg.clusterSecretFile)
             );
           message = "services.browser-daemon.clusterSecretFile must be an absolute path outside the Nix store (a string, not a path literal).";
+        }
+        {
+          assertion = lib.all (p: (p.url == null) != (p.urlFile == null)) cfg.proxies;
+          message = "services.browser-daemon.proxies: set exactly one of url and urlFile for each proxy.";
+        }
+        {
+          assertion = lib.all (
+            p:
+            p.urlFile == null
+            || (lib.hasPrefix "/" p.urlFile && !(lib.hasPrefix "${builtins.storeDir}/" p.urlFile))
+          ) cfg.proxies;
+          message = "services.browser-daemon.proxies: urlFile must be an absolute path outside the Nix store (a string, not a path literal).";
         }
         {
           assertion =
@@ -720,7 +743,16 @@ in
               ]
               ++ lib.optionals (cfg.proxies != [ ]) [
                 "--proxies-file"
-                "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" cfg.proxies}"
+                "${(pkgs.formats.json { }).generate "browser-daemon-proxies.json" (
+                  map (
+                    p:
+                    {
+                      inherit (p) id name;
+                    }
+                    // lib.optionalAttrs (p.url != null) { inherit (p) url; }
+                    // lib.optionalAttrs (p.urlFile != null) { url_file = p.urlFile; }
+                  ) cfg.proxies
+                )}"
               ]
               ++ lib.optionals (cfg.socksProxy.listen != null) (
                 [

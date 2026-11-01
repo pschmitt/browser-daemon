@@ -15,7 +15,8 @@
   that other nodes use as an upstream: connections leave from its network. Clients
   are limited by network (`--socks-allow`) and/or a login (`--socks-credentials-file`,
   RFC 1929), and destinations like a session's relay's. Upstream proxy URLs can now
-  carry a login (SOCKS5 user/password, HTTP Basic).
+  carry a login (SOCKS5 user/password, HTTP Basic), and a proxy's URL can be kept in
+  a file (`url_file`, NixOS `urlFile`) so a sops-nix or agenix secret stays out of the Nix store.
 * The Home Assistant integration (`custom_components/browser_daemon`, HACS) now
   lives in this repository and is released with the daemon, under its version.
   It gains `browser_daemon.run` (a Playwright script or steps, with the result as

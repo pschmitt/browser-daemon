@@ -138,12 +138,46 @@ pub fn firefox_prefs(relay_port: u16) -> Vec<String> {
     ]
 }
 
+/// An entry of the proxies file: the URL inline, or in a file of its own
+/// (`url_file`), which keeps a login out of the file and, with NixOS, out of the
+/// Nix store (a sops-nix or agenix secret).
+#[derive(Deserialize)]
+struct Entry {
+    id: String,
+    name: String,
+    url: Option<String>,
+    url_file: Option<std::path::PathBuf>,
+}
+
+impl Entry {
+    fn resolve(self) -> Result<Proxy, String> {
+        let url = match (self.url, self.url_file) {
+            (Some(url), None) => url,
+            (None, Some(file)) => std::fs::read_to_string(&file)
+                .map_err(|e| format!("proxy {:?}: {}: {e}", self.id, file.display()))?
+                .trim()
+                .to_string(),
+            _ => return Err(format!("proxy {:?}: set one of url and url_file", self.id)),
+        };
+        Ok(Proxy {
+            id: self.id,
+            name: self.name,
+            url,
+        })
+    }
+}
+
 /// Load and validate the node's proxies. Errors name the offending entry.
 pub fn load(path: &Path) -> Result<Vec<Proxy>, String> {
     let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let proxies: Vec<Proxy> =
+    let entries: Vec<Entry> =
         serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
-    validate(proxies)
+    validate(
+        entries
+            .into_iter()
+            .map(Entry::resolve)
+            .collect::<Result<_, _>>()?,
+    )
 }
 
 fn validate(proxies: Vec<Proxy>) -> Result<Vec<Proxy>, String> {
@@ -234,6 +268,35 @@ mod tests {
         assert!(validate(vec![proxy("a", "socks5://u:p@a:1")]).is_ok());
         assert!(validate(vec![proxy("a", "socks4://u@a:1")]).is_err());
         assert!(validate(vec![proxy("a", "http://a")]).is_ok());
+    }
+
+    #[test]
+    fn a_url_can_live_in_its_own_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("exit-url");
+        std::fs::write(&secret, "socks5://u:p@node.example:1080\n").unwrap();
+        let list = dir.path().join("proxies.json");
+        let write = |json: serde_json::Value| std::fs::write(&list, json.to_string()).unwrap();
+
+        write(serde_json::json!([
+            {"id": "a", "name": "A", "url_file": secret},
+            {"id": "b", "name": "B", "url": "http://b:3128"}
+        ]));
+        let loaded = load(&list).unwrap();
+        assert_eq!(loaded[0].url, "socks5://u:p@node.example:1080");
+        assert_eq!(loaded[0].upstream().auth, Some(("u".into(), "p".into())));
+        assert_eq!(loaded[1].url, "http://b:3128");
+
+        // Both, neither, a missing or an empty file: each names the entry.
+        write(serde_json::json!([{"id": "a", "name": "A", "url": "http://a", "url_file": secret}]));
+        assert!(load(&list).unwrap_err().contains("\"a\""));
+        write(serde_json::json!([{"id": "a", "name": "A"}]));
+        assert!(load(&list).is_err());
+        write(serde_json::json!([{"id": "a", "name": "A", "url_file": dir.path().join("none")}]));
+        assert!(load(&list).unwrap_err().contains("\"a\""));
+        std::fs::write(&secret, "\n").unwrap();
+        write(serde_json::json!([{"id": "a", "name": "A", "url_file": secret}]));
+        assert!(load(&list).is_err());
     }
 
     #[test]
