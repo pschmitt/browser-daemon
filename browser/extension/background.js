@@ -506,7 +506,7 @@ function buildTabMenu() {
   if (!api.menus) return;
   api.menus.removeAll().then(() => {
     menuProxies.length = 0;
-    api.menus.create({id: 'bd-share', title: 'Share this tab with the daemon', contexts: ['tab'], type: 'checkbox', enabled: false});
+    api.menus.create({id: 'bd-share', title: 'Share tab', contexts: ['tab'], type: 'checkbox', enabled: false});
     if (!proxyOffer) return;
     api.menus.create({id: 'bd-proxy', title: 'Proxy for this tab', contexts: ['tab']});
     const entries = [['follow', 'Default'], ['none', 'No proxy'], [NodeProxy.DIRECT, proxyLabel(NodeProxy.DIRECT)],
@@ -520,7 +520,7 @@ function buildTabMenu() {
 function tabMenuShown(info, tab) {
   if (!tab || !(info.contexts || []).includes('tab')) return;
   const ready = !!registration && safeTab(tab);
-  void api.menus.update('bd-share', {checked: shared.has(tab.id), enabled: ready, title: shared.has(tab.id) ? 'Stop sharing this tab' : 'Share this tab with the daemon'});
+  void api.menus.update('bd-share', {checked: shared.has(tab.id), enabled: ready});
   if (menuProxies.length) {
     const own = tabProxies.has(tab.id) ? (tabProxies.get(tab.id) ?? 'none') : 'follow';
     void api.menus.update('bd-proxy:follow', {title: `Default (${proxyLabel(proxyChoice)})`});

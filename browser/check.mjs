@@ -629,18 +629,19 @@ test('Firefox routes each tab by its own pick, and the tab menu sets it and shar
   assert.ok(h.menu.updated.some(([id, o]) => id === 'bd-proxy:node:b' && o.checked === true));
   assert.ok(h.menu.updated.some(([id, o]) => id === 'bd-proxy:follow' && o.checked === false));
   // Sharing and unsharing the tab.
-  const shareTitles = () => h.menu.updated.filter(([id]) => id === 'bd-share').map(([, o]) => o.title).at(-1);
+  const shareChecked = () => h.menu.updated.filter(([id]) => id === 'bd-share').map(([, o]) => o.checked).at(-1);
+  assert.equal(h.menu.created.find(o => o.id === 'bd-share').title, 'Share tab');
   h.menu.updated.length = 0;
   h.listeners.menuShown({contexts: ['tab']}, {id: 1, url: 'https://one.example/', incognito: false});
-  assert.equal(shareTitles(), 'Share this tab with the daemon');
+  assert.equal(shareChecked(), false);
   click('bd-share'); await h.flush();
   h.menu.updated.length = 0;
   h.listeners.menuShown({contexts: ['tab']}, {id: 1, url: 'https://one.example/', incognito: false});
-  assert.equal(shareTitles(), 'Stop sharing this tab');
+  assert.equal(shareChecked(), true);
   click('bd-share'); await h.flush();
   h.menu.updated.length = 0;
   h.listeners.menuShown({contexts: ['tab']}, {id: 1, url: 'https://one.example/', incognito: false});
-  assert.equal(shareTitles(), 'Share this tab with the daemon');
+  assert.equal(shareChecked(), false);
   // The popup says which proxy the tab in front uses.
   h.tabs.get(1).active = true;
   const state = plain((await h.message({type: 'state'})).proxy);
