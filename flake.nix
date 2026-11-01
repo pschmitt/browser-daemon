@@ -91,7 +91,7 @@
     eachSystem
     // {
       # Linux package builds and checks run on the self-hosted nixbot. aarch64-linux
-      # builds natively on GitHub's arm runners (.github/workflows/nix-aarch64.yaml);
+      # builds natively on GitHub's arm runners (the aarch64 job of .github/workflows/build.yaml);
       # the build nodes could only emulate it.
       hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (system: {
         # rbw builds its own extension; this output only re-exports it.
