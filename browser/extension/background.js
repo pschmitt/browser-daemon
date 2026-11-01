@@ -495,7 +495,9 @@ async function applyProxy() {
   }}});
 }
 
-// The tab's context menu (Firefox): share it, and pick its proxy.
+// The tab's context menu (Firefox), on the tab and on its page: share it, and pick
+// its proxy.
+const MENU_CONTEXTS = ['tab', 'page'];
 const menuProxies = [];
 function proxyLabel(pick) {
   if (!pick) return 'No proxy';
@@ -506,19 +508,19 @@ function buildTabMenu() {
   if (!api.menus) return;
   api.menus.removeAll().then(() => {
     menuProxies.length = 0;
-    api.menus.create({id: 'bd-share', title: 'Share tab', contexts: ['tab'], type: 'checkbox', enabled: false});
+    api.menus.create({id: 'bd-share', title: 'Share tab', contexts: MENU_CONTEXTS, type: 'checkbox', enabled: false});
     if (!proxyOffer) return;
-    api.menus.create({id: 'bd-proxy', title: 'Proxy for this tab', contexts: ['tab']});
+    api.menus.create({id: 'bd-proxy', title: 'Proxy for this tab', contexts: MENU_CONTEXTS});
     const entries = [['follow', 'Default'], ['none', 'No proxy'], [NodeProxy.DIRECT, proxyLabel(NodeProxy.DIRECT)],
       ...proxyOffer.proxies.map(p => [p.id, p.name])];
     for (const [id, title] of entries) {
       menuProxies.push(id);
-      api.menus.create({id: `bd-proxy:${id}`, parentId: 'bd-proxy', title, contexts: ['tab'], type: 'radio'});
+      api.menus.create({id: `bd-proxy:${id}`, parentId: 'bd-proxy', title, contexts: MENU_CONTEXTS, type: 'radio'});
     }
   }).catch(() => {});
 }
 function tabMenuShown(info, tab) {
-  if (!tab || !(info.contexts || []).includes('tab')) return;
+  if (!tab || !(info.contexts || []).some(c => MENU_CONTEXTS.includes(c))) return;
   const ready = !!registration && safeTab(tab);
   void api.menus.update('bd-share', {checked: shared.has(tab.id), enabled: ready});
   if (menuProxies.length) {

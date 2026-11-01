@@ -642,6 +642,11 @@ test('Firefox routes each tab by its own pick, and the tab menu sets it and shar
   h.menu.updated.length = 0;
   h.listeners.menuShown({contexts: ['tab']}, {id: 1, url: 'https://one.example/', incognito: false});
   assert.equal(shareChecked(), false);
+  // On the page's own menu as well.
+  h.menu.updated.length = 0;
+  h.listeners.menuShown({contexts: ['page']}, {id: 1, url: 'https://one.example/', incognito: false});
+  assert.ok(h.menu.updated.some(([id]) => id === 'bd-share'));
+  assert.ok(h.menu.created.every(o => o.contexts.includes('page') && o.contexts.includes('tab')));
   // The popup says which proxy the tab in front uses.
   h.tabs.get(1).active = true;
   const state = plain((await h.message({type: 'state'})).proxy);
