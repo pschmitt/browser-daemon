@@ -9,4 +9,4 @@ permissions:
   pull-requests: write
 jobs:
   update:
-    uses: pschmitt/ci-workflows/.github/workflows/nix-flake-lock.yaml@61598d55796c6d3cdaabc2d61d5381dacf39d3f5
+    uses: pschmitt/ci-workflows/.github/workflows/nix-flake-lock.yaml@main
