@@ -1,0 +1,44 @@
+name: python-client
+# Publishes the Python client (python/) to PyPI once the daemon's release exists
+# (the client has the daemon's version; test.yaml tests it). PyPI's trusted
+# publisher is bound to this file's name and to the `pypi` environment: there is no
+# token, and a job of another workflow file (release.yaml) is refused.
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  # (Re)publish a tag: a rerun skips what PyPI already has.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to publish (vX.Y.Z)
+        required: true
+permissions:
+  contents: read
+jobs:
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v')) }}
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+    environment:
+      name: pypi
+      url: https://pypi.org/project/browser-daemon-client/
+    permissions:
+      # Trusted publishing: the job's OIDC token is PyPI's proof of who publishes.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - name: Match tag and package version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' python/pyproject.toml | head -n1)
+          test "$TAG" = "v$version" || { echo "::error::$TAG does not match python/pyproject.toml's $version"; exit 1; }
+      - name: Build
+        run: pipx run build --outdir dist python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          skip-existing: true

@@ -154,32 +154,6 @@ jobs:
           body_path: RELEASE_NOTES.md
           generate_release_notes: false
           make_latest: ${{ github.event_name == 'push' || inputs.latest }}
-  # The Python client (python/) has the daemon's version: PyPI gets it once the
-  # release exists, through trusted publishing (no token: PyPI trusts this
-  # workflow in the `pypi` environment). A rerun skips what is already there.
-  python:
-    needs: [release]
-    if: ${{ !inputs.dry-run }}
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/browser-daemon-client/
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.TAG }}
-      - name: Match tag and package version
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' python/pyproject.toml | head -n1)
-          test "$TAG" = "v$version" || { echo "::error::$TAG does not match python/pyproject.toml's $version"; exit 1; }
-      - name: Build
-        run: pipx run build --outdir dist python
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
-          skip-existing: true
   # The Nix package fetches the signed packages from the release by hash.
   packages:
     needs: [release]
