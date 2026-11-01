@@ -10,8 +10,9 @@ assets aligned with the release instructions below.
   and `just browser-check` for extension checks.
 - Use the narrowest relevant checks for changes in Python, Nix, or the
   Home Assistant integration; follow that component's README and CI workflow.
-- CI reuses workflows and actions from
-  [ci-workflows](https://github.com/pschmitt/ci-workflows).
+- Before changing CI, check for a reusable workflow or action in
+  [ci-workflows](https://github.com/pschmitt/ci-workflows) and preserve the
+  caller's existing behavior and check coverage.
 
 ## Releases
 
