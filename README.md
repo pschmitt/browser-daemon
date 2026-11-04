@@ -102,3 +102,4 @@ live view.
 ## License
 
 GPL-3.0-only. See [LICENSE](LICENSE).
+Third-party notices: [THIRD-PARTY.md](THIRD-PARTY.md).

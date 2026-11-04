@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Hermes sessions show Nous Research's real Hermes Agent mark instead of a placeholder.
+  A client that names itself with `agent=` in the CDP URL counts as an agent even when
+  its WebSocket library is not Playwright or Puppeteer.
+
 ## [0.12.1] - 2026-11-04
 
 ### Fixed

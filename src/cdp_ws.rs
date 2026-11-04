@@ -30,15 +30,17 @@ pub(crate) async fn client_arrived(
     let from = clients::describe_origin(addr, &state.node_name, &peers).await;
     info!(session_id = %session.id, kind, from = %from, "Automation client connected");
     let integration = clients::clean(params.client.as_deref());
+    let agent_name = clients::clean(params.agent.as_deref());
     session.clients.add(clients::ClientInfo {
         kind: kind.into(),
-        agent: agent && integration.is_none(),
+        // An agent that names itself (`agent=`) is one whatever its WebSocket library says.
+        agent: (agent || agent_name.is_some()) && integration.is_none(),
         integration,
         from,
         addr: addr.map(|a| a.to_string()),
         user_agent: ua,
         since: clients::now_secs(),
-        agent_name: clients::clean(params.agent.as_deref()),
+        agent_name,
         conversation: clients::clean(params.conversation.as_deref()),
         cwd: clients::clean(params.cwd.as_deref()),
         machine: clients::clean(params.machine.as_deref()),
