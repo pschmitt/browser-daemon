@@ -366,7 +366,7 @@ async fn sign(
     }
     let plain = |s: &str| {
         !s.is_empty()
-            && s.len() <= 1024
+            && s.len() <= secrets::MAX_WEBAUTHN_B64URL
             && s.bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     };

@@ -60,10 +60,11 @@ fn valid_request(req: &Request) -> Result<(), String> {
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     };
     // A WebAuthn challenge or credential id (base64url): longer than an id;
-    // Microsoft's challenges exceed 128 characters.
+    // WebAuthn sets no maximum, Microsoft's exceed 128 characters and Google's
+    // 1024.
     let b64url_like = |s: &str| {
         !s.is_empty()
-            && s.len() <= 1024
+            && s.len() <= crate::secrets::MAX_WEBAUTHN_B64URL
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     };
@@ -866,13 +867,14 @@ mod tests {
             bad.url = Some(url.into());
             assert!(valid_request(&bad).is_err(), "{url}");
         }
-        // Challenges and credential ids are longer than ids (Microsoft: >128).
+        // Challenges and credential ids are longer than ids (Microsoft: >128,
+        // Google: >1024).
         let mut ok = req();
-        ok.challenge = Some("a".repeat(400));
-        ok.allow = vec!["b".repeat(300)];
+        ok.challenge = Some("a".repeat(4000));
+        ok.allow = vec!["b".repeat(1400)];
         assert!(valid_request(&ok).is_ok());
         let mut bad = req();
-        bad.challenge = Some("a".repeat(1025));
+        bad.challenge = Some("a".repeat(crate::secrets::MAX_WEBAUTHN_B64URL + 1));
         assert!(valid_request(&bad).is_err());
         bad.challenge = Some("--rp-id".into());
         assert!(

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Signing in to Google with a passkey from the vault failed with "No passkey: Bad
+  challenge": Google's WebAuthn challenge is longer than the 1024 characters the
+  secret agent took. It takes up to 16 KiB now.
+
 ## [0.12.0] - 2026-11-01
 
 ### Changed

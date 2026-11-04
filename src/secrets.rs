@@ -10,6 +10,11 @@ use tokio::process::Command;
 
 /// What redaction puts where a filled secret would show.
 pub const MASK: &str = "•••";
+/// Longest WebAuthn challenge or credential id (base64url) a page may hand the
+/// secret agent. WebAuthn sets no maximum and Google's sign-in sends challenges
+/// over 1024 characters; this stays far below the 128 KiB a single command-line
+/// argument (rbw's `--challenge=…`) may have.
+pub const MAX_WEBAUTHN_B64URL: usize = 16 * 1024;
 
 /// Secrets shorter than this are not redacted (they would mangle unrelated text).
 const MIN_REDACT: usize = 4;
