@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-04
+
 ### Changed
 
 * Hermes sessions show Nous Research's real Hermes Agent mark instead of a placeholder.
