@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-04
+
 ### Fixed
 
 * Signing in to Google with a passkey from the vault failed with "No passkey: Bad

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "browser-daemon-client"
-version = "0.12.0"
+version = "0.12.1"
 description = "Async client for browser-daemon: Playwright runs over HTTP, sessions and logins, with nothing but aiohttp"
 readme = "README.md"
 license = "GPL-3.0-only"
