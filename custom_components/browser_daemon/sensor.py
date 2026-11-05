@@ -12,6 +12,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfInformation, UnitOfTime
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -109,6 +110,38 @@ NODE_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
 )
 
 
+# Metadata, shown as diagnostic text sensors on each device.
+NODE_METADATA_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key="version",
+        translation_key="version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:tag",
+    ),
+    SensorEntityDescription(
+        key="revision",
+        translation_key="revision",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:source-commit",
+    ),
+    SensorEntityDescription(
+        key="supported_engines",
+        translation_key="supported_engines",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:application-cog",
+    ),
+)
+
+MESH_METADATA_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
+    SensorEntityDescription(
+        key="version",
+        translation_key="version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        icon="mdi:tag",
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -120,19 +153,21 @@ async def async_setup_entry(
     entities: list[SensorEntity] = []
 
     # Add mesh-wide sensors
-    for desc in MESH_SENSOR_DESCRIPTIONS:
+    for desc in (*MESH_SENSOR_DESCRIPTIONS, *MESH_METADATA_DESCRIPTIONS):
         entities.append(BrowserDaemonMeshSensor(coordinator, desc))
 
     # Add per-node sensors
     nodes = (coordinator.data or {}).get("nodes", {})
     known_nodes = set(nodes)
     for node_name in nodes:
-        for desc in NODE_SENSOR_DESCRIPTIONS:
+        for desc in (*NODE_SENSOR_DESCRIPTIONS, *NODE_METADATA_DESCRIPTIONS):
             entities.append(BrowserDaemonNodeSensor(coordinator, node_name, desc))
 
     known_browsers = set((coordinator.data or {}).get("browsers", {}))
     entities.extend(
-        BrowserDaemonBrowserTabsSensor(coordinator, bid) for bid in known_browsers
+        sensor
+        for bid in known_browsers
+        for sensor in _browser_sensors(coordinator, bid)
     )
 
     async_add_entities(entities)
@@ -145,7 +180,7 @@ async def async_setup_entry(
             return
         known_browsers.update(new)
         async_add_entities(
-            [BrowserDaemonBrowserTabsSensor(coordinator, b) for b in sorted(new)]
+            [s for b in sorted(new) for s in _browser_sensors(coordinator, b)]
         )
 
     entry.async_on_unload(coordinator.async_add_listener(add_new_browser_entities))
@@ -161,7 +196,7 @@ async def async_setup_entry(
             [
                 BrowserDaemonNodeSensor(coordinator, node_name, desc)
                 for node_name in sorted(new_nodes)
-                for desc in NODE_SENSOR_DESCRIPTIONS
+                for desc in (*NODE_SENSOR_DESCRIPTIONS, *NODE_METADATA_DESCRIPTIONS)
             ]
         )
 
@@ -187,6 +222,8 @@ class BrowserDaemonMeshSensor(BrowserDaemonEntity, SensorEntity):
         """Return the state of the sensor."""
         if not self.coordinator.data:
             return None
+        if self.entity_description.key == "version":
+            return (self.coordinator.data.get("local_node") or {}).get("version")
         return self.coordinator.data.get(self.entity_description.key)
 
 
@@ -211,7 +248,10 @@ class BrowserDaemonNodeSensor(BrowserDaemonNodeEntity, SensorEntity):
         node_data = self.node_data
         if not node_data:
             return None
-        return node_data.get(self.entity_description.key)
+        value = node_data.get(self.entity_description.key)
+        if isinstance(value, list):
+            return ", ".join(str(v) for v in value)
+        return value
 
 
 class BrowserDaemonBrowserTabsSensor(BrowserDaemonBrowserEntity, SensorEntity):
@@ -242,3 +282,33 @@ class BrowserDaemonBrowserTabsSensor(BrowserDaemonBrowserEntity, SensorEntity):
             "remembered": data.get("remembered"),
             "native_control": data.get("native_control"),
         }
+
+
+def _browser_sensors(
+    coordinator: BrowserDaemonCoordinator, browser_id: str
+) -> list[SensorEntity]:
+    """Return all sensors of one extension browser."""
+    return [
+        BrowserDaemonBrowserTabsSensor(coordinator, browser_id),
+        BrowserDaemonBrowserMetadataSensor(coordinator, browser_id, "version"),
+        BrowserDaemonBrowserMetadataSensor(coordinator, browser_id, "browser"),
+    ]
+
+
+class BrowserDaemonBrowserMetadataSensor(BrowserDaemonBrowserEntity, SensorEntity):
+    """Diagnostic metadata (extension version, browser) of an extension browser."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(
+        self, coordinator: BrowserDaemonCoordinator, browser_id: str, key: str
+    ) -> None:
+        """Initialize the metadata sensor."""
+        super().__init__(coordinator, browser_id, key)
+        self._attr_translation_key = f"browser_{key}"
+        self._attr_icon = "mdi:tag" if key == "version" else "mdi:web"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the metadata value."""
+        return self.browser_data.get(self._key) or None

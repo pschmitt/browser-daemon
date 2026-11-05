@@ -79,6 +79,21 @@
       },
       "browser_tabs": {
         "name": "Geteilte Tabs"
+      },
+      "version": {
+        "name": "Version"
+      },
+      "revision": {
+        "name": "Revision"
+      },
+      "supported_engines": {
+        "name": "Unterstützte Engines"
+      },
+      "browser_version": {
+        "name": "Erweiterungsversion"
+      },
+      "browser_browser": {
+        "name": "Browser"
       }
     },
     "binary_sensor": {
@@ -101,6 +116,11 @@
       },
       "vacuum_recordings": {
         "name": "Alte Aufnahmen bereinigen"
+      }
+    },
+    "image": {
+      "browser_screenshot": {
+        "name": "Screenshot"
       }
     }
   },

@@ -26,6 +26,7 @@ PLATFORMS: Final = [
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.IMAGE,
 ]
 
 # Events

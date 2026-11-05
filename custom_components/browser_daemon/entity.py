@@ -32,10 +32,12 @@ class BrowserDaemonEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
         version = data.get("local_node", {}).get("version")
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_mesh")},
+            entry_type=DeviceEntryType.SERVICE,
             name=f"Browser Daemon Mesh ({local_name})",
             manufacturer="pschmitt",
             model="Browser Daemon Mesh",
             sw_version=version,
+            hw_version=data.get("local_node", {}).get("revision"),
             configuration_url=coordinator.client.base_url,
         )
 
@@ -70,10 +72,12 @@ class BrowserDaemonNodeEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
 
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_node_{node_name}")},
+            entry_type=DeviceEntryType.SERVICE,
             name=f"Browser Node {node_name}",
             manufacturer="pschmitt",
             model="Browser Daemon Node",
             sw_version=version,
+            hw_version=node_info.get("revision"),
             via_device_id=via_device_id,
             configuration_url=url or coordinator.client.base_url,
         )
@@ -116,6 +120,7 @@ class BrowserDaemonBrowserEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
             manufacturer="pschmitt",
             model=f"{info.get('browser') or 'Browser'} (extension)",
             sw_version=info.get("version") or None,
+            serial_number=browser_id,
             via_device_id=parent_device.id if parent_device else None,
             configuration_url=coordinator.client.base_url,
         )

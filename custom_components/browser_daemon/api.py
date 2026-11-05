@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import time
 from typing import Any
@@ -198,6 +199,26 @@ class BrowserDaemonClient:
         if isinstance(data, dict):
             data = data.get("nodes") or []
         return [b for b in data if isinstance(b, dict) and b.get("id")]
+
+    async def async_extension_screenshot(
+        self, browser_id: str, tab: int
+    ) -> tuple[bytes, str] | None:
+        """Screenshot a shared tab of an extension browser: (bytes, mime type)."""
+        resp = await self._async_request(
+            "POST",
+            f"/api/extension/nodes/{quote(browser_id)}/command",
+            json={"tab": tab, "action": "screenshot", "params": {}},
+            timeout=20,
+        )
+        if resp.status != 200:
+            return None
+        body = await resp.json()
+        result = body.get("result") if isinstance(body, dict) else None
+        data = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(data, str):
+            return None
+        mime = "image/png" if result.get("format") == "png" else "image/jpeg"
+        return base64.b64decode(data), mime
 
     async def async_list_sessions(
         self, node: str | None = None
