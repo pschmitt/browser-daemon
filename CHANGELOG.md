@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Username-first logins ignore password decoys marked `aria-hidden` or inside
+  inert elements. Generic login sends Enter's carriage-return text so Chromium
+  submits username, password and one-time-code forms.
+
 ## [0.13.0] - 2026-11-05
 
 ### Added

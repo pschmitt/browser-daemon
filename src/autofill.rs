@@ -90,7 +90,7 @@ const FILL: &str = r#"(c) => {
   walk(document);
   const type = (el) => (el.getAttribute("type") || "").toLowerCase();
   const shown = (el) => {
-    if (el.disabled || el.readOnly) return false;
+    if (el.disabled || el.readOnly || el.closest('[aria-hidden="true"], [inert]')) return false;
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return false;
     const s = getComputedStyle(el);
@@ -259,7 +259,7 @@ pub(crate) async fn login_submit_chromium(ws_url: &str) -> Result<(), String> {
     let mut cdp = Cdp::connect(ws_url).await?;
     cdp.call(
         "Input.dispatchKeyEvent",
-        json!({ "type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13 }),
+        json!({ "type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": "\r" }),
     )
     .await?;
     cdp.call(
@@ -277,7 +277,7 @@ fn login_state_script(selector: &str) -> String {
     format!(
         r#"(() => {{
           /*RBW_FILL_TARGETS*/
-          const shown = (el) => {{ const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return !el.disabled && r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0; }};
+          const shown = (el) => {{ const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return !el.disabled && !el.closest('[aria-hidden="true"], [inert]') && r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0; }};
           const inputs = [];
           const walk = (root) => root.querySelectorAll('*').forEach((el) => {{ if (el.tagName === 'INPUT') inputs.push(el); if (el.shadowRoot) walk(el.shadowRoot); }});
           walk(document);
@@ -506,6 +506,143 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires Chromium on PATH"]
+    async fn chromium_username_first_login_ignores_hidden_password() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut browser = tokio::process::Command::new("chromium")
+            .args([
+                "--headless=new",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--no-first-run",
+                "--remote-debugging-port=0",
+            ])
+            .arg(format!("--user-data-dir={}", directory.path().display()))
+            .arg("about:blank")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let client = reqwest::Client::new();
+        let ws_url = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(port_file) =
+                    tokio::fs::read_to_string(directory.path().join("DevToolsActivePort")).await
+                {
+                    let port = port_file.lines().next().unwrap();
+                    if let Ok(response) = client
+                        .get(format!("http://127.0.0.1:{port}/json/list"))
+                        .send()
+                        .await
+                    {
+                        if let Ok(targets) = response.json::<Vec<Value>>().await {
+                            if let Some(url) = targets
+                                .iter()
+                                .find(|target| target["type"] == "page")
+                                .and_then(|target| target["webSocketDebuggerUrl"].as_str())
+                            {
+                                break url.to_string();
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let mut cdp = Cdp::connect(&ws_url).await.unwrap();
+        let tree = cdp.call("Page.getFrameTree", json!({})).await.unwrap();
+        let html = r#"<!doctype html><form id="login">
+            <input id="username" type="email" autocomplete="username">
+            <input id="decoy" type="password" aria-hidden="true" tabindex="-1"
+                   style="position:absolute;left:-10000px">
+            <button type="submit">Next</button></form>
+            <script>
+            let stage = 0;
+            document.querySelector('form').addEventListener('submit', event => {
+              event.preventDefault();
+              if (stage === 0) {
+                if (document.querySelector('#username').value !== 'user@example.test') return;
+                event.target.innerHTML = '<input id="password" type="password" autocomplete="current-password"><button type="submit">Sign in</button>';
+              } else if (stage === 1) {
+                if (document.querySelector('#password').value !== 'fixture-password') return;
+                event.target.innerHTML = '<input id="otp" autocomplete="one-time-code" maxlength="6"><button type="submit">Verify</button>';
+              } else {
+                if (document.querySelector('#otp').value !== '123456') return;
+                event.target.innerHTML = '<div id="signed-in">Signed in</div>';
+              }
+              stage++;
+            });
+            </script>"#;
+        cdp.call(
+            "Page.setDocumentContent",
+            json!({"frameId": tree["frameTree"]["frame"]["id"], "html": html}),
+        )
+        .await
+        .unwrap();
+        let state = login_state_chromium(&ws_url, Some("#signed-in"), |_| true)
+            .await
+            .unwrap();
+        assert_eq!(state["username"], true);
+        assert_eq!(state["password"], false);
+        let credentials = Creds {
+            username: Some("user@example.test".into()),
+            password: Some("fixture-password".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            fill_chromium(&ws_url, |_| true, &credentials)
+                .await
+                .unwrap(),
+            ["username"]
+        );
+        let decoy = cdp
+            .call(
+                "Runtime.evaluate",
+                json!({"expression": "document.querySelector('#decoy').value === ''", "returnByValue": true}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(decoy["result"]["value"], true);
+        login_submit_chromium(&ws_url).await.unwrap();
+        let state = login_state_chromium(&ws_url, Some("#signed-in"), |_| true)
+            .await
+            .unwrap();
+        assert_eq!(state["password"], true);
+        assert_eq!(
+            fill_chromium(&ws_url, |_| true, &credentials)
+                .await
+                .unwrap(),
+            ["password"]
+        );
+        login_submit_chromium(&ws_url).await.unwrap();
+        let state = login_state_chromium(&ws_url, Some("#signed-in"), |_| true)
+            .await
+            .unwrap();
+        assert_eq!(state["totp"], true);
+        let credentials = Creds {
+            totp: Some("123456".into()),
+            mask_totp: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            fill_chromium(&ws_url, |_| true, &credentials)
+                .await
+                .unwrap(),
+            ["totp"]
+        );
+        login_submit_chromium(&ws_url).await.unwrap();
+        let state = login_state_chromium(&ws_url, Some("#signed-in"), |_| true)
+            .await
+            .unwrap();
+        assert_eq!(state["success"], true);
+        cdp.close().await;
+        browser.kill().await.unwrap();
+    }
 
     #[test]
     fn frame_trees_flatten_top_first() {
