@@ -4,7 +4,7 @@ A state-of-the-art Home Assistant custom component for managing, observing, and 
 
 ## Features
 
-- **Mesh Topology & Telemetry**: Automatically discovers the local node and all interconnected peer nodes (e.g. `fnuc`, `rofl-13`, `rofl-14`, `rofl-15`, `rofl-16`).
+- **Mesh Topology & Telemetry**: Automatically discovers the local node and all interconnected peer nodes (e.g. `node-a`, `node-b`).
 - **Rich Entity Model**:
   - **Hub Device**: `Browser Daemon Mesh (<Node>)` representing cluster-wide metrics.
   - **Node Devices**: Per-node devices linked via `via_device`, reporting latency, uptime, active session count, storage used, and online/offline status.
@@ -145,16 +145,23 @@ trace data. For dependent integrations that must handle credentials, call
 
 ## Installation
 
-Through HACS: add `https://github.com/pschmitt/browser-daemon` as a custom
-repository of type *Integration*, or copy `custom_components/browser_daemon` to
-your configuration. The integration is released with the daemon and has its
-version.
+[![Open this integration in Home Assistant Marketplace](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=pschmitt&repository=browser-daemon&category=integration)
+
+For Home Assistant 2026.11 and later, use the Marketplace badge to add this
+repository as a custom repository and install the integration.
+
+For older Home Assistant versions, add
+`https://github.com/pschmitt/browser-daemon` to HACS as a custom repository of
+type *Integration*, then install it. You can also copy
+`custom_components/browser_daemon` to your configuration. The integration is
+released with the daemon and has its version. Restart Home Assistant after
+installing or copying it.
 
 ## Configuration
 
 Set up via Home Assistant UI:
 **Settings $\to$ Devices & Services $\to$ Add Integration $\to$ Browser Daemon**
 
-- **URL**: Default is `https://browser.fnuc.ts.brkn.lol`
+- **URL**: The base URL where your Browser Daemon dashboard is reachable (for example, `https://browser-daemon.example`).
 - **Cluster Secret**: Optional. If omitted, the integration automatically negotiates session tokens.
 - **Verify SSL**: Enabled by default.

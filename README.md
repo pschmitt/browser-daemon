@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://nixbot.brkn.lol/repos/github/pschmitt/browser-daemon"><img src="https://nixbot.brkn.lol/repos/github/pschmitt/browser-daemon/badge.svg?branch=main" alt="nixbot"></a>
-  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=pschmitt&repository=browser-daemon&category=integration"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" alt="HACS custom repository"></a>
+  <a href="https://my.home-assistant.io/redirect/marketplace_repository/?owner=pschmitt&repository=browser-daemon&category=integration"><img src="https://my.home-assistant.io/badges/marketplace_repository.svg" alt="Open this integration in Home Assistant Marketplace"></a>
 </p>
 
 <h1 align="center">browser-daemon</h1>
@@ -30,7 +30,8 @@
   between nodes, per-profile proxies.
 - **Playwright over HTTP**: `POST /api/run` runs a script or a list of steps
   in a session and answers with the result, for clients without Playwright.
-- **Home Assistant integration** (HACS): the mesh's nodes and sessions as
+- **Home Assistant integration** (Marketplace; HACS custom repository on older
+  Home Assistant versions): the mesh's nodes and sessions as
   entities, and actions such as `browser_daemon.run` for automations.
 - **A mesh of nodes** with one dashboard, CLI, terminal UI and MCP server for
   AI agents across all of them.
@@ -84,7 +85,7 @@ live view.
 | [NixOS module](docs/nixos.md) | Options, mesh, resource limits |
 | [Automation](docs/automation.md) | CDP and BiDi endpoints, engines, Playwright on shared browsers |
 | [Runs](docs/run.md) | Playwright scripts and steps over HTTP, for clients without Playwright |
-| [Home Assistant](custom_components/browser_daemon/README.md) | The integration (HACS), its entities and actions, `browser_daemon.run` |
+| [Home Assistant](custom_components/browser_daemon/README.md) | The integration's installation options, entities and actions, `browser_daemon.run` |
 | [Live view](docs/live-view.md) | Handoff, downloads, vault logins |
 | [rbw vault](docs/rbw.md) | Secret agent, logins and passkeys from rbw, styling |
 | [Live-view extensions](docs/extensions.md) | The vault's UI as a sandboxed bundle, its manifest and messages |
