@@ -1413,8 +1413,8 @@ const fillLogin = (c, urls) => {
     put(t.user, c.username, false);
     filled.push("username");
   }
-  if (otp.length === 1) put(otp[0], c.totp, false);
-  else otp.forEach((el, i) => put(el, c.totp[i], false));
+  if (otp.length === 1) put(otp[0], c.totp, c.maskTotp === true);
+  else otp.forEach((el, i) => put(el, c.totp[i], c.maskTotp === true));
   if (otp.length) filled.push("totp");
   // Custom fields (text ones only; hidden, boolean and linked never come here), as
   // rbw's extension: an input whose id or name is the field's name, else one not
@@ -1528,7 +1528,7 @@ async function execute(command) {
     const frames = (Array.isArray(params.frames) ? params.frames : [])
       .filter(f => (chromium ? typeof f?.frame === 'string' : Number.isSafeInteger(f?.frame)) && typeof f.url === 'string');
     if (!frames.length) return {filled: []};
-    const creds = {css: String(params.css || ''), username: params.username ?? null, password: params.password ?? null, totp: params.totp ?? null, custom: Array.isArray(params.custom) ? params.custom.filter(f => typeof f?.name === 'string' && typeof f?.value === 'string') : []};
+    const creds = {css: String(params.css || ''), username: params.username ?? null, password: params.password ?? null, totp: params.totp ?? null, maskTotp: params.maskTotp === true, custom: Array.isArray(params.custom) ? params.custom.filter(f => typeof f?.name === 'string' && typeof f?.value === 'string') : []};
     const urls = frames.map(f => f.url);
     if (chromium) {
       const filled = new Set();
