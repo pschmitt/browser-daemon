@@ -335,7 +335,8 @@ fn own_tools(
                 "type": "object",
                 "properties": {
                     "profile": { "type": "string", "description": "Name of a profile from browser_status." },
-                    "node": { "type": "string", "description": "Node to run a throwaway browser on (a profile lives on one node)." }
+                    "node": { "type": "string", "description": "Destination node. An idle saved profile is moved here automatically; active profiles are not interrupted." },
+                    "group": { "type": "string", "description": "Restrict placement to this node group, such as cloud. Never falls back outside it; node, if supplied, must belong to it." }
                 },
                 "additionalProperties": false
             },
@@ -1618,7 +1619,18 @@ impl State {
             .map(|c| c.target.describe());
         let nodes: Vec<Value> = Self::nodes(&ov)
             .iter()
-            .map(|n| json!({ "node": n.0, "sessions": format!("{}/{}", n.2, n.3) }))
+            .map(|n| {
+                let groups = if n.0 == ov.local_node.name {
+                    &ov.local_node.groups
+                } else {
+                    &ov.peers
+                        .iter()
+                        .find(|p| p.name == n.0)
+                        .expect("listed node")
+                        .groups
+                };
+                json!({ "node": n.0, "groups": groups, "sessions": format!("{}/{}", n.2, n.3) })
+            })
             .collect();
         let profiles: Vec<Value> = ov
             .profiles
@@ -1659,68 +1671,110 @@ impl State {
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty());
+        let group = args["group"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(name) = profile.filter(|name| !allows(&self.allow, name)) {
+            return Err(format!(
+                "Profile '{name}' is not open to agents here. Allowed: {}.",
+                allowed(&self.allow)
+            ));
+        }
         let mut ov = self.overview().await?;
-        let target = match profile {
-            Some(name) => {
-                if !allows(&self.allow, name) {
-                    return Err(format!(
-                        "Profile '{name}' is not open to agents here. Allowed: {}.",
-                        allowed(&self.allow)
-                    ));
-                }
-                let found = |ov: &MeshOverview| {
-                    ov.profiles
+        let target = if group.is_some() || (profile.is_some() && node.is_some()) {
+            let mut request = self
+                .http
+                .post(format!("{}/api/mesh/placement", self.base))
+                .timeout(Duration::from_secs(180))
+                .json(&json!({"profile":profile,"node":node,"group":group}));
+            if let Some(secret) = &self.secret {
+                request = request.header("X-Browser-Cluster-Secret", secret);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|_| "Browser placement request failed".to_string())?;
+            if !response.status().is_success() {
+                return Err(format!("Browser placement refused (HTTP {}): check node/group capacity, active profile sessions and duplicate copies", response.status()));
+            }
+            let placed: crate::profile_transfer::Placement = response
+                .json()
+                .await
+                .map_err(|_| "Invalid browser placement response".to_string())?;
+            Target {
+                node: placed.node,
+                ws_base: Self::ws_base(&placed.node_url),
+                url: placed.node_url,
+                profile: placed.profile,
+            }
+        } else {
+            match profile {
+                Some(name) => {
+                    if !allows(&self.allow, name) {
+                        return Err(format!(
+                            "Profile '{name}' is not open to agents here. Allowed: {}.",
+                            allowed(&self.allow)
+                        ));
+                    }
+                    let found = |ov: &MeshOverview| {
+                        ov.profiles
+                            .iter()
+                            .filter(|p| {
+                                p.profile.name == name && node.is_none_or(|n| p.node_name == n)
+                            })
+                            .count()
+                    };
+                    // The overview is shared and polls peers with a short timeout: a
+                    // busy node can be missing its profiles for one round.
+                    for _ in 0..2 {
+                        if found(&ov) > 0 || Self::incomplete_nodes(&ov).is_empty() {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(2500)).await;
+                        ov = self.overview().await?;
+                    }
+                    let hits: Vec<_> = ov
+                        .profiles
                         .iter()
                         .filter(|p| p.profile.name == name && node.is_none_or(|n| p.node_name == n))
-                        .count()
-                };
-                // The overview is shared and polls peers with a short timeout: a
-                // busy node can be missing its profiles for one round.
-                for _ in 0..2 {
-                    if found(&ov) > 0 || Self::incomplete_nodes(&ov).is_empty() {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_millis(2500)).await;
-                    ov = self.overview().await?;
-                }
-                let hits: Vec<_> = ov
-                    .profiles
-                    .iter()
-                    .filter(|p| p.profile.name == name && node.is_none_or(|n| p.node_name == n))
-                    .collect();
-                let [p] = hits.as_slice() else {
-                    return Err(if hits.is_empty() {
-                        let incomplete = Self::incomplete_nodes(&ov);
-                        format!(
-                            "No profile '{name}'{}{}",
-                            node.map(|n| format!(" on {n}")).unwrap_or_default(),
-                            if incomplete.is_empty() {
-                                String::new()
-                            } else {
-                                format!(
+                        .collect();
+                    let [p] = hits.as_slice() else {
+                        return Err(if hits.is_empty() {
+                            let incomplete = Self::incomplete_nodes(&ov);
+                            format!(
+                                "No profile '{name}'{}{}",
+                                node.map(|n| format!(" on {n}")).unwrap_or_default(),
+                                if incomplete.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(
                                     ". {} did not list all its profiles in time (busy?): try again",
                                     incomplete.join(", ")
                                 )
-                            }
-                        )
-                    } else {
-                        format!("Profile '{name}' exists on several nodes: name one with `node`")
-                    });
-                };
-                Target {
-                    node: p.node_name.clone(),
-                    url: p.node_url.clone(),
-                    ws_base: Self::ws_base(&p.node_url),
-                    profile: Some(name.to_string()),
+                                }
+                            )
+                        } else {
+                            format!(
+                                "Profile '{name}' exists on several nodes: name one with `node`"
+                            )
+                        });
+                    };
+                    Target {
+                        node: p.node_name.clone(),
+                        url: p.node_url.clone(),
+                        ws_base: Self::ws_base(&p.node_url),
+                        profile: Some(name.to_string()),
+                    }
                 }
-            }
-            None => {
-                let (node, url) = Self::pick_node(&ov, node)?;
-                Target {
-                    node,
-                    ws_base: Self::ws_base(&url),
-                    url,
-                    profile: None,
+                None => {
+                    let (node, url) = Self::pick_node(&ov, node)?;
+                    Target {
+                        node,
+                        ws_base: Self::ws_base(&url),
+                        url,
+                        profile: None,
+                    }
                 }
             }
         };

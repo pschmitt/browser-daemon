@@ -139,6 +139,34 @@ async def test_requests_for_other_nodes_go_through_the_peer_route(daemon):
     assert seen[-1]["query"] == {"minutes": "5"}
 
 
+@pytest.mark.parametrize("selected", ["here", "worker"])
+async def test_group_session_routes_to_placement_and_allows_new_profiles(daemon, selected):
+    bd, seen, answers = daemon
+    answers[("GET", "/api/mesh/overview")] = (200, {"local_node": {"name": "here"}})
+    answers[("POST", "/api/mesh/placement")] = (200, {"node": selected})
+    path = "/api/sessions" if selected == "here" else "/api/peers/worker/sessions"
+    answers[("POST", path)] = (201, {"id": "new-session"})
+    result = await bd.create_session(profile="new-profile", group="cloud", engine="chromium")
+    assert result == {"id": "new-session", "node_name": selected}
+    assert seen[1]["json"] == {
+        "profile": "new-profile",
+        "group": "cloud",
+        "engine": "chromium",
+        "create": True,
+    }
+    assert seen[2]["path"] == path
+    assert "group" not in seen[2]["json"]
+
+
+async def test_refused_placement_does_not_create_a_session(daemon):
+    bd, seen, answers = daemon
+    bd.local_node = "here"
+    answers[("POST", "/api/mesh/placement")] = (409, {"error": "profile is busy"})
+    with pytest.raises(BrowserDaemonError):
+        await bd.create_session(profile="work", node="worker")
+    assert [item["path"] for item in seen] == ["/api/mesh/placement"]
+
+
 async def test_a_session_is_named_after_the_client(daemon):
     bd, seen, answers = daemon
     answers[("POST", "/api/sessions")] = (201, {"id": "abc"})

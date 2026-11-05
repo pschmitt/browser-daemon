@@ -191,6 +191,10 @@ pub struct Args {
     #[arg(long)]
     pub node_name: Option<String>,
 
+    /// Groups this node belongs to (repeatable).
+    #[arg(long = "node-group")]
+    pub node_groups: Vec<String>,
+
     #[arg(long)]
     pub public_url: Option<String>,
 
@@ -822,6 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .connect_timeout(Duration::from_secs(5))
             .build()?,
         node_name,
+        node_groups: args.node_groups,
         public_url,
         extension_origins,
         share_url,
@@ -1257,6 +1262,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Peer-to-Peer Mesh APIs
         .route("/api/mesh/node", get(api_mesh_node))
         .route("/api/mesh/overview", get(api_mesh_overview))
+        .route("/api/mesh/placement", post(api_place_browser))
         .route("/api/run", post(run_api::api_run))
         .route("/api/ws/overview", get(handle_overview_ws))
         .route("/api/peers", get(api_list_peers).post(api_add_peer))

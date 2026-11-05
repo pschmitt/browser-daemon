@@ -41,6 +41,14 @@ async with aiohttp.ClientSession() as http:
 - `overview()`, `find_profile()`, `sessions()`, `session()`, `create_session()`,
   `delete_session()`, `set_idle_timeout()`, `tabs()`, `open_tab()`,
   `close_tab()`, `export_auth()` (a page's cookies and storage; never log them).
+- `place_browser(profile=..., node=..., group=..., engine=...)` selects a
+  matching node and moves an idle existing profile there. `create=True` permits
+  a missing profile for a subsequent session or run; it reserves nothing.
+- `create_session(profile="work", group="cloud")` places the profile before
+  opening it and returns `node_name` for subsequent node-specific calls.
+  Supplying both `profile` and `node` also enables automatic placement.
+  See [profile placement](../docs/profiles.md#automatic-placement-and-node-groups)
+  for transfer restrictions and failure behavior.
 - `node=` sends a request to another node of the mesh through this one.
 - `read_secret()` reads the cluster secret from its file.
 

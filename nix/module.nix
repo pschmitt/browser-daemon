@@ -187,6 +187,12 @@ in
       description = "Node identifier for peer-to-peer mesh.";
     };
 
+    nodeGroups = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Groups this node belongs to in the browser mesh.";
+    };
+
     publicUrl = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -782,6 +788,10 @@ in
                 "--adblock-default"
                 (lib.boolToString cfg.adblock.default)
               ]
+              ++ lib.concatMap (group: [
+                "--node-group"
+                group
+              ]) cfg.nodeGroups
               ++ lib.optionals cfg.adblock.enable [
                 "--chromium-adblock"
                 "${cfg.adblock.chromiumExtension}"

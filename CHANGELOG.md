@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+* Node groups: repeat `--node-group` or set NixOS `nodeGroups` to advertise
+  placement labels. Mesh inventory and MCP status include each node's groups.
+* `POST /api/mesh/placement` selects a node by profile, node, group and engine.
+  Idle persistent profiles move to the selected node without overwriting an
+  existing copy. Active profiles that need moving, duplicate copies and
+  incomplete profile inventories are refused; groups never fall back outside
+  their membership.
+* MCP `browser_use` accepts `group` and moves idle profiles when a destination
+  node is requested. The Python client exposes `place_browser()` and group-aware
+  `create_session()`, including explicit first-use profile creation.
+
 ## [0.12.3] - 2026-11-05
 
 ### Added

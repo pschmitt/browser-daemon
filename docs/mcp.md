@@ -3,7 +3,7 @@
 `browser-daemon mcp` is an MCP server (stdio) that gives an agent a browser on any node of the mesh with a single entry in its MCP configuration. The browser tools are [Playwright MCP](https://github.com/microsoft/playwright-mcp)'s, run as a child on a CDP endpoint of a node; Playwright MCP cannot change that endpoint while it runs, so the server swaps the child when the agent asks for something else. These tools are added:
 
 - `browser_status`: the browser in use, the profiles the agent may open, the nodes and their load.
-- `browser_use`: switch to a saved profile (`profile`, which also fixes the node) or to a throwaway browser on a chosen node (`node`). The previous browser is closed.
+- `browser_use`: switch to a saved profile (`profile`) or a throwaway browser. Optional `node` and `group` select its destination; an idle profile moves there automatically. A group is a strict restriction, not a preference. Active profiles that need moving are refused. The previous browser is closed after placement succeeds. See [profile placement](profiles.md#automatic-placement-and-node-groups).
 - `browser_fill_secret` (only with `--allow-secret`): type a field of an [rbw](https://github.com/doy/rbw) vault entry (`password`, `username`, `totp` or a custom field) into a page field without the value reaching the agent. See below.
 - `browser_passkey` (only with `--allow-passkey`): sign in with a passkey from the vault. See [Passkeys](#passkeys-browser_passkey).
 - `browser_ask_human` (only with `--ask-human-cmd`): ask the user to do something only a person may do, in the live view of the agent's own page. See [Asking the user](#asking-the-user-browser_ask_human).

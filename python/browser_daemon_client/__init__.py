@@ -292,19 +292,62 @@ class BrowserDaemon:
         )
         return LoginResult.from_json(data or {})
 
+    async def place_browser(
+        self,
+        *,
+        profile: str | None = None,
+        node: str | None = None,
+        group: str | None = None,
+        engine: str | None = None,
+        create: bool = False,
+    ) -> dict[str, Any]:
+        """Resolve placement; `create` allows a missing profile for a subsequent session."""
+        if self.local_node is None:
+            await self.overview()
+        return await self._json(
+            "POST",
+            "/api/mesh/placement",
+            json={
+                k: v
+                for k, v in {
+                    "profile": profile,
+                    "node": node,
+                    "group": group,
+                    "engine": engine,
+                    "create": create,
+                }.items()
+                if v is not None
+            },
+            timeout=180,
+        )
+
     async def create_session(
-        self, *, profile: str | None = None, node: str | None = None, **options: Any
+        self,
+        *,
+        profile: str | None = None,
+        node: str | None = None,
+        group: str | None = None,
+        **options: Any,
     ) -> dict[str, Any]:
         """Start a session (or attach to the profile's); options as `POST /api/sessions`."""
+        placed = None
+        if group is not None or (profile is not None and node is not None):
+            placed = await self.place_browser(
+                profile=profile, node=node, group=group, engine=options.get("engine"), create=True
+            )
+            node = placed["node"]
         body = {"persistent": True, "profile": profile, **options}
         if self.client and "name" not in body:
             body["name"] = self.client
-        return await self._json(
+        result = await self._json(
             "POST",
             "/api/sessions",
             node=node,
             json={k: v for k, v in body.items() if v is not None},
         )
+        if placed is not None:
+            result["node_name"] = node
+        return result
 
     async def delete_session(self, session_id: str, node: str | None = None) -> None:
         await self._request("DELETE", f"/api/sessions/{quote(session_id, safe='')}", node=node)

@@ -26,8 +26,9 @@
 - **Live view (handoff)** of any tab on phones and desktops: touch and mouse
   input, the phone keyboard, files, downloads, vault logins and passkeys.
 - **Recordings** with sound, a scrubbing player, WebM export and merging.
-- **Persistent profiles** with free-text names, backups, exports and transfers
-  between nodes, per-profile proxies.
+- **Persistent profiles** with free-text names, backups, exports, per-profile
+  proxies and automatic idle-profile transfers to a requested node or group.
+  See [profile placement](docs/profiles.md#automatic-placement-and-node-groups).
 - **Playwright over HTTP**: `POST /api/run` runs a script or a list of steps
   in a session and answers with the result, for clients without Playwright.
 - **Home Assistant integration** (HACS): the mesh's nodes and sessions as

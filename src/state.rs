@@ -204,6 +204,7 @@ pub struct AppState {
     /// its own, each request sets the one it needs.
     pub peer_client: reqwest::Client,
     pub node_name: String,
+    pub node_groups: Vec<String>,
     pub public_url: String,
     /// Origins an extension may use to connect across this daemon cluster.
     pub extension_origins: Vec<String>,

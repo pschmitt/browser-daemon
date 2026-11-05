@@ -172,6 +172,18 @@ impl AppState {
             }
             Slot::Reserved(r) => r,
         };
+        // A transfer may remove a resolved profile while reservation waits for its lock.
+        if let Some(profile) = profile.as_ref() {
+            if profiles::read_meta(&profile.dir)
+                .await
+                .is_none_or(|meta| meta.id != profile.meta.id)
+            {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "Profile moved or was removed; retry placement",
+                ));
+            }
+        }
 
         // An explicit choice wins ("none" for a direct connection), then the profile's,
         // then the node's default (skipped when the node no longer has that proxy).

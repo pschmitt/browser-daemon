@@ -5,6 +5,8 @@ use super::*;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PeerState {
     pub name: String,
+    #[serde(default)]
+    pub groups: Vec<String>,
     pub url: String,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

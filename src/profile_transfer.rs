@@ -401,6 +401,201 @@ pub(crate) async fn api_transfer_profile(
     })))
 }
 
+#[derive(Deserialize)]
+pub(crate) struct PlacementRequest {
+    pub profile: Option<String>,
+    pub node: Option<String>,
+    pub group: Option<String>,
+    pub engine: Option<BrowserEngine>,
+    #[serde(default)]
+    pub create: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Placement {
+    pub node: String,
+    pub node_url: String,
+    pub profile: Option<String>,
+}
+
+fn select_placement(ov: &MeshOverview, req: &PlacementRequest) -> Result<Placement, ApiError> {
+    let profile = if let Some(name) = req.profile.as_deref() {
+        // A partial inventory cannot establish which copy is authoritative.
+        if ov.peers.iter().any(|p| {
+            p.status != "online"
+                || ov.profiles.iter().filter(|m| m.node_name == p.name).count() < p.profiles_count
+        }) {
+            return Err(api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Profile inventory is incomplete; retry when all nodes are reachable",
+            ));
+        }
+        let hits: Vec<_> = ov
+            .profiles
+            .iter()
+            .filter(|p| p.profile.name == name)
+            .collect();
+        match hits.as_slice() {
+            [profile] => Some(*profile),
+            [] if req.create => None,
+            [] => {
+                return Err(api_error(
+                    StatusCode::NOT_FOUND,
+                    "Profile not found in mesh",
+                ))
+            }
+            _ => {
+                return Err(api_error(
+                    StatusCode::CONFLICT,
+                    "Profile exists on several nodes; resolve duplicate copies before placement",
+                ))
+            }
+        }
+    } else {
+        None
+    };
+    let engine = profile
+        .map(|p| p.profile.engine)
+        .or(req.engine)
+        .unwrap_or_default();
+    if req.engine.is_some_and(|e| e != engine) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Requested engine differs from the profile's engine",
+        ));
+    }
+    let candidates = std::iter::once((
+        &ov.local_node.name,
+        &ov.local_node.url,
+        ov.local_node.active_sessions,
+        ov.local_node.max_sessions,
+        &ov.local_node.groups,
+        &ov.local_node.supported_engines,
+    ))
+    .chain(ov.peers.iter().filter(|p| p.status == "online").map(|p| {
+        (
+            &p.name,
+            &p.url,
+            p.active_sessions,
+            p.max_sessions,
+            &p.groups,
+            &p.supported_engines,
+        )
+    }));
+    let target = candidates
+        .filter(|(name, _, _, _, groups, engines)| {
+            req.node.as_ref().is_none_or(|n| n == *name)
+                && req.group.as_ref().is_none_or(|g| groups.contains(g))
+                && engines.contains(&engine)
+        })
+        .filter(|(name, _, active, max, _, _)| {
+            active < max
+                || profile.is_some_and(|p| &p.node_name == *name && p.profile.session_id.is_some())
+        })
+        .min_by(|a, b| {
+            let resident = |name: &str| profile.is_some_and(|p| p.node_name == name);
+            resident(b.0)
+                .cmp(&resident(a.0))
+                .then_with(|| {
+                    (a.2 as f64 / a.3.max(1) as f64).total_cmp(&(b.2 as f64 / b.3.max(1) as f64))
+                })
+                .then_with(|| a.0.cmp(b.0))
+        })
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "No online node with capacity and the requested engine matches the node/group",
+            )
+        })?;
+    Ok(Placement {
+        node: target.0.clone(),
+        node_url: target.1.clone(),
+        profile: req.profile.clone(),
+    })
+}
+
+pub(crate) async fn api_place_browser(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(mut req): Json<PlacementRequest>,
+) -> Result<Json<Placement>, ApiError> {
+    state.check_auth(&headers)?;
+    for text in [&mut req.profile, &mut req.node, &mut req.group]
+        .into_iter()
+        .flatten()
+    {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "Placement selectors must not be empty",
+            ));
+        }
+        *text = trimmed.to_string();
+    }
+    let ov = fetch_mesh_overview(&state).await;
+    let placement = select_placement(&ov, &req)?;
+    if let Some(name) = req.profile.as_deref() {
+        let Some(source) = ov.profiles.iter().find(|p| p.profile.name == name) else {
+            return Ok(Json(placement));
+        };
+        if source.node_name != placement.node {
+            let transfer = TransferProfileRequest {
+                target_node: placement.node.clone(),
+                target_name: None,
+                delete_source: true,
+                overwrite: false,
+            };
+            let result = if source.is_local {
+                let response = api_transfer_profile(
+                    AxumPath(
+                        source
+                            .profile
+                            .id
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| source.profile.name.clone()),
+                    ),
+                    State(state.clone()),
+                    headers,
+                    Json(transfer),
+                )
+                .await?
+                .into_response();
+                let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                    .await
+                    .map_err(|_| api_error(StatusCode::BAD_GATEWAY, "Invalid transfer response"))?;
+                serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .map_err(|_| api_error(StatusCode::BAD_GATEWAY, "Invalid transfer response"))?
+            } else {
+                let url = peer_profile_url(
+                    &source.node_url,
+                    &source
+                        .profile
+                        .id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| source.profile.name.clone()),
+                    Some("transfer"),
+                );
+                let response = state.peer_request(state.peer_client.post(url))
+                    .timeout(PeerWait::Long.timeout()).json(&transfer).send().await
+                    .map_err(|_| api_error(StatusCode::BAD_GATEWAY, "Profile transfer request failed; inspect source and destination before retrying"))?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(api_error(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY), "Profile transfer refused; the source may be active or the destination may already exist"));
+                }
+                response
+                    .json::<serde_json::Value>()
+                    .await
+                    .map_err(|_| api_error(StatusCode::BAD_GATEWAY, "Invalid transfer response"))?
+            };
+            if result["deleted_source"] != true {
+                return Err(api_error(StatusCode::CONFLICT, "Transfer did not remove the source; resolve duplicate copies before opening the destination"));
+            }
+        }
+    }
+    Ok(Json(placement))
+}
+
 // ---------------------------------------------------------------------------
 // Peer-to-Peer Mesh Handlers & Proxy APIs
 // ---------------------------------------------------------------------------
@@ -448,6 +643,124 @@ pub(crate) fn peer_profile_url(peer_url: &str, name: &str, action: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn placement_overview() -> MeshOverview {
+        let node = |name: &str, groups: &[&str]| {
+            serde_json::json!({
+                "name": name, "url": format!("https://{name}.example.com"), "groups": groups,
+                "version": "0", "uptime_seconds": 0, "active_sessions": 0, "max_sessions": 4,
+                "profiles_count": 0, "recordings_count": 0, "storage_used_bytes": 0,
+                "max_storage_bytes": 0, "status": "online", "latency_ms": null,
+                "supported_engines": ["chromium"]
+            })
+        };
+        serde_json::from_value(serde_json::json!({
+            "local_node": node("home", &["home"]), "peers": [node("worker", &["cloud"])],
+            "sessions": [], "profiles": [], "targets": [], "recordings": [],
+            "total_sessions": 0, "total_capacity": 8, "total_profiles": 0,
+            "total_recordings": 0, "total_nodes": 2, "online_nodes": 2,
+            "total_storage_bytes": 0, "max_storage_bytes": 0
+        }))
+        .unwrap()
+    }
+
+    fn placement_request(
+        profile: Option<&str>,
+        node: Option<&str>,
+        group: Option<&str>,
+    ) -> PlacementRequest {
+        PlacementRequest {
+            profile: profile.map(str::to_string),
+            node: node.map(str::to_string),
+            group: group.map(str::to_string),
+            engine: None,
+            create: false,
+        }
+    }
+
+    fn add_profile(ov: &mut MeshOverview, node: &str, active: bool) {
+        ov.profiles.push(
+            serde_json::from_value(serde_json::json!({
+                "name": "demo", "engine": "chromium", "size_bytes": 0, "is_active": active,
+                "session_id": active.then_some("00000000-0000-0000-0000-000000000001"),
+                "created_at_secs": null, "modified_at_secs": null,
+                "node_name": node, "node_url": format!("https://{node}.example.com"),
+                "is_local": node == "home"
+            }))
+            .unwrap(),
+        );
+    }
+
+    #[test]
+    fn groups_never_fall_back_to_an_unmatched_node() {
+        let mut ov = placement_overview();
+        let req = placement_request(None, None, Some("cloud"));
+        assert_eq!(select_placement(&ov, &req).unwrap().node, "worker");
+        ov.peers[0].active_sessions = 4;
+        assert!(select_placement(&ov, &req).is_err());
+        ov.peers[0].active_sessions = 0;
+        ov.peers[0].status = "unreachable".into();
+        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(
+            &placement_overview(),
+            &placement_request(None, Some("home"), Some("cloud"))
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn resident_profiles_are_preferred_and_can_reuse_full_nodes() {
+        let mut ov = placement_overview();
+        add_profile(&mut ov, "worker", true);
+        ov.peers[0].active_sessions = 4;
+        assert_eq!(
+            select_placement(&ov, &placement_request(Some("demo"), None, None))
+                .unwrap()
+                .node,
+            "worker"
+        );
+        assert_eq!(
+            select_placement(&ov, &placement_request(Some("demo"), Some("home"), None))
+                .unwrap()
+                .node,
+            "home"
+        );
+    }
+
+    #[test]
+    fn ambiguous_missing_and_incomplete_profiles_are_refused() {
+        let mut ov = placement_overview();
+        let req = placement_request(Some("demo"), Some("worker"), None);
+        assert!(select_placement(&ov, &req).is_err());
+        add_profile(&mut ov, "home", false);
+        assert_eq!(select_placement(&ov, &req).unwrap().node, "worker");
+        ov.peers[0].profiles_count = 1;
+        assert!(select_placement(&ov, &req).is_err());
+        ov.peers[0].profiles_count = 0;
+        add_profile(&mut ov, "worker", false);
+        assert!(select_placement(&ov, &req).is_err());
+    }
+
+    #[test]
+    fn new_profiles_require_explicit_creation_and_complete_inventory() {
+        let mut ov = placement_overview();
+        let mut req = placement_request(Some("new-profile"), None, Some("cloud"));
+        assert!(select_placement(&ov, &req).is_err());
+        req.create = true;
+        let placed = select_placement(&ov, &req).unwrap();
+        assert_eq!(placed.node, "worker");
+        assert_eq!(placed.profile.as_deref(), Some("new-profile"));
+        ov.peers[0].status = "unreachable".into();
+        assert!(select_placement(&ov, &req).is_err());
+    }
+
+    #[test]
+    fn placement_checks_engine_support() {
+        let ov = placement_overview();
+        let mut req = placement_request(None, None, Some("cloud"));
+        req.engine = Some(BrowserEngine::Firefox);
+        assert!(select_placement(&ov, &req).is_err());
+    }
 
     #[test]
     fn peer_profile_urls_encode_the_name() {

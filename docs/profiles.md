@@ -10,6 +10,42 @@ cookies (including the ones without an expiry that many logins use), localStorag
 
 Discovers peer nodes across Tailscale/wireguard meshes and transfers persistent browser profiles between nodes with live progress toasts.
 
+### Automatic placement and node groups
+
+Advertise labels with repeated `--node-group` arguments or NixOS
+`services.browser-daemon.nodeGroups = [ "cloud" ];`. Groups appear in mesh
+inventory and MCP `browser_status`. Nodes without groups remain usable when
+no group is requested.
+
+MCP `browser_use` accepts `profile`, `node` and `group`. Requesting a saved
+profile on another node moves it there before opening it. A group restricts
+placement to its members; an explicit node must also belong to that group.
+A matching resident profile is preferred, otherwise the least-utilized online
+node with capacity and the required browser engine is selected.
+
+The authenticated `POST /api/mesh/placement` endpoint accepts:
+
+```json
+{"profile": "work", "group": "cloud", "engine": "chromium"}
+```
+
+It returns `node`, `node_url` and `profile`. Call the selected node's session
+or run API afterwards. Placement does not reserve capacity or start a browser.
+`create: true` allows a missing profile for a subsequent session or run to
+create; it does not create or reserve that profile itself. Clients creating a
+new profile concurrently must coordinate its name and destination.
+
+An active profile can stay on a matching node, but cannot be moved. Transfers
+never overwrite a destination profile. Duplicate names, incomplete profile
+inventory and a group without available capacity cause an error rather than
+fallback. All nodes must be reachable to establish a named profile's unique
+location. A failed request can leave complete copies on both nodes; resolve
+those copies before retrying. If opening a session fails after a successful
+move, the profile stays on its destination.
+
+The CLI and dashboard's explicit transfer controls remain available; group
+placement is exposed through the API, MCP and Python client.
+
 ## Upstream proxies
 
 Route a session through a SOCKS or HTTP proxy configured on its node (`services.browser-daemon.proxies`). Pick one per session (`"proxy": "<id>"` when creating it, `?proxy=<id>` on `/chromium` and `/firefox`, `none` for direct) or store a default on a profile (`PATCH /api/profiles/<name> {"proxy": "<id>"}`). A running session switches on the fly (`POST /api/sessions/<id>/proxy {"proxy": "<id>"}`, the session menu in the dashboard and handoff, `p` in the TUI): browsers always talk to a per-session SOCKS5 relay in the daemon, which forwards directly or through the chosen proxy and drops open connections when the route changes. DNS goes through SOCKS5 proxies, and WebRTC is kept from bypassing them. `GET /api/proxies` lists a node's proxies. A proxy URL may carry a login (`socks5://user:password@host:1080`, percent-encoded; HTTP proxies get Basic; keep it in a file with `url_file` instead of `url`); the API never shows it. A node can be such a proxy for the others, and they pick it up by themselves as `node:<name>`: see [SOCKS5 egress](nixos.md#socks5-egress).

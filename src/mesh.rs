@@ -5,6 +5,8 @@ use super::*;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NodeInfo {
     pub name: String,
+    #[serde(default)]
+    pub groups: Vec<String>,
     pub url: String,
     pub version: String,
     /// Git commit it was built from (absent in builds without one).
@@ -126,6 +128,7 @@ pub(crate) async fn api_mesh_node(
 
     Ok(Json(NodeInfo {
         name: state.node_name.clone(),
+        groups: state.node_groups.clone(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         revision: REVISION.map(str::to_string),
@@ -223,6 +226,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
     let unreachable = |latency_ms: Option<u64>, error: String| PeerReport {
         state: PeerState {
             name: name.clone(),
+            groups: Vec::new(),
             url: url.clone(),
             status: "unreachable".to_string(),
             version: None,
@@ -282,6 +286,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         Some(info) => (
             PeerState {
                 name: info.name.clone(),
+                groups: info.groups,
                 url: url.clone(),
                 status: "online".to_string(),
                 version: Some(info.version),
@@ -305,6 +310,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         None => (
             PeerState {
                 name: name.clone(),
+                groups: Vec::new(),
                 url: url.clone(),
                 status: "online".to_string(),
                 version: None,
@@ -393,6 +399,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     }
     let local_node = NodeInfo {
         name: state.node_name.clone(),
+        groups: state.node_groups.clone(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         revision: REVISION.map(str::to_string),
