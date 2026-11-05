@@ -271,6 +271,39 @@ pub(crate) async fn login_submit_chromium(ws_url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The script that reads a login page's state: which fields it shows, whether
+/// it reports an error, wants a person, or shows the success selector.
+fn login_state_script(selector: &str) -> String {
+    format!(
+        r#"(() => {{
+          /*RBW_FILL_TARGETS*/
+          const shown = (el) => {{ const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return !el.disabled && r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0; }};
+          const inputs = [];
+          const walk = (root) => root.querySelectorAll('*').forEach((el) => {{ if (el.tagName === 'INPUT') inputs.push(el); if (el.shadowRoot) walk(el.shadowRoot); }});
+          walk(document);
+          const visible = inputs.filter((el) => shown(el) && (el.type || '').toLowerCase() !== 'hidden');
+          let targets = {{}};
+          try {{ targets = globalThis.rbwFillTargets.loginTargets(visible); }} catch {{}}
+          delete globalThis.rbwFillTargets;
+          const password = !!targets.password;
+          const username = !!targets.user;
+          const totp = !!targets.otp || visible.filter((el) => el.maxLength === 1).length >= 4;
+          const error = [...document.querySelectorAll('[role=alert], [aria-invalid=true]')].some(shown);
+          const interaction = !!document.querySelector('iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i]');
+          let success = false;
+          try {{ success = !!({selector} && document.querySelector({selector}) && shown(document.querySelector({selector}))); }} catch {{}}
+          return JSON.stringify({{ username, password, totp, error, success, interaction }});
+        }})()"#
+    )
+}
+
+fn login_state_expression(selector: &str) -> String {
+    login_state_script(selector).replace(
+        "/*RBW_FILL_TARGETS*/",
+        include_str!("../vendor/rbw/fill-targets.js"),
+    )
+}
+
 /// Inspect only login-state booleans. Input values and page text never leave
 /// the isolated evaluation as part of the answer.
 pub(crate) async fn login_state_chromium(
@@ -295,31 +328,7 @@ pub(crate) async fn login_state_chromium(
             return Err("Could not inspect the login page".into());
         };
         let selector = serde_json::to_string(&success_selector).unwrap_or_else(|_| "null".into());
-        let expression = format!(
-            r#"(() => {{
-          /*RBW_FILL_TARGETS*/
-          const shown = (el) => {{ const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return !el.disabled && r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0; }};
-          const inputs = [];
-          const walk = (root) => root.querySelectorAll('*').forEach((el) => {{ if (el.tagName === 'INPUT') inputs.push(el); if (el.shadowRoot) walk(el.shadowRoot); }});
-          walk(document);
-          const visible = inputs.filter((el) => shown(el) && (el.type || '').toLowerCase() !== 'hidden');
-          let targets = {{}};
-          try {{ targets = globalThis.rbwFillTargets.loginTargets(visible); }} catch {{}}
-          delete globalThis.rbwFillTargets;
-          const password = !!targets.password;
-          const username = !!targets.user;
-          const totp = !!targets.otp || visible.filter((el) => el.maxLength === 1).length >= 4;
-          const error = [...document.querySelectorAll('[role=alert], [aria-invalid=true]')].some(shown);
-          const interaction = !!document.querySelector('iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i]');
-          let success = false;
-          try {{ success = !!({selector} && document.querySelector({selector}) && shown(document.querySelector({selector})); }} catch {{}}
-          return JSON.stringify({{ username, password, totp, error, success, interaction }});
-        }})()"#
-        )
-        .replace(
-            "/*RBW_FILL_TARGETS*/",
-            include_str!("../vendor/rbw/fill-targets.js"),
-        );
+        let expression = login_state_expression(&selector);
         let result = cdp
             .call(
                 "Runtime.evaluate",
@@ -446,6 +455,56 @@ pub async fn fill_firefox(
 
 #[cfg(test)]
 mod tests {
+    /// The generated page script must parse: a missing parenthesis made every
+    /// login attempt fail with "Could not inspect the login page".
+    #[test]
+    fn login_state_script_is_balanced() {
+        for selector in ["null", "\"[data-page=account]\"", "\")(\""] {
+            let script = login_state_script(selector);
+            let mut stack = Vec::new();
+            let mut chars = script.chars().peekable();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\'' | '"' | '`' => {
+                        while let Some(d) = chars.next() {
+                            if d == '\\' {
+                                chars.next();
+                            } else if d == c {
+                                break;
+                            }
+                        }
+                    }
+                    '/' if chars.peek() == Some(&'*') => {
+                        while let Some(d) = chars.next() {
+                            if d == '*' && chars.peek() == Some(&'/') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                    '(' | '[' | '{' => stack.push(c),
+                    ')' | ']' | '}' => {
+                        let open = stack.pop();
+                        assert_eq!(
+                            open,
+                            Some(match c {
+                                ')' => '(',
+                                ']' => '[',
+                                _ => '{',
+                            }),
+                            "unbalanced {c} in the login state script"
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                stack.is_empty(),
+                "unclosed {stack:?} in the login state script"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
