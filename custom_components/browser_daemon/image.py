@@ -114,7 +114,7 @@ class BrowserDaemonNodeScreenshot(BrowserDaemonNodeEntity, ImageEntity):
     """Screenshot of the latest session of a node.
 
     A node can run several sessions; the one shown is the one agents or live
-    views are using, else the most recently started.
+    views are using, else the most recently active.
     """
 
     _attr_translation_key = "node_screenshot"
@@ -140,7 +140,7 @@ class BrowserDaemonNodeScreenshot(BrowserDaemonNodeEntity, ImageEntity):
             mine,
             key=lambda s: (
                 (s.get("client_count") or 0) + (s.get("viewer_count") or 0) > 0,
-                -(s.get("uptime_seconds") or 0),
+                -(s.get("idle_seconds") or 0),
             ),
             default=None,
         )

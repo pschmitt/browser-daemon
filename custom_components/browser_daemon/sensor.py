@@ -141,6 +141,119 @@ MESH_METADATA_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
 )
 
 
+def _compact(items: list[dict[str, Any]], *keys: str) -> list[dict[str, Any]]:
+    """Keep only the named keys of each item (attributes stay small)."""
+    return [{k: i.get(k) for k in keys if i.get(k) is not None} for i in items]
+
+
+def _node_of(item: dict[str, Any], local_name: str) -> str:
+    return item.get("node_name") or local_name
+
+
+def _local_name(data: dict[str, Any]) -> str:
+    return (data.get("local_node") or {}).get("name") or "local"
+
+
+def _session_items(sessions: list[dict[str, Any]], local: str) -> list[dict[str, Any]]:
+    items = [
+        {**s, "node": _node_of(s, local), "tabs": s.get("tabs_count")} for s in sessions
+    ]
+    return _compact(
+        items,
+        "id",
+        "name",
+        "node",
+        "engine",
+        "profile",
+        "tabs",
+        "client_count",
+        "viewer_count",
+        "idle_seconds",
+        "uptime_seconds",
+        "is_recording",
+        "audible",
+    )
+
+
+def _profile_items(profiles: list[dict[str, Any]], local: str) -> list[dict[str, Any]]:
+    items = [{**p, "node": _node_of(p, local)} for p in profiles]
+    return _compact(
+        items, "id", "name", "node", "engine", "is_active", "size_bytes", "session_id"
+    )
+
+
+def _recording_items(
+    recordings: list[dict[str, Any]], local: str
+) -> list[dict[str, Any]]:
+    latest = sorted(
+        recordings, key=lambda r: r.get("started_at_secs") or 0, reverse=True
+    )[:10]
+    items = [{**r, "node": _node_of(r, local)} for r in latest]
+    return _compact(
+        items,
+        "id",
+        "node",
+        "profile",
+        "title",
+        "status",
+        "started_at_secs",
+        "duration_seconds",
+        "size_bytes",
+        "keep",
+    )
+
+
+def mesh_attributes(key: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Extra attributes for a mesh-level sensor."""
+    local = _local_name(data)
+    nodes = data.get("nodes") or {}
+    if key == "total_nodes":
+        return {
+            "nodes": [
+                {
+                    "name": name,
+                    "status": n.get("status"),
+                    "version": n.get("version"),
+                    "latency_ms": n.get("latency_ms"),
+                    "is_local": n.get("is_local"),
+                }
+                for name, n in nodes.items()
+            ]
+        }
+    if key == "online_nodes":
+        return {
+            "online": [n for n, i in nodes.items() if i.get("status") == "online"],
+            "offline": [n for n, i in nodes.items() if i.get("status") != "online"],
+        }
+    if key == "total_sessions":
+        return {"sessions": _session_items(data.get("sessions") or [], local)}
+    if key == "total_profiles":
+        return {"profiles": _profile_items(data.get("profiles") or [], local)}
+    if key == "total_recordings":
+        return {"latest": _recording_items(data.get("recordings") or [], local)}
+    if key == "total_storage_bytes":
+        return {
+            "by_node": {
+                name: n.get("storage_used_bytes")
+                for name, n in nodes.items()
+                if n.get("storage_used_bytes") is not None
+            }
+        }
+    return {}
+
+
+def node_attributes(key: str, node: str, data: dict[str, Any]) -> dict[str, Any]:
+    """Extra attributes for a node-level sensor."""
+    local = _local_name(data)
+    if key == "active_sessions":
+        mine = [s for s in data.get("sessions") or [] if _node_of(s, local) == node]
+        return {"sessions": _session_items(mine, local)}
+    if key == "storage_used_bytes":
+        mine = [p for p in data.get("profiles") or [] if _node_of(p, local) == node]
+        return {"profiles": _profile_items(mine, local)}
+    return {}
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -225,6 +338,13 @@ class BrowserDaemonMeshSensor(BrowserDaemonEntity, SensorEntity):
             return (self.coordinator.data.get("local_node") or {}).get("version")
         return self.coordinator.data.get(self.entity_description.key)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return details behind the counter."""
+        if not self.coordinator.data:
+            return {}
+        return mesh_attributes(self.entity_description.key, self.coordinator.data)
+
 
 class BrowserDaemonNodeSensor(BrowserDaemonNodeEntity, SensorEntity):
     """Node-specific sensor for Browser Daemon."""
@@ -251,6 +371,15 @@ class BrowserDaemonNodeSensor(BrowserDaemonNodeEntity, SensorEntity):
         if isinstance(value, list):
             return ", ".join(str(v) for v in value)
         return value
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return details behind the value."""
+        if not self.coordinator.data:
+            return {}
+        return node_attributes(
+            self.entity_description.key, self._node_name, self.coordinator.data
+        )
 
 
 class BrowserDaemonBrowserTabsSensor(BrowserDaemonBrowserEntity, SensorEntity):

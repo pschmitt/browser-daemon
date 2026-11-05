@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -158,6 +160,25 @@ class BrowserDaemonNodeBinarySensor(BrowserDaemonNodeEntity, BinarySensorEntity)
         if not node_data:
             return False
         return node_data.get("status") == "online"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Describe the node."""
+        n = self.node_data
+        return {
+            k: n.get(k)
+            for k in (
+                "url",
+                "version",
+                "revision",
+                "supported_engines",
+                "max_sessions",
+                "profiles_count",
+                "recordings_count",
+                "is_local",
+            )
+            if n.get(k) is not None
+        }
 
 
 class BrowserDaemonBrowserBinarySensor(BrowserDaemonBrowserEntity, BinarySensorEntity):
