@@ -18,7 +18,6 @@ from .api import (
 from .const import (
     CONF_POLL_INTERVAL,
     DEFAULT_POLL_INTERVAL,
-    DOMAIN,
     EVENT_SESSION_STARTED,
     EVENT_SESSION_STOPPED,
 )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
@@ -54,9 +54,7 @@ async def async_setup_entry(
         if not new:
             return
         known.update(new)
-        async_add_entities(
-            BrowserDaemonScreenshot(coordinator, b) for b in sorted(new)
-        )
+        async_add_entities(BrowserDaemonScreenshot(coordinator, b) for b in sorted(new))
 
     entry.async_on_unload(coordinator.async_add_listener(add_new_browsers))
 
@@ -107,7 +105,7 @@ class BrowserDaemonScreenshot(BrowserDaemonBrowserEntity, ImageEntity):
             return self._cached
         self._cached, self._attr_content_type = shot[0], shot[1]
         self._cached_at = time.monotonic()
-        self._attr_image_last_updated = datetime.now(timezone.utc)
+        self._attr_image_last_updated = datetime.now(UTC)
         self.async_write_ha_state()
         return self._cached
 
@@ -188,6 +186,6 @@ class BrowserDaemonNodeScreenshot(BrowserDaemonNodeEntity, ImageEntity):
             return self._cached if self._cached_session == sid else None
         self._cached, self._cached_session = data, sid
         self._cached_at = time.monotonic()
-        self._attr_image_last_updated = datetime.now(timezone.utc)
+        self._attr_image_last_updated = datetime.now(UTC)
         self.async_write_ha_state()
         return data

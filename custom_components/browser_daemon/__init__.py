@@ -33,11 +33,11 @@ CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 __all__ = [
     "DOMAIN",
+    "BrowserDaemonAuthError",
     "BrowserDaemonClient",
+    "BrowserDaemonConnectionError",
     "BrowserDaemonCoordinator",
     "BrowserDaemonError",
-    "BrowserDaemonAuthError",
-    "BrowserDaemonConnectionError",
     "BrowserDaemonNodeOfflineError",
     "async_get_client",
     "async_get_coordinator",

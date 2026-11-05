@@ -106,7 +106,9 @@ class BrowserDaemonBrowserEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
         super().__init__(coordinator)
         self._browser_id = browser_id
         self._key = key
-        self._attr_unique_id = f"{coordinator.entry.entry_id}_browser_{browser_id}_{key}"
+        self._attr_unique_id = (
+            f"{coordinator.entry.entry_id}_browser_{browser_id}_{key}"
+        )
 
         info = self.browser_data
         dev_reg = dr.async_get(coordinator.hass)
@@ -114,7 +116,9 @@ class BrowserDaemonBrowserEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
             identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_mesh")}
         )
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_browser_{browser_id}")},
+            identifiers={
+                (DOMAIN, f"{coordinator.entry.entry_id}_browser_{browser_id}")
+            },
             entry_type=DeviceEntryType.SERVICE,
             name=info.get("name") or f"Browser {browser_id[:8]}",
             manufacturer="pschmitt",
@@ -130,6 +134,4 @@ class BrowserDaemonBrowserEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
         """Return data for this browser."""
         if not self.coordinator.data:
             return {}
-        return (self.coordinator.data.get("browsers") or {}).get(
-            self._browser_id
-        ) or {}
+        return (self.coordinator.data.get("browsers") or {}).get(self._browser_id) or {}

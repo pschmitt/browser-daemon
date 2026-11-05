@@ -12,7 +12,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import BrowserDaemonAuthError, BrowserDaemonClient
-from .const import CONF_CLUSTER_SECRET, CONF_URL, CONF_VERIFY_SSL, DOMAIN
+from .const import CONF_CLUSTER_SECRET, CONF_URL, CONF_VERIFY_SSL
 
 _LOGGER = logging.getLogger(__name__)
 
