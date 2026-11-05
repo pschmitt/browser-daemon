@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-05
+
+### Added
+
+* Log in to a tab that is already open: `POST /api/sessions/{id}/login` (and
+  `login()` in the Python client) fills a username, a password and an optional
+  one-time code, only on the origins you allow, and says whether it worked
+  (`authenticated`, `needs_totp`, `needs_interaction`, `failed`, `unknown`). It needs
+  the cluster secret and returns no page text.
+* Home Assistant: the browsers of the extension show up as devices, with an online
+  sensor, the number of shared tabs, their version, and a picture of the tab in
+  front. Every node has a picture of its latest session. The counters (nodes,
+  sessions, profiles, recordings, storage) list what they count in their
+  attributes, and every device shows its version and revision. Mesh, nodes and
+  browsers are service devices. New services `browser_daemon.login` and
+  `browser_daemon.set_idle_timeout`.
+* The dashboard marks a session that Playwright steers with a Playwright badge, and
+  "Agents only" keeps it, also when it is an integration (Home Assistant's workers).
+
+### Changed
+
+* The extension's vault fill masks the one-time code it types when the daemon asks
+  for it, as the new login API does.
+
 ## [0.12.2] - 2026-11-04
 
 ### Changed
