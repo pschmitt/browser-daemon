@@ -49,11 +49,18 @@ MESH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         icon="mdi:account-group",
     ),
     SensorEntityDescription(
+        key="total_recordings",
+        translation_key="total_recordings",
+        native_unit_of_measurement="recordings",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:video-box",
+    ),
+    SensorEntityDescription(
         key="total_storage_bytes",
         translation_key="total_storage_bytes",
         device_class=SensorDeviceClass.DATA_SIZE,
         native_unit_of_measurement=UnitOfInformation.BYTES,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:database",
     ),
     SensorEntityDescription(
@@ -78,7 +85,7 @@ NODE_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         translation_key="storage_used_bytes",
         device_class=SensorDeviceClass.DATA_SIZE,
         native_unit_of_measurement=UnitOfInformation.BYTES,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:harddisk",
     ),
     SensorEntityDescription(
@@ -114,11 +121,29 @@ async def async_setup_entry(
 
     # Add per-node sensors
     nodes = (coordinator.data or {}).get("nodes", {})
+    known_nodes = set(nodes)
     for node_name in nodes:
         for desc in NODE_SENSOR_DESCRIPTIONS:
             entities.append(BrowserDaemonNodeSensor(coordinator, node_name, desc))
 
     async_add_entities(entities)
+
+    def add_new_node_entities() -> None:
+        """Add entities for nodes first seen after initial setup."""
+        current_nodes = set((coordinator.data or {}).get("nodes", {}))
+        new_nodes = current_nodes - known_nodes
+        if not new_nodes:
+            return
+        known_nodes.update(new_nodes)
+        async_add_entities(
+            [
+                BrowserDaemonNodeSensor(coordinator, node_name, desc)
+                for node_name in sorted(new_nodes)
+                for desc in NODE_SENSOR_DESCRIPTIONS
+            ]
+        )
+
+    entry.async_on_unload(coordinator.async_add_listener(add_new_node_entities))
 
 
 class BrowserDaemonMeshSensor(BrowserDaemonEntity, SensorEntity):

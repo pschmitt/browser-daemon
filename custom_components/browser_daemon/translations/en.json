@@ -73,6 +73,9 @@
       },
       "latency_ms": {
         "name": "Latency"
+      },
+      "total_recordings": {
+        "name": "Total Recordings"
       }
     },
     "binary_sensor": {
@@ -163,6 +166,10 @@
         "node": {
           "name": "Node",
           "description": "Target mesh node."
+        },
+        "session_id": {
+          "name": "Session ID",
+          "description": "Optional UUID of the session that should receive the new tab."
         }
       }
     },
@@ -303,6 +310,70 @@
         "node": {
           "name": "Node",
           "description": "Send the run to this mesh node."
+        }
+      }
+    },
+    "set_idle_timeout": {
+      "name": "Set Idle Timeout",
+      "description": "Change the idle timeout for an active browser session. Use 0 to disable it.",
+      "fields": {
+        "session_id": {
+          "name": "Session ID",
+          "description": "UUID of the session to update."
+        },
+        "idle_timeout_minutes": {
+          "name": "Idle Timeout",
+          "description": "Minutes before stopping. Use 0 for no timeout."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Node where the session is running."
+        }
+      }
+    },
+    "login": {
+      "name": "Log In",
+      "description": "Log in to a Chromium session. Credentials may appear in Home Assistant traces, including values from !secret.",
+      "fields": {
+        "session_id": {
+          "name": "Session ID",
+          "description": "UUID of the Chromium session."
+        },
+        "tab": {
+          "name": "Tab ID",
+          "description": "Chromium page ID in the session."
+        },
+        "username": {
+          "name": "Username",
+          "description": "Username to enter in the login form."
+        },
+        "password": {
+          "name": "Password",
+          "description": "Password to enter in the login form."
+        },
+        "totp_secret": {
+          "name": "TOTP Secret",
+          "description": "Optional Base32 TOTP seed; do not use with a TOTP code."
+        },
+        "totp_code": {
+          "name": "TOTP Code",
+          "description": "Optional 6 to 8 digit TOTP code; do not use with a TOTP secret."
+        },
+        "allowed_origins": {
+          "name": "Allowed Origins",
+          "description": "Origins allowed to receive credentials."
+        },
+        "success_selector": {
+          "name": "Success Selector",
+          "description": "Visible element that proves login succeeded."
+        },
+        "timeout_seconds": {
+          "name": "Timeout",
+          "description": "Maximum time to wait for login results."
+        },
+        "node": {
+          "name": "Node",
+          "description": "Node running the session."
         }
       }
     }

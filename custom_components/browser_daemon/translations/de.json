@@ -73,6 +73,9 @@
       },
       "latency_ms": {
         "name": "Latenz"
+      },
+      "total_recordings": {
+        "name": "Aufzeichnungen gesamt"
       }
     },
     "binary_sensor": {
@@ -92,6 +95,90 @@
       },
       "vacuum_recordings": {
         "name": "Alte Aufnahmen bereinigen"
+      }
+    }
+  },
+  "services": {
+    "set_idle_timeout": {
+      "name": "Leerlaufzeit festlegen",
+      "description": "Ändert die Leerlaufzeit einer aktiven Browsersitzung. 0 deaktiviert den Timeout.",
+      "fields": {
+        "session_id": {
+          "name": "Sitzungs-ID",
+          "description": "UUID der zu ändernden Sitzung."
+        },
+        "idle_timeout_minutes": {
+          "name": "Leerlaufzeit",
+          "description": "Minuten bis zum Beenden. 0 deaktiviert den Timeout."
+        },
+        "node": {
+          "name": "Knoten",
+          "description": "Knoten, auf dem die Sitzung läuft."
+        }
+      }
+    },
+    "login": {
+      "name": "Anmelden",
+      "description": "Meldet eine Chromium-Sitzung an. Zugangsdaten können in Home-Assistant-Ablaufspuren erscheinen, auch bei Verwendung von !secret.",
+      "fields": {
+        "session_id": {
+          "name": "Sitzungs-ID",
+          "description": "UUID der Chromium-Sitzung."
+        },
+        "tab": {
+          "name": "Tab-ID",
+          "description": "Chromium-Seiten-ID innerhalb der Sitzung."
+        },
+        "username": {
+          "name": "Benutzername",
+          "description": "Benutzername für das Anmeldeformular."
+        },
+        "password": {
+          "name": "Passwort",
+          "description": "Passwort für das Anmeldeformular."
+        },
+        "totp_secret": {
+          "name": "TOTP-Schlüssel",
+          "description": "Optionaler Base32-TOTP-Schlüssel; nicht zusammen mit einem TOTP-Code verwenden."
+        },
+        "totp_code": {
+          "name": "TOTP-Code",
+          "description": "Optionaler TOTP-Code mit 6 bis 8 Ziffern; nicht zusammen mit einem TOTP-Schlüssel verwenden."
+        },
+        "allowed_origins": {
+          "name": "Erlaubte Ursprünge",
+          "description": "Ursprünge, an die Zugangsdaten gesendet werden dürfen."
+        },
+        "success_selector": {
+          "name": "Erfolgsselektor",
+          "description": "Sichtbares Element, das die erfolgreiche Anmeldung bestätigt."
+        },
+        "timeout_seconds": {
+          "name": "Timeout",
+          "description": "Maximale Wartezeit auf das Anmeldeergebnis."
+        },
+        "node": {
+          "name": "Knoten",
+          "description": "Knoten, auf dem die Sitzung läuft."
+        }
+      }
+    },
+    "open_tab": {
+      "name": "Tab öffnen",
+      "description": "Öffnet einen neuen Tab im Browser.",
+      "fields": {
+        "url": {
+          "name": "URL",
+          "description": "Webadresse für die Navigation."
+        },
+        "session_id": {
+          "name": "Sitzungs-ID",
+          "description": "Optionale UUID der Sitzung für den neuen Tab."
+        },
+        "node": {
+          "name": "Knoten",
+          "description": "Zielknoten."
+        }
       }
     }
   }

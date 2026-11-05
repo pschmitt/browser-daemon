@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Final
+
 from homeassistant.const import Platform
 
 DOMAIN: Final = "browser_daemon"
@@ -34,6 +35,8 @@ EVENT_SESSION_STOPPED: Final = f"{DOMAIN}_session_stopped"
 # Services
 SERVICE_CREATE_SESSION: Final = "create_session"
 SERVICE_STOP_SESSION: Final = "stop_session"
+SERVICE_SET_IDLE_TIMEOUT: Final = "set_idle_timeout"
+SERVICE_LOGIN: Final = "login"
 SERVICE_OPEN_TAB: Final = "open_tab"
 SERVICE_CLOSE_TAB: Final = "close_tab"
 SERVICE_EXPORT_AUTH: Final = "export_auth"

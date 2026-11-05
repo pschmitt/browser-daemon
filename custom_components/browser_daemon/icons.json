@@ -13,6 +13,9 @@
       "total_profiles": {
         "default": "mdi:account-group"
       },
+      "total_recordings": {
+        "default": "mdi:video-box"
+      },
       "total_storage_bytes": {
         "default": "mdi:database"
       },

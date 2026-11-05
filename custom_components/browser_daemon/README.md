@@ -8,13 +8,15 @@ A state-of-the-art Home Assistant custom component for managing, observing, and 
 - **Rich Entity Model**:
   - **Hub Device**: `Browser Daemon Mesh (<Node>)` representing cluster-wide metrics.
   - **Node Devices**: Per-node devices linked via `via_device`, reporting latency, uptime, active session count, storage used, and online/offline status.
-  - **Sensors**: Active sessions, online nodes, total nodes, saved profiles, storage consumption, storage limits, and node ping latencies.
+  - **Sensors**: Active sessions, online nodes, total nodes, recordings, saved profiles, storage consumption, storage limits, and node ping latencies.
   - **Binary Sensors**: Mesh connectivity, node reachability, and active session indicators.
   - **Buttons**: Mesh refresh and recording vacuuming.
 - **HA Services / Actions**:
   - `browser_daemon.create_session`: Launch ad-hoc or profile-backed browser sessions (with Chromium/Firefox, adblock, recording, phone/desktop screen emulation, and idle timeouts).
   - `browser_daemon.stop_session`: Terminate running sessions by session UUID.
-  - `browser_daemon.open_tab`: Open a tab on a node or session.
+  - `browser_daemon.set_idle_timeout`: Change a session's idle timeout (`0` disables it).
+  - `browser_daemon.login`: Fill and submit a login form in an existing Chromium session.
+  - `browser_daemon.open_tab`: Open a tab on a node or a selected session.
   - `browser_daemon.close_tab`: Close an open Chromium target/tab.
   - `browser_daemon.export_auth`: Export cookies and `localStorage` (Playwright `storageState` format) for automated token extraction.
   - `browser_daemon.take_screenshot`: Capture live JPEG screenshots from active browser sessions.
@@ -63,6 +65,15 @@ if client:
     auth_state = await client.async_export_auth(
         page_id=...,
         storage=True,
+    )
+
+    # Log in without putting credentials in Home Assistant action data/traces
+    login = await client.async_login(
+        session_id=session_id,
+        tab=tab_id,
+        username=username,
+        password=password,
+        success_selector=".account-home",
     )
 
     # Close the session when done
@@ -115,6 +126,22 @@ response_variable: run
 screenshot of the tab comes with it only with `screenshot_on_error: true`.
 Values in `args` are never logged by the daemon; a `script` gets them as `args`,
 steps take them with `value_arg`.
+
+## Login (`browser_daemon.login`)
+
+Login needs the integration's **cluster secret** and an existing Chromium
+session. The action returns `authenticated`, `needs_totp`, `needs_interaction`,
+`failed`, or `unknown`. It reports `authenticated` only when a
+`success_selector` is present and visible. Set `allowed_origins` when the login
+flow redirects to another origin.
+
+Home Assistant may keep action data in automation traces; see its
+[trace privacy guidance](https://www.home-assistant.io/docs/automation/testing/#preparing-a-trace-for-sharing).
+The credential fields
+in this service can therefore expose usernames, passwords, and TOTP values in a
+trace, even when an automation uses `!secret`; the UI selectors do not hide
+trace data. For dependent integrations that must handle credentials, call
+`BrowserDaemonClient.async_login` directly instead of invoking this service.
 
 ## Installation
 

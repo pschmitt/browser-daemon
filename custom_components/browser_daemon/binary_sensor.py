@@ -47,6 +47,7 @@ async def async_setup_entry(
 
     # Per-node online binary sensor
     nodes = (coordinator.data or {}).get("nodes", {})
+    known_nodes = set(nodes)
     for node_name in nodes:
         desc = BinarySensorEntityDescription(
             key="node_online",
@@ -57,6 +58,31 @@ async def async_setup_entry(
         entities.append(BrowserDaemonNodeBinarySensor(coordinator, node_name, desc))
 
     async_add_entities(entities)
+
+    def add_new_node_entities() -> None:
+        """Add online sensors for nodes first seen after initial setup."""
+        current_nodes = set((coordinator.data or {}).get("nodes", {}))
+        new_nodes = current_nodes - known_nodes
+        if not new_nodes:
+            return
+        known_nodes.update(new_nodes)
+        async_add_entities(
+            [
+                BrowserDaemonNodeBinarySensor(
+                    coordinator,
+                    node_name,
+                    BinarySensorEntityDescription(
+                        key="node_online",
+                        translation_key="node_online",
+                        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+                        icon="mdi:server-network",
+                    ),
+                )
+                for node_name in sorted(new_nodes)
+            ]
+        )
+
+    entry.async_on_unload(coordinator.async_add_listener(add_new_node_entities))
 
 
 class BrowserDaemonMeshBinarySensor(BrowserDaemonEntity, BinarySensorEntity):

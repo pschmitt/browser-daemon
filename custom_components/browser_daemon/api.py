@@ -269,6 +269,67 @@ class BrowserDaemonClient:
             raise BrowserDaemonError(
                 f"Failed to set idle timeout ({resp.status}): {text}"
             )
+        if resp.status == 204:
+            return {
+                "success": True,
+                "session_id": session_id,
+                "idle_timeout_minutes": minutes,
+            }
+        if resp.content_length == 0 or resp.content_type != "application/json":
+            return {
+                "success": True,
+                "session_id": session_id,
+                "idle_timeout_minutes": minutes,
+            }
+        return await resp.json()
+
+    async def async_login(
+        self,
+        session_id: str,
+        *,
+        tab: str,
+        username: str,
+        password: str,
+        totp_secret: str | None = None,
+        totp_code: str | None = None,
+        allowed_origins: list[str] | None = None,
+        success_selector: str | None = None,
+        timeout_seconds: int = 30,
+        node: str | None = None,
+    ) -> dict[str, Any]:
+        """Fill and submit a login form in an existing Chromium session tab.
+
+        This endpoint requires the cluster secret. Credential values are sent
+        only in the request body and are not logged or retained by this client.
+        """
+        if not self.cluster_secret:
+            raise BrowserDaemonError("Login requires a configured cluster secret")
+
+        payload: dict[str, Any] = {
+            "tab": tab,
+            "username": username,
+            "password": password,
+            "timeout_seconds": timeout_seconds,
+        }
+        for key, value in (
+            ("totp_secret", totp_secret),
+            ("totp_code", totp_code),
+            ("success_selector", success_selector),
+        ):
+            if value is not None:
+                payload[key] = value
+        if allowed_origins:
+            payload["allowed_origins"] = allowed_origins
+
+        resp = await self._async_request(
+            "POST",
+            f"/api/sessions/{quote(session_id)}/login",
+            node=node,
+            json=payload,
+            timeout=timeout_seconds + 5,
+        )
+        if resp.status != 200:
+            raise BrowserDaemonError(f"Login failed: HTTP {resp.status}")
         return await resp.json()
 
     async def async_delete_session(

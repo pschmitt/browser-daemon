@@ -74,6 +74,100 @@ stop_session:
       example: "9dbfef82-5852-4139-8a53-80671d43dee1"
       selector:
         text:
+
+set_idle_timeout:
+  name: Set Idle Timeout
+  description: Change the idle timeout for an active browser session. Use 0 to disable it.
+  fields:
+    session_id:
+      name: Session ID
+      description: UUID of the session to update.
+      required: true
+      selector:
+        text:
+    idle_timeout_minutes:
+      name: Idle Timeout
+      description: Minutes without activity before the session stops. Use 0 for no timeout.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: minutes
+    node:
+      name: Node
+      description: Node where the session is running.
+      selector:
+        text:
+
+login:
+  name: Log In
+  description: >-
+    Fill and submit a login form in an existing Chromium session. Login requires
+    the integration's cluster secret. Credentials supplied to this action can
+    appear in Home Assistant automation traces, including values from !secret.
+    Use the direct Python API from another integration when handling credentials.
+  fields:
+    session_id:
+      name: Session ID
+      description: UUID of the Chromium session.
+      required: true
+      selector:
+        text:
+    tab:
+      name: Tab ID
+      description: Chromium page ID in the session.
+      required: true
+      selector:
+        text:
+    username:
+      name: Username
+      description: Username to enter in the login form.
+      required: true
+      selector:
+        text:
+    password:
+      name: Password
+      description: Password to enter in the login form.
+      required: true
+      selector:
+        text:
+          type: password
+    totp_secret:
+      name: TOTP Secret
+      description: Optional Base32 TOTP seed. Do not use with a TOTP code.
+      selector:
+        text:
+          type: password
+    totp_code:
+      name: TOTP Code
+      description: Optional 6 to 8 digit TOTP code. Do not use with a TOTP secret.
+      selector:
+        text:
+    allowed_origins:
+      name: Allowed Origins
+      description: HTTP or HTTPS origins allowed to receive credentials. Defaults to the tab origin.
+      selector:
+        object:
+    success_selector:
+      name: Success Selector
+      description: Visible page element that proves login succeeded. Without it, authenticated is never reported.
+      selector:
+        text:
+    timeout_seconds:
+      name: Timeout
+      description: Maximum time to wait for login results.
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 90
+          unit_of_measurement: seconds
+    node:
+      name: Node
+      description: Node running the session.
+      selector:
+        text:
     node:
       name: Node
       description: Node where the session is running.
@@ -89,6 +183,11 @@ open_tab:
       description: Web page URL to navigate to.
       required: true
       example: "https://ha.brkn.lol"
+      selector:
+        text:
+    session_id:
+      name: Session ID
+      description: Optional UUID of the session that should receive the new tab.
       selector:
         text:
     node:
