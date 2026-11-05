@@ -1360,7 +1360,7 @@ const fillLogin = (c, urls) => {
   walk(document);
   const type = (el) => (el.getAttribute("type") || "").toLowerCase();
   const shown = (el) => {
-    if (el.disabled || el.readOnly) return false;
+    if (el.disabled || el.readOnly || el.closest('[aria-hidden="true"], [inert]')) return false;
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return false;
     const s = getComputedStyle(el);
