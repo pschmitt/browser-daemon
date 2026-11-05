@@ -326,6 +326,7 @@ button.hb:hover, .hero-top button.chip:hover { filter: brightness(1.12); }
 .hb.rec .rec-dot { background: #fff; }
 .hb.public { background: var(--public); color: #fff; cursor: pointer; box-shadow: 0 0 0 2px color-mix(in oklab, var(--public) 35%, transparent), 0 2px 10px color-mix(in oklab, var(--public) 60%, transparent); }
 .hb.note { background: color-mix(in oklab, var(--accent-btn) 88%, #000); }
+.hb.playwright { color: #fff; background: color-mix(in oklab, #2ead33 78%, #000); }
 .hb.sound { color: #fff; background: color-mix(in oklab, var(--accent) 85%, #000); padding: 0 6px; }
 .hb-n { display: inline-flex; align-items: center; gap: 3px; padding-left: 5px; margin-left: 1px; border-left: 1px solid #fff6; }
 .hero-foot { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 8px; padding: 22px 10px 8px;
@@ -1068,6 +1069,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></symbol>
   <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9.5 13v1M14.5 13v1M9.5 17h5M2 13v3M22 13v3"/></symbol>
   <symbol id="i-homeassistant" viewBox="124 124 184 184"><path fill="#18BCF2" stroke="none" d="M296.22,200.98L223.78,128.54C219.51,124.26 212.5,124.26 208.23,128.54L135.78,200.98C131.51,205.25 128,213.71 128,219.76V285.76C128,291.81 132.95,296.76 139,296.76H206.66L176.87,266.96C175.34,267.49 173.7,267.79 172,267.79C163.71,267.79 156.97,261.05 156.97,252.76C156.97,244.47 163.71,237.73 172,237.73C180.29,237.73 187.03,244.47 187.03,252.76C187.03,254.47 186.73,256.1 186.21,257.64L209.4,280.83V195.85C204.41,193.4 200.97,188.29 200.97,182.37C200.97,174.08 207.71,167.33 216,167.33C224.29,167.33 231.03,174.08 231.03,182.37C231.03,188.29 227.59,193.4 222.6,195.85V255.45L245.67,232.38C245.22,230.94 244.97,229.42 244.97,227.83C244.97,219.55 251.71,212.8 260,212.8C268.29,212.8 275.03,219.55 275.03,227.83C275.03,236.12 268.29,242.87 260,242.87C258.17,242.87 256.42,242.52 254.8,241.92L222.6,274.12V296.77H293C299.05,296.77 304,291.82 304,285.77V219.77C304,213.72 300.5,205.27 296.22,200.99V200.98Z"/></symbol>
+  <symbol id="i-playwright" viewBox="0 0 24 24"><path d="M12 8.5h7v5.5a3.5 3.5 0 0 1-7 0z"/><path d="M4 4.5h8v7a4 4 0 0 1-8 0z"/><path d="M6.5 8v1.2M9.5 8v1.2M6.3 11.3c.8.8 2.600.8 3.400 0"/></symbol>
   <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M21 16l-5-5-9 9"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 14a6.5 6.5 0 0 1 3 6"/></symbol>
@@ -1173,7 +1175,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <section class="view" id="view-sessions">
     <div class="sess-tools" id="sessTools" hidden>
       <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="sessSearch" placeholder="Filter sessions: name, agent, topic, address…" autocomplete="off" spellcheck="false" aria-label="Filter sessions"></label>
-      <button class="btn" id="agentsOnlyBtn" data-act="agents-only" aria-pressed="false" title="Only the sessions an agent is driving"><svg class="i sm"><use href="#i-bot"/></svg>Agents only</button>
+      <button class="btn" id="agentsOnlyBtn" data-act="agents-only" aria-pressed="false" title="Only the sessions an agent or Playwright is driving"><svg class="i sm"><use href="#i-bot"/></svg>Agents only</button>
     </div>
     <div class="session-grid" id="sessionGrid"></div>
   </section>
@@ -2252,6 +2254,8 @@ function profileInfo(p) {
 // Name to send for a rename/copy/transfer target; legacy nodes need the directory name.
 const profileTargetName = (p, name) => (!p.id && p.engine === 'firefox' ? 'firefox_' + name : name);
 // An agent (Playwright, Puppeteer, ...) that is connected to a session; "" when none is.
+// A Playwright client is connected (an agent, or an integration such as a worker): the session is steered by it.
+const playwrightOf = (s) => (s?.clients || []).find((c) => /playwright/i.test(c.kind || ''));
 const driverOf = (s) => { const a = (s?.clients || []).find((c) => c.agent); return a ? agentLabel(a) : ''; };
 const drivenAttr = (s, owner = null) => { const who = owner?.agent ? agentLabel(owner) : driverOf(s); return who ? ` data-driven="${esc(who)}" data-driven-session="${esc(s.id)}"${owner?.conversation ? ` data-driven-conversation="${esc(owner.conversation)}"` : ''}` : ''; };
 // Who is at the wheel: the agent, what it works on, where it runs and for how long.
@@ -2451,7 +2455,7 @@ function renderSessions() {
   const grid = $('sessionGrid');
   const all = dashboardSessions().filter(inFilter);
   const words = sessQuery.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = all.filter((s) => (!agentsOnly || driverOf(s)) && words.every((w) => sessHaystack(s).includes(w))).sort(newestFirst);
+  const list = all.filter((s) => (!agentsOnly || driverOf(s) || playwrightOf(s)) && words.every((w) => sessHaystack(s).includes(w))).sort(newestFirst);
   const stale = words.length || agentsOnly ? [] : staleSessions().filter(inFilter);
   $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery;
   $('agentsOnlyBtn').setAttribute('aria-pressed', String(agentsOnly));
@@ -2589,6 +2593,7 @@ function sessionCard(s) {
   const n = s.client_count || 0;
   // Who is connected (an older node reports only the count): agents are Playwright/Puppeteer.
   const clients = s.clients || [];
+  const pw = clients.filter((c) => /playwright/i.test(c.kind || ''));
   const agents = clients.filter((c) => c.agent), integrations = clients.filter((c) => c.integration);
   const others = clients.filter((c) => !c.agent && !c.integration);
   const lead = agents[0];
@@ -2604,6 +2609,7 @@ function sessionCard(s) {
       ? `<button class="hb" data-act="rec-dialog" data-key="${key}" title="Recording paused: resume, stop or switch the sound">${icon('pause', 'sm')}Paused</button>`
       : `<button class="hb rec" data-act="rec-dialog" data-key="${key}" title="Recording${s.recording_audio ? ' with sound' : ''}: pause, stop or switch the sound"><span class="rec-dot" aria-hidden="true"></span>REC${s.recording_audio ? ` ${icon('speaker', 'sm')}` : ''}</button>`),
     sh && `<button class="hb public" data-act="share-session" data-key="${key}" title="${esc(`Shared publicly: anyone with the link can ${sh.control ? 'watch and control' : 'watch'} it${sh.expires_at ? ` (until ${absTime(sh.expires_at)})` : ''}${sh.watching ? `; ${sh.watching} watching now` : ''}. Manage the link`)}">${icon('globe', 'sm')}${sh.control ? 'Public · control' : 'Public'}${sh.watching ? `<span class="hb-n">${icon('eye', 'sm')}${sh.watching}</span>` : ''}</button>`,
+    pw.length && `<span class="hb playwright" title="${esc(pw.length > 1 ? `Steered by Playwright (${pw.length} clients)` : 'Steered by Playwright')}">${icon('playwright', 'sm')}Playwright</span>`,
     s.audible && `<span class="hb sound" title="Playing sound">${icon('speaker', 'sm')}</span>`,
     s.notes && `<button class="hb note" data-act="notes-session" data-key="${key}" title="${esc(`${plural(s.notes.count, 'note')}, the latest:\n\n${s.notes.last || ''}`)}" aria-label="${esc(plural(s.notes.count, 'note'))}">${icon('note', 'sm')}${s.notes.count}</button>`,
   ].filter(Boolean).join('');
