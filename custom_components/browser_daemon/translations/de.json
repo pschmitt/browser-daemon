@@ -76,6 +76,9 @@
       },
       "total_recordings": {
         "name": "Aufzeichnungen gesamt"
+      },
+      "browser_tabs": {
+        "name": "Geteilte Tabs"
       }
     },
     "binary_sensor": {
@@ -87,6 +90,9 @@
       },
       "node_online": {
         "name": "Knoten-Status"
+      },
+      "browser_online": {
+        "name": "Status"
       }
     },
     "button": {

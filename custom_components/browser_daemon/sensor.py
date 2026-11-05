@@ -17,7 +17,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import BrowserDaemonCoordinator
-from .entity import BrowserDaemonEntity, BrowserDaemonNodeEntity
+from .entity import (
+    BrowserDaemonBrowserEntity,
+    BrowserDaemonEntity,
+    BrowserDaemonNodeEntity,
+)
 
 MESH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
     SensorEntityDescription(
@@ -126,7 +130,25 @@ async def async_setup_entry(
         for desc in NODE_SENSOR_DESCRIPTIONS:
             entities.append(BrowserDaemonNodeSensor(coordinator, node_name, desc))
 
+    known_browsers = set((coordinator.data or {}).get("browsers", {}))
+    entities.extend(
+        BrowserDaemonBrowserTabsSensor(coordinator, bid) for bid in known_browsers
+    )
+
     async_add_entities(entities)
+
+    def add_new_browser_entities() -> None:
+        """Add entities for extension browsers first seen after setup."""
+        current = set((coordinator.data or {}).get("browsers", {}))
+        new = current - known_browsers
+        if not new:
+            return
+        known_browsers.update(new)
+        async_add_entities(
+            [BrowserDaemonBrowserTabsSensor(coordinator, b) for b in sorted(new)]
+        )
+
+    entry.async_on_unload(coordinator.async_add_listener(add_new_browser_entities))
 
     def add_new_node_entities() -> None:
         """Add entities for nodes first seen after initial setup."""
@@ -190,3 +212,33 @@ class BrowserDaemonNodeSensor(BrowserDaemonNodeEntity, SensorEntity):
         if not node_data:
             return None
         return node_data.get(self.entity_description.key)
+
+
+class BrowserDaemonBrowserTabsSensor(BrowserDaemonBrowserEntity, SensorEntity):
+    """Number of shared tabs of an extension-backed browser."""
+
+    _attr_translation_key = "browser_tabs"
+    _attr_native_unit_of_measurement = "tabs"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:tab"
+
+    def __init__(self, coordinator: BrowserDaemonCoordinator, browser_id: str) -> None:
+        """Initialize the tab count sensor."""
+        super().__init__(coordinator, browser_id, "tabs")
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the number of shared tabs."""
+        data = self.browser_data
+        return data.get("tab_count") if data else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Describe the browser."""
+        data = self.browser_data
+        return {
+            "browser": data.get("browser"),
+            "version": data.get("version"),
+            "remembered": data.get("remembered"),
+            "native_control": data.get("native_control"),
+        }

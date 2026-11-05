@@ -76,6 +76,9 @@
       },
       "total_recordings": {
         "name": "Total Recordings"
+      },
+      "browser_tabs": {
+        "name": "Shared tabs"
       }
     },
     "binary_sensor": {
@@ -87,6 +90,9 @@
       },
       "node_online": {
         "name": "Node Status"
+      },
+      "browser_online": {
+        "name": "Status"
       }
     },
     "button": {

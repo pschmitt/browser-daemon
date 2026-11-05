@@ -187,6 +187,18 @@ class BrowserDaemonClient:
             self._local_node_name = local_node["name"]
         return data
 
+    async def async_list_extension_browsers(self) -> list[dict[str, Any]]:
+        """List extension-backed (shared) browsers registered on the local node."""
+        resp = await self._async_request("GET", "/api/extension/nodes", timeout=15)
+        if resp.status != 200:
+            raise BrowserDaemonError(
+                f"Failed to list extension browsers: HTTP {resp.status}"
+            )
+        data = await resp.json()
+        if isinstance(data, dict):
+            data = data.get("nodes") or []
+        return [b for b in data if isinstance(b, dict) and b.get("id")]
+
     async def async_list_sessions(
         self, node: str | None = None
     ) -> list[dict[str, Any]]:

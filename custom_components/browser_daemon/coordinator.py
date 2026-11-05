@@ -90,6 +90,18 @@ class BrowserDaemonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "is_local": False,
                 }
 
+        # Extension-backed browsers are not mesh nodes; failures here must not
+        # take the rest of the data down (older daemons lack the endpoint).
+        browsers: dict[str, dict[str, Any]] = {}
+        try:
+            for browser in await self.client.async_list_extension_browsers():
+                browsers[str(browser["id"])] = {
+                    **browser,
+                    "tab_count": len(browser.get("tabs") or []),
+                }
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Could not list extension browsers: %s", err)
+
         # Process sessions
         sessions = overview.get("sessions") or []
         sessions_by_id = {s["id"]: s for s in sessions if "id" in s}
@@ -141,6 +153,7 @@ class BrowserDaemonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "local_node": local_node,
             "peers": peers,
             "nodes": all_nodes,
+            "browsers": browsers,
             "sessions": sessions,
             "sessions_by_id": sessions_by_id,
             "profiles": profiles,

@@ -13,7 +13,11 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import BrowserDaemonCoordinator
-from .entity import BrowserDaemonEntity, BrowserDaemonNodeEntity
+from .entity import (
+    BrowserDaemonBrowserEntity,
+    BrowserDaemonEntity,
+    BrowserDaemonNodeEntity,
+)
 
 MESH_BINARY_DESCRIPTIONS: tuple[BinarySensorEntityDescription, ...] = (
     BinarySensorEntityDescription(
@@ -57,7 +61,25 @@ async def async_setup_entry(
         )
         entities.append(BrowserDaemonNodeBinarySensor(coordinator, node_name, desc))
 
+    known_browsers = set((coordinator.data or {}).get("browsers", {}))
+    entities.extend(
+        BrowserDaemonBrowserBinarySensor(coordinator, bid) for bid in known_browsers
+    )
+
     async_add_entities(entities)
+
+    def add_new_browser_entities() -> None:
+        """Add entities for extension browsers first seen after setup."""
+        current = set((coordinator.data or {}).get("browsers", {}))
+        new = current - known_browsers
+        if not new:
+            return
+        known_browsers.update(new)
+        async_add_entities(
+            [BrowserDaemonBrowserBinarySensor(coordinator, b) for b in sorted(new)]
+        )
+
+    entry.async_on_unload(coordinator.async_add_listener(add_new_browser_entities))
 
     def add_new_node_entities() -> None:
         """Add online sensors for nodes first seen after initial setup."""
@@ -136,3 +158,20 @@ class BrowserDaemonNodeBinarySensor(BrowserDaemonNodeEntity, BinarySensorEntity)
         if not node_data:
             return False
         return node_data.get("status") == "online"
+
+
+class BrowserDaemonBrowserBinarySensor(BrowserDaemonBrowserEntity, BinarySensorEntity):
+    """Online state of an extension-backed browser."""
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_translation_key = "browser_online"
+    _attr_icon = "mdi:web"
+
+    def __init__(self, coordinator: BrowserDaemonCoordinator, browser_id: str) -> None:
+        """Initialize the browser online sensor."""
+        super().__init__(coordinator, browser_id, "online")
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if the browser's extension is connected."""
+        return bool(self.browser_data.get("online"))

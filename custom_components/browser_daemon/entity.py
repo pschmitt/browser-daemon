@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -85,3 +85,46 @@ class BrowserDaemonNodeEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
             return {}
         nodes = self.coordinator.data.get("nodes") or {}
         return nodes.get(self._node_name) or {}
+
+
+class BrowserDaemonBrowserEntity(CoordinatorEntity[BrowserDaemonCoordinator]):
+    """Base entity for an extension-backed (shared) browser."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: BrowserDaemonCoordinator,
+        browser_id: str,
+        key: str,
+    ) -> None:
+        """Initialize the browser entity."""
+        super().__init__(coordinator)
+        self._browser_id = browser_id
+        self._key = key
+        self._attr_unique_id = f"{coordinator.entry.entry_id}_browser_{browser_id}_{key}"
+
+        info = self.browser_data
+        dev_reg = dr.async_get(coordinator.hass)
+        parent_device = dev_reg.async_get_device(
+            identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_mesh")}
+        )
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{coordinator.entry.entry_id}_browser_{browser_id}")},
+            entry_type=DeviceEntryType.SERVICE,
+            name=info.get("name") or f"Browser {browser_id[:8]}",
+            manufacturer="pschmitt",
+            model=f"{info.get('browser') or 'Browser'} (extension)",
+            sw_version=info.get("version") or None,
+            via_device_id=parent_device.id if parent_device else None,
+            configuration_url=coordinator.client.base_url,
+        )
+
+    @property
+    def browser_data(self) -> dict[str, Any]:
+        """Return data for this browser."""
+        if not self.coordinator.data:
+            return {}
+        return (self.coordinator.data.get("browsers") or {}).get(
+            self._browser_id
+        ) or {}
