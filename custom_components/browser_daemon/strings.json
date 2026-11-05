@@ -121,6 +121,9 @@
     "image": {
       "browser_screenshot": {
         "name": "Screenshot"
+      },
+      "node_screenshot": {
+        "name": "Screenshot"
       }
     }
   },

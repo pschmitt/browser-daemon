@@ -13,7 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import BrowserDaemonCoordinator
-from .entity import BrowserDaemonBrowserEntity
+from .entity import BrowserDaemonBrowserEntity, BrowserDaemonNodeEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +30,23 @@ async def async_setup_entry(
     coordinator: BrowserDaemonCoordinator = hass.data[DOMAIN][entry.entry_id]
     known = set((coordinator.data or {}).get("browsers", {}))
     async_add_entities(BrowserDaemonScreenshot(coordinator, b) for b in sorted(known))
+
+    known_nodes = set((coordinator.data or {}).get("nodes", {}))
+    async_add_entities(
+        BrowserDaemonNodeScreenshot(coordinator, n) for n in sorted(known_nodes)
+    )
+
+    def add_new_nodes() -> None:
+        current = set((coordinator.data or {}).get("nodes", {}))
+        new = current - known_nodes
+        if not new:
+            return
+        known_nodes.update(new)
+        async_add_entities(
+            BrowserDaemonNodeScreenshot(coordinator, n) for n in sorted(new)
+        )
+
+    entry.async_on_unload(coordinator.async_add_listener(add_new_nodes))
 
     def add_new_browsers() -> None:
         current = set((coordinator.data or {}).get("browsers", {}))
@@ -93,3 +110,84 @@ class BrowserDaemonScreenshot(BrowserDaemonBrowserEntity, ImageEntity):
         self._attr_image_last_updated = datetime.now(timezone.utc)
         self.async_write_ha_state()
         return self._cached
+
+
+class BrowserDaemonNodeScreenshot(BrowserDaemonNodeEntity, ImageEntity):
+    """Screenshot of the latest session of a node.
+
+    A node can run several sessions; the one shown is the one agents or live
+    views are using, else the most recently started.
+    """
+
+    _attr_translation_key = "node_screenshot"
+    _attr_icon = "mdi:monitor-screenshot"
+
+    def __init__(self, coordinator: BrowserDaemonCoordinator, node_name: str) -> None:
+        """Initialize the screenshot image."""
+        BrowserDaemonNodeEntity.__init__(self, coordinator, node_name, "screenshot")
+        ImageEntity.__init__(self, coordinator.hass)
+        self._attr_content_type = "image/jpeg"
+        self._cached: bytes | None = None
+        self._cached_session: str | None = None
+        self._cached_at = 0.0
+
+    def _session(self) -> dict | None:
+        local = ((self.coordinator.data or {}).get("local_node") or {}).get("name")
+        mine = [
+            s
+            for s in (self.coordinator.data or {}).get("sessions") or []
+            if (s.get("node_name") or local) == self._node_name
+        ]
+        return max(
+            mine,
+            key=lambda s: (
+                (s.get("client_count") or 0) + (s.get("viewer_count") or 0) > 0,
+                -(s.get("uptime_seconds") or 0),
+            ),
+            default=None,
+        )
+
+    @property
+    def available(self) -> bool:
+        """The node has to be online and running a session."""
+        return (
+            super().available
+            and self.node_data.get("status") == "online"
+            and self._session() is not None
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """Tell which session is shown."""
+        session = self._session() or {}
+        return {
+            "session_id": session.get("id"),
+            "session_name": session.get("name"),
+            "profile": session.get("profile"),
+            "engine": session.get("engine"),
+        }
+
+    async def async_image(self) -> bytes | None:
+        """Return a screenshot of the node's latest session."""
+        session = self._session()
+        if not session or not session.get("id"):
+            return None
+        sid = session["id"]
+        if (
+            self._cached
+            and self._cached_session == sid
+            and time.monotonic() - self._cached_at < CACHE_SECONDS
+        ):
+            return self._cached
+        try:
+            data = await self.coordinator.client.async_screenshot(
+                sid, node=self._node_name
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("Screenshot of session %s failed: %s", sid, err)
+            return self._cached if self._cached_session == sid else None
+        self._cached, self._cached_session = data, sid
+        self._cached_at = time.monotonic()
+        self._attr_image_last_updated = datetime.now(timezone.utc)
+        self.async_write_ha_state()
+        return data
