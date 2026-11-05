@@ -36,27 +36,27 @@ async def async_setup_entry(
         BrowserDaemonNodeScreenshot(coordinator, n) for n in sorted(known_nodes)
     )
 
-    def add_new_nodes() -> None:
-        current = set((coordinator.data or {}).get("nodes", {}))
-        new = current - known_nodes
-        if not new:
-            return
-        known_nodes.update(new)
+    def add_new_images() -> None:
+        """Add images for browsers and nodes first seen after setup."""
+        data = coordinator.data or {}
+        new_browsers = set(data.get("browsers", {})) - known
+        known.update(new_browsers)
+        new_nodes = set(data.get("nodes", {})) - known_nodes
+        known_nodes.update(new_nodes)
         async_add_entities(
-            BrowserDaemonNodeScreenshot(coordinator, n) for n in sorted(new)
+            [
+                *(
+                    BrowserDaemonScreenshot(coordinator, b)
+                    for b in sorted(new_browsers)
+                ),
+                *(
+                    BrowserDaemonNodeScreenshot(coordinator, n)
+                    for n in sorted(new_nodes)
+                ),
+            ]
         )
 
-    entry.async_on_unload(coordinator.async_add_listener(add_new_nodes))
-
-    def add_new_browsers() -> None:
-        current = set((coordinator.data or {}).get("browsers", {}))
-        new = current - known
-        if not new:
-            return
-        known.update(new)
-        async_add_entities(BrowserDaemonScreenshot(coordinator, b) for b in sorted(new))
-
-    entry.async_on_unload(coordinator.async_add_listener(add_new_browsers))
+    entry.async_on_unload(coordinator.async_add_listener(add_new_images))
 
 
 class BrowserDaemonScreenshot(BrowserDaemonBrowserEntity, ImageEntity):

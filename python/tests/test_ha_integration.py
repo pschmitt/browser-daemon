@@ -67,8 +67,9 @@ def _install_home_assistant_stubs() -> None:
 
     const = ModuleType("homeassistant.const")
     const.Platform = SimpleNamespace(
-        SENSOR="sensor", BINARY_SENSOR="binary_sensor", BUTTON="button"
+        SENSOR="sensor", BINARY_SENSOR="binary_sensor", BUTTON="button", IMAGE="image"
     )
+    const.EntityCategory = SimpleNamespace(DIAGNOSTIC="diagnostic")
     const.UnitOfInformation = SimpleNamespace(BYTES="B")
     const.UnitOfTime = SimpleNamespace(SECONDS="s")
     sys.modules["homeassistant.const"] = const
@@ -132,7 +133,13 @@ def _install_home_assistant_stubs() -> None:
             super().__init__(coordinator, key)
             self._node_name = node_name
 
+    class BrowserEntity(MeshEntity):
+        def __init__(self, coordinator: Any, browser_id: str, key: str) -> None:
+            super().__init__(coordinator, key)
+            self._browser_id = browser_id
+
     entity.BrowserDaemonEntity = MeshEntity
+    entity.BrowserDaemonBrowserEntity = BrowserEntity
     entity.BrowserDaemonNodeEntity = NodeEntity
     sys.modules[entity.__name__] = entity
 
@@ -402,3 +409,27 @@ def test_recording_and_storage_sensors_are_gauges():
         description.key: description for description in sensor_platform.NODE_SENSOR_DESCRIPTIONS
     }
     assert node_descriptions["storage_used_bytes"].state_class == "measurement"
+
+
+def test_counter_attributes_list_profiles_sessions_and_nodes():
+    data = {
+        "local_node": {"name": "a"},
+        "nodes": {
+            "a": {"status": "online", "version": "1", "storage_used_bytes": 5},
+            "b": {"status": "offline", "node_name": "b"},
+        },
+        "profiles": [
+            {"id": "p1", "name": "work", "engine": "chromium", "size_bytes": 1, "x": 1},
+            {"id": "p2", "name": "home", "node_name": "b"},
+        ],
+        "sessions": [{"id": "s1", "name": "one", "tabs_count": 2, "profile": "work"}],
+    }
+    profiles = sensor_platform.mesh_attributes("total_profiles", data)["profiles"]
+    assert [(p["name"], p["node"]) for p in profiles] == [("work", "a"), ("home", "b")]
+    assert "x" not in profiles[0]
+    sessions = sensor_platform.mesh_attributes("total_sessions", data)["sessions"]
+    assert sessions == [{"id": "s1", "name": "one", "node": "a", "profile": "work", "tabs": 2}]
+    online = sensor_platform.mesh_attributes("online_nodes", data)
+    assert online == {"online": ["a"], "offline": ["b"]}
+    per_node = sensor_platform.node_attributes("storage_used_bytes", "b", data)
+    assert [p["name"] for p in per_node["profiles"]] == ["home"]

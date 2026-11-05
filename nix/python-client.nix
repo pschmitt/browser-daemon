@@ -11,7 +11,15 @@ buildPythonPackage {
   # The daemon's version: the client is released with it.
   version = (builtins.fromTOML (builtins.readFile ../python/pyproject.toml)).project.version;
   pyproject = true;
-  src = ../python;
+  # The tests of the Home Assistant integration read ../custom_components.
+  src = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../python
+      ../custom_components
+    ];
+  };
+  sourceRoot = "source/python";
 
   build-system = [ setuptools ];
   dependencies = [ aiohttp ];

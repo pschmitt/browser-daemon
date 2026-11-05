@@ -295,10 +295,9 @@ async def async_setup_entry(
             [s for b in sorted(new) for s in _browser_sensors(coordinator, b)]
         )
 
-    entry.async_on_unload(coordinator.async_add_listener(add_new_browser_entities))
-
     def add_new_node_entities() -> None:
         """Add entities for nodes first seen after initial setup."""
+        add_new_browser_entities()
         current_nodes = set((coordinator.data or {}).get("nodes", {}))
         new_nodes = current_nodes - known_nodes
         if not new_nodes:
