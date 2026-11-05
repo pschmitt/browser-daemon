@@ -12,6 +12,7 @@ from aiohttp.test_utils import TestServer
 from browser_daemon_client import (
     BrowserDaemon,
     BrowserDaemonError,
+    LoginResult,
     RunError,
     RunTimeout,
     read_secret,
@@ -148,6 +149,46 @@ async def test_a_session_is_named_after_the_client(daemon):
         "default_tabs": False,
         "name": "tests",
     }
+
+
+async def test_login_uses_existing_session_and_tab_without_logging_secrets(daemon):
+    bd, seen, answers = daemon
+    answers[("POST", "/api/sessions/session%2Fid/login")] = (
+        200,
+        {"outcome": "needs_totp"},
+    )
+    result = await bd.login(
+        "session/id",
+        "tab-id",
+        "alice",
+        "not-for-logs",
+        totp_secret="JBSWY3DPEHPK3PXP",
+        allowed_origins=["https://login.example.test"],
+        success_selector=".account-home",
+    )
+    assert result == LoginResult("needs_totp")
+    assert seen[0]["json"] == {
+        "tab": "tab-id",
+        "username": "alice",
+        "password": "not-for-logs",
+        "totp_secret": "JBSWY3DPEHPK3PXP",
+        "allowed_origins": ["https://login.example.test"],
+        "success_selector": ".account-home",
+        "timeout_seconds": 30,
+    }
+
+
+async def test_login_refuses_both_totp_seed_and_code(daemon):
+    bd, _, _ = daemon
+    with pytest.raises(ValueError, match="not both"):
+        await bd.login(
+            "session",
+            "tab",
+            "alice",
+            "password",
+            totp_secret="seed",
+            totp_code="123456",
+        )
 
 
 async def test_an_unreachable_daemon_is_a_browser_daemon_error():

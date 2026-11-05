@@ -34,6 +34,10 @@ async with aiohttp.ClientSession() as http:
 - `run()`: a Playwright `script` (a JavaScript function expression) or `steps`,
   in a profile's browser, a session or a throwaway browser. Runs for a profile
   go to the node that has it. See [docs/run.md](../docs/run.md).
+- `login(session_id, tab, username, password, ...)`: submit credentials in an
+  existing Chromium tab and return a `LoginResult.outcome`. Set
+  `success_selector` to visible page evidence before treating the result as
+  authenticated; see [docs/run.md](../docs/run.md#log-in-to-an-existing-tab).
 - `overview()`, `find_profile()`, `sessions()`, `session()`, `create_session()`,
   `delete_session()`, `set_idle_timeout()`, `tabs()`, `open_tab()`,
   `close_tab()`, `export_auth()` (a page's cookies and storage; never log them).

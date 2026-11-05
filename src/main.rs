@@ -22,6 +22,7 @@ mod httpproxy;
 mod idle;
 mod json_api;
 mod live_ws;
+mod login_api;
 mod mcp;
 mod mesh;
 mod names;
@@ -1129,6 +1130,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(api_page_insert_text),
         )
         .route("/api/sessions/{id}/autofill", post(api_session_autofill))
+        .route(
+            "/api/sessions/{id}/login",
+            post(login_api::api_session_login),
+        )
         .route("/api/pages/{page_id}/autofill", post(api_page_autofill))
         .route(
             "/api/extension/nodes/{id}/tabs/{tab}/autofill",

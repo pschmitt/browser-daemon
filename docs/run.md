@@ -154,6 +154,54 @@ async with session.post(
     answer = await res.json()
 ```
 
+## Log in to an existing tab
+
+`POST /api/sessions/{session_id}/login` automates a username, password, and an
+optional one-time code in an existing Chromium tab. It does not create a
+session or tab. The request needs the cluster secret, as it puts credentials
+into a browser page.
+
+```json
+{
+  "tab": "PAGE_ID",
+  "username": "user@example.org",
+  "password": "…",
+  "totp_secret": "BASE32_SEED",
+  "allowed_origins": ["https://login.example.org"],
+  "success_selector": "[data-page=account]"
+}
+```
+
+Give `totp_secret` or `totp_code`, not both. A seed is used only when the page
+shows a one-time-code field. The tab's starting origin is the only allowed
+origin by default; list every login origin that may receive credentials when
+the flow redirects to an identity provider or uses a cross-origin frame. The
+daemon checks the current tab and each frame before filling. A redirect outside
+the allowed origins stops the attempt.
+
+The answer's `outcome` is `authenticated`, `needs_totp`, `needs_interaction`,
+`failed`, or `unknown`. The daemon returns `authenticated` only when the
+configured `success_selector` is visible. Without that explicit condition, the
+result stays `unknown` even if the form disappears after submission. A
+`needs_totp` answer can be followed by another call with the current one-time
+code; the call detects the challenge and does not submit the password again.
+The operation has a bounded timeout of at most 90 seconds. It returns no page
+text or screenshot, and credentials are not included in logs.
+
+```python
+result = await bd.login(
+    session_id,
+    tab,
+    username,
+    password,
+    totp_secret=seed,
+    allowed_origins=["https://login.example.org"],
+    success_selector="[data-page=account]",
+)
+if result.outcome == "authenticated":
+    ...
+```
+
 ## Plans
 
 - Vault helpers for scripts and steps (`fill_secret` with an rbw entry, as `browser_fill_secret` does for agents), so a client need not hold the password at all.

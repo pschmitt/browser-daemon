@@ -32,6 +32,7 @@ import aiohttp
 __all__ = [
     "BrowserDaemon",
     "BrowserDaemonError",
+    "LoginResult",
     "RunError",
     "RunResult",
     "RunTimeout",
@@ -81,6 +82,17 @@ class RunResult:
             screenshot=data.get("screenshot"),
             ms=data.get("ms"),
         )
+
+
+@dataclass
+class LoginResult:
+    """Outcome of a generic login attempt in an existing session tab."""
+
+    outcome: str
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> LoginResult:
+        return cls(outcome=str(data.get("outcome", "unknown")))
 
 
 class RunError(BrowserDaemonError):
@@ -237,6 +249,48 @@ class BrowserDaemon:
     async def session(self, session_id: str, node: str | None = None) -> dict[str, Any]:
         """The session and its `targets` (tabs)."""
         return await self._json("GET", f"/api/sessions/{quote(session_id, safe='')}", node=node)
+
+    async def login(
+        self,
+        session_id: str,
+        tab: str,
+        username: str,
+        password: str,
+        *,
+        totp_secret: str | None = None,
+        totp_code: str | None = None,
+        allowed_origins: list[str] | None = None,
+        success_selector: str | None = None,
+        timeout: float = 30,
+        node: str | None = None,
+    ) -> LoginResult:
+        """Log in in place, without creating a new browser session or tab.
+
+        ``authenticated`` is returned only when ``success_selector`` is visible.
+        Otherwise inspect ``outcome`` (``needs_totp``, ``needs_interaction``,
+        ``failed`` or ``unknown``) and handle the page accordingly.
+        """
+        if totp_secret is not None and totp_code is not None:
+            raise ValueError("give totp_secret or totp_code, not both")
+        timeout = max(1, min(90, timeout))
+        body = {
+            "tab": tab,
+            "username": username,
+            "password": password,
+            "totp_secret": totp_secret,
+            "totp_code": totp_code,
+            "allowed_origins": allowed_origins,
+            "success_selector": success_selector,
+            "timeout_seconds": max(1, round(timeout)),
+        }
+        data = await self._json(
+            "POST",
+            f"/api/sessions/{quote(session_id, safe='')}/login",
+            node=node,
+            json={key: value for key, value in body.items() if value is not None},
+            timeout=timeout + 5,
+        )
+        return LoginResult.from_json(data or {})
 
     async def create_session(
         self, *, profile: str | None = None, node: str | None = None, **options: Any

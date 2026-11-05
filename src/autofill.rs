@@ -23,6 +23,10 @@ pub struct Creds {
     pub password: Option<String>,
     #[serde(default)]
     pub totp: Option<String>,
+    /// Mask one-time codes in screen captures. Vault fills keep their existing
+    /// behavior; generic login automation sets this for transient credentials.
+    #[serde(skip)]
+    pub mask_totp: bool,
     /// Text custom fields of the entry, matched to the form's inputs by name.
     #[serde(default)]
     pub custom: Vec<CustomField>,
@@ -125,8 +129,8 @@ const FILL: &str = r#"(c) => {
     put(t.user, c.username, false);
     filled.push("username");
   }
-  if (otp.length === 1) put(otp[0], c.totp, false);
-  else otp.forEach((el, i) => put(el, c.totp[i], false));
+  if (otp.length === 1) put(otp[0], c.totp, c.maskTotp === true);
+  else otp.forEach((el, i) => put(el, c.totp[i], c.maskTotp === true));
   if (otp.length) filled.push("totp");
   // Custom fields (text ones only; hidden, boolean and linked never come here), as
   // rbw's extension: an input whose id or name is the field's name, else one not
@@ -158,6 +162,7 @@ fn expression(creds: &Creds, firefox: bool) -> String {
         "username": creds.username,
         "password": creds.password,
         "totp": creds.totp,
+        "maskTotp": creds.mask_totp,
         "custom": creds.custom,
     });
     format!(
@@ -246,6 +251,103 @@ impl Cdp {
             return Ok(v["result"].clone());
         }
     }
+}
+
+/// Press Enter in a page after a generic login field has been filled. The
+/// target id is checked by the API handler before each call.
+pub(crate) async fn login_submit_chromium(ws_url: &str) -> Result<(), String> {
+    let mut cdp = Cdp::connect(ws_url).await?;
+    cdp.call(
+        "Input.dispatchKeyEvent",
+        json!({ "type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13 }),
+    )
+    .await?;
+    cdp.call(
+        "Input.dispatchKeyEvent",
+        json!({ "type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13 }),
+    )
+    .await?;
+    cdp.close().await;
+    Ok(())
+}
+
+/// Inspect only login-state booleans. Input values and page text never leave
+/// the isolated evaluation as part of the answer.
+pub(crate) async fn login_state_chromium(
+    ws_url: &str,
+    success_selector: Option<&str>,
+    frame_ok: impl Fn(&str) -> bool,
+) -> Result<Value, String> {
+    let mut cdp = Cdp::connect(ws_url).await?;
+    let tree = cdp.call("Page.getFrameTree", json!({})).await?;
+    let mut all = Vec::new();
+    frames(&tree["frameTree"], "id", "childFrames", &mut all);
+    let mut last = json!({ "username": false, "password": false, "totp": false, "error": false, "success": false, "interaction": false });
+    let mut candidate = None;
+    for (frame, _) in all.into_iter().filter(|(_, url)| frame_ok(url)) {
+        let world = cdp
+            .call(
+                "Page.createIsolatedWorld",
+                json!({ "frameId": frame, "worldName": "bd-login-state" }),
+            )
+            .await?;
+        let Some(context) = world["executionContextId"].as_u64() else {
+            return Err("Could not inspect the login page".into());
+        };
+        let selector = serde_json::to_string(&success_selector).unwrap_or_else(|_| "null".into());
+        let expression = format!(
+            r#"(() => {{
+          /*RBW_FILL_TARGETS*/
+          const shown = (el) => {{ const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return !el.disabled && r.width > 1 && r.height > 1 && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0; }};
+          const inputs = [];
+          const walk = (root) => root.querySelectorAll('*').forEach((el) => {{ if (el.tagName === 'INPUT') inputs.push(el); if (el.shadowRoot) walk(el.shadowRoot); }});
+          walk(document);
+          const visible = inputs.filter((el) => shown(el) && (el.type || '').toLowerCase() !== 'hidden');
+          let targets = {{}};
+          try {{ targets = globalThis.rbwFillTargets.loginTargets(visible); }} catch {{}}
+          delete globalThis.rbwFillTargets;
+          const password = !!targets.password;
+          const username = !!targets.user;
+          const totp = !!targets.otp || visible.filter((el) => el.maxLength === 1).length >= 4;
+          const error = [...document.querySelectorAll('[role=alert], [aria-invalid=true]')].some(shown);
+          const interaction = !!document.querySelector('iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i]');
+          let success = false;
+          try {{ success = !!({selector} && document.querySelector({selector}) && shown(document.querySelector({selector})); }} catch {{}}
+          return JSON.stringify({{ username, password, totp, error, success, interaction }});
+        }})()"#
+        )
+        .replace(
+            "/*RBW_FILL_TARGETS*/",
+            include_str!("../vendor/rbw/fill-targets.js"),
+        );
+        let result = cdp
+            .call(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "contextId": context, "returnByValue": true }),
+            )
+            .await?;
+        let state = result
+            .pointer("/result/value")
+            .and_then(Value::as_str)
+            .and_then(|s| serde_json::from_str::<Value>(s).ok())
+            .ok_or_else(|| "Could not inspect the login page".to_string())?;
+        if state["success"].as_bool() == Some(true) {
+            cdp.close().await;
+            return Ok(state);
+        }
+        if ["username", "password", "totp", "error", "interaction"]
+            .iter()
+            .any(|key| state[*key].as_bool() == Some(true))
+        {
+            if candidate.is_none() {
+                candidate = Some(state);
+            }
+        } else {
+            last = state;
+        }
+    }
+    cdp.close().await;
+    Ok(candidate.unwrap_or(last))
 }
 
 /// Fills the login form of the Chromium page at `ws_url`, in the first frame on
@@ -387,6 +489,7 @@ mod tests {
                 username: Some("me\"); alert(1); (\"".into()),
                 password: Some("p\\w".into()),
                 totp: None,
+                mask_totp: false,
                 custom: vec![CustomField {
                     name: "n\"); x(); (\"".into(),
                     value: "v".into(),
@@ -401,5 +504,22 @@ mod tests {
             ["username", "password"]
         );
         assert!(filled(Some("nope")).is_empty());
+    }
+
+    #[test]
+    fn generic_login_totp_is_masked_before_it_is_filled() {
+        let expression = expression(
+            &Creds {
+                totp: Some("123456".into()),
+                mask_totp: true,
+                ..Default::default()
+            },
+            false,
+        );
+        assert!(expression.contains(r#""maskTotp":true"#));
+        assert!(expression.contains("put(otp[0], c.totp, c.maskTotp === true)"));
+        assert!(
+            expression.find("guard(el, c.css)").unwrap() < expression.find(".call(el, v)").unwrap()
+        );
     }
 }
