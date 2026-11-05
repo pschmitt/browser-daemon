@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-05
+
 ### Added
 
 * Node groups: repeat `--node-group` or set NixOS `nodeGroups` to advertise
