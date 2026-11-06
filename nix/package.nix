@@ -13,21 +13,22 @@ let
   inherit (cargoToml.package) version;
   # The package's own version, normalized out of everything the dependency build
   # sees, so a release bump keeps that derivation (and the caches holding it).
-  normalized =
+  normalizedContents =
     file:
-    builtins.toFile (baseNameOf file) (
-      builtins.replaceStrings
-        [ "name = \"browser-daemon\"\nversion = \"${version}\"" ]
-        [ "name = \"browser-daemon\"\nversion = \"0.0.0\"" ]
-        (builtins.readFile file)
-    );
+    builtins.replaceStrings
+      [ "name = \"browser-daemon\"\nversion = \"${version}\"" ]
+      [ "name = \"browser-daemon\"\nversion = \"0.0.0\"" ]
+      (builtins.readFile file);
+  normalized = file: builtins.toFile (baseNameOf file) (normalizedContents file);
   depsLock = normalized ../Cargo.lock;
   common = {
     pname = "browser-daemon";
     inherit version src;
     strictDeps = true;
     # Vendored crates don't depend on the package's version: shared by both builds.
-    cargoVendorDir = craneLib.vendorCargoDeps { cargoLock = depsLock; };
+    cargoVendorDir = craneLib.vendorCargoDeps {
+      cargoLockContents = normalizedContents ../Cargo.lock;
+    };
     cargoExtraArgs = "--locked";
   };
   # Only the normalized manifests (eval-time files) and a stub main, unlike crane's
