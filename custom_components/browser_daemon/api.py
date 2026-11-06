@@ -30,6 +30,10 @@ class BrowserDaemonNodeOfflineError(BrowserDaemonError):
     """Specified node is offline or unreachable."""
 
 
+class BrowserDaemonNotConfiguredError(BrowserDaemonError):
+    """No matching Browser Daemon config entry is available."""
+
+
 class BrowserDaemonClient:
     """HTTP Client for browser-daemon mesh."""
 

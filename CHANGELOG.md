@@ -8,6 +8,14 @@
   the node names in the profile transfer dialog. Groups can be added and removed
   at runtime in a node's settings (`PATCH /api/settings` with `groups`); the
   ones from `--node-group` or `nodeGroups` are immutable and shown locked.
+* Home Assistant integration: `async_get_daemon()` gives other integrations a
+  `browser_daemon_client` client configured from a Browser Daemon entry, so they
+  need no URL or cluster secret of their own.
+
+### Fixed
+
+* Home Assistant integration: `async_get_client()` and `async_get_coordinator()`
+  return nothing for an unavailable `entry_id` instead of another entry's.
 
 ## [0.13.1] - 2026-11-06
 

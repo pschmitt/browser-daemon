@@ -12,5 +12,8 @@
   "loggers": [
     "custom_components.browser_daemon"
   ],
+  "requirements": [
+    "browser-daemon-client==0.13.0"
+  ],
   "version": "0.13.1"
 }

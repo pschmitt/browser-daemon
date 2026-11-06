@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TypeVar
 
+from browser_daemon_client import BrowserDaemon
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
@@ -16,6 +17,7 @@ from .api import (
     BrowserDaemonConnectionError,
     BrowserDaemonError,
     BrowserDaemonNodeOfflineError,
+    BrowserDaemonNotConfiguredError,
 )
 from .const import (
     CONF_CLUSTER_SECRET,
@@ -31,6 +33,8 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
+DaemonT = TypeVar("DaemonT", bound=BrowserDaemon)
+
 __all__ = [
     "DOMAIN",
     "BrowserDaemonAuthError",
@@ -39,8 +43,10 @@ __all__ = [
     "BrowserDaemonCoordinator",
     "BrowserDaemonError",
     "BrowserDaemonNodeOfflineError",
+    "BrowserDaemonNotConfiguredError",
     "async_get_client",
     "async_get_coordinator",
+    "async_get_daemon",
 ]
 
 
@@ -107,10 +113,9 @@ def async_get_coordinator(
 ) -> BrowserDaemonCoordinator | None:
     """Retrieve the coordinator for an entry or the default coordinator."""
     domain_data = hass.data.get(DOMAIN, {})
-    if entry_id and entry_id in domain_data:
-        coord = domain_data[entry_id]
-        if isinstance(coord, BrowserDaemonCoordinator):
-            return coord
+    if entry_id:
+        coord = domain_data.get(entry_id)
+        return coord if isinstance(coord, BrowserDaemonCoordinator) else None
     for val in domain_data.values():
         if isinstance(val, BrowserDaemonCoordinator):
             return val
@@ -123,3 +128,37 @@ def async_get_client(
     """Retrieve the BrowserDaemonClient instance."""
     coordinator = async_get_coordinator(hass, entry_id)
     return coordinator.client if coordinator else None
+
+
+def async_get_daemon(
+    hass: HomeAssistant,
+    *,
+    client: str,
+    cls: type[DaemonT] = BrowserDaemon,
+    entry_id: str | None = None,
+) -> DaemonT:
+    """Return a browser-daemon client configured from a config entry.
+
+    Other integrations use this instead of keeping a URL and cluster secret of
+    their own. Without ``entry_id`` the first enabled entry is used. It also
+    works while the entry retries its setup, so a daemon that is down reports
+    itself on the first request. ``client`` is the name shown on the dashboard.
+    """
+    entries = [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if not entry.disabled_by and (not entry_id or entry.entry_id == entry_id)
+    ]
+    if not entries:
+        raise BrowserDaemonNotConfiguredError(
+            f"Browser Daemon entry {entry_id} is not available"
+            if entry_id
+            else "The Browser Daemon integration is not set up"
+        )
+    data = entries[0].data
+    return cls(
+        async_get_clientsession(hass, verify_ssl=data.get(CONF_VERIFY_SSL, True)),
+        data[CONF_URL],
+        (data.get(CONF_CLUSTER_SECRET) or "").strip() or None,
+        client=client,
+    )

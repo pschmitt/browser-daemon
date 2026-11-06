@@ -433,3 +433,80 @@ def test_counter_attributes_list_profiles_sessions_and_nodes():
     assert online == {"online": ["a"], "offline": ["b"]}
     per_node = sensor_platform.node_attributes("storage_used_bytes", "b", data)
     assert [p["name"] for p in per_node["profiles"]] == ["home"]
+
+
+@pytest.fixture
+def integration(monkeypatch):
+    """The package's public API, on the real exceptions."""
+    session = ModuleType("homeassistant.helpers.aiohttp_client")
+    session.async_get_clientsession = lambda hass, verify_ssl=True: ("session", verify_ssl)
+    monkeypatch.setitem(sys.modules, session.__name__, session)
+    monkeypatch.setitem(sys.modules, "custom_components.browser_daemon.api", api)
+    monkeypatch.setattr(
+        sys.modules["homeassistant.helpers.config_validation"],
+        "empty_config_schema",
+        lambda domain: None,
+        raising=False,
+    )
+    spec = importlib.util.spec_from_file_location(
+        "custom_components.browser_daemon",
+        INTEGRATION / "__init__.py",
+        submodule_search_locations=[str(INTEGRATION)],
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _daemon_entries(*entries: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(
+        config_entries=SimpleNamespace(async_entries=lambda domain: list(entries))
+    )
+
+
+def _daemon_entry(entry_id: str, url: str, secret: str | None, *, disabled_by=None):
+    return SimpleNamespace(
+        entry_id=entry_id,
+        disabled_by=disabled_by,
+        data={"url": url, "cluster_secret": secret, "verify_ssl": False},
+    )
+
+
+def test_get_daemon_builds_a_client_from_the_selected_entry(integration):
+    from browser_daemon_client import BrowserDaemon
+
+    hass = _daemon_entries(
+        _daemon_entry("off", "http://off", "x", disabled_by="user"),
+        _daemon_entry("a", "http://a/", " secret-a "),
+        _daemon_entry("b", "http://b", None),
+    )
+
+    class Custom(BrowserDaemon):
+        pass
+
+    first = integration.async_get_daemon(hass, client="Test")
+    assert (first.url, first.secret, first.client) == ("http://a", "secret-a", "Test")
+    assert first.session == ("session", False)
+
+    selected = integration.async_get_daemon(hass, client="Test", cls=Custom, entry_id="b")
+    assert isinstance(selected, Custom)
+    assert (selected.url, selected.secret) == ("http://b", None)
+
+
+@pytest.mark.parametrize("entry_id", ["gone", "off"])
+def test_get_daemon_never_falls_back_to_another_entry(integration, entry_id):
+    hass = _daemon_entries(
+        _daemon_entry("off", "http://off", "x", disabled_by="user"),
+        _daemon_entry("a", "http://a", "s"),
+    )
+    with pytest.raises(integration.BrowserDaemonNotConfiguredError):
+        integration.async_get_daemon(hass, client="Test", entry_id=entry_id)
+
+
+def test_get_coordinator_never_falls_back_to_another_entry(integration):
+    coordinator = integration.BrowserDaemonCoordinator()
+    hass = SimpleNamespace(data={integration.DOMAIN: {"a": coordinator}})
+    assert integration.async_get_coordinator(hass) is coordinator
+    assert integration.async_get_coordinator(hass, "a") is coordinator
+    assert integration.async_get_coordinator(hass, "gone") is None
