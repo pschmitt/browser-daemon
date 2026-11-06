@@ -204,6 +204,7 @@ pub struct AppState {
     /// its own, each request sets the one it needs.
     pub peer_client: reqwest::Client,
     pub node_name: String,
+    /// Groups from the startup flags: immutable. Runtime ones live in `settings`.
     pub node_groups: Vec<String>,
     pub public_url: String,
     /// Origins an extension may use to connect across this daemon cluster.
@@ -346,6 +347,18 @@ impl AppState {
             .iter()
             .map(proxies::Proxy::info)
             .collect()
+    }
+
+    /// The groups this node advertises: the immutable ones from the startup
+    /// flags, then those added at runtime.
+    pub fn effective_groups(&self) -> Vec<String> {
+        let mut groups = self.node_groups.clone();
+        for g in self.settings.get().groups {
+            if !groups.contains(&g) {
+                groups.push(g);
+            }
+        }
+        groups
     }
 
     /// A proxy id this node knows, `None` for a direct connection.

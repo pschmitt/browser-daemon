@@ -99,6 +99,8 @@ svg.i.fill { fill: currentColor; stroke: none; }
   display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px;
   font-size: 11.5px; font-weight: 600; background: var(--hover); color: var(--muted); white-space: nowrap; flex: none;
 }
+.chip .chip-x { display: inline-flex; border: 0; background: none; color: inherit; padding: 0; margin-right: -4px; cursor: pointer; opacity: .7; }
+.chip .chip-x:hover, .chip .chip-x:focus-visible { opacity: 1; }
 .chip.node { background: color-mix(in oklab, var(--node) 16%, transparent); color: var(--node); }
 .chip.node::before, .dot { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .chip.ok { background: var(--ok-soft); color: var(--ok); }
@@ -1099,6 +1101,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/></symbol>
   <symbol id="i-tabs" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 9h18M8 5v4"/></symbol>
   <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="8" ry="2.5"/><path d="M4 5.5v13c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5v-13M4 12c0 1.4 3.6 2.5 8 2.5s8-1.1 8-2.5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
   <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01"/></symbol>
   <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
   <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5"/></symbol>
@@ -4608,6 +4611,35 @@ function openSettings(kind, key) {
   openModal('settingsModal');
   renderSettings();
 }
+// Groups from the node's startup flags are fixed; the ones added here live in its settings.
+function groupsEditor(n) {
+  const added = n.settings?.groups || [], fixed = (n.groups || []).filter((g) => !added.includes(g));
+  return `<div class="node-setting"><span>${icon('tag', 'sm')}Groups</span>
+    ${fixed.map((g) => `<span class="chip group" title="Set by the node's startup flags (--node-group / nodeGroups): change it there">${icon('lock', 'sm')}${esc(g)}</span>`).join(' ')}
+    ${added.map((g) => `<span class="chip group">${esc(g)}<button type="button" class="chip-x" data-group-remove="${esc(g)}" data-node="${esc(n.name)}" aria-label="Remove group ${esc(g)}">${icon('x', 'sm')}</button></span>`).join(' ')}
+    <input class="input" data-group-add="${esc(n.name)}" placeholder="Add group…" maxlength="64" autocomplete="off" spellcheck="false" aria-label="Add a group to ${esc(n.name)}" style="max-width:160px">
+    <span class="hint">Placement can target a group. Locked ones come from the startup flags.</span></div>`;
+}
+async function saveGroups(node, groups) {
+  const r = await act(`Saving ${node}'s groups`, () => request('PATCH', api(node, '/settings'), { groups }), `${node}: groups saved`);
+  if (r !== undefined) { const n = nodes.find((x) => x.name === node); if (n) n.settings = r; }
+  refreshData();
+}
+$('settingsBody').addEventListener('keydown', (e) => {
+  const inp = e.target.closest('[data-group-add]');
+  if (!inp || e.key !== 'Enter') return;
+  e.preventDefault();
+  const node = inp.dataset.groupAdd, name = inp.value.trim();
+  const n = nodes.find((x) => x.name === node);
+  if (!name || !n) return;
+  saveGroups(node, [...(n.settings?.groups || []), name]);
+});
+$('settingsBody').addEventListener('click', (e) => {
+  const rm = e.target.closest('[data-group-remove]');
+  if (!rm) return;
+  const node = rm.dataset.node, n = nodes.find((x) => x.name === node);
+  if (n) saveGroups(node, (n.settings?.groups || []).filter((g) => g !== rm.dataset.groupRemove));
+});
 // Also on every overview while it is open.
 function renderSettings() {
   if (!settingsCtx || !$('settingsModal').open) return;
@@ -4628,6 +4660,7 @@ function renderSettings() {
             ${proxies.map((x) => `<option value="${esc(x.id)}"${def === x.id ? ' selected' : ''}>${esc(x.name)} (${esc(x.host)}:${x.port})</option>`).join('')}
           </select>`
         : '<span class="muted">No proxies on this node</span>'}<span class="hint">For new sessions that pick no proxy and whose profile has none.</span></label>` : ''}
+      ${online && n.settings ? groupsEditor(n) : n.groups?.length ? `<div class="node-setting"><span>${icon('tag', 'sm')}Groups</span>${groupChips(n)}</div>` : ''}
       ${!n.isLocal ? `<div class="settings-danger"><button class="btn danger" data-node-remove="${esc(n.name)}">${icon('trash', 'sm')}Remove peer</button><span class="hint">Configured peers come back when this node restarts.</span></div>` : ''}
     </div>`;
   } else if (kind === 'browser') {

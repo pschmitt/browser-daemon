@@ -7,6 +7,10 @@ pub(crate) struct UpdateSettingsRequest {
     /// Proxy id; "none" or "" for direct. Absent: unchanged.
     #[serde(default)]
     pub(crate) default_proxy: Option<String>,
+    /// Runtime node groups, replaced as a whole; those from the startup flags
+    /// are immutable and left out. Absent: unchanged.
+    #[serde(default)]
+    pub(crate) groups: Option<Vec<String>>,
     /// Engine defaults, each engine replaced as a whole. Absent: unchanged.
     #[serde(default)]
     pub(crate) engines: Option<EnginesPatch>,
@@ -19,6 +23,38 @@ pub(crate) struct EnginesPatch {
     pub(crate) chromium: Option<settings::EngineDefaults>,
     #[serde(default)]
     pub(crate) firefox: Option<settings::EngineDefaults>,
+}
+
+const MAX_GROUPS: usize = 16;
+const MAX_GROUP_LEN: usize = 64;
+
+/// Trimmed, unique, without the startup-flag groups; names are plain labels.
+fn normalize_groups(groups: &[String], fixed: &[String]) -> Result<Vec<String>, ApiError> {
+    let mut out: Vec<String> = Vec::new();
+    for g in groups {
+        let g = g.trim();
+        if g.is_empty() || fixed.iter().any(|f| f == g) || out.iter().any(|o| o == g) {
+            continue;
+        }
+        if g.len() > MAX_GROUP_LEN
+            || !g
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
+        {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                format!("Invalid group name {g:?}: use letters, digits, - _ . : (up to {MAX_GROUP_LEN})"),
+            ));
+        }
+        out.push(g.to_string());
+    }
+    if out.len() > MAX_GROUPS {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            format!("At most {MAX_GROUPS} runtime groups"),
+        ));
+    }
+    Ok(out)
 }
 
 pub(crate) async fn api_get_settings(
@@ -44,6 +80,9 @@ pub(crate) async fn api_update_settings(
                 } else {
                     state.check_proxy(key)?
                 };
+            }
+            if let Some(ref groups) = req.groups {
+                settings.groups = normalize_groups(groups, &state.node_groups)?;
             }
             if let Some(engines) = req.engines {
                 if let Some(chromium) = engines.chromium {
@@ -77,4 +116,21 @@ pub(crate) async fn api_list_proxies(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     Ok(Json(state.proxy_infos()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_groups;
+
+    #[test]
+    fn runtime_groups_skip_fixed_and_duplicates() {
+        let fixed = vec!["cloud".to_string()];
+        let got = normalize_groups(
+            &[" gpu ".into(), "cloud".into(), "gpu".into(), "".into()],
+            &fixed,
+        )
+        .unwrap();
+        assert_eq!(got, vec!["gpu"]);
+        assert!(normalize_groups(&["a b".into()], &fixed).is_err());
+    }
 }

@@ -17,6 +17,11 @@ Advertise labels with repeated `--node-group` arguments or NixOS
 inventory and MCP `browser_status`. Nodes without groups remain usable when
 no group is requested.
 
+Groups can also be added at runtime in a node's settings on the dashboard's
+Nodes tab (or `PATCH /api/settings` with `{"groups": [...]}`) and are kept across
+restarts. Groups from the startup flags are immutable there: change them in the
+flags or Nix option.
+
 MCP `browser_use` accepts `profile`, `node` and `group`. Requesting a saved
 profile on another node moves it there before opening it. A group restricts
 placement to its members; an explicit node must also belong to that group.

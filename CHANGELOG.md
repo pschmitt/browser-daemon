@@ -5,7 +5,9 @@
 ### Added
 
 * The dashboard shows each node's groups as chips on the Nodes tab and next to
-  the node names in the profile transfer dialog.
+  the node names in the profile transfer dialog. Groups can be added and removed
+  at runtime in a node's settings (`PATCH /api/settings` with `groups`); the
+  ones from `--node-group` or `nodeGroups` are immutable and shown locked.
 
 ## [0.13.1] - 2026-11-06
 

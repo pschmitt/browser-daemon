@@ -128,7 +128,7 @@ pub(crate) async fn api_mesh_node(
 
     Ok(Json(NodeInfo {
         name: state.node_name.clone(),
-        groups: state.node_groups.clone(),
+        groups: state.effective_groups(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         revision: REVISION.map(str::to_string),
@@ -399,7 +399,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     }
     let local_node = NodeInfo {
         name: state.node_name.clone(),
-        groups: state.node_groups.clone(),
+        groups: state.effective_groups(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         revision: REVISION.map(str::to_string),

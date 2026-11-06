@@ -12,6 +12,10 @@ use crate::profiles::ColorScheme;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct NodeSettings {
+    /// Node groups added at runtime (Nodes tab), on top of the immutable ones
+    /// from `--node-group`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
     /// Proxy id for sessions that choose none themselves and whose profile has
     /// none either; direct when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
