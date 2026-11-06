@@ -219,6 +219,7 @@ pub struct AppState {
     pub http_proxy_choices: crate::httpproxy::Choices,
     /// Public links to recordings and sessions (see shares.rs).
     pub shares: Arc<shares::Store>,
+    pub peer_memory: Arc<crate::peer_memory::PeerMemory>,
     pub peers: Arc<RwLock<HashMap<String, String>>>,
     pub start_time: Instant,
     pub cluster_secret: Option<String>,

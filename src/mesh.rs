@@ -515,7 +515,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     let total_profiles = all_profiles.len();
     let total_recordings = all_recordings.len();
 
-    MeshOverview {
+    let overview = MeshOverview {
         local_node,
         peers: peer_states,
         sessions: all_sessions,
@@ -530,7 +530,9 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         online_nodes,
         total_storage_bytes,
         max_storage_bytes,
-    }
+    };
+    state.peer_memory.learn(&overview).await;
+    overview
 }
 
 /// A profile's notes among a node's (they are keyed by its id).

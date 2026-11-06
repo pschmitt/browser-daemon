@@ -418,7 +418,11 @@ pub(crate) struct Placement {
     pub profile: Option<String>,
 }
 
-fn select_placement(ov: &MeshOverview, req: &PlacementRequest) -> Result<Placement, ApiError> {
+fn select_placement(
+    ov: &MeshOverview,
+    req: &PlacementRequest,
+    down_holders: &[String],
+) -> Result<Placement, ApiError> {
     let profile = if let Some(name) = req.profile.as_deref() {
         // A node that answers with a partial list cannot establish which copy is authoritative.
         if ov.peers.iter().any(|p| {
@@ -435,23 +439,16 @@ fn select_placement(ov: &MeshOverview, req: &PlacementRequest) -> Result<Placeme
             .iter()
             .filter(|p| p.profile.name == name)
             .collect();
-        let unreachable: Vec<&str> = ov
-            .peers
-            .iter()
-            .filter(|p| p.status != "online")
-            .map(|p| p.name.as_str())
-            .collect();
         match hits.as_slice() {
             [profile] => Some(*profile),
-            // The profile may be on a node that is down, for example restarting. Creating it
-            // now would lose its logins to a new, empty copy.
-            [] if !unreachable.is_empty() => {
+            // Creating it now would lose its logins to a new, empty copy, for example while the
+            // node that has it restarts.
+            [] if !down_holders.is_empty() => {
                 return Err(api_error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     format!(
-                        "Profile not found on the reachable nodes; retry when these are \
-                         reachable: {}",
-                        unreachable.join(", ")
+                        "Profile is on a node that is down; retry when it is reachable: {}",
+                        down_holders.join(", ")
                     ),
                 ))
             }
@@ -552,7 +549,12 @@ pub(crate) async fn api_place_browser(
         *text = trimmed.to_string();
     }
     let ov = fetch_mesh_overview(&state).await;
-    let placement = select_placement(&ov, &req)?;
+    let down_holders = req
+        .profile
+        .as_deref()
+        .map(|name| state.peer_memory.down_peers_holding(&ov, name))
+        .unwrap_or_default();
+    let placement = select_placement(&ov, &req, &down_holders)?;
     if let Some(name) = req.profile.as_deref() {
         let Some(source) = ov.profiles.iter().find(|p| p.profile.name == name) else {
             return Ok(Json(placement));
@@ -713,15 +715,16 @@ mod tests {
     fn groups_never_fall_back_to_an_unmatched_node() {
         let mut ov = placement_overview();
         let req = placement_request(None, None, Some("cloud"));
-        assert_eq!(select_placement(&ov, &req).unwrap().node, "worker");
+        assert_eq!(select_placement(&ov, &req, &[]).unwrap().node, "worker");
         ov.peers[0].active_sessions = 4;
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
         ov.peers[0].active_sessions = 0;
         ov.peers[0].status = "unreachable".into();
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
         assert!(select_placement(
             &placement_overview(),
-            &placement_request(None, Some("home"), Some("cloud"))
+            &placement_request(None, Some("home"), Some("cloud")),
+            &[]
         )
         .is_err());
     }
@@ -732,15 +735,19 @@ mod tests {
         add_profile(&mut ov, "worker", true);
         ov.peers[0].active_sessions = 4;
         assert_eq!(
-            select_placement(&ov, &placement_request(Some("demo"), None, None))
+            select_placement(&ov, &placement_request(Some("demo"), None, None), &[])
                 .unwrap()
                 .node,
             "worker"
         );
         assert_eq!(
-            select_placement(&ov, &placement_request(Some("demo"), Some("home"), None))
-                .unwrap()
-                .node,
+            select_placement(
+                &ov,
+                &placement_request(Some("demo"), Some("home"), None),
+                &[]
+            )
+            .unwrap()
+            .node,
             "home"
         );
     }
@@ -749,27 +756,27 @@ mod tests {
     fn ambiguous_missing_and_incomplete_profiles_are_refused() {
         let mut ov = placement_overview();
         let req = placement_request(Some("demo"), Some("worker"), None);
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
         add_profile(&mut ov, "home", false);
-        assert_eq!(select_placement(&ov, &req).unwrap().node, "worker");
+        assert_eq!(select_placement(&ov, &req, &[]).unwrap().node, "worker");
         ov.peers[0].profiles_count = 1;
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
         ov.peers[0].profiles_count = 0;
         add_profile(&mut ov, "worker", false);
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
     }
 
     #[test]
     fn new_profiles_require_explicit_creation_and_complete_inventory() {
         let mut ov = placement_overview();
         let mut req = placement_request(Some("new-profile"), None, Some("cloud"));
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
         req.create = true;
-        let placed = select_placement(&ov, &req).unwrap();
+        let placed = select_placement(&ov, &req, &[]).unwrap();
         assert_eq!(placed.node, "worker");
         assert_eq!(placed.profile.as_deref(), Some("new-profile"));
         ov.peers[0].status = "unreachable".into();
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
     }
 
     #[test]
@@ -783,21 +790,74 @@ mod tests {
         ov.peers[0].profiles_count = 1;
         add_profile(&mut ov, "worker", false);
         let req = placement_request(Some("demo"), None, Some("cloud"));
-        assert_eq!(select_placement(&ov, &req).unwrap().node, "worker");
+        assert_eq!(select_placement(&ov, &req, &[]).unwrap().node, "worker");
     }
 
     #[test]
-    fn an_unreachable_node_may_hold_a_profile_not_found_elsewhere() {
+    fn a_down_node_that_had_the_profile_blocks_creating_it() {
         let mut ov = placement_overview();
         ov.peers[0].status = "unreachable".into();
         let mut req = placement_request(Some("demo"), None, None);
         req.create = true;
-        let err = select_placement(&ov, &req).err().unwrap();
+        let err = select_placement(&ov, &req, &["worker".to_string()])
+            .err()
+            .unwrap();
         assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
-        // Not a 404 either: it may exist there.
         req.create = false;
-        let err = select_placement(&ov, &req).err().unwrap();
+        let err = select_placement(&ov, &req, &["worker".to_string()])
+            .err()
+            .unwrap();
         assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn a_new_profile_is_created_while_an_unrelated_node_is_down() {
+        let mut ov = placement_overview();
+        let mut down = ov.peers[0].clone();
+        down.name = "down".into();
+        down.status = "unreachable".into();
+        ov.peers.push(down);
+        let mut req = placement_request(Some("new"), None, Some("cloud"));
+        req.create = true;
+        assert_eq!(select_placement(&ov, &req, &[]).unwrap().node, "worker");
+        // Asking for one that exists nowhere, without creating it, is still not found.
+        req.create = false;
+        let err = select_placement(&ov, &req, &[]).err().unwrap();
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn peers_are_remembered_across_restarts() {
+        use crate::peer_memory::PeerMemory;
+        let dir = std::env::temp_dir().join(format!("bd-peer-memory-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("peer-profiles.json");
+        let mut ov = placement_overview();
+        ov.peers[0].profiles_count = 1;
+        add_profile(&mut ov, "worker", false);
+        let memory = PeerMemory::load(&path);
+        memory.learn(&ov).await;
+        // Online: nothing to fear from it.
+        assert!(memory.down_peers_holding(&ov, "demo").is_empty());
+        ov.peers[0].status = "unreachable".into();
+        ov.profiles.clear();
+        // Down: keeps what it knew, also after a restart of this node.
+        memory.learn(&ov).await;
+        let memory = PeerMemory::load(&path);
+        assert_eq!(memory.down_peers_holding(&ov, "demo"), ["worker"]);
+        assert!(memory.down_peers_holding(&ov, "other").is_empty());
+        // A partial list teaches nothing.
+        ov.peers[0].status = "online".into();
+        memory.learn(&ov).await;
+        ov.peers[0].status = "unreachable".into();
+        assert_eq!(memory.down_peers_holding(&ov, "demo"), ["worker"]);
+        // Removed on the peer: forgotten once it answers.
+        ov.peers[0].status = "online".into();
+        ov.peers[0].profiles_count = 0;
+        memory.learn(&ov).await;
+        ov.peers[0].status = "unreachable".into();
+        assert!(memory.down_peers_holding(&ov, "demo").is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -806,7 +866,7 @@ mod tests {
         ov.peers[0].profiles_count = 1;
         let mut req = placement_request(Some("demo"), None, None);
         req.create = true;
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
     }
 
     #[test]
@@ -814,7 +874,7 @@ mod tests {
         let ov = placement_overview();
         let mut req = placement_request(None, None, Some("cloud"));
         req.engine = Some(BrowserEngine::Firefox);
-        assert!(select_placement(&ov, &req).is_err());
+        assert!(select_placement(&ov, &req, &[]).is_err());
     }
 
     #[test]

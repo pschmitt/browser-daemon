@@ -32,6 +32,7 @@ mod page_input;
 mod pages;
 mod passkeys;
 mod passkeys_api;
+mod peer_memory;
 mod peerproc;
 mod peers;
 mod persist;
@@ -702,6 +703,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let history = Arc::new(history::History::new(config.state_dir().join("history")));
     let thumbnails = Arc::new(thumbnail::Thumbnails::default());
     let shares = Arc::new(shares::Store::load(&config.state_dir().join("shares.json")));
+    let peer_memory = Arc::new(peer_memory::PeerMemory::load(
+        &config.state_dir().join("peer-profiles.json"),
+    ));
     let share_url = args.share_url.clone().unwrap_or_else(|| public_url.clone());
     let hosts = auth::HostPolicy::new(&public_url, &args.allowed_hosts, args.bind.port());
     // The browsers must not reach the daemon (or its mesh) through their relay.
@@ -834,6 +838,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_proxy,
         http_proxy_choices,
         shares,
+        peer_memory,
         peers: Arc::new(RwLock::new(peer_map)),
         start_time: Instant::now(),
         auth,

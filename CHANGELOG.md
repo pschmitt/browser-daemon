@@ -15,8 +15,9 @@
 ### Fixed
 
 * Placement of a named profile no longer fails because an unrelated node is
-  down. A profile that is not found on the reachable nodes still fails while any
-  node is down, so that a restarting node cannot lead to a new, empty copy.
+  down. Each node remembers the profiles its peers had (`peer-profiles.json`), so
+  only a profile that a down node had still fails, and a restarting node cannot
+  lead to a new, empty copy. Other profiles can be found and created as usual.
 * Home Assistant integration: `async_get_client()` and `async_get_coordinator()`
   return nothing for an unavailable `entry_id` instead of another entry's.
 

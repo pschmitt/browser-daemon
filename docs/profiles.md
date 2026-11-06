@@ -43,10 +43,11 @@ new profile concurrently must coordinate its name and destination.
 An active profile can stay on a matching node, but cannot be moved. Transfers
 never overwrite a destination profile. Duplicate names, incomplete profile
 inventory and a group without available capacity cause an error rather than
-fallback. A node that is down does not stop a profile found on the reachable
-nodes, even though it might hold an old copy. A profile not found there is an
-error while any node is down, as it may be on that node: creating it would lose
-its logins to a new, empty copy. A failed request can leave complete copies on both nodes; resolve
+fallback. A node that is down stops only what it may hold. Each
+node remembers the profiles its peers had when they last answered: a profile
+that a down node had is an error until it is back, as creating it would lose its
+logins to a new, empty copy. Any other profile is found or created as usual. A
+failed request can leave complete copies on both nodes; resolve
 those copies before retrying. If opening a session fails after a successful
 move, the profile stays on its destination.
 
