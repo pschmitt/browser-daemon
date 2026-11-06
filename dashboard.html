@@ -99,6 +99,9 @@ svg.i.fill { fill: currentColor; stroke: none; }
   display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border-radius: 999px;
   font-size: 11.5px; font-weight: 600; background: var(--hover); color: var(--muted); white-space: nowrap; flex: none;
 }
+.group-edit .group-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.group-edit .group-add { display: flex; gap: 8px; align-items: center; }
+.group-edit .group-add .input { flex: 1; min-width: 0; max-width: 240px; }
 .chip .chip-x { display: inline-flex; border: 0; background: none; color: inherit; padding: 0; margin-right: -4px; cursor: pointer; opacity: .7; }
 .chip .chip-x:hover, .chip .chip-x:focus-visible { opacity: 1; }
 .chip.node { background: color-mix(in oklab, var(--node) 16%, transparent); color: var(--node); }
@@ -4614,10 +4617,10 @@ function openSettings(kind, key) {
 // Groups from the node's startup flags are fixed; the ones added here live in its settings.
 function groupsEditor(n) {
   const added = n.settings?.groups || [], fixed = (n.groups || []).filter((g) => !added.includes(g));
-  return `<div class="node-setting"><span>${icon('tag', 'sm')}Groups</span>
-    ${fixed.map((g) => `<span class="chip group" title="Set by the node's startup flags (--node-group / nodeGroups): change it there">${icon('lock', 'sm')}${esc(g)}</span>`).join(' ')}
-    ${added.map((g) => `<span class="chip group">${esc(g)}<button type="button" class="chip-x" data-group-remove="${esc(g)}" data-node="${esc(n.name)}" aria-label="Remove group ${esc(g)}">${icon('x', 'sm')}</button></span>`).join(' ')}
-    <input class="input" data-group-add="${esc(n.name)}" placeholder="Add group…" maxlength="64" autocomplete="off" spellcheck="false" aria-label="Add a group to ${esc(n.name)}" style="max-width:160px">
+  return `<div class="node-setting group-edit"><span>${icon('tag', 'sm')}Groups</span>
+    <div class="group-chips">${fixed.map((g) => `<span class="chip group" title="Set by the node's startup flags (--node-group / nodeGroups): change it there">${icon('lock', 'sm')}${esc(g)}</span>`).join(' ')}
+    ${added.map((g) => `<span class="chip group">${esc(g)}<button type="button" class="chip-x" data-group-remove="${esc(g)}" data-node="${esc(n.name)}" aria-label="Remove group ${esc(g)}">${icon('x', 'sm')}</button></span>`).join(' ')}${fixed.length || added.length ? '' : '<span class="muted">None</span>'}</div>
+    <div class="group-add"><input class="input" data-group-add="${esc(n.name)}" placeholder="New group name" maxlength="64" autocomplete="off" spellcheck="false" aria-label="Add a group to ${esc(n.name)}"><button type="button" class="btn sm primary" data-group-add-btn="${esc(n.name)}">${icon('plus', 'sm')}Add</button></div>
     <span class="hint">Placement can target a group. Locked ones come from the startup flags.</span></div>`;
 }
 async function saveGroups(node, groups) {
@@ -4625,16 +4628,22 @@ async function saveGroups(node, groups) {
   if (r !== undefined) { const n = nodes.find((x) => x.name === node); if (n) n.settings = r; }
   refreshData();
 }
+function addGroup(node) {
+  const inp = $('settingsBody').querySelector(`input[data-group-add="${CSS.escape(node)}"]`);
+  const name = inp?.value.trim(), n = nodes.find((x) => x.name === node);
+  if (!name || !n) return;
+  inp.value = '';
+  saveGroups(node, [...(n.settings?.groups || []), name]);
+}
 $('settingsBody').addEventListener('keydown', (e) => {
   const inp = e.target.closest('[data-group-add]');
   if (!inp || e.key !== 'Enter') return;
   e.preventDefault();
-  const node = inp.dataset.groupAdd, name = inp.value.trim();
-  const n = nodes.find((x) => x.name === node);
-  if (!name || !n) return;
-  saveGroups(node, [...(n.settings?.groups || []), name]);
+  addGroup(inp.dataset.groupAdd);
 });
 $('settingsBody').addEventListener('click', (e) => {
+  const add = e.target.closest('[data-group-add-btn]');
+  if (add) { addGroup(add.dataset.groupAddBtn); return; }
   const rm = e.target.closest('[data-group-remove]');
   if (!rm) return;
   const node = rm.dataset.node, n = nodes.find((x) => x.name === node);
