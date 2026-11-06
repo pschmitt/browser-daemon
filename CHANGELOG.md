@@ -14,6 +14,9 @@
 
 ### Fixed
 
+* Placement of a named profile no longer fails because an unrelated node is
+  down. A profile that is not found on the reachable nodes still fails while any
+  node is down, so that a restarting node cannot lead to a new, empty copy.
 * Home Assistant integration: `async_get_client()` and `async_get_coordinator()`
   return nothing for an unavailable `entry_id` instead of another entry's.
 
