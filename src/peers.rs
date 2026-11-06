@@ -163,6 +163,8 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("POST", ["pages", _, "auth"]) => (false, Short),
         ("POST", ["run"]) => (false, Long),
         ("DELETE", ["sessions", _]) => (false, Short),
+        ("POST", ["sessions", _, "agent-passkey"]) => (false, Short),
+        ("POST", ["sessions", _, "login"]) => (false, Short),
         ("GET", ["sessions", _, "screenshot"]) => (false, Short),
         ("POST", ["sessions", _, "save-as-profile"]) => (false, Long),
         (
@@ -542,6 +544,10 @@ mod tests {
     fn only_known_routes_reach_a_peer() {
         use axum::http::Method;
         let target = |m: Method, p: &str| peer_target(&m, p);
+        // A sign-in in a browser on another node: arming passkeys and the password login.
+        assert!(target(Method::POST, "sessions/abc/agent-passkey").is_some());
+        assert!(target(Method::POST, "sessions/abc/login").is_some());
+        assert!(target(Method::GET, "sessions/abc/agent-passkey").is_none());
         let t = target(Method::GET, "profiles/Work").unwrap();
         assert_eq!(t.segments, ["profiles", "Work"]);
         assert!(!t.devtools);
