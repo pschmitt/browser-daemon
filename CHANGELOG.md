@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+* The dashboard shows each node's groups as chips on the Nodes tab and next to
+  the node names in the profile transfer dialog.
+
 ## [0.13.1] - 2026-11-06
 
 ### Fixed
