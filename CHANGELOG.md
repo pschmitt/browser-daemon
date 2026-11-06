@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-06
+
 ### Fixed
 
 * Username-first logins ignore password decoys marked `aria-hidden` or inside
