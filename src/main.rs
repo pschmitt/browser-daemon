@@ -1290,6 +1290,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/mesh/overview", get(api_mesh_overview))
         .route("/api/mesh/placement", post(api_place_browser))
         .route("/api/ephemeral/sessions", post(ephemeral::create))
+        .route(
+            "/api/ephemeral/{id}/proxy/{*path}",
+            any(ephemeral::ui_proxy),
+        )
+        .route("/api/ephemeral/{id}/ws/{*path}", get(ephemeral::ui_ws))
         .route("/api/run", post(run_api::api_run))
         .route("/api/ws/overview", get(handle_overview_ws))
         .route("/api/peers", get(api_list_peers).post(api_add_peer))

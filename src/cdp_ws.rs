@@ -268,20 +268,21 @@ pub(crate) async fn handle_firefox_ws(
         return (StatusCode::BAD_REQUEST, "Not a Firefox session").into_response();
     };
     // The handoff page attaches as an observer: it must not keep sessions alive.
-    let counted = !params.observer.unwrap_or(false);
+    let observer = params.observer.unwrap_or(false);
+    let counted = state.ephemeral_node || !observer;
 
     let Some(mut slot) = ClientSlot::new(&state, &session, counted) else {
         return (StatusCode::GONE, "Session is closing").into_response();
     };
     ws.on_upgrade(move |socket| async move {
-        if counted {
+        if !observer {
             slot.client = Some(client_arrived(&state, &session, &headers, &params).await);
         }
         info!(session_id = %session.id, observer = !counted, "Client attached to Firefox WebDriver BiDi");
 
         session.activity.touch();
         // An automation client may set where downloads go (see downloads.rs).
-        let claim = if counted {
+        let claim = if !observer {
             let sd = state
                 .downloads
                 .session(state.config.state_dir(), session.id)
@@ -291,7 +292,7 @@ pub(crate) async fn handle_firefox_ws(
             None
         };
         let ownership = slot.client.map(|id| (session.clients.clone(), id));
-        hub.serve_client(socket, session.activity.clone(), !counted, claim, ownership)
+        hub.serve_client(socket, session.activity.clone(), observer, claim, ownership)
             .await;
         drop(slot);
     })
@@ -320,11 +321,15 @@ pub(crate) async fn handle_page_ws(
 
     // The handoff page attaches as an observer: watching alone is not activity.
     let observer = params.observer.unwrap_or(false);
+    let Some(slot) = ClientSlot::new(&state, &session, state.ephemeral_node && observer) else {
+        return (StatusCode::GONE, "Session is closing").into_response();
+    };
     if !observer {
         activity.touch();
     }
     let backend_url = format!("ws://127.0.0.1:{}/devtools/page/{}", port, page_id);
     ws.on_upgrade(move |socket| async move {
+        let _slot = slot;
         match tokio_tungstenite::connect_async_with_config(&backend_url, None, true).await {
             Ok((server_ws, _)) => {
                 let activity = Some((activity, observer));

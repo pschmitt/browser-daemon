@@ -72,7 +72,11 @@ a backstop for failures outside the daemon's control.
 
 Call authenticated `POST /api/ephemeral/sessions` with the usual session
 creation options, `browser-daemon session new --ephemeral-node`, or MCP
-`browser_use` with `{"ephemeral":true}`. The
+`browser_use` with `{"ephemeral":true}`. In the dashboard, choose **New session**
+and enable **Dedicated short-lived node**. The live view keeps this worker alive;
+closing the last live view or automation client starts the disconnect grace period.
+The dashboard reaches the worker through its provider, without exposing the
+cluster secret to the browser. The
 response contains `node_url` and `session`; connect to the node's `/chromium`
 or `/firefox` with `session_id` set to that session's ID. The session is always
 non-persistent. Saved profiles and node/group selectors are not supported for

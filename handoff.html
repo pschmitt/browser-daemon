@@ -742,6 +742,29 @@
 "use strict";
 
 const params = new URLSearchParams(location.search);
+// Ephemeral workers are reached through their provider, without exposing its
+// cluster credential or requiring the browser to reach the worker directly.
+const ephemeralLease = params.get("ephemeral");
+if (ephemeralLease && /^[0-9a-f-]{36}$/i.test(ephemeralLease)) {
+  const prefix = `/api/ephemeral/${encodeURIComponent(ephemeralLease)}`;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (input, options) => {
+    if (typeof input === "string" && (/^\/json\//.test(input) || /^\/api\/(sessions|settings|proxies|favicon|qr)(\/|\?|$)/.test(input))) {
+      input = `${prefix}/proxy${input}`;
+    }
+    return originalFetch(input, options);
+  };
+  const NativeWebSocket = window.WebSocket;
+  window.WebSocket = class extends NativeWebSocket {
+    constructor(url, protocols) {
+      const parsed = new URL(url, location.href);
+      if (parsed.host === location.host && (/^\/devtools\/page\//.test(parsed.pathname) || ["/firefox", "/video", "/audio", "/viewers"].includes(parsed.pathname))) {
+        parsed.pathname = `${prefix}/ws${parsed.pathname}`;
+      }
+      super(parsed.toString(), ...(protocols === undefined ? [] : [protocols]));
+    }
+  };
+}
 const sharedBrowserId = params.get("browser");
 const sharedDaemon = params.get("daemon") || "";
 let sharedBrowser = null;

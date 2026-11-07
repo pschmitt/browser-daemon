@@ -37,6 +37,16 @@ async def test_ephemeral_session_survives_coordinator_restart_and_cleans_up(tmp_
 
     app = web.Application()
     app.router.add_route("*", "/api/sessions{tail:.*}", fake_node)
+    async def fake_ws(request):
+        requests.append((request.method, request.path))
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await ws.send_str(msg.data)
+        return ws
+    app.router.add_get("/devtools/page/test", fake_ws)
+    app.router.add_get("/chromium", fake_ws)
     node = TestServer(app)
     await node.start_server()
     up = tmp_path / "up"
@@ -99,6 +109,16 @@ async def test_ephemeral_session_survives_coordinator_restart_and_cleans_up(tmp_
                 assert response.status == 200
                 result = await response.json()
                 assert result["session"]["id"] == session_id
+                assert result["lease_id"] and result["node_name"]
+                relay = f"{base}/api/ephemeral/{result['lease_id']}"
+                async with client.get(f"{relay}/proxy/api/sessions/{session_id}") as proxied:
+                    assert proxied.status == 200
+                async with client.get(f"{relay}/proxy/api/secret-agent/status") as forbidden:
+                    assert forbidden.status == 404
+                async with client.ws_connect(f"{relay}/ws/devtools/page/test?observer=true") as ws:
+                    await ws.send_str("hello")
+                    assert (await ws.receive()).data == "hello"
+                    assert ("GET", "/chromium") in requests
         proc.terminate()
         await proc.wait()
         proc = await start()
@@ -167,7 +187,15 @@ async def test_last_client_grace_period_allows_reconnect(tmp_path):
             await asyncio.sleep(5)
             async with client.get(f"{base}/api/sessions/{session['id']}") as response:
                 assert response.status == 200
+            async with client.get(f"{base}/json/list") as response:
+                pages = await response.json()
+            page = next(item for item in pages if item["type"] == "page")
+            view = await client.ws_connect(f"ws://127.0.0.1:{port}/devtools/page/{page['id']}?observer=true")
             await ws.close()
+            await asyncio.sleep(6)
+            async with client.get(f"{base}/api/sessions/{session['id']}") as response:
+                assert response.status == 200
+            await view.close()
             for _ in range(150):
                 await asyncio.sleep(0.1)
                 async with client.get(f"{base}/api/sessions/{session['id']}") as response:
@@ -178,3 +206,81 @@ async def test_last_client_grace_period_allows_reconnect(tmp_path):
     finally:
         proc.terminate()
         await proc.wait()
+
+
+@pytest.mark.skipif(not os.environ.get("BD_TEST_BROWSER"), reason="requires Chromium and Xvfb")
+@pytest.mark.parametrize("engine", ["chromium", "firefox"])
+async def test_dashboard_launches_and_closes_dedicated_worker(tmp_path, engine):
+    playwright = pytest.importorskip("playwright.async_api")
+    if engine == "firefox" and not shutil.which("firefox"):
+        pytest.skip("requires Firefox")
+    def free_port():
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+    worker_port, coordinator_port, router_port = free_port(), free_port(), free_port()
+    worker_base = f"http://127.0.0.1:{worker_port}"
+    base = f"http://127.0.0.1:{coordinator_port}"
+    up, down, marker = tmp_path / "up", tmp_path / "down", tmp_path / "destroyed"
+    up.write_text(f"#!{sys.executable}\nimport json\nprint(json.dumps({{'url': {worker_base!r}}}))\n")
+    down.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    up.chmod(0o700)
+    down.chmod(0o700)
+    async def daemon(port, name, *extra):
+        engines = ["--chromium", shutil.which("chromium"), "--xvfb", shutil.which("Xvfb")]
+        if shutil.which("firefox"):
+            engines += ["--firefox", shutil.which("firefox")]
+        proc = await asyncio.create_subprocess_exec(
+            os.environ["BD_TEST_BINARY"], "run", "--bind", f"127.0.0.1:{port}",
+            "--node-name", name,
+            "--profile-dir", str(tmp_path / name / "profiles"),
+            "--recordings-dir", str(tmp_path / name / "recordings"),
+            *engines,
+            "--display-mode", "per-session", *extra,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        )
+        async with aiohttp.ClientSession() as client:
+            for _ in range(100):
+                try:
+                    async with client.get(f"http://127.0.0.1:{port}/api/mesh/node"):
+                        return proc
+                except aiohttp.ClientError:
+                    await asyncio.sleep(0.1)
+        proc.kill()
+        await proc.wait()
+        raise AssertionError("daemon did not start")
+    worker = await daemon(worker_port, "worker", "--ephemeral-node")
+    coordinator = await daemon(coordinator_port, "coordinator", "--ephemeral-up", str(up), "--ephemeral-down", str(down))
+    router = await daemon(router_port, "router", "--peer", base)
+    try:
+        async with playwright.async_playwright() as pw:
+            browser = await pw.chromium.launch(executable_path=shutil.which("chromium"), args=["--no-sandbox"])
+            page = await browser.new_page()
+            await page.goto(f"http://127.0.0.1:{router_port}")
+            await page.wait_for_function("typeof nodes !== 'undefined' && nodes.some(n => n.ephemeral_provider)", timeout=30_000)
+            await page.locator("#newSessionAction").click()
+            await page.locator("#sessionDedicatedField").click()
+            assert await page.locator("#sessionDedicated").is_checked()
+            if engine == "firefox":
+                await page.locator('#sessionEngines [data-engine="firefox"]').click()
+            await page.locator("#sessionUrl").fill("data:text/html,ephemeral-test")
+            async with page.expect_response(lambda r: "/proxy/json/new?" in r.url, timeout=120_000) as opened:
+                await page.locator("#sessionSubmit").click()
+            response = await opened.value
+            assert response.ok, f"{response.status}: {await response.text()}"
+            await page.wait_for_url("**/handoff/?ephemeral=**", timeout=120_000)
+            await page.wait_for_function("document.querySelector('#dot')?.className === 'live'", timeout=60_000)
+            await page.close()
+            for _ in range(150):
+                if marker.exists():
+                    break
+                await asyncio.sleep(0.2)
+            assert marker.exists(), "closing the live view must decommission the worker"
+            await browser.close()
+    finally:
+        router.terminate()
+        coordinator.terminate()
+        worker.terminate()
+        await router.wait()
+        await coordinator.wait()
+        await worker.wait()

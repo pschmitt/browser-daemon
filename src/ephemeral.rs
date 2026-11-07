@@ -1,6 +1,7 @@
 //! Provision short-lived nodes through operator-provided executables.
 
 use super::*;
+use futures_util::{SinkExt, StreamExt};
 use std::process::Stdio;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -17,6 +18,216 @@ struct Lease {
 
 fn lease_dir(state: &AppState) -> PathBuf {
     state.config.state_dir().join("ephemeral-nodes")
+}
+
+async fn ui_lease(state: &AppState, id: Uuid) -> Option<Lease> {
+    let data = fs::read(lease_dir(state).join(format!("{id}.json")))
+        .await
+        .ok()?;
+    let lease: Lease = serde_json::from_slice(&data).ok()?;
+    lease.session?;
+    Some(lease)
+}
+
+fn ui_path_allowed(method: &axum::http::Method, path: &str, session: Uuid) -> bool {
+    if !matches!(
+        *method,
+        axum::http::Method::GET
+            | axum::http::Method::POST
+            | axum::http::Method::PUT
+            | axum::http::Method::PATCH
+            | axum::http::Method::DELETE
+    ) {
+        return false;
+    }
+    if path
+        .split('/')
+        .any(|s| s == ".." || s == "." || s.contains(['\\', '\0']))
+        || crate::auth::secret_only(method, &format!("/{path}"))
+    {
+        return false;
+    }
+    let session_prefix = format!("api/sessions/{session}");
+    if path == session_prefix || path.starts_with(&format!("{session_prefix}/")) {
+        return !["/run", "/agent-passkey", "/passkey", "/login", "/autofill"]
+            .iter()
+            .any(|p| path.contains(p));
+    }
+    matches!(
+        path,
+        "json/list" | "json/new" | "api/settings" | "api/proxies" | "api/favicon" | "api/qr"
+    ) || path.starts_with("json/close/")
+        || path.starts_with("json/activate/")
+}
+
+pub(crate) async fn ui_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    AxumPath((id, path)): AxumPath<(Uuid, String)>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+    body: axum::body::Body,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(lease) = ui_lease(&state, id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !ui_path_allowed(&method, &path, lease.session.unwrap_or_default()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let mut url = format!("{}/{}", lease.url.trim_end_matches('/'), path);
+    if let Some(query) = query {
+        url.push('?');
+        url.push_str(&query);
+    }
+    let mut req = state
+        .peer_request(state.peer_client.request(method, url))
+        .timeout(Duration::from_secs(120));
+    if let Some(ct) = headers.get(header::CONTENT_TYPE) {
+        req = req.header(header::CONTENT_TYPE, ct.clone());
+    }
+    if let Some(range) = headers.get(header::RANGE) {
+        req = req.header(header::RANGE, range.clone());
+    }
+    req = req.body(reqwest::Body::wrap_stream(crate::peers::capped_chunks(
+        body,
+        MAX_UPLOAD_BYTES,
+    )));
+    match req.send().await {
+        Ok(res) => {
+            let mut out = Response::builder().status(res.status());
+            for name in [
+                header::CONTENT_TYPE,
+                header::CONTENT_LENGTH,
+                header::CONTENT_DISPOSITION,
+                header::CONTENT_RANGE,
+                header::ACCEPT_RANGES,
+            ] {
+                if let Some(v) = res.headers().get(&name) {
+                    out = out.header(name, v);
+                }
+            }
+            out.body(axum::body::Body::from_stream(res.bytes_stream()))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+        }
+        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    }
+}
+
+pub(crate) async fn ui_ws(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    AxumPath((id, path)): AxumPath<(Uuid, String)>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Response {
+    if let Err(e) = state.check_auth(&headers) {
+        return e.into_response();
+    }
+    let Some(lease) = ui_lease(&state, id).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !(path.starts_with("devtools/page/")
+        || matches!(path.as_str(), "firefox" | "video" | "audio" | "viewers"))
+        || path.contains("..")
+        || path.contains('\\')
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let base = lease
+        .url
+        .replacen("http://", "ws://", 1)
+        .replacen("https://", "wss://", 1);
+    let mut url = format!("{}/{}", base.trim_end_matches('/'), path);
+    if let Some(query) = query {
+        url.push('?');
+        url.push_str(&query);
+    }
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let Ok(mut request) = url.into_client_request() else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    if let Some(secret) = &state.cluster_secret {
+        let Ok(value) = HeaderValue::from_str(secret) else {
+            return StatusCode::BAD_GATEWAY.into_response();
+        };
+        request
+            .headers_mut()
+            .insert("x-browser-cluster-secret", value);
+    }
+    let Ok((upstream, _)) = tokio_tungstenite::connect_async(request).await else {
+        return StatusCode::BAD_GATEWAY.into_response();
+    };
+    // Hold a normal automation connection for the life of the live view. This
+    // also supports older worker images where observers do not count as clients.
+    let hold_path = if path.starts_with("devtools/page/") {
+        Some("chromium")
+    } else if path == "firefox" {
+        Some("firefox")
+    } else {
+        None
+    };
+    let hold = if let Some(hold_path) = hold_path {
+        let hold_url = format!(
+            "{}/{hold_path}?session_id={}&client=dashboard",
+            base.trim_end_matches('/'),
+            lease.session.unwrap_or_default()
+        );
+        let Ok(mut req) = hold_url.into_client_request() else {
+            return StatusCode::BAD_GATEWAY.into_response();
+        };
+        if let Some(secret) = &state.cluster_secret {
+            let Ok(value) = HeaderValue::from_str(secret) else {
+                return StatusCode::BAD_GATEWAY.into_response();
+            };
+            req.headers_mut().insert("x-browser-cluster-secret", value);
+        }
+        let Ok((socket, _)) = tokio_tungstenite::connect_async(req).await else {
+            return StatusCode::BAD_GATEWAY.into_response();
+        };
+        Some(socket)
+    } else {
+        None
+    };
+    ws.on_upgrade(move |socket| async move {
+        let _hold = hold;
+        use axum::extract::ws::Message as A;
+        use tokio_tungstenite::tungstenite::Message as T;
+        let (mut a_tx, mut a_rx) = socket.split();
+        let (mut b_tx, mut b_rx) = upstream.split();
+        let to_upstream = async {
+            while let Some(Ok(msg)) = a_rx.next().await {
+                let msg = match msg {
+                    A::Text(v) => T::Text(v.to_string().into()),
+                    A::Binary(v) => T::Binary(v),
+                    A::Ping(v) => T::Ping(v),
+                    A::Pong(v) => T::Pong(v),
+                    A::Close(_) => break,
+                };
+                if b_tx.send(msg).await.is_err() {
+                    break;
+                }
+            }
+        };
+        let to_client = async {
+            while let Some(Ok(msg)) = b_rx.next().await {
+                let msg = match msg {
+                    T::Text(v) => A::Text(v.to_string().into()),
+                    T::Binary(v) => A::Binary(v),
+                    T::Ping(v) => A::Ping(v),
+                    T::Pong(v) => A::Pong(v),
+                    T::Close(_) => break,
+                    T::Frame(_) => continue,
+                };
+                if a_tx.send(msg).await.is_err() {
+                    break;
+                }
+            }
+        };
+        tokio::select! { _ = to_upstream => {}, _ = to_client => {} }
+    })
 }
 
 async fn save(state: &AppState, key: Uuid, lease: &Lease) -> std::io::Result<()> {
@@ -281,9 +492,10 @@ pub(crate) async fn create(
             ));
         }
         let url = lease.url.clone();
+        let node_name = state.node_name.clone();
         tokio::spawn(watch(state, key, lease));
         Ok(Json(
-            serde_json::json!({ "node_url": url, "session": session }),
+            serde_json::json!({ "node_url": url, "node_name": node_name, "lease_id": key, "session": session }),
         ))
     });
     task.await.map_err(|_| {
@@ -292,4 +504,39 @@ pub(crate) async fn create(
             "Ephemeral provisioning task failed",
         )
     })?
+}
+
+#[cfg(test)]
+mod ui_tests {
+    use super::*;
+
+    #[test]
+    fn relay_is_scoped_to_the_lease_and_excludes_secrets() {
+        let id = Uuid::new_v4();
+        assert!(ui_path_allowed(
+            &axum::http::Method::GET,
+            &format!("api/sessions/{id}"),
+            id
+        ));
+        assert!(!ui_path_allowed(
+            &axum::http::Method::GET,
+            &format!("api/sessions/{}", Uuid::new_v4()),
+            id
+        ));
+        assert!(!ui_path_allowed(
+            &axum::http::Method::POST,
+            &format!("api/sessions/{id}/agent-passkey"),
+            id
+        ));
+        assert!(!ui_path_allowed(
+            &axum::http::Method::GET,
+            "api/secret-agent/next",
+            id
+        ));
+        assert!(!ui_path_allowed(
+            &axum::http::Method::GET,
+            "json/../api/peers",
+            id
+        ));
+    }
 }

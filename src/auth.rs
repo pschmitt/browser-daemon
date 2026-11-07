@@ -232,7 +232,14 @@ impl Auth {
         let dashboard_pair = req.method == Method::POST
             && req.path == "/api/extension/pair"
             && self.can_pair(req.headers, now);
-        if cred == Credential::Token && secret_only(req.method, req.path) && !dashboard_pair {
+        let dashboard_ephemeral = req.method == Method::POST
+            && req.path == "/api/ephemeral/sessions"
+            && self.can_pair(req.headers, now);
+        if cred == Credential::Token
+            && secret_only(req.method, req.path)
+            && !dashboard_pair
+            && !dashboard_ephemeral
+        {
             return Err(Refusal::new(
                 StatusCode::FORBIDDEN,
                 "This needs the cluster secret, not a viewer token",
@@ -660,6 +667,28 @@ mod tests {
             assert!(!a.verify_token(bad, 1));
         }
         assert!(!auth(None).verify_token(&t, 1_001));
+    }
+
+    #[test]
+    fn ephemeral_provisioning_requires_secret_or_same_origin_dashboard_cookie() {
+        let a = auth(Some("s3cret"));
+        let (token, _) = a.issue(1_000).unwrap();
+        let mut r = req("/api/ephemeral/sessions");
+        r.method = Method::POST;
+        r.origin = Some("https://browser.fnuc.test");
+        r.site = Some("same-origin");
+        r.headers = headers(&[
+            ("cookie", &format!("bd_auth={token}")),
+            ("origin", "https://browser.fnuc.test"),
+            ("sec-fetch-site", "same-origin"),
+        ]);
+        assert_eq!(decide(&a, &r), Ok(Credential::Token));
+        r.headers = headers(&[
+            ("authorization", &format!("Bearer {token}")),
+            ("origin", "https://browser.fnuc.test"),
+            ("sec-fetch-site", "same-origin"),
+        ]);
+        assert_eq!(decide(&a, &r), Err(StatusCode::FORBIDDEN));
     }
 
     #[test]
