@@ -12,9 +12,9 @@
 #   nix shell nixpkgs#chromium nixpkgs#xvfb nixpkgs#nodejs nixpkgs#curl nixpkgs#coreutils \
 #     -c tools/screenshots/run.sh
 #
-# Writes dashboard.png, dashboard-dark.png, dashboard-profiles.png and
-# dashboard-profiles-dark.png to the output directory (default: the repository
-# root). Ports, the binary and the browser can be set with the variables below.
+# Writes dashboard.png, dashboard-profiles.png (desktop), dashboard-phone.png,
+# dashboard-phone-sheet.png and live-phone.png (phone, 390x844 at 3x), each
+# with a -dark twin, to the output directory (default: the repository root). Ports, the binary and the browser can be set with the variables below.
 
 usage() {
   cat <<EOF

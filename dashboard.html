@@ -1315,6 +1315,17 @@ body.selecting .appnav { visibility: hidden; }
   .merge-list .mv .btn { width: 40px; height: 40px; }
   .chip .chip-x { padding: 6px; margin: -6px -8px -6px -2px; }
 }
+/* The player on touch screens: 44px controls, the timeline easier to grab. */
+@media (pointer: coarse), (max-width: 760px) {
+  .player-ctrl-btn { height: var(--tap); min-width: var(--tap); }
+  .player-timeline, .player-scrubber { height: 34px; }
+  .player-track { top: 15px; }
+  .player-stillness-bar { top: 5px; }
+  .player-scrubber::-webkit-slider-thumb { width: 20px; height: 20px; margin-top: 7px; }
+  .player-scrubber::-moz-range-thumb { width: 20px; height: 20px; }
+  .player-top .btn.icon, .player-top .x-btn { width: var(--tap); height: var(--tap); }
+  .node-ctl .btn { height: var(--tap); }
+}
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }
