@@ -637,6 +637,21 @@ dialog.modal::backdrop { background: transparent; }
 .seg button .dot { color: var(--node, var(--muted)); }
 .seg button.off { opacity: .5; }
 #newSessionForm .hint:empty { display: none; }
+/* The profile field: the choice, opening the list. */
+.pick { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 8px 14px 8px 10px; text-align: left; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line-strong); border-radius: 14px; font: inherit; cursor: pointer; }
+.pick:hover { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); }
+.pick .avatar { width: 40px; height: 40px; }
+.pick .pc-txt { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.pick .pc-name { font-weight: 650; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick .pc-meta { font-size: 12px; color: var(--muted); }
+.pick-chev { width: 18px; height: 18px; color: var(--muted); flex: none; }
+.avatar.mini { width: 24px; height: 24px; border-radius: 7px; font-size: 9.5px; }
+.avatar.mini .i { width: 14px; height: 14px; }
+.menu .lead:has(.avatar.mini) { width: 24px; }
+.obj-row .lead:has(.avatar.mini) { width: 28px; }
+.obj-row .lead .avatar.mini img { width: 100%; height: 100%; }
+.menu { max-height: min(70vh, 560px); overflow-y: auto; }
 /* The start page, as a browser's address bar: a search or a globe in front. */
 .urlbar { display: flex; align-items: center; gap: 10px; height: 50px; padding: 0 6px 0 16px; border-radius: 25px; border: 1px solid var(--line-strong); background: var(--bg); cursor: text; transition: border-color .15s, box-shadow .15s; }
 .urlbar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
@@ -1551,8 +1566,7 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
       <span class="hint browser-only" id="sessionBrowserHint"></span>
       <div class="field managed-only" id="sessionProfileField">
         <span class="field-label" id="sessionProfileLabel">Profile</span>
-        <input class="input" id="sessionProfileFilter" type="search" placeholder="Find a profile" aria-label="Find a profile" autocomplete="off" spellcheck="false" hidden>
-        <div class="pgrid" id="sessionProfileGrid" role="radiogroup" aria-labelledby="sessionProfileLabel"></div>
+        <button type="button" class="pick" id="sessionProfilePick" aria-haspopup="listbox" aria-labelledby="sessionProfileLabel sessionProfilePick"></button>
         <select class="input" id="sessionProfiles" aria-labelledby="sessionProfileLabel" hidden></select>
         <input class="input" id="sessionProfileName" placeholder="Name of the new profile, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
         <span class="hint" id="sessionProfileHint"></span>
@@ -4256,12 +4270,11 @@ function openNewSession(prefill = {}) {
   $('sessionPublic').checked = false;
   $('sessionDedicated').checked = !!sessionProvisioned;
   $('sessionNodeTtl').value = '7200';
-  $('sessionProfileFilter').value = '';
   $('sessionMore').open = !!(prefill.screen && prefill.screen !== 'window');
   syncDedicated();
   setEngine(prefill.engine || byKey.profiles.get(`${sessionNode}|${prefill.profile}`)?.engine || 'chromium');
   openModal('newSessionModal');
-  setTimeout(() => $('sessionProfileGrid').querySelector('.pcard[aria-checked="true"]')?.focus(), 40);
+  setTimeout(() => $('sessionUrl').focus({ preventScroll: true }), 40);
 }
 
 const DEDICATED = '__ephemeral-node__';
@@ -4317,11 +4330,7 @@ function renderProfilePicker() {
     ...all.map((p, i) => opt('p:' + i, `${p.display} · ${p.node_name}`, sessionProfile?.node === p.node_name && sessionProfile?.name === p.display)),
     opt('new', 'New profile…', !!sessionProfile?.new),
   ].join('');
-  // A long list gets a search field.
-  $('sessionProfileFilter').hidden = all.length <= 8;
-  const words = $('sessionProfileFilter').value.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = words.length ? all.filter((p) => words.every((w) => `${p.display} ${p.node_name} ${(p.labels || []).join(' ')}`.toLowerCase().includes(w))) : all;
-  renderProfileGrid(shown);
+  renderProfilePick();
   const isNew = !!sessionProfile?.new;
   $('sessionProfileName').hidden = !isNew;
   const picked = pickedProfile();
@@ -4349,50 +4358,39 @@ function renderProfilePicker() {
   renderAdvSummary();
   syncBrowserTarget();
 }
-// The profiles as cards (the hidden select holds the choice and the events).
-function renderProfileGrid(list) {
-  const grid = $('sessionProfileGrid');
-  const hadFocus = grid.contains(document.activeElement);
-  const cur = (p) => sessionProfile?.node === p.node_name && sessionProfile?.name === p.display;
-  const card = (key, on, avatar, name, meta, cls = '') =>
-    `<button type="button" class="pcard ${cls}" role="radio" aria-checked="${on}" tabindex="${on ? 0 : -1}" data-pick="${esc(key)}">${avatar}<span class="pc-txt"><span class="pc-name">${esc(name)}</span><span class="pc-meta">${meta}</span></span></button>`;
-  const avatarOf = (p) => {
-    const pic = profIcon(p);
-    return pic ? `<div class="avatar pic"><img src="${esc(pic)}" alt=""></div>`
-      : `<div class="avatar" style="color:${nodeColor(p.display)};background:color-mix(in oklab, ${nodeColor(p.display)} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`;
-  };
-  const multiNode = nodes.length > 1;
-  const meta = (p) => [
-    p.session ? '<span class="run">● running</span>' : '',
-    multiNode ? `<span class="nd" style="--node:${nodeColor(p.node_name)}">● ${esc(nodeLabel(p.node_name))}</span>` : '',
-    p.engine === 'firefox' ? 'Firefox' : '',
-    p.session ? '' : esc(relTime(p.modified_at_secs)),
-  ].filter(Boolean).join(' · ');
-  const parts = [
-    card('', !sessionProfile, `<div class="avatar">${icon('trash')}</div>`, 'Throwaway', 'Nothing is kept', 'ghost'),
-    ...list.map((p) => card('p:' + pickerProfiles.indexOf(p), cur(p), avatarOf(p), p.display, meta(p))),
-    card('new', !!sessionProfile?.new, `<div class="avatar">${icon('plus')}</div>`, 'New profile', 'Created on first launch', 'add'),
-  ];
-  grid.innerHTML = parts.join('');
-  if (hadFocus) grid.querySelector('.pcard[aria-checked="true"]')?.focus();
+// The profile as one field showing the choice; it opens the list (a menu, a sheet on
+// phones). The hidden select holds the choice and its change event.
+const pickAvatar = (p, cls = '') => {
+  if (!p) return `<div class="avatar ${cls}">${icon('trash')}</div>`;
+  const pic = profIcon(p);
+  return pic ? `<div class="avatar pic ${cls}"><img src="${esc(pic)}" alt=""></div>`
+    : `<div class="avatar ${cls}" style="color:${nodeColor(p.display)};background:color-mix(in oklab, ${nodeColor(p.display)} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`;
+};
+const pickMeta = (p) => [
+  p.session ? 'running' : '',
+  nodes.length > 1 ? nodeLabel(p.node_name) : '',
+  p.engine === 'firefox' ? 'Firefox' : '',
+  p.session ? '' : relTime(p.modified_at_secs),
+].filter(Boolean).join(' · ');
+function renderProfilePick() {
+  const picked = pickedProfile();
+  const html = sessionProfile?.new
+    ? `<div class="avatar">${icon('plus')}</div><span class="pc-txt"><span class="pc-name">New profile</span><span class="pc-meta">Created on first launch</span></span>`
+    : picked ? `${pickAvatar(picked)}<span class="pc-txt"><span class="pc-name">${esc(picked.display)}</span><span class="pc-meta">${esc(pickMeta(picked))}</span></span>`
+    : `${pickAvatar(null)}<span class="pc-txt"><span class="pc-name">Throwaway</span><span class="pc-meta">Nothing is kept</span></span>`;
+  const btn = $('sessionProfilePick');
+  if (btn.dataset.html !== html) { btn.innerHTML = html + icon('chev', 'pick-chev'); btn.dataset.html = html; }
 }
-$('sessionProfileFilter').addEventListener('input', () => renderProfilePicker());
-$('sessionProfileGrid').addEventListener('click', (e) => {
-  const b = e.target.closest('.pcard');
-  if (!b) return;
-  $('sessionProfiles').value = b.dataset.pick;
-  $('sessionProfiles').dispatchEvent(new Event('change'));
+$('sessionProfilePick').addEventListener('click', (e) => {
+  const pick = (key) => { $('sessionProfiles').value = key; $('sessionProfiles').dispatchEvent(new Event('change')); };
+  openMenu(e.currentTarget, [
+    { label: 'Profile' },
+    { lead: pickAvatar(null, 'mini'), label: 'Throwaway', meta: 'nothing is kept', on: !sessionProfile, run: () => pick('') },
+    ...pickerProfiles.map((p, i) => ({ lead: pickAvatar(p, 'mini'), label: p.display, meta: pickMeta(p), on: sessionProfile?.node === p.node_name && sessionProfile?.name === p.display, run: () => pick('p:' + i) })),
+    '-',
+    { icon: 'plus', label: 'New profile…', on: !!sessionProfile?.new, run: () => pick('new') },
+  ], { align: 'left' });
 });
-$('sessionProfileGrid').addEventListener('keydown', (e) => {
-  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
-  if (!step) return;
-  const cards = [...$('sessionProfileGrid').querySelectorAll('.pcard')];
-  const at = cards.indexOf(document.activeElement);
-  if (at < 0) return;
-  e.preventDefault();
-  cards[(at + step + cards.length) % cards.length].click();
-});
-
 /* Proxy for the new session: null = the profile's default, 'none' = direct, or an id. */
 let sessionProxy = null;
 function renderProxyPicker(profile) {
