@@ -1244,6 +1244,11 @@ body.selecting .appnav { visibility: hidden; }
 .obj-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .obj-id h2 { margin: 0; font-size: 18px; font-weight: 750; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .obj-sub { font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px; line-height: 1.6; }
+.obj-si { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.obj-si:not(:last-child)::after { content: '·'; margin-left: 5px; color: var(--faint); }
+/* Opening a sheet focuses it; on touch that must not draw a ring around it. */
+dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .obj-body:focus-visible { outline: none; }
+.obj-sub { column-gap: 5px; }
 .obj-sub .run { color: var(--ok); font-weight: 650; }
 .obj-facts { display: flex; flex-wrap: wrap; gap: 5px; }
 .obj-primary { display: flex; gap: 8px; }
@@ -2621,6 +2626,8 @@ $('objSheet').addEventListener('close', () => { sheet = null; });
 // What used to be each object's ⋯ menu, as a sheet: who and what it is on top, the
 // main action as a large button, frequent actions as tiles, the rest as rows that
 // show their current value.
+// Facts under the name: separate pieces, so a wrapped line never starts with a dot.
+const subLine = (...parts) => parts.filter(Boolean).map((x) => `<span class="obj-si">${x}</span>`).join('');
 const sheetHead = (pic, title, sub, extra = '') => `<div class="obj-pic">${pic}</div><div class="obj-id"><h2>${title}</h2><div class="obj-sub">${sub}</div>${extra}</div>`;
 function sessionSheetSpec(s) {
   const key = keyOf.session(s);
@@ -2631,7 +2638,7 @@ function sessionSheetSpec(s) {
   if (s._extension) {
     const control = s._extension.tabs.some(t => t.control);
     return {
-      head: sheetHead(thumb, esc(sessName(s)), `Real browser · ${nodeChip(s.node_name)} · ${plural(s.tabs_count || s._extension.tabs.length, 'shared tab')}`),
+      head: sheetHead(thumb, esc(sessName(s)), subLine('Real browser', nodeChip(s.node_name), plural(s.tabs_count || s._extension.tabs.length, 'shared tab'))),
       primary: `<a class="btn primary big" href="${href}">${icon('takeover')}${control ? 'Take over' : 'View'}</a>`,
       items: [
         s._extension.public_share && { tile: true, icon: 'share', label: 'Share', run: () => openShare('session', s) },
@@ -2651,7 +2658,7 @@ function sessionSheetSpec(s) {
   ].filter(Boolean);
   const sh = s.share;
   return {
-    head: sheetHead(thumb, `${esc(sessName(s))}`, `${esc(s.profile || 'Throwaway')} · ${nodeChip(s.node_name)} · ${engine === 'firefox' ? 'Firefox' : 'Chromium'} · up <span data-up data-start="${sessionStart(s)}"></span>`,
+    head: sheetHead(thumb, `${esc(sessName(s))}`, subLine(esc(s.profile || 'Throwaway'), nodeChip(s.node_name), engine === 'firefox' ? 'Firefox' : 'Chromium', `up <span data-up data-start="${sessionStart(s)}"></span>`),
       `${facts.length ? `<div class="obj-facts">${facts.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}${s.labels?.length ? `<div class="obj-facts">${lblChips(s.labels)}</div>` : ''}`),
     primary: `<a class="btn primary big" href="${href}"${drivenAttr(s)}>${icon('takeover')}Take over</a>`,
     items: [
@@ -2686,9 +2693,9 @@ function profileSheetSpec(p) {
   const others = nodes.filter((n) => n.name !== p.node_name && n.status === 'online');
   const engine = p.engine === 'firefox' ? 'Firefox' : 'Chromium';
   const next = p.session ? ' (from the next launch)' : '';
-  const status = p.session ? `<span class="run">● Running</span> · up <span data-up data-start="${sessionStart(p.session)}"></span>` : 'Not running';
+  const status = p.session ? `<span class="run">● Running</span>&nbsp;up <span data-up data-start="${sessionStart(p.session)}"></span>` : 'Not running';
   return {
-    head: sheetHead(pic, esc(p.display), `${status} · ${nodeChip(p.node_name)} · ${engine} · ${formatBytes(p.size_bytes)}`, p.labels?.length ? `<div class="obj-facts">${lblChips(p.labels)}</div>` : ''),
+    head: sheetHead(pic, esc(p.display), subLine(status, nodeChip(p.node_name), engine, formatBytes(p.size_bytes)), p.labels?.length ? `<div class="obj-facts">${lblChips(p.labels)}</div>` : ''),
     primary: p.session
       ? `<a class="btn primary big" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)}>${icon('takeover')}Take over</a>`
       : `<button class="btn primary big" data-act="launch-profile" data-key="${esc(key)}">${icon('play', 'fill')}Launch</button>${p.tabs?.length ? `<button class="btn big" data-act="launch-profile-bare" data-key="${esc(key)}">Without tabs</button>` : ''}`,
@@ -2733,7 +2740,7 @@ function recordingSheetSpec(r) {
   const flags = [isLive(r) && 'Live', r.status === 'interrupted' && 'Cut short', r.keep && 'Kept', r.audio && 'With sound', r.merged_from?.length && `Merged from ${r.merged_from.length}`, cachedRecordingsSet.has(r.id) && 'Saved in this browser'].filter(Boolean);
   return {
     head: sheetHead(`<span class="site-fav lg">${favicon(url, recFavicon(r), r.favicon_url)}</span>`, esc(recordingTitle(r)),
-      `${esc(shortUrl(url) || plural(r.frame_count, 'frame'))} · ${nodeChip(r.node_name)} · ${esc(relTime(r.started_at_secs))} · ${esc(formatUptime(r.duration_seconds))} · ${esc(formatBytes(r.size_bytes))}`,
+      subLine(esc(shortUrl(url) || plural(r.frame_count, 'frame')), nodeChip(r.node_name), esc(relTime(r.started_at_secs)), esc(formatUptime(r.duration_seconds)), esc(formatBytes(r.size_bytes))),
       `${flags.length ? `<div class="obj-facts">${flags.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}${r.labels?.length ? `<div class="obj-facts">${lblChips(r.labels)}</div>` : ''}`),
     primary: `<button class="btn primary big" data-act="play" data-key="${esc(key)}">${icon('play', 'fill')}Play</button>`,
     items: [

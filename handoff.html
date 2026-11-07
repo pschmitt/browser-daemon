@@ -466,6 +466,15 @@
   .tab-close { width: 28px; height: 28px; border-radius: 50%; border: 0; background: transparent; color: var(--muted);
     cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; flex: none; }
   .tab-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+  #tabsReopen { display: none; }
+  #keys button.on { background: var(--accent-btn); color: #fff; box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 60%, transparent); }
+  #ownerSheet { position: fixed; inset: 0; z-index: 120; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .5); }
+  #ownerSheet[hidden] { display: none; }
+  #ownerSheet .os-card { width: 100%; max-width: 480px; box-sizing: border-box; padding: 16px 18px calc(18px + env(safe-area-inset-bottom)); border: 1px solid var(--line); border-radius: 20px 20px 0 0; background: var(--bar); display: flex; flex-direction: column; gap: 10px; animation: sheetUp .18s ease-out; }
+  #ownerSheet .os-head { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; }
+  #ownerSheet .os-head svg { width: 22px; height: 22px; flex: none; }
+  #ownerSheet .pm-context-row { font-size: 13px; }
+  #ownerSheet .os-close { min-height: 44px; border: 0; border-radius: 12px; background: var(--btn); color: var(--fg); font: inherit; font-weight: 600; }
   .tab-close:hover { background: var(--line); color: var(--bad); }
   /* The page asks for files: the bar when the chooser can't open by itself. */
   #pageFiles { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -601,6 +610,27 @@
     #newTabBtn { min-height: 44px; padding: 0 16px; font-size: 13px; }
     .tabs-search { min-height: 44px; font-size: 16px; }
     .tabs-modal-card { padding-bottom: env(safe-area-inset-bottom); }
+    .tabs-modal-overlay { background: var(--bar); backdrop-filter: none; }
+    .tabs-modal-card { max-width: none; max-height: none; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
+    .tabs-list.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-content: start; padding: 12px; }
+    .tab-card.tg { flex-direction: column; align-items: stretch; gap: 0; padding: 0; overflow: hidden; border-radius: 14px; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
+    .tab-card.tg.active { border-width: 2px; border-color: var(--accent); }
+    .tg-top { display: flex; align-items: center; gap: 6px; padding: 0 0 0 10px; min-height: 44px; }
+    .tg-top .tg-title { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tg-top .tab-close { margin: 0; }
+    .tg-prev { position: relative; aspect-ratio: 3 / 4; background: color-mix(in oklab, var(--bg) 70%, var(--btn)); overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 12px; }
+    .tg-prev img.tg-shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+    .tg-prev.ph { background: color-mix(in oklab, hsl(var(--h, 210) 60% 50%) 16%, var(--bg)); }
+    .tg-prev .site-ic { width: 44px !important; height: 44px !important; border-radius: 12px; }
+    .tg-prev .site-ic.letter { font-size: 22px; }
+    .tg-badges { position: absolute; left: 6px; right: 6px; bottom: 6px; display: flex; gap: 5px; flex-wrap: wrap; pointer-events: none; }
+    .tg-badge { pointer-events: auto; display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 0 8px; border: 0; border-radius: 13px; background: rgba(15, 15, 20, .78); color: #fff; font: 600 11px/1 system-ui, sans-serif; backdrop-filter: blur(4px); }
+    .tg-badge svg { width: 14px; height: 14px; flex: none; }
+    .tg-badge.own { min-height: 32px; padding: 0 10px; }
+    .tg-meta { padding: 6px 10px 8px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tabsReopen { display: block; flex: none; margin: 4px 12px 12px; min-height: 44px; border: 0; border-radius: 12px; background: var(--btn); color: var(--fg); font: inherit; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tabsReopen[hidden] { display: none; }
+    #tabContextMenu button { min-height: 48px; padding: 0 14px; font-size: 15px; }
 
     /* things that float above the page keep clear of the toolbar */
     #clipToast { bottom: calc(80px + env(safe-area-inset-bottom)); }
@@ -754,6 +784,7 @@
     </div>
   </div>
   <div id="keys">
+    <button id="ctrlKey" type="button" aria-pressed="false" title="Hold Ctrl for the next key">Ctrl</button>
     <button data-key="Tab">Tab</button>
     <button data-key="Escape">Esc</button>
     <button data-key="ArrowLeft" aria-label="Arrow left">←</button>
@@ -860,7 +891,7 @@
     <div class="tabs-modal-header">
       <div style="display:flex;align-items:center;gap:8px;">
         <svg viewBox="0 0 24 24" style="width:18px;height:18px;stroke:var(--accent);fill:none;stroke-width:2;"><rect x="3" y="3" width="13" height="13" rx="2.5"/><path d="M8 8h11a2.5 2.5 0 0 1 2.5 2.5v10.5"/></svg>
-        <span style="font-weight:700;font-size:16px;">Tabs</span>
+        <span id="tabsTitle" style="font-weight:700;font-size:16px;">Tabs</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <button class="btn-xs" id="newTabBtn" title="Open new tab in this browser">+ New Tab</button>
@@ -869,8 +900,10 @@
     </div>
     <input id="tabsSearch" class="tabs-search" type="search" placeholder="Search tabs" aria-label="Search tabs">
     <div id="tabsList" class="tabs-list"></div>
+    <button id="tabsReopen" type="button" hidden></button>
   </div>
 </div>
+<div id="ownerSheet" hidden><div class="os-card" role="dialog" aria-modal="true" aria-label="Tab owner"></div></div>
 <div id="tabContextMenu" role="menu" hidden><button id="tabContextReload" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 1-2.3-5.7L20 9"/></svg><span>Reload tab</span></button><button id="tabContextPin" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m16 3 5 5-4 1-4 4v5l-2 2-2-7-5-5 2-2h5z"/></svg><span id="tabContextPinLabel"></span></button><button id="tabContextClose" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m18 6-12 12M6 6l12 12"/></svg><span>Close tab</span></button></div>
 <script>
 "use strict";
@@ -2768,15 +2801,18 @@ function noteClosedTabs(before, after) {
 function renderReopen() {
   const last = closedTabs.at(-1);
   $("smReopen").hidden = !last;
+  $("tabsReopen").hidden = !last;
+  if (last) $("tabsReopen").textContent = `Reopen closed tab: ${last.title.length > 28 ? last.title.slice(0, 27) + "…" : last.title}`;
   if (last) {
     $("smReopenText").textContent = `Reopen ${last.title.length > 32 ? last.title.slice(0, 31) + "…" : last.title}`;
     $("smReopen").title = `Reopen the last closed tab: ${last.url}`;
   }
 }
-$("smReopen").addEventListener("click", async () => {
+$("smReopen").addEventListener("click", () => { toggleSessMenu(false); reopenClosedTab(); });
+$("tabsReopen").addEventListener("click", () => { closeTabsModal(); reopenClosedTab(); });
+async function reopenClosedTab() {
   const last = closedTabs.pop();
   renderReopen();
-  toggleSessMenu(false);
   if (!last) return;
   if (sharedBrowserId) { openSharedTabAt(last.url); return; }
   try {
@@ -2790,7 +2826,7 @@ $("smReopen").addEventListener("click", async () => {
     renderReopen();
     toast("Could not reopen the tab: " + err.message, 5000);
   }
-});
+}
 
 // Shared browsers use the extension's stored follow setting.
 const followKey = () => `handoff.follow.${sharedBrowserId}`;
@@ -2927,8 +2963,18 @@ E.kb.addEventListener("input", () => {
   const now = E.kb.value;
   let p = 0; const max = Math.min(mirror.length, now.length);
   while (p < max && mirror[p] === now[p]) p++;
-  for (let i = mirror.length - p; i > 0; i--) pressKey("Backspace");
   const added = now.slice(p);
+  const ctrl = ctrlOnce && takeCtrl();
+  if (ctrl && added.length === 1 && p === mirror.length && /^[a-z]$/i.test(added)) {
+    // Ctrl + letter from the on-screen keyboard: a shortcut, not text.
+    E.kb.value = mirror;
+    const k = added.toLowerCase();
+    drv.shortcut(k, false, { a: "selectAll", z: "undo", y: "redo" }[k] || null);
+    clearTimeout(resyncTimer); resyncTimer = setTimeout(resync, 200);
+    refreshRemoteSelection();
+    return;
+  }
+  for (let i = mirror.length - p; i > 0; i--) pressKey("Backspace", ctrl && i === mirror.length - p && !added ? { ctrl: true } : undefined);
   if (added) drv.insertText(added);
   mirror = now;
   clearTimeout(resyncTimer);
@@ -2959,11 +3005,23 @@ E.kb.addEventListener("keydown", (e) => {
     }
     return;
   }
-  if (e.key === "Enter") { e.preventDefault(); pressKey("Enter"); setTimeout(probeFocus, 400); }
-  else if (e.key === "Tab") { e.preventDefault(); pressKey("Tab"); setTimeout(probeFocus, 200); }
-  else if (e.key === "Escape") { e.preventDefault(); pressKey("Escape"); }
+  if (e.key === "Enter") { e.preventDefault(); pressKey("Enter", ctrlMods()); setTimeout(probeFocus, 400); }
+  else if (e.key === "Tab") { e.preventDefault(); pressKey("Tab", ctrlMods()); setTimeout(probeFocus, 200); }
+  else if (e.key === "Escape") { e.preventDefault(); pressKey("Escape", ctrlMods()); }
 });
 E.kb.addEventListener("blur", () => { if (!manualKb) E.keys.classList.remove("show"); });
+
+// The Ctrl button of the keys row: the next key (from the row or the on-screen
+// keyboard) goes with Ctrl, then it lets go.
+let ctrlOnce = false;
+function setCtrl(on) {
+  ctrlOnce = on;
+  $("ctrlKey").classList.toggle("on", on);
+  $("ctrlKey").setAttribute("aria-pressed", String(on));
+}
+function takeCtrl() { const was = ctrlOnce; if (was) setCtrl(false); return was; }
+const ctrlMods = () => takeCtrl() ? { ctrl: true } : undefined;
+$("ctrlKey").addEventListener("click", () => setCtrl(!ctrlOnce));
 
 const KEYS = CDP_KEYS;
 function pressKey(key, mods) {
@@ -3641,7 +3699,7 @@ function showTabContextMenu(event, tab) {
   contextTab = tab;
   E.tabContextPinLabel.textContent = tab.pinned ? "Unpin tab" : "Pin tab";
   const width = 190;
-  const height = 130;
+  const height = phoneMQ.matches ? 160 : 130;
   E.tabContextMenu.style.left = `${Math.max(4, Math.min(event.clientX, innerWidth - width - 4))}px`;
   E.tabContextMenu.style.top = `${Math.max(4, Math.min(event.clientY, innerHeight - height - 4))}px`;
   E.tabContextMenu.hidden = false;
@@ -3805,14 +3863,130 @@ async function closeSharedTab(id) {
   finally { setTimeout(() => loadTabs(), 250); }
 }
 
+// Phones: the owner's details in a small sheet (there is no hover to show them).
+function showOwnerSheet(tab) {
+  const o = tab.owner;
+  if (!o) return;
+  const brand = AGENT_TITLE[agentBrand(o)] || o.integration || o.agent_name || "Agent";
+  const row = (k, v, mono) => v ? `<div class="pm-context-row"><span>${k}</span><strong${mono ? ' class="mono"' : ""}>${esc(v)}</strong></div>` : "";
+  const sheet = $("ownerSheet");
+  sheet.firstElementChild.innerHTML = `<div class="os-head">${agentSvg(o)}<span>${esc(brand)}</span></div>`
+    + row("Topic", o.topic) + row("Conversation", o.conversation, true)
+    + row("Machine", o.machine || o.from) + row("Directory", o.cwd, true) + row("Automation", o.kind)
+    + `<button type="button" class="os-close">Close</button>`;
+  sheet.hidden = false;
+}
+function closeOwnerSheet() { $("ownerSheet").hidden = true; }
+$("ownerSheet").addEventListener("click", (e) => { if (e.target === $("ownerSheet") || e.target.closest(".os-close")) closeOwnerSheet(); });
+
+// Phones: a grid of previews. A tab's last picture comes from frameCache (the shown tab: its canvas).
+function tabPreview(p) {
+  if (p.id === pageId && E.view.width > 1 && drv) { try { return E.view.toDataURL("image/jpeg", 0.5); } catch { /* tainted or empty */ } }
+  const f = frameCache.get(p.id);
+  return f ? `data:${f.mime || "image/jpeg"};base64,${f.data}` : "";
+}
+function renderTabGrid(pages, visible) {
+  E.tabsList.classList.add("grid");
+  E.tabsList.innerHTML = "";
+  for (const p of visible) {
+    const isCurrent = p.id === pageId;
+    let host = "";
+    try { host = new URL(p.url, location.href).hostname.replace(/^www\./, ""); } catch { /* not a web address */ }
+    const card = document.createElement("div");
+    card.className = "tab-card tg" + (isCurrent ? " active" : "");
+    card.addEventListener("contextmenu", (e) => showTabContextMenu(e, p));
+
+    const top = document.createElement("div");
+    top.className = "tg-top";
+    const label = document.createElement("span");
+    label.className = "tg-title";
+    label.textContent = p.title || host || "(untitled)";
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "tab-close";
+    closeBtn.title = "Close tab";
+    closeBtn.setAttribute("aria-label", "Close tab");
+    closeBtn.innerHTML = "✕";
+    closeBtn.onclick = (e) => { e.stopPropagation(); closeTab(p.id); };
+    closeBtn.hidden = !!sharedBrowserId && !p.control;
+    top.append(siteIcon(p.url, 16, p.favicon), label, closeBtn);
+
+    const prev = document.createElement("div");
+    const shot = tabPreview(p);
+    prev.className = "tg-prev" + (shot ? "" : " ph");
+    if (shot) {
+      const img = document.createElement("img");
+      img.className = "tg-shot"; img.alt = ""; img.src = shot;
+      prev.appendChild(img);
+    } else {
+      if (host) prev.style.setProperty("--h", hueOf(host));
+      prev.append(siteIcon(p.url, 44, p.favicon));
+      const h = document.createElement("span");
+      h.textContent = host || "New tab";
+      prev.appendChild(h);
+    }
+    const badges = document.createElement("div");
+    badges.className = "tg-badges";
+    const badge = (html, cls = "") => { const b = document.createElement("span"); b.className = "tg-badge " + cls; b.innerHTML = html; badges.appendChild(b); return b; };
+    if (p.owner) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "tg-badge own";
+      b.setAttribute("aria-label", "Owner: " + tabOwnerLabel(p.owner));
+      b.innerHTML = `${agentSvg(p.owner)}<span>${esc(p.owner.integration || agentShort(p.owner) || p.owner.kind || AGENT_TITLE[agentBrand(p.owner)] || "Agent")}</span>`;
+      b.onclick = (e) => { e.stopPropagation(); showOwnerSheet(p); };
+      badges.appendChild(b);
+    }
+    if (p.pinned) badge("Pinned");
+    if (p.audible) badge(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Playing sound"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>`);
+    prev.appendChild(badges);
+
+    const meta = document.createElement("div");
+    meta.className = "tg-meta";
+    const bits = [host || p.url];
+    if (p.profile) bits.push("Profile: " + p.profile);
+    else if (p.sessionId && !sharedBrowserId && p.sessionId !== target?.sessionId) bits.push("Session: " + p.sessionId.slice(0, 8));
+    meta.textContent = bits.filter(Boolean).join(" · ");
+    meta.title = p.url || "";
+    card.append(top, prev, meta);
+
+    // A long press opens the tab menu (phone browsers do not reliably fire contextmenu).
+    let hold = 0, sx = 0, sy = 0;
+    const cancel = () => { clearTimeout(hold); hold = 0; };
+    card.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1 || e.target.closest(".tab-close, .tg-badge.own")) return;
+      const t = e.touches[0];
+      sx = t.clientX; sy = t.clientY;
+      cancel();
+      hold = setTimeout(() => {
+        hold = 0;
+        card.dataset.held = String(Date.now());
+        navigator.vibrate?.(15);
+        showTabContextMenu({ preventDefault() {}, clientX: sx, clientY: sy }, p);
+      }, 500);
+    }, { passive: true });
+    card.addEventListener("touchmove", (e) => { const t = e.touches[0]; if (Math.hypot(t.clientX - sx, t.clientY - sy) > 10) cancel(); }, { passive: true });
+    card.addEventListener("touchend", cancel);
+    card.addEventListener("touchcancel", cancel);
+    card.onclick = () => {
+      if (Date.now() - Number(card.dataset.held || 0) < 800) return;
+      closeTabsModal();
+      if (!isCurrent) switchTab(p.id);
+    };
+    E.tabsList.appendChild(card);
+  }
+}
+
 function renderTabsModal(pages) {
   if (!E.tabsModal.classList.contains("open")) return;
   const query = E.tabsSearch.value.trim().toLocaleLowerCase();
   const visible = pages.filter((p) => !query || `${p.title || ""} ${p.url || ""}`.toLocaleLowerCase().includes(query));
+  const phone = phoneMQ.matches;
+  $("tabsTitle").textContent = phone ? `${pages.length} ${pages.length === 1 ? "tab" : "tabs"}` : "Tabs";
+  E.tabsList.classList.toggle("grid", false);
   if (visible.length === 0) {
     E.tabsList.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted);font-size:13.5px;">${pages.length ? "No matching tabs." : "No open tabs found."}</div>`;
     return;
   }
+  if (phone) { renderTabGrid(pages, visible); return; }
   E.tabsList.innerHTML = "";
   for (const p of visible) {
     const isCurrent = p.id === pageId;
@@ -3930,6 +4104,7 @@ window.addEventListener("keydown", event => {
   const dialog = document.activeElement?.closest('dialog[open]') || dialogs.at(-1);
   let close;
   if (dialog) close = () => dialog.close('cancel');
+  else if (!$("ownerSheet").hidden) close = closeOwnerSheet;
   else if (!E.tabContextMenu.hidden) close = closeTabContextMenu;
   else if (!$("tabHoverMenu").hidden) close = () => hideTabHoverMenu(true);
   else if (E.tabsModal.classList.contains('open')) close = closeTabsModal;
@@ -3951,6 +4126,7 @@ $("urlTabs").onclick = () => openTabsModal();
 $("urlTabs").addEventListener("mousedown", (e) => e.preventDefault());
 E.newTabBtn.onclick = () => openNewTab();
 E.tabsSearch.addEventListener("input", () => renderTabsModal(tabsAll));
+phoneMQ.addEventListener("change", () => renderTabsModal(tabsAll));
 E.tabContextReload.addEventListener("click", () => {
   if (contextTab) {
     if (sharedBrowserId) void reloadSharedTab(contextTab.id);
@@ -4085,7 +4261,7 @@ E.kbbtn.onclick = () => {
 };
 $("smKeyboard").onclick = () => E.kbbtn.click();
 new MutationObserver(() => $("smKeyboard").setAttribute("aria-checked", String(E.kbbtn.classList.contains("on")))).observe(E.kbbtn, { attributes: true, attributeFilter: ["class"] });
-document.querySelectorAll("#keys button[data-key]").forEach((b) => b.addEventListener("click", () => { pressKey(b.dataset.key); setTimeout(probeFocus, 300); }));
+document.querySelectorAll("#keys button[data-key]").forEach((b) => b.addEventListener("click", () => { pressKey(b.dataset.key, ctrlMods()); setTimeout(probeFocus, 300); }));
 async function copyRemoteSelection() {
   if (!drv) return '';
   try {
