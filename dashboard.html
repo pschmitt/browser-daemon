@@ -637,6 +637,20 @@ dialog.modal::backdrop { background: transparent; }
 .seg button .dot { color: var(--node, var(--muted)); }
 .seg button.off { opacity: .5; }
 #newSessionForm .hint:empty { display: none; }
+/* The start page, as a browser's address bar: a search or a globe in front. */
+.urlbar { display: flex; align-items: center; gap: 10px; height: 50px; padding: 0 6px 0 16px; border-radius: 25px; border: 1px solid var(--line-strong); background: var(--bg); cursor: text; transition: border-color .15s, box-shadow .15s; }
+.urlbar:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.urlbar > .i { width: 18px; height: 18px; color: var(--muted); flex: none; }
+.urlbar input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 16px; }
+.urlbar-x { width: 38px; height: 38px; border: 0; border-radius: 50%; background: var(--hover); color: var(--muted); display: grid; place-items: center; flex: none; }
+/* Options: an icon in front of every setting; switches sit at the end of their row. */
+#newSessionForm .switch .opt-ico { order: -1; }
+#newSessionForm .switch .txt { flex: 1; min-width: 0; }
+#newSessionForm .switch .track { order: 2; }
+.opt-ico { width: 18px; height: 18px; color: var(--muted); flex: none; }
+#newSessionForm .field > label, #newSessionForm .field-label { display: inline-flex; align-items: center; gap: 8px; }
+#newSessionForm .field-label .opt-ico, #newSessionForm .field > label .opt-ico { width: 16px; height: 16px; }
+#sessionNodes button.dedicated .i { color: var(--accent); }
 #newSessionForm details.adv.more { border-style: dashed; }
 #newSessionForm:not(.to-browser) .browser-only, #newSessionForm.to-browser .managed-only { display: none !important; }
 .seg.small button { height: 30px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
@@ -1509,7 +1523,7 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
       </form>
       <form id="addEphemeralForm" class="add-card" role="tabpanel" aria-labelledby="addTabEphemeral" hidden>
         <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-server"/></svg></span>
-          <div><h3>Short-lived worker</h3><p>Start a dedicated node now and create one throwaway session on it later.</p></div></div>
+          <div><h3>Ephemeral node</h3><p>Start a node of its own now and create one throwaway session on it later.</p></div></div>
         <div class="field"><label for="nodeTtl">Maximum lifetime</label><select class="input" id="nodeTtl">
           <option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="7200" selected>2 hours</option><option value="14400">4 hours</option><option value="28800">8 hours</option><option value="86400">24 hours</option>
         </select><span class="hint">The worker is removed at this limit, or after its session ends.</span></div>
@@ -1533,7 +1547,7 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
     <div class="sheet-body">
       <!-- The two questions: what to open, and with which profile. The profile brings its
            node and engine; everything else has a default and sits under Options. -->
-      <input class="input" id="sessionUrl" type="text" inputmode="url" placeholder="Address or search (optional)" aria-label="Start page" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label class="urlbar" id="sessionUrlBar"><svg class="i" id="sessionUrlIcon"><use href="#i-search"/></svg><input id="sessionUrl" type="text" inputmode="url" enterkeyhint="go" placeholder="Search or enter address" aria-label="Start page" autocomplete="off" autocapitalize="off" spellcheck="false"><button type="button" class="urlbar-x" id="sessionUrlClear" aria-label="Clear" hidden><svg class="i sm"><use href="#i-x"/></svg></button></label>
       <span class="hint browser-only" id="sessionBrowserHint"></span>
       <div class="field managed-only" id="sessionProfileField">
         <span class="field-label" id="sessionProfileLabel">Profile</span>
@@ -1552,14 +1566,14 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
       <details class="adv" id="sessionMore">
         <summary><svg class="i sm"><use href="#i-gear"/></svg>Options<span class="adv-sum" id="advSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
         <div class="adv-body">
-          <div class="field" id="sessionNodeField"><span class="field-label">Node</span><div class="seg" id="sessionNodes"></div></div>
-          <label class="switch managed-only" id="sessionDedicatedField" hidden><input type="checkbox" id="sessionDedicated"><span class="track"></span><span class="txt"><b>Dedicated short-lived node</b><span>A worker of its own, removed after the last client disconnects</span></span></label>
-          <div class="field managed-only" id="sessionNodeTtlField" hidden><label for="sessionNodeTtl">Maximum node lifetime</label><select class="input" id="sessionNodeTtl"><option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="7200" selected>2 hours</option><option value="14400">4 hours</option><option value="28800">8 hours</option><option value="86400">24 hours</option></select></div>
-          <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Take over right away</b><span>Open the live view once it is up</span></span></label>
-          <label class="switch managed-only" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
-          <label class="switch managed-only" id="sessionPublicField"><input type="checkbox" id="sessionPublic"><span class="track"></span><span class="txt"><b>Public link</b><span>Anyone with the link can watch for an hour</span></span></label>
-          <label class="switch managed-only"><input type="checkbox" id="sessionRecord"><span class="track"></span><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
-          <div class="field managed-only"><span class="field-label">Screen</span><div class="seg" id="sessionScreen">
+          <div class="field" id="sessionNodeField"><span class="field-label"><svg class="i opt-ico"><use href="#i-server"/></svg>Node</span><div class="seg" id="sessionNodes"></div></div>
+          <input type="checkbox" id="sessionDedicated" hidden>
+          <div class="field managed-only" id="sessionNodeTtlField" hidden><label for="sessionNodeTtl"><svg class="i opt-ico"><use href="#i-clock"/></svg>Lifetime of the ephemeral node</label><select class="input" id="sessionNodeTtl"><option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="7200" selected>2 hours</option><option value="14400">4 hours</option><option value="28800">8 hours</option><option value="86400">24 hours</option></select></div>
+          <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><svg class="i opt-ico"><use href="#i-takeover"/></svg><span class="txt"><b>Take over right away</b><span>Open the live view once it is up</span></span></label>
+          <label class="switch managed-only" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><svg class="i opt-ico"><use href="#i-tabs"/></svg><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
+          <label class="switch managed-only" id="sessionPublicField"><input type="checkbox" id="sessionPublic"><span class="track"></span><svg class="i opt-ico"><use href="#i-globe"/></svg><span class="txt"><b>Public link</b><span>Anyone with the link can watch for an hour</span></span></label>
+          <label class="switch managed-only"><input type="checkbox" id="sessionRecord"><span class="track"></span><svg class="i opt-ico"><use href="#i-rec"/></svg><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
+          <div class="field managed-only"><span class="field-label"><svg class="i opt-ico"><use href="#i-handoff"/></svg>Screen</span><div class="seg" id="sessionScreen">
             <button type="button" data-screen="window" class="on" title="The size below">Window</button>
             <button type="button" data-screen="native" title="Live views give the page their own screen's size and pixel density">Native</button>
             <button type="button" data-screen="phone" title="A phone: 412×915, touch input, the mobile site">Phone</button>
@@ -1577,22 +1591,22 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
             <div class="field"><label for="sessionHeight">Height</label><input class="input" type="number" id="sessionHeight" value="1080" min="240" max="2160"></div>
           </div></div>
           <details class="adv more managed-only">
-            <summary>More<span class="adv-sum" id="advMoreSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
+            <summary><svg class="i sm"><use href="#i-more"/></svg>More<span class="adv-sum" id="advMoreSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
             <div class="adv-body">
-              <div class="field"><span class="field-label">Name</span><input class="input" id="sessionName" placeholder="Made up when empty" autocomplete="off" spellcheck="false" maxlength="64"></div>
+              <div class="field"><span class="field-label"><svg class="i opt-ico"><use href="#i-edit"/></svg>Name</span><input class="input" id="sessionName" placeholder="Made up when empty" autocomplete="off" spellcheck="false" maxlength="64"></div>
               <div class="row2">
-                <div class="field"><span class="field-label">Appearance</span><select class="input" id="sessionScheme" aria-label="Appearance"></select></div>
-                <div class="field" id="sessionProxyField"><span class="field-label">Proxy</span><select class="input" id="sessionProxies" aria-label="Proxy"></select></div>
+                <div class="field"><span class="field-label"><svg class="i opt-ico"><use href="#i-moon"/></svg>Appearance</span><select class="input" id="sessionScheme" aria-label="Appearance"></select></div>
+                <div class="field" id="sessionProxyField"><span class="field-label"><svg class="i opt-ico"><use href="#i-route"/></svg>Proxy</span><select class="input" id="sessionProxies" aria-label="Proxy"></select></div>
               </div>
               <span class="hint" id="sessionProxyHint"></span>
               <div class="row2">
-                <div class="field"><label for="sessionIdle">Stop when idle for</label>
+                <div class="field"><label for="sessionIdle"><svg class="i opt-ico"><use href="#i-power"/></svg>Stop when idle for</label>
                   <select class="input" id="sessionIdle"><option value="">Node default</option><option value="15">15 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">1 day</option><option value="0">Never</option></select></div>
-                <div class="field"><label for="sessionMem">Memory limit (MB)</label><input class="input" type="number" id="sessionMem" min="128" max="65536" placeholder="Node default"></div>
+                <div class="field"><label for="sessionMem"><svg class="i opt-ico"><use href="#i-db"/></svg>Memory limit (MB)</label><input class="input" type="number" id="sessionMem" min="128" max="65536" placeholder="Node default"></div>
               </div>
-              <label class="switch"><input type="checkbox" id="sessionEphemeral" checked><span class="track"></span><span class="txt"><b>Ephemeral</b><span id="sessionEphemeralHint">Stops when its last automation client disconnects (the live view does not count)</span></span></label>
-              <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
-              <label class="switch"><input type="checkbox" id="sessionTouches"><span class="track"></span><span class="txt"><b>Show touches</b><span>Live views mark taps and clicks</span></span></label>
+              <label class="switch"><input type="checkbox" id="sessionEphemeral" checked><span class="track"></span><svg class="i opt-ico"><use href="#i-clock"/></svg><span class="txt"><b>Stop with the last client</b><span id="sessionEphemeralHint">Stops when its last automation client (Playwright, CDP, BiDi) disconnects; the live view does not count</span></span></label>
+              <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><svg class="i opt-ico"><use href="#i-shield"/></svg><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
+              <label class="switch"><input type="checkbox" id="sessionTouches"><span class="track"></span><svg class="i opt-ico"><use href="#i-eye"/></svg><span class="txt"><b>Show touches</b><span>Live views mark taps and clicks</span></span></label>
             </div>
           </details>
         </div>
@@ -2657,7 +2671,7 @@ function sessionSheetSpec(s) {
   const idle = idleState(s);
   const settingsMeta = [s.idle_timeout_seconds ? `stops idle ${idleLabel(s.idle_timeout_seconds)}` : 'never idles out', s.proxy ? proxyName(s.node_name, s.proxy) : ''].filter(Boolean).join(' · ');
   const facts = [
-    !s.persistent && 'Ephemeral', s.adblock && 'Blocks ads', s.proxy && `Via ${proxyName(s.node_name, s.proxy)}`, idle?.text,
+    !s.persistent && 'Stops with its last client', s.adblock && 'Blocks ads', s.proxy && `Via ${proxyName(s.node_name, s.proxy)}`, idle?.text,
   ].filter(Boolean);
   const sh = s.share;
   return {
@@ -3746,7 +3760,7 @@ function sessionCard(s) {
     s._extension && (s._extension.tabs.some(t => t.control)
       ? ind('ok', icon('takeover', 'sm'), '', 'Control allowed: you can click and type in the shared tabs')
       : ind('', icon('eye', 'sm'), '', 'View only: the shared tabs can be watched, not controlled')),
-    !s.persistent && ind('', icon('clock', 'sm'), '', 'Ephemeral: stops when its last client disconnects'),
+    !s.persistent && ind('', icon('clock', 'sm'), '', 'Stops when its last automation client disconnects'),
     s.adblock && ind('ok', icon('shield', 'sm'), '', 'Ads and trackers are blocked'),
     s.proxy && ind('accent', icon('route', 'sm'), proxyName(s.node_name, s.proxy), `Traffic goes through ${proxyName(s.node_name, s.proxy)}`),
     others.length && ind('', icon('users', 'sm'), String(others.length), `Automation clients attached:\n\n${others.map(clientInfo).join('\n\n')}`, 'session-clients'),
@@ -4207,10 +4221,28 @@ $('sessionTouches').addEventListener('change', () => { touchesTouched = true; })
 $('sessionAdblock').addEventListener('change', () => { adblockTouched = true; });
 const engineDefaults = (node, engine) => nodes.find((n) => n.name === node)?.settings?.engines?.[engine] || {};
 
+// The address bar's icon: a globe for an address, a magnifier for a search.
+function syncUrlBar() {
+  const v = $('sessionUrl').value.trim();
+  const isAddress = /^[a-z][\w+.-]*:\/\//i.test(v) || /^(localhost|[^\s/]+\.[a-z]{2,})(:\d+)?(\/\S*)?$/i.test(v);
+  $('sessionUrlIcon').innerHTML = `<use href="#i-${isAddress ? 'globe' : 'search'}"/>`;
+  $('sessionUrlClear').hidden = !v;
+}
+$('sessionUrl').addEventListener('input', syncUrlBar);
+$('sessionUrlClear').addEventListener('click', () => { $('sessionUrl').value = ''; syncUrlBar(); $('sessionUrl').focus(); });
 function openNewSession(prefill = {}) {
   sessionProvisioned = prefill.ephemeral || null;
   sessionNode = sessionProvisioned?.provider || prefill.node || (filter !== 'all' && extensionNodeOf(filter)?.online !== false ? filter : localName());
-  nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true, browsers: true });
+  nodePills($('sessionNodes'), sessionNode, (n) => {
+    const dedicated = n === DEDICATED;
+    if (dedicated !== $('sessionDedicated').checked) { $('sessionDedicated').checked = dedicated; syncDedicated(); }
+    if (!dedicated) sessionNode = n;
+    setEngine(sessionEngine);
+  }, { onlineOnly: true, browsers: true });
+  // An ephemeral node of its own is one more choice of where it runs.
+  if (!prefill.ephemeral && hasEphemeralProvider()) {
+    $('sessionNodes').insertAdjacentHTML('beforeend', `<button type="button" class="dedicated" data-node="${DEDICATED}" aria-pressed="false" title="A new node of its own, removed after the last client disconnects">${icon('clock', 'sm')}Ephemeral node <span class="muted" style="font-weight:500">· new</span></button>`);
+  }
   sessionProfile = prefill.profile ? { node: sessionNode, name: prefill.profile } : null;
   sessionProxy = null;
   sessionScheme = null;
@@ -4220,22 +4252,25 @@ function openNewSession(prefill = {}) {
   $('sessionProfileName').value = '';
   $('sessionName').value = '';
   $('sessionUrl').value = prefill.url || '';
+  syncUrlBar();
   $('sessionPublic').checked = false;
   $('sessionDedicated').checked = !!sessionProvisioned;
-  $('sessionDedicatedField').hidden = !!sessionProvisioned || !nodes.some((n) => n.status === 'online' && n.ephemeral_provider);
   $('sessionNodeTtl').value = '7200';
   $('sessionProfileFilter').value = '';
   $('sessionMore').open = !!(prefill.screen && prefill.screen !== 'window');
-  $('sessionNodeField').hidden = nodes.length + extensionBrowserNodes.filter((n) => n.online !== false).length < 2;
   syncDedicated();
   setEngine(prefill.engine || byKey.profiles.get(`${sessionNode}|${prefill.profile}`)?.engine || 'chromium');
   openModal('newSessionModal');
   setTimeout(() => $('sessionProfileGrid').querySelector('.pcard[aria-checked="true"]')?.focus(), 40);
 }
 
+const DEDICATED = '__ephemeral-node__';
+const hasEphemeralProvider = () => nodes.some((n) => n.status === 'online' && n.ephemeral_provider);
 function syncDedicated() {
   const on = $('sessionDedicated').checked;
-  $('sessionNodeField').hidden = on || nodes.length + extensionBrowserNodes.filter((n) => n.online !== false).length < 2;
+  // Where it runs: hidden when there is nothing to choose, or a lease was handed in.
+  const choices = nodes.length + extensionBrowserNodes.filter((n) => n.online !== false).length + (hasEphemeralProvider() ? 1 : 0);
+  $('sessionNodeField').hidden = !!sessionProvisioned || choices < 2;
   $('sessionNodeTtlField').hidden = !on || !!sessionProvisioned;
   $('sessionProfileField').hidden = on;
   $('sessionTabsField').hidden = on || !$('sessionTabsHint').textContent;
@@ -4244,8 +4279,8 @@ function syncDedicated() {
   $('sessionEphemeral').disabled = on;
   $('sessionHandoff').disabled = on;
   $('sessionEphemeralHint').textContent = on
-    ? 'The session and its worker close after the last client or live view disconnects'
-    : 'Stops when its last automation client disconnects (the live view does not count)';
+    ? 'The session and its node close after the last client or live view disconnects'
+    : 'Stops when its last automation client (Playwright, CDP, BiDi) disconnects; the live view does not count';
   if (on) {
     sessionProfile = null;
     sessionProxy = null;
@@ -4427,7 +4462,7 @@ $('sessionScreen').addEventListener('click', (e) => { const b = e.target.closest
 function renderAdvSummary() {
   const browser = extensionNodeOf(sessionNode);
   const parts = [];
-  if ($('sessionDedicated').checked) parts.push('dedicated node');
+  if ($('sessionDedicated').checked) parts.push('ephemeral node');
   else if (browser) parts.push(browser.name);
   else parts.push(nodeLabel(sessionNode) || 'local', sessionEngine === 'firefox' ? 'Firefox' : 'Chromium');
   if (!browser) parts.push(sessionScreen === 'window' ? `${$('sessionWidth').value}×${$('sessionHeight').value}` : sessionScreen === 'native' ? 'Native' : 'Phone');
@@ -4441,7 +4476,7 @@ function renderAdvSummary() {
   if (sessionProxy) more.push(sessionProxy === 'none' ? 'direct' : proxyName(sessionNode, sessionProxy));
   if ($('sessionIdle').value !== '') more.push($('sessionIdle').value === '0' ? 'never idles out' : `idle ${$('sessionIdle').selectedOptions[0].textContent}`);
   if (parseInt($('sessionMem').value, 10) > 0) more.push(`${$('sessionMem').value} MB`);
-  if (!$('sessionEphemeral').checked) more.push('persistent');
+  if (!$('sessionEphemeral').checked) more.push('keeps running');
   if (adblockTouched && !$('sessionAdblock').checked) more.push('ads not blocked');
   if (touchesTouched && $('sessionTouches').checked) more.push('touches shown');
   $('advSummary').textContent = [...parts, ...more].join(' · ');
@@ -4530,7 +4565,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     }
     closeModal('newSessionModal');
     const url = dedicated ? `${nodeBase(provider)}/handoff/?ephemeral=${enc(created.lease_id)}&session=${enc(s.id)}${tab?.id ? `&page=${enc(tab.id)}` : ''}` : handoffUrl(node, tab?.id ? { page: tab.id } : { session: s.id });
-    t.done('Session started', dedicated ? 'Dedicated short-lived node' : `${payload.profile || 'Throwaway'} on ${node}`, { icon: 'takeover', text: 'Take over', url });
+    t.done('Session started', dedicated ? 'Ephemeral node' : `${payload.profile || 'Throwaway'} on ${node}`, { icon: 'takeover', text: 'Take over', url });
     if (shared) {
       // The link first (copy, QR, expiry, control); taking over stays one click away.
       copyText(shared.url);
@@ -5612,7 +5647,7 @@ function ephemeralNodeCard(n) {
   return `<div class="node-card" style="--node:${nodeColor(n.name)}">
     <div class="node-head"><div class="avatar">${icon('server')}</div>
       <div class="t"><b>${esc(n.name)} <span class="chip accent">ephemeral</span> <span class="chip ${online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad'}">${esc(n.status)}</span></b>
-        <span>Dedicated worker · via ${esc(n.provider)}</span></div>
+        <span>Ephemeral node · via ${esc(n.provider)}</span></div>
       <div class="node-ctl">${online && url ? `<a class="btn sm" href="${esc(url)}">${icon('takeover', 'sm')}Take over</a>` : ''}
         ${n.status === 'ready' ? `<button class="btn sm" data-ephemeral-launch="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">${icon('plus', 'sm')}New session</button>` : ''}
         ${n.session_id ? `<button class="btn sm" data-ephemeral-stop="${esc(n.lease_id)}" data-provider="${esc(n.provider)}" data-session="${esc(n.session_id)}">Stop</button>` : n.status === 'ready' ? `<button class="btn sm" data-ephemeral-remove="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">Remove</button>` : ''}</div>
@@ -5927,7 +5962,7 @@ $('addEphemeralForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const button = e.submitter;
   button.disabled = true;
-  const t = createProgressToast('provision-node', 'Starting a short-lived worker', 'Provisioning the node…');
+  const t = createProgressToast('provision-node', 'Starting an ephemeral node', 'Provisioning the node…');
   try {
     await request('POST', '/api/ephemeral/nodes', { ttl_seconds: Number($('nodeTtl').value) });
     closeModal('addNodeModal');

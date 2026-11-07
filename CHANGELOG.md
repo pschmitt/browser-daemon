@@ -27,6 +27,10 @@
   throwaway session or a new profile. Everything else is under Options, whose
   closed line says where it runs and what differs from the defaults; the rarely
   used settings sit under More inside it, and custom sizes behind Custom.
+* "Ephemeral node" names what was a dedicated or short-lived node or worker in the
+  dashboard; in New session it is one more choice next to the nodes. The session
+  switch that was called Ephemeral is now "Stop with the last client". The start
+  page field looks like an address bar, and every option has an icon.
 
 ## [0.14.0] - 2026-11-07
 
