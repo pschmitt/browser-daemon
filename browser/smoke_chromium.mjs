@@ -80,7 +80,14 @@ try {
   const pageURL = `http://fixture.browser.test:${pageServer.address().port}/`;
   launch(process.env.CHROMIUM || 'chromium', ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(directory, 'chromium')}`, `--remote-debugging-port=${chromePort}`, '--remote-debugging-address=127.0.0.1', '--host-resolver-rules=MAP fixture.browser.test 127.0.0.2', '--no-proxy-server', `--load-extension=${resolve('browser/dist/chromium')}`, pageURL]);
   const targets = () => fetch(`http://127.0.0.1:${chromePort}/json/list`).then(r => r.json());
-  const worker = await until(async () => (await targets()).find(t => t.type === 'service_worker' && t.url.endsWith('/background.js')));
+  // Newer Chromium builds ship a component extension with its own /background.js (157: "Gemini in
+  // Chrome"): take ours by its manifest name, not the first worker of that name.
+  const worker = await until(async () => {
+    for (const t of (await targets()).filter(t => t.type === 'service_worker' && t.url.endsWith('/background.js'))) {
+      const c = await CDP.open(t.webSocketDebuggerUrl);
+      try { if (await c.evaluate('chrome.runtime.getManifest().name') === 'Browser Daemon Node') return t; } finally { c.socket.close(); }
+    }
+  });
   const origin = worker.url.replace(/\/background.js$/, '');
   const popupTarget = await fetch(`http://127.0.0.1:${chromePort}/json/new?${encodeURIComponent(`${origin}/popup.html`)}`, {method: 'PUT'}).then(r => r.json());
   const popup = await CDP.open(popupTarget.webSocketDebuggerUrl); sockets.push(popup.socket);
