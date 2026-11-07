@@ -636,6 +636,8 @@ dialog.modal::backdrop { background: transparent; }
 .seg button.on { border-color: var(--accent); color: var(--fg); background: var(--accent-soft); }
 .seg button .dot { color: var(--node, var(--muted)); }
 .seg button.off { opacity: .5; }
+#newSessionForm .hint:empty { display: none; }
+#newSessionForm details.adv.more { border-style: dashed; }
 #newSessionForm:not(.to-browser) .browser-only, #newSessionForm.to-browser .managed-only { display: none !important; }
 .seg.small button { height: 30px; padding: 0 10px; font-size: 12px; border-radius: 8px; }
 .switch { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 2px 0; }
@@ -1313,7 +1315,7 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
   .switch .track { width: 44px; height: 26px; }
   .switch .track::after { width: 20px; height: 20px; }
   .switch input:checked + .track::after { transform: translateX(18px); }
-  .seg button { height: 42px; }
+  .seg button, .seg.small button { height: 42px; }
   .sheet-foot .btn { height: 44px; padding: 0 18px; }
   .kv .kv-copy { width: 36px; height: 36px; }
   .merge-list .mv .btn { width: 40px; height: 40px; }
@@ -1527,72 +1529,72 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
 
 <dialog class="modal" id="newSessionModal" aria-label="New browser session">
   <form class="sheet" id="newSessionForm">
-    <div class="sheet-head"><h2>New browser session</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2>New session</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
-      <div class="field"><span class="field-label">Start page</span><input class="input" id="sessionUrl" type="text" inputmode="url" placeholder="Optional: an address, or words to search for" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-      <div class="field" id="sessionNodeField"><span class="field-label">Node</span><div class="seg" id="sessionNodes"></div></div>
+      <!-- The two questions: what to open, and with which profile. The profile brings its
+           node and engine; everything else has a default and sits under Options. -->
+      <input class="input" id="sessionUrl" type="text" inputmode="url" placeholder="Address or search (optional)" aria-label="Start page" autocomplete="off" autocapitalize="off" spellcheck="false">
       <span class="hint browser-only" id="sessionBrowserHint"></span>
-      <label class="switch managed-only" id="sessionDedicatedField" hidden><input type="checkbox" id="sessionDedicated"><span class="track"></span><span class="txt"><b>Dedicated short-lived node</b><span>Start a worker for this session. It is removed after the last client disconnects.</span></span></label>
-      <div class="field managed-only" id="sessionNodeTtlField" hidden><label for="sessionNodeTtl">Maximum node lifetime</label><select class="input" id="sessionNodeTtl"><option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="7200" selected>2 hours</option><option value="14400">4 hours</option><option value="28800">8 hours</option><option value="86400">24 hours</option></select></div>
-      <div class="field managed-only"><span class="field-label">Engine</span>
-        <div class="seg" id="sessionEngines">
+      <div class="field managed-only" id="sessionProfileField">
+        <span class="field-label" id="sessionProfileLabel">Profile</span>
+        <input class="input" id="sessionProfileFilter" type="search" placeholder="Find a profile" aria-label="Find a profile" autocomplete="off" spellcheck="false" hidden>
+        <div class="pgrid" id="sessionProfileGrid" role="radiogroup" aria-labelledby="sessionProfileLabel"></div>
+        <select class="input" id="sessionProfiles" aria-labelledby="sessionProfileLabel" hidden></select>
+        <input class="input" id="sessionProfileName" placeholder="Name of the new profile, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
+        <span class="hint" id="sessionProfileHint"></span>
+      </div>
+      <div class="field managed-only" id="sessionEngineField"><div class="seg" id="sessionEngines" role="radiogroup" aria-label="Engine">
           <button type="button" data-engine="chromium" class="on"><svg class="i" style="color:var(--chromium)"><use href="#i-chromium"/></svg>Chromium</button>
           <button type="button" data-engine="firefox"><svg class="i" style="color:var(--firefox)"><use href="#i-firefox"/></svg>Firefox</button>
         </div>
         <span class="hint" id="engineHint"></span>
       </div>
-      <div class="field managed-only" id="sessionProfileField">
-        <span class="field-label" id="sessionProfileLabel">Profile</span>
-        <div class="pgrid" id="sessionProfileGrid" role="radiogroup" aria-labelledby="sessionProfileLabel"></div>
-        <select class="input" id="sessionProfiles" aria-labelledby="sessionProfileLabel" hidden></select>
-        <input class="input" id="sessionProfileName" placeholder="Profile name, e.g. Google (me@example.com)" autocomplete="off" spellcheck="false" maxlength="128" hidden>
-        <span class="hint" id="sessionProfileHint"></span>
-      </div>
-      <label class="switch managed-only" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
-      <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Take over right away</b><span>Open the live view as soon as it is up</span></span></label>
-      <label class="switch managed-only" id="sessionPublicField"><input type="checkbox" id="sessionPublic"><span class="track"></span><span class="txt"><b>Public link</b><span>Anyone with the link can watch, without signing in (1 hour; change it in the next step)</span></span></label>
-      <details class="adv managed-only">
-        <summary><svg class="i sm"><use href="#i-more"/></svg>Advanced<span class="adv-sum" id="advSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
+      <details class="adv" id="sessionMore">
+        <summary><svg class="i sm"><use href="#i-gear"/></svg>Options<span class="adv-sum" id="advSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
         <div class="adv-body">
-          <div class="adv-group">Session</div>
-          <div class="field"><span class="field-label">Name</span><input class="input" id="sessionName" placeholder="Optional, e.g. Drive upload (auto-generated by default)" autocomplete="off" spellcheck="false" maxlength="64"></div>
-          <label class="switch"><input type="checkbox" id="sessionEphemeral" checked><span class="track"></span><span class="txt"><b>Ephemeral</b><span id="sessionEphemeralHint">Stop the browser once its last automation client (Playwright, CDP, BiDi) disconnects; the live view does not hold it. Off: it runs until stopped (or idle)</span></span></label>
-          <label class="switch"><input type="checkbox" id="sessionRecord"><span class="track"></span><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
-          <div class="field"><label for="sessionIdle">Stop when idle for</label>
-            <select class="input" id="sessionIdle">
-              <option value="">Node default</option>
-              <option value="15">15 minutes</option>
-              <option value="60">1 hour</option>
-              <option value="240">4 hours</option>
-              <option value="1440">1 day</option>
-              <option value="0">Never</option>
-            </select>
-            <span class="hint">Idle means no automation commands and no input in handoff; just watching does not count.</span></div>
-          <div class="adv-group">Screen</div>
-          <div class="field"><div class="seg" id="sessionScreen">
-            <button type="button" data-screen="window" class="on" title="The browser keeps the size below">Window</button>
+          <div class="field" id="sessionNodeField"><span class="field-label">Node</span><div class="seg" id="sessionNodes"></div></div>
+          <label class="switch managed-only" id="sessionDedicatedField" hidden><input type="checkbox" id="sessionDedicated"><span class="track"></span><span class="txt"><b>Dedicated short-lived node</b><span>A worker of its own, removed after the last client disconnects</span></span></label>
+          <div class="field managed-only" id="sessionNodeTtlField" hidden><label for="sessionNodeTtl">Maximum node lifetime</label><select class="input" id="sessionNodeTtl"><option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="7200" selected>2 hours</option><option value="14400">4 hours</option><option value="28800">8 hours</option><option value="86400">24 hours</option></select></div>
+          <label class="switch"><input type="checkbox" id="sessionHandoff" checked><span class="track"></span><span class="txt"><b>Take over right away</b><span>Open the live view once it is up</span></span></label>
+          <label class="switch managed-only" id="sessionTabsField" hidden><input type="checkbox" id="sessionDefaultTabs" checked><span class="track"></span><span class="txt"><b>Open the default tabs</b><span id="sessionTabsHint"></span></span></label>
+          <label class="switch managed-only" id="sessionPublicField"><input type="checkbox" id="sessionPublic"><span class="track"></span><span class="txt"><b>Public link</b><span>Anyone with the link can watch for an hour</span></span></label>
+          <label class="switch managed-only"><input type="checkbox" id="sessionRecord"><span class="track"></span><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
+          <div class="field managed-only"><span class="field-label">Screen</span><div class="seg" id="sessionScreen">
+            <button type="button" data-screen="window" class="on" title="The size below">Window</button>
             <button type="button" data-screen="native" title="Live views give the page their own screen's size and pixel density">Native</button>
             <button type="button" data-screen="phone" title="A phone: 412×915, touch input, the mobile site">Phone</button>
-          </div><span class="hint" id="sessionScreenHint"></span></div>
-          <div id="sessionSizeFields" style="display:flex;flex-direction:column;gap:14px">
+          </div><span class="hint" id="sessionScreenHint"></span>
           <div class="seg small" id="sizePresets">
             <button type="button" data-w="1920" data-h="1080" class="on">1080p</button>
-            <button type="button" data-w="1280" data-h="720">720p</button>
             <button type="button" data-w="1440" data-h="900">Laptop</button>
+            <button type="button" data-w="1280" data-h="720">720p</button>
             <button type="button" data-w="820" data-h="1180">iPad</button>
             <button type="button" data-w="3840" data-h="2160">4K</button>
+            <button type="button" data-custom>Custom</button>
           </div>
-          <div class="row2">
+          <div class="row2" id="sessionSizeFields" hidden>
             <div class="field"><label for="sessionWidth">Width</label><input class="input" type="number" id="sessionWidth" value="1920" min="320" max="3840"></div>
             <div class="field"><label for="sessionHeight">Height</label><input class="input" type="number" id="sessionHeight" value="1080" min="240" max="2160"></div>
-          </div>
-          </div>
-          <label class="switch"><input type="checkbox" id="sessionTouches"><span class="track"></span><span class="txt"><b>Show touches</b><span>Live views mark taps and clicks</span></span></label>
-          <div class="adv-group">Browser</div>
-          <div class="field"><span class="field-label">Appearance</span><select class="input" id="sessionScheme" aria-label="Appearance"></select></div>
-          <div class="field" id="sessionProxyField"><span class="field-label">Proxy</span><select class="input" id="sessionProxies" aria-label="Proxy"></select><span class="hint" id="sessionProxyHint"></span></div>
-          <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
-          <div class="field"><label for="sessionMem">Memory limit (MB)</label><input class="input" type="number" id="sessionMem" min="128" max="65536" placeholder="Node default"><span class="hint">Caps the JS heap of this browser.</span></div>
+          </div></div>
+          <details class="adv more managed-only">
+            <summary>More<span class="adv-sum" id="advMoreSummary"></span><svg class="i sm chev"><use href="#i-chev"/></svg></summary>
+            <div class="adv-body">
+              <div class="field"><span class="field-label">Name</span><input class="input" id="sessionName" placeholder="Made up when empty" autocomplete="off" spellcheck="false" maxlength="64"></div>
+              <div class="row2">
+                <div class="field"><span class="field-label">Appearance</span><select class="input" id="sessionScheme" aria-label="Appearance"></select></div>
+                <div class="field" id="sessionProxyField"><span class="field-label">Proxy</span><select class="input" id="sessionProxies" aria-label="Proxy"></select></div>
+              </div>
+              <span class="hint" id="sessionProxyHint"></span>
+              <div class="row2">
+                <div class="field"><label for="sessionIdle">Stop when idle for</label>
+                  <select class="input" id="sessionIdle"><option value="">Node default</option><option value="15">15 minutes</option><option value="60">1 hour</option><option value="240">4 hours</option><option value="1440">1 day</option><option value="0">Never</option></select></div>
+                <div class="field"><label for="sessionMem">Memory limit (MB)</label><input class="input" type="number" id="sessionMem" min="128" max="65536" placeholder="Node default"></div>
+              </div>
+              <label class="switch"><input type="checkbox" id="sessionEphemeral" checked><span class="track"></span><span class="txt"><b>Ephemeral</b><span id="sessionEphemeralHint">Stops when its last automation client disconnects (the live view does not count)</span></span></label>
+              <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
+              <label class="switch"><input type="checkbox" id="sessionTouches"><span class="track"></span><span class="txt"><b>Show touches</b><span>Live views mark taps and clicks</span></span></label>
+            </div>
+          </details>
         </div>
       </details>
     </div>
@@ -4190,10 +4192,8 @@ function setEngine(engine) {
   document.querySelectorAll('#sessionEngines button').forEach((b) => b.classList.toggle('on', b.dataset.engine === engine));
   const node = nodes.find((n) => n.name === sessionNode);
   const supported = $('sessionDedicated').checked || !node?.supported_engines?.length || node.supported_engines.includes(engine);
-  $('engineHint').textContent = !supported
-    ? `${sessionNode} has no ${engine === 'firefox' ? 'Firefox' : 'Chromium'} configured.`
-    : engine === 'firefox' ? 'WebDriver BiDi on /firefox; handoff streams screenshots.' : 'Chrome DevTools Protocol on /chromium; handoff streams a live screencast.';
-  $('engineHint').style.color = supported ? '' : 'var(--bad)';
+  $('engineHint').textContent = supported ? '' : `${sessionNode} has no ${engine === 'firefox' ? 'Firefox' : 'Chromium'} configured: pick another node under Options.`;
+  $('engineHint').style.color = 'var(--bad)';
   $('sessionSubmit').dataset.unsupported = supported ? '' : '1';
   $('sessionSubmit').disabled = !supported;
   // Ad blocking as the engine's default on that node (Engines tab), until changed here.
@@ -4224,15 +4224,18 @@ function openNewSession(prefill = {}) {
   $('sessionDedicated').checked = !!sessionProvisioned;
   $('sessionDedicatedField').hidden = !!sessionProvisioned || !nodes.some((n) => n.status === 'online' && n.ephemeral_provider);
   $('sessionNodeTtl').value = '7200';
+  $('sessionProfileFilter').value = '';
+  $('sessionMore').open = !!(prefill.screen && prefill.screen !== 'window');
+  $('sessionNodeField').hidden = nodes.length + extensionBrowserNodes.filter((n) => n.online !== false).length < 2;
   syncDedicated();
-  setEngine(prefill.engine || 'chromium');
+  setEngine(prefill.engine || byKey.profiles.get(`${sessionNode}|${prefill.profile}`)?.engine || 'chromium');
   openModal('newSessionModal');
   setTimeout(() => $('sessionProfileGrid').querySelector('.pcard[aria-checked="true"]')?.focus(), 40);
 }
 
 function syncDedicated() {
   const on = $('sessionDedicated').checked;
-  $('sessionNodeField').hidden = on;
+  $('sessionNodeField').hidden = on || nodes.length + extensionBrowserNodes.filter((n) => n.online !== false).length < 2;
   $('sessionNodeTtlField').hidden = !on || !!sessionProvisioned;
   $('sessionProfileField').hidden = on;
   $('sessionTabsField').hidden = on || !$('sessionTabsHint').textContent;
@@ -4241,8 +4244,8 @@ function syncDedicated() {
   $('sessionEphemeral').disabled = on;
   $('sessionHandoff').disabled = on;
   $('sessionEphemeralHint').textContent = on
-    ? 'The session and its worker close after the last client or live view disconnects.'
-    : 'Stop the browser once its last automation client (Playwright, CDP, BiDi) disconnects; the live view does not hold it. Off: it runs until stopped (or idle)';
+    ? 'The session and its worker close after the last client or live view disconnects'
+    : 'Stops when its last automation client disconnects (the live view does not count)';
   if (on) {
     sessionProfile = null;
     sessionProxy = null;
@@ -4263,84 +4266,82 @@ const pickedProfile = () => (sessionProfile?.name
   ? pickerProfiles.find((p) => p.node_name === sessionProfile.node && p.display === sessionProfile.name) : null);
 function renderProfilePicker() {
   const online = new Set(nodes.filter((n) => n.status === 'online').map((n) => n.name));
-  const recent = (a, b) => (b.modified_at_secs || 0) - (a.modified_at_secs || 0);
-  const all = [...byKey.profiles.values()].filter((p) => (p.engine || 'chromium') === sessionEngine && online.has(p.node_name));
-  const here = all.filter((p) => p.node_name === sessionNode).sort(recent);
-  const elsewhere = all.filter((p) => p.node_name !== sessionNode).sort(recent);
-  pickerProfiles = [...here, ...elsewhere];
+  // Running first, then the most recently used.
+  const order = (a, b) => (!!b.session - !!a.session) || (b.modified_at_secs || 0) - (a.modified_at_secs || 0);
+  const all = [...byKey.profiles.values()].filter((p) => online.has(p.node_name)).sort(order);
+  pickerProfiles = all;
   if (sessionProfile?.name && !sessionProfile.new && !pickedProfile()) {
-    // Prefilled, or left over from an engine change: here if it exists, else a new one.
-    const same = here.find((p) => p.display === sessionProfile.name);
+    // Prefilled with a name: that profile on this node if it exists, else a new one.
+    const same = all.find((p) => p.node_name === sessionNode && p.display === sessionProfile.name);
     if (same) sessionProfile = { node: same.node_name, name: same.display };
     else { $('sessionProfileName').value = sessionProfile.name; sessionProfile = { new: true }; }
   }
   const opt = (key, label, on) => `<option value="${esc(key)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
-  const profOpt = (p, i) => opt('p:' + i,
-    `${p.display}  ·  ${formatBytes(p.size_bytes)}, used ${relTime(p.modified_at_secs)}${p.session ? ', running' : ''}`,
-    sessionProfile?.node === p.node_name && sessionProfile?.name === p.display);
   $('sessionProfiles').innerHTML = [
     opt('', 'Throwaway (nothing is kept)', !sessionProfile),
-    here.length ? `<optgroup label="On ${esc(sessionNode)}">${here.map((p, i) => profOpt(p, i)).join('')}</optgroup>` : '',
-    elsewhere.length ? `<optgroup label="On other nodes (copied to ${esc(sessionNode)})">${elsewhere.map((p, i) => opt('p:' + (here.length + i),
-      `${p.display}  ·  on ${p.node_name}${p.session ? ', running' : ''}`,
-      sessionProfile?.node === p.node_name && sessionProfile?.name === p.display)).join('')}</optgroup>` : '',
+    ...all.map((p, i) => opt('p:' + i, `${p.display} · ${p.node_name}`, sessionProfile?.node === p.node_name && sessionProfile?.name === p.display)),
     opt('new', 'New profile…', !!sessionProfile?.new),
   ].join('');
-  renderProfileGrid(here, elsewhere);
+  // A long list gets a search field.
+  $('sessionProfileFilter').hidden = all.length <= 8;
+  const words = $('sessionProfileFilter').value.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = words.length ? all.filter((p) => words.every((w) => `${p.display} ${p.node_name} ${(p.labels || []).join(' ')}`.toLowerCase().includes(w))) : all;
+  renderProfileGrid(shown);
   const isNew = !!sessionProfile?.new;
   $('sessionProfileName').hidden = !isNew;
   const picked = pickedProfile();
+  // Only a throwaway session or a new profile has an engine to choose.
+  const engines = nodes.filter((n) => n.status === 'online').flatMap((n) => n.supported_engines?.length ? n.supported_engines : ['chromium', 'firefox']);
+  $('sessionEngineField').hidden = !!picked || $('sessionDedicated').checked || new Set(engines).size < 2;
   renderProxyPicker(picked);
   renderSchemePicker(picked);
   const remote = picked && picked.node_name !== sessionNode;
-  const clash = remote && here.find((p) => p.display === picked.display);
+  const clash = remote && all.find((p) => p.node_name === sessionNode && p.display === picked.display && (p.engine || 'chromium') === (picked.engine || 'chromium'));
   let hint = '';
   if (remote && picked.session) hint = `Running on ${picked.node_name}: stop it there first, a running profile cannot be copied.`;
   else if (clash?.session) hint = `${picked.display} is running on ${sessionNode}: stop it before replacing it.`;
   else if (clash) hint = `Replaces ${sessionNode}'s ${picked.display} (its cookies and logins) with the copy from ${picked.node_name}. The original stays on ${picked.node_name}.`;
   else if (remote) hint = `Copied to ${sessionNode} before launch; the original stays on ${picked.node_name}.`;
-  else if (picked?.session) hint = 'Already running: launching attaches to that session.';
   else if (isNew) hint = 'Created on first launch.';
-  else if (picked) hint = 'Picks up cookies and logins from the last session.';
   $('sessionProfileHint').textContent = hint;
+  $('sessionProfileHint').hidden = !hint;
   const tabs = picked?.tabs || [];
   $('sessionTabsField').hidden = $('sessionDedicated').checked || !tabs.length || !!picked?.session;
   $('sessionTabsHint').textContent = tabs.map(hostOf).join(', ');
   $('sessionProfileHint').style.color = remote && (picked.session || clash?.session) ? 'var(--bad)' : '';
   $('sessionSubmit').disabled = !!(remote && (picked.session || clash?.session)) || $('sessionSubmit').dataset.unsupported === '1';
-  $('sessionSubmitText').textContent = remote ? 'Copy & launch' : 'Launch';
+  $('sessionSubmitText').textContent = remote ? 'Copy & launch' : picked?.session ? 'Take over' : 'Launch';
+  renderAdvSummary();
   syncBrowserTarget();
 }
-// The profiles as cards (the hidden select above holds the choice and the events).
-function renderProfileGrid(here, elsewhere) {
+// The profiles as cards (the hidden select holds the choice and the events).
+function renderProfileGrid(list) {
   const grid = $('sessionProfileGrid');
   const hadFocus = grid.contains(document.activeElement);
   const cur = (p) => sessionProfile?.node === p.node_name && sessionProfile?.name === p.display;
-  const card = (key, on, avatar, name, meta, cls = '', title = '') =>
-    `<button type="button" class="pcard ${cls}" role="radio" aria-checked="${on}" tabindex="${on ? 0 : -1}" data-pick="${esc(key)}"${title ? ` title="${esc(title)}"` : ''}>${avatar}<span class="pc-txt"><span class="pc-name">${esc(name)}</span><span class="pc-meta">${meta}</span></span></button>`;
+  const card = (key, on, avatar, name, meta, cls = '') =>
+    `<button type="button" class="pcard ${cls}" role="radio" aria-checked="${on}" tabindex="${on ? 0 : -1}" data-pick="${esc(key)}">${avatar}<span class="pc-txt"><span class="pc-name">${esc(name)}</span><span class="pc-meta">${meta}</span></span></button>`;
   const avatarOf = (p) => {
     const pic = profIcon(p);
     return pic ? `<div class="avatar pic"><img src="${esc(pic)}" alt=""></div>`
       : `<div class="avatar" style="color:${nodeColor(p.display)};background:color-mix(in oklab, ${nodeColor(p.display)} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`;
   };
-  const meta = (p, remote) => [
+  const multiNode = nodes.length > 1;
+  const meta = (p) => [
     p.session ? '<span class="run">● running</span>' : '',
-    remote ? `<span class="nd" style="--node:${nodeColor(p.node_name)}">● ${esc(p.node_name)}</span>` : '',
-    `${formatBytes(p.size_bytes)}`,
+    multiNode ? `<span class="nd" style="--node:${nodeColor(p.node_name)}">● ${esc(nodeLabel(p.node_name))}</span>` : '',
+    p.engine === 'firefox' ? 'Firefox' : '',
     p.session ? '' : esc(relTime(p.modified_at_secs)),
   ].filter(Boolean).join(' · ');
   const parts = [
     card('', !sessionProfile, `<div class="avatar">${icon('trash')}</div>`, 'Throwaway', 'Nothing is kept', 'ghost'),
-    ...here.map((p, i) => card('p:' + i, cur(p), avatarOf(p), p.display, meta(p, false))),
+    ...list.map((p) => card('p:' + pickerProfiles.indexOf(p), cur(p), avatarOf(p), p.display, meta(p))),
+    card('new', !!sessionProfile?.new, `<div class="avatar">${icon('plus')}</div>`, 'New profile', 'Created on first launch', 'add'),
   ];
-  if (elsewhere.length) {
-    parts.push(`<div class="ph">On other nodes · copied to ${esc(sessionNode)}</div>`);
-    parts.push(...elsewhere.map((p, i) => card('p:' + (here.length + i), cur(p), avatarOf(p), p.display, meta(p, true))));
-  }
-  parts.push(card('new', !!sessionProfile?.new, `<div class="avatar">${icon('plus')}</div>`, 'New profile…', 'Created on first launch', 'add'));
   grid.innerHTML = parts.join('');
   if (hadFocus) grid.querySelector('.pcard[aria-checked="true"]')?.focus();
 }
+$('sessionProfileFilter').addEventListener('input', () => renderProfilePicker());
 $('sessionProfileGrid').addEventListener('click', (e) => {
   const b = e.target.closest('.pcard');
   if (!b) return;
@@ -4391,8 +4392,16 @@ function renderSchemePicker(profile) {
 $('sessionScheme').addEventListener('change', () => { sessionScheme = $('sessionScheme').value || null; });
 $('sessionProfiles').addEventListener('change', () => {
   const k = $('sessionProfiles').value;
+  if (k === 'new') setTimeout(() => $('sessionProfileName').focus(), 0);
   const picked = k.startsWith('p:') ? pickerProfiles[+k.slice(2)] : null;
   sessionProfile = k === '' ? null : k === 'new' ? { new: true } : { node: picked.node_name, name: picked.display };
+  if (picked) {
+    // Its own node and engine (Options can still move it to another node: then it is copied).
+    sessionNode = picked.node_name;
+    $('sessionNodes').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.node === sessionNode));
+    setEngine(picked.engine || 'chromium');
+    return;
+  }
   renderProfilePicker();
   if (sessionProfile?.new) $('sessionProfileName').focus();
 });
@@ -4407,37 +4416,48 @@ const SCREEN_HINTS = {
 function setScreen(v) {
   sessionScreen = v;
   $('sessionScreen').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.screen === v));
-  $('sessionSizeFields').style.display = v === 'window' ? 'flex' : 'none';
+  $('sizePresets').hidden = v !== 'window';
+  $('sessionSizeFields').hidden = v !== 'window' || !$('sizePresets').querySelector('[data-custom].on');
   $('sessionScreenHint').textContent = SCREEN_HINTS[v];
   renderAdvSummary();
 }
 $('sessionScreen').addEventListener('click', (e) => { const b = e.target.closest('button[data-screen]'); if (b) setScreen(b.dataset.screen); });
-// What Advanced holds besides the defaults, on its closed summary line.
+// What Options (and More inside it) hold, on their closed summary lines: where it
+// runs and anything changed from the defaults.
 function renderAdvSummary() {
+  const browser = extensionNodeOf(sessionNode);
   const parts = [];
-  if ($('sessionName').value.trim()) parts.push($('sessionName').value.trim());
-  parts.push(sessionScreen === 'window' ? `${$('sessionWidth').value}×${$('sessionHeight').value}` : sessionScreen === 'native' ? 'Native' : 'Phone');
-  if ($('sessionEphemeral').checked) parts.push('ephemeral');
+  if ($('sessionDedicated').checked) parts.push('dedicated node');
+  else if (browser) parts.push(browser.name);
+  else parts.push(nodeLabel(sessionNode) || 'local', sessionEngine === 'firefox' ? 'Firefox' : 'Chromium');
+  if (!browser) parts.push(sessionScreen === 'window' ? `${$('sessionWidth').value}×${$('sessionHeight').value}` : sessionScreen === 'native' ? 'Native' : 'Phone');
+  if (!$('sessionHandoff').checked) parts.push('stays in the background');
+  if (!$('sessionTabsField').hidden && !$('sessionDefaultTabs').checked) parts.push('no default tabs');
+  if ($('sessionPublic').checked) parts.push('public link');
   if ($('sessionRecord').checked) parts.push('recorded');
-  if (sessionScheme) parts.push(sessionScheme);
-  if (sessionProxy) parts.push(sessionProxy === 'none' ? 'direct' : proxyName(sessionNode, sessionProxy));
-  if (adblockTouched && !$('sessionAdblock').checked) parts.push('ads not blocked');
-  if (touchesTouched && $('sessionTouches').checked) parts.push('touches shown');
-  $('advSummary').textContent = '· ' + parts.join(' · ');
+  const more = [];
+  if ($('sessionName').value.trim()) more.push($('sessionName').value.trim());
+  if (sessionScheme) more.push(sessionScheme);
+  if (sessionProxy) more.push(sessionProxy === 'none' ? 'direct' : proxyName(sessionNode, sessionProxy));
+  if ($('sessionIdle').value !== '') more.push($('sessionIdle').value === '0' ? 'never idles out' : `idle ${$('sessionIdle').selectedOptions[0].textContent}`);
+  if (parseInt($('sessionMem').value, 10) > 0) more.push(`${$('sessionMem').value} MB`);
+  if (!$('sessionEphemeral').checked) more.push('persistent');
+  if (adblockTouched && !$('sessionAdblock').checked) more.push('ads not blocked');
+  if (touchesTouched && $('sessionTouches').checked) more.push('touches shown');
+  $('advSummary').textContent = [...parts, ...more].join(' · ');
+  $('advMoreSummary').textContent = more.join(' · ');
 }
-['sessionName', 'sessionWidth', 'sessionHeight'].forEach((id) => $(id).addEventListener('input', renderAdvSummary));
-['sessionEphemeral', 'sessionRecord', 'sessionAdblock', 'sessionTouches', 'sessionScheme', 'sessionProxies'].forEach((id) => $(id).addEventListener('change', () => setTimeout(renderAdvSummary)));
+['sessionName', 'sessionWidth', 'sessionHeight', 'sessionMem'].forEach((id) => $(id).addEventListener('input', renderAdvSummary));
+['sessionEphemeral', 'sessionRecord', 'sessionAdblock', 'sessionTouches', 'sessionScheme', 'sessionProxies', 'sessionIdle', 'sessionHandoff', 'sessionPublic', 'sessionDefaultTabs', 'sessionDedicated'].forEach((id) => $(id).addEventListener('change', () => setTimeout(renderAdvSummary)));
 $('sizePresets').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-w]');
+  const b = e.target.closest('button[data-w], button[data-custom]');
   if (!b) return;
-  $('sessionWidth').value = b.dataset.w;
-  $('sessionHeight').value = b.dataset.h;
+  if (b.dataset.w) { $('sessionWidth').value = b.dataset.w; $('sessionHeight').value = b.dataset.h; }
   $('sizePresets').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+  $('sessionSizeFields').hidden = !b.dataset.custom;
+  if (b.dataset.custom) $('sessionWidth').focus();
   renderAdvSummary();
 });
-['sessionWidth', 'sessionHeight'].forEach((id) => $(id).addEventListener('input', () => {
-  $('sizePresets').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x.dataset.w === $('sessionWidth').value && x.dataset.h === $('sessionHeight').value));
-}));
 
 $('newSessionForm').addEventListener('submit', async (e) => {
   e.preventDefault();

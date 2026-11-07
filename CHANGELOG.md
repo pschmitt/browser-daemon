@@ -21,6 +21,12 @@
 * The public share page has the app's colours and theme, two-finger zoom on the
   live picture, and in-page confirmations instead of the browser's dialogs.
 * Touch targets are 44px or larger throughout.
+* The New session dialog asks two things: the start page and the profile. A
+  profile brings its own node and engine (profiles of every node and engine are
+  listed, with a search field when there are many); the engine is only asked for a
+  throwaway session or a new profile. Everything else is under Options, whose
+  closed line says where it runs and what differs from the defaults; the rarely
+  used settings sit under More inside it, and custom sizes behind Custom.
 
 ## [0.14.0] - 2026-11-07
 
