@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-07
+
 ### Changed
 
 * The web UI is built for phones first. The dashboard has a bar at the bottom
