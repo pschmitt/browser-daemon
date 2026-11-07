@@ -847,6 +847,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ephemeral_node: args.ephemeral_node,
         ephemeral_up: args.ephemeral_up,
         ephemeral_down: args.ephemeral_down,
+        ephemeral_locks: Arc::new(Mutex::new(HashMap::new())),
         public_url,
         extension_origins,
         share_url,
@@ -1290,6 +1291,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/mesh/overview", get(api_mesh_overview))
         .route("/api/mesh/placement", post(api_place_browser))
         .route("/api/ephemeral/sessions", post(ephemeral::create))
+        .route("/api/ephemeral/nodes", post(ephemeral::create_node))
+        .route("/api/ephemeral/{id}", delete(ephemeral::delete_node))
+        .route(
+            "/api/ephemeral/{id}/sessions",
+            post(ephemeral::create_node_session),
+        )
         .route(
             "/api/ephemeral/{id}/proxy/{*path}",
             any(ephemeral::ui_proxy),

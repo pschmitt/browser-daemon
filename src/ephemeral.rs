@@ -4,6 +4,19 @@ use super::*;
 use futures_util::{SinkExt, StreamExt};
 use std::process::Stdio;
 
+const DEFAULT_NODE_TTL: u64 = 7200;
+const MAX_NODE_TTL: u64 = 86400;
+
+fn validate_ttl(ttl: u64) -> Result<u64, ApiError> {
+    if !(60..=MAX_NODE_TTL).contains(&ttl) {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Node lifetime must be between 1 minute and 24 hours",
+        ));
+    }
+    Ok(ttl)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Lease {
     id: String,
@@ -14,6 +27,12 @@ struct Lease {
     created: u64,
     #[serde(default)]
     seen_client: bool,
+    #[serde(default)]
+    standalone: bool,
+    #[serde(default)]
+    expires_at: Option<u64>,
+    #[serde(default)]
+    session_created: Option<u64>,
 }
 
 /// A provider-owned worker, without exposing its private URL.
@@ -24,6 +43,8 @@ pub struct EphemeralNode {
     pub session_id: Option<Uuid>,
     pub status: String,
     pub created_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
 }
 
 pub(crate) async fn nodes(state: &AppState) -> Vec<EphemeralNode> {
@@ -69,8 +90,10 @@ pub(crate) async fn nodes(state: &AppState) -> Vec<EphemeralNode> {
                 _ => None,
             }
         };
-        let status = if lease.session.is_none() {
+        let status = if lease.url.is_empty() || (lease.session.is_none() && !lease.standalone) {
             "starting"
+        } else if info.is_some() && lease.session.is_none() {
+            "ready"
         } else if info.is_some() {
             "online"
         } else {
@@ -84,6 +107,7 @@ pub(crate) async fn nodes(state: &AppState) -> Vec<EphemeralNode> {
             session_id: lease.session,
             status: status.into(),
             created_at: lease.created,
+            expires_at: lease.expires_at,
         }
     }))
     .await
@@ -340,13 +364,52 @@ async fn destroy(state: &AppState, key: Uuid, lease: &Lease) {
     }
 }
 
-async fn watch(state: AppState, key: Uuid, mut lease: Lease) {
-    let Some(id) = lease.session else {
-        destroy(&state, key, &lease).await;
+async fn lease_lock(state: &AppState, key: Uuid) -> Arc<Mutex<()>> {
+    state
+        .ephemeral_locks
+        .lock()
+        .await
+        .entry(key)
+        .or_default()
+        .clone()
+}
+
+async fn load_lease(state: &AppState, key: Uuid) -> Option<Lease> {
+    let data = fs::read(lease_dir(state).join(format!("{key}.json")))
+        .await
+        .ok()?;
+    serde_json::from_slice(&data).ok()
+}
+
+async fn destroy_owned(state: &AppState, key: Uuid) {
+    let lock = lease_lock(state, key).await;
+    let guard = lock.lock().await;
+    if let Some(lease) = load_lease(state, key).await {
+        destroy(state, key, &lease).await;
+    }
+    drop(guard);
+    let mut locks = state.ephemeral_locks.lock().await;
+    if Arc::strong_count(&lock) == 2 {
+        locks.remove(&key);
+    }
+}
+
+async fn watch(state: AppState, key: Uuid, initial: Lease) {
+    if initial.url.is_empty() || (!initial.standalone && initial.session.is_none()) {
+        destroy_owned(&state, key).await;
         return;
-    };
+    }
     loop {
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        let Some(lease) = load_lease(&state, key).await else {
+            return;
+        };
+        if lease.expires_at.is_some_and(|at| clients::now_secs() >= at) {
+            break;
+        }
+        let Some(id) = lease.session else {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            continue;
+        };
         let url = format!("{}/api/sessions/{id}", lease.url.trim_end_matches('/'));
         let response = state.peer_request(state.http_client.get(&url)).send().await;
         match response {
@@ -355,16 +418,20 @@ async fn watch(state: AppState, key: Uuid, mut lease: Lease) {
                 if let Ok(body) = response.json::<serde_json::Value>().await {
                     if body["session"]["client_count"].as_u64().unwrap_or(0) > 0 {
                         if !lease.seen_client {
-                            lease.seen_client = true;
-                            if let Err(e) = save(&state, key, &lease).await {
-                                warn!(error = %e, "Could not save ephemeral node state");
+                            let lock = lease_lock(&state, key).await;
+                            let _guard = lock.lock().await;
+                            if let Some(mut current) = load_lease(&state, key).await {
+                                current.seen_client = true;
+                                if let Err(e) = save(&state, key, &current).await {
+                                    warn!(error = %e, "Could not save ephemeral node state");
+                                }
                             }
                         }
                     } else if !lease.seen_client
-                        && clients::now_secs().saturating_sub(lease.created) > 120
-                    {
-                        // A session created but never attached must not leave a VM behind.
-                        if state
+                        && clients::now_secs()
+                            .saturating_sub(lease.session_created.unwrap_or(lease.created))
+                            > 120
+                        && state
                             .peer_request(
                                 state.peer_client.post(format!("{url}/expire-unattached")),
                             )
@@ -374,19 +441,16 @@ async fn watch(state: AppState, key: Uuid, mut lease: Lease) {
                             .is_ok_and(|r| {
                                 r.status().is_success() || r.status() == StatusCode::NOT_FOUND
                             })
-                        {
-                            break;
-                        }
+                    {
+                        break;
                     }
                 }
             }
-            _ => {
-                warn!(node = %lease.id, "Cannot inspect ephemeral session; will retry");
-                tokio::time::sleep(Duration::from_secs(28)).await;
-            }
+            _ => warn!(node = %lease.id, "Cannot inspect ephemeral session; will retry"),
         }
+        tokio::time::sleep(Duration::from_secs(2)).await;
     }
-    destroy(&state, key, &lease).await;
+    destroy_owned(&state, key).await;
 }
 
 pub(crate) async fn recover(state: &AppState) {
@@ -413,6 +477,229 @@ pub(crate) async fn recover(state: &AppState) {
     }
 }
 
+async fn provision(
+    state: &AppState,
+    up: PathBuf,
+    ttl: Option<u64>,
+    standalone: bool,
+) -> Result<(Uuid, Lease), ApiError> {
+    let key = Uuid::new_v4();
+    let now = clients::now_secs();
+    let mut lease = Lease {
+        id: key.to_string(),
+        url: String::new(),
+        session: None,
+        created: now,
+        seen_client: false,
+        standalone,
+        expires_at: ttl.map(|seconds| now.saturating_add(seconds)),
+        session_created: None,
+    };
+    save(state, key, &lease).await.map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not save ephemeral node lease",
+        )
+    })?;
+    let mut command = tokio::process::Command::new(up);
+    command
+        .arg(&lease.id)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    if let Some(ttl) = ttl {
+        command.env("BROWSER_DAEMON_EPHEMERAL_TTL_SECONDS", ttl.to_string());
+    }
+    let output = tokio::time::timeout(
+        Duration::from_secs(ttl.unwrap_or(1500).min(1500)),
+        command.output(),
+    )
+    .await;
+    let output = match output {
+        Ok(Ok(output)) if output.status.success() => output,
+        _ => {
+            let state = state.clone();
+            tokio::spawn(async move {
+                destroy_owned(&state, key).await;
+            });
+            return Err(api_error(
+                StatusCode::BAD_GATEWAY,
+                "Ephemeral provisioning failed or timed out",
+            ));
+        }
+    };
+    let descriptor = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+    let url = descriptor.as_ref().and_then(|d| d["url"].as_str());
+    let valid = url.and_then(|s| url::Url::parse(s).ok()).is_some_and(|u| {
+        matches!(u.scheme(), "http" | "https")
+            && u.host().is_some()
+            && u.username().is_empty()
+            && u.password().is_none()
+            && u.query().is_none()
+            && u.fragment().is_none()
+    });
+    if !valid || lease.expires_at.is_some_and(|at| clients::now_secs() >= at) {
+        let state = state.clone();
+        tokio::spawn(async move {
+            destroy_owned(&state, key).await;
+        });
+        return Err(api_error(
+            StatusCode::BAD_GATEWAY,
+            "Invalid or expired ephemeral node descriptor",
+        ));
+    }
+    lease.url = url.unwrap_or_default().to_string();
+    if save(state, key, &lease).await.is_err() {
+        let state = state.clone();
+        tokio::spawn(async move {
+            destroy_owned(&state, key).await;
+        });
+        return Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not save ephemeral node lease",
+        ));
+    }
+    Ok((key, lease))
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct CreateNodeRequest {
+    #[serde(default = "default_node_ttl")]
+    ttl_seconds: u64,
+}
+
+fn default_node_ttl() -> u64 {
+    DEFAULT_NODE_TTL
+}
+
+pub(crate) async fn create_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<CreateNodeRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.check_auth(&headers)?;
+    validate_ttl(req.ttl_seconds)?;
+    let Some(up) = state.ephemeral_up.clone() else {
+        let overview = fetch_mesh_overview(&state).await;
+        let peer = overview
+            .peers
+            .iter()
+            .filter(|p| p.status == "online" && p.ephemeral_provider)
+            .min_by(|a, b| a.name.cmp(&b.name))
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "No ephemeral node provider is online",
+                )
+            })?;
+        let response = state
+            .peer_request(state.peer_client.post(format!(
+                "{}/api/ephemeral/nodes",
+                peer.url.trim_end_matches('/')
+            )))
+            .timeout(Duration::from_secs(1650))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|_| api_error(StatusCode::BAD_GATEWAY, "Ephemeral provider request failed"))?;
+        if !response.status().is_success() {
+            return Err(api_error(
+                response.status(),
+                "Ephemeral provider could not create a node",
+            ));
+        }
+        return response.json().await.map(Json).map_err(|_| {
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "Invalid ephemeral provider response",
+            )
+        });
+    };
+    tokio::spawn(async move {
+        let (key, lease) = provision(&state, up, Some(req.ttl_seconds), true).await?;
+        let node_name = state.node_name.clone();
+        let expires_at = lease.expires_at;
+        tokio::spawn(watch(state, key, lease));
+        Ok(Json(
+            serde_json::json!({"lease_id": key, "node_name": node_name, "expires_at": expires_at}),
+        ))
+    })
+    .await
+    .map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Ephemeral provisioning task failed",
+        )
+    })?
+}
+
+pub(crate) async fn create_node_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(key): AxumPath<Uuid>,
+    Json(mut req): Json<CreateSessionRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state.check_auth(&headers)?;
+    if req.profile.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "Saved profiles cannot be placed on ephemeral nodes",
+        ));
+    }
+    req.persistent = false;
+    req.ephemeral_ttl_seconds = None;
+    tokio::spawn(async move {
+        let lock = lease_lock(&state, key).await;
+        let guard = lock.lock().await;
+        let mut lease = load_lease(&state, key).await.ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Ephemeral node not found"))?;
+        if !lease.standalone || lease.session.is_some() || lease.url.is_empty() {
+            return Err(api_error(StatusCode::CONFLICT, "Ephemeral node is not available for a new session"));
+        }
+        if lease.expires_at.is_some_and(|at| clients::now_secs() >= at) {
+            return Err(api_error(StatusCode::GONE, "Ephemeral node has expired"));
+        }
+        let response = state.peer_request(state.peer_client.post(format!("{}/api/sessions", lease.url.trim_end_matches('/'))))
+            .json(&req).timeout(Duration::from_secs(120)).send().await;
+        let session = match response { Ok(r) if r.status().is_success() => r.json::<SessionSummary>().await.ok(), _ => None };
+        let Some(session) = session else {
+            drop(guard);
+            let state = state.clone();
+            tokio::spawn(async move { destroy_owned(&state, key).await; });
+            return Err(api_error(StatusCode::BAD_GATEWAY, "Could not create session on ephemeral node"));
+        };
+        lease.session = Some(session.id);
+        lease.session_created = Some(clients::now_secs());
+        if save(&state, key, &lease).await.is_err() {
+            drop(guard);
+            let state = state.clone();
+            tokio::spawn(async move { destroy_owned(&state, key).await; });
+            return Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save ephemeral session lease"));
+        }
+        Ok(Json(serde_json::json!({"node_url": lease.url, "node_name": state.node_name, "lease_id": key, "session": session})))
+    }).await.map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Ephemeral session task failed"))?
+}
+
+pub(crate) async fn delete_node(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(key): AxumPath<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    state.check_auth(&headers)?;
+    let lease = load_lease(&state, key)
+        .await
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Ephemeral node not found"))?;
+    if lease.url.is_empty() {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "Ephemeral node is still starting",
+        ));
+    }
+    tokio::spawn(async move {
+        destroy_owned(&state, key).await;
+    });
+    Ok(StatusCode::ACCEPTED)
+}
+
 pub(crate) async fn create(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -424,6 +711,9 @@ pub(crate) async fn create(
             StatusCode::BAD_REQUEST,
             "Saved profiles cannot be placed on ephemeral nodes",
         ));
+    }
+    if let Some(ttl) = req.ephemeral_ttl_seconds {
+        validate_ttl(ttl)?;
     }
     req.persistent = false;
     let Some(up) = state.ephemeral_up.clone() else {
@@ -467,69 +757,7 @@ pub(crate) async fn create(
     // Keep provisioning alive if the HTTP caller disconnects; the unused-session
     // timeout will destroy the resulting node.
     let task = tokio::spawn(async move {
-        let key = Uuid::new_v4();
-        let mut lease = Lease {
-            id: key.to_string(),
-            url: String::new(),
-            session: None,
-            created: clients::now_secs(),
-            seen_client: false,
-        };
-        save(&state, key, &lease).await.map_err(|_| {
-            api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not save ephemeral node lease",
-            )
-        })?;
-        let output = tokio::time::timeout(
-            // The provider may wait for a VM boot and then for its service.
-            Duration::from_secs(1500),
-            tokio::process::Command::new(up)
-                .arg(&lease.id)
-                .stdin(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await;
-        let output = match output {
-            Ok(Ok(output)) if output.status.success() => output,
-            _ => {
-                tokio::spawn(watch(state, key, lease));
-                return Err(api_error(
-                    StatusCode::BAD_GATEWAY,
-                    "Ephemeral provisioning failed or timed out",
-                ));
-            }
-        };
-        let descriptor = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
-        let url = descriptor.as_ref().and_then(|d| d["url"].as_str());
-        let valid = url.and_then(|s| url::Url::parse(s).ok()).is_some_and(|u| {
-            matches!(u.scheme(), "http" | "https")
-                && u.host().is_some()
-                && u.username().is_empty()
-                && u.password().is_none()
-                && u.query().is_none()
-                && u.fragment().is_none()
-        });
-        if !valid {
-            tokio::spawn(watch(state, key, lease));
-            return Err(api_error(
-                StatusCode::BAD_GATEWAY,
-                "Invalid ephemeral node descriptor",
-            ));
-        }
-        lease.url = url.unwrap_or_default().to_string();
-        lease.created = clients::now_secs();
-        if save(&state, key, &lease).await.is_err() {
-            tokio::spawn(async move {
-                destroy(&state, key, &lease).await;
-            });
-            return Err(api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not save ephemeral node lease",
-            ));
-        }
+        let (key, mut lease) = provision(&state, up, req.ephemeral_ttl_seconds, false).await?;
         let response = state
             .peer_request(
                 state
@@ -552,7 +780,7 @@ pub(crate) async fn create(
             ));
         };
         lease.session = Some(session.id);
-        lease.created = clients::now_secs();
+        lease.session_created = Some(clients::now_secs());
         if save(&state, key, &lease).await.is_err() {
             tokio::spawn(watch(
                 state,

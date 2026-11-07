@@ -232,9 +232,8 @@ impl Auth {
         let dashboard_pair = req.method == Method::POST
             && req.path == "/api/extension/pair"
             && self.can_pair(req.headers, now);
-        let dashboard_ephemeral = req.method == Method::POST
-            && req.path == "/api/ephemeral/sessions"
-            && self.can_pair(req.headers, now);
+        let dashboard_ephemeral =
+            ephemeral_admin(req.method, req.path) && self.can_pair(req.headers, now);
         if cred == Credential::Token
             && secret_only(req.method, req.path)
             && !dashboard_pair
@@ -343,10 +342,20 @@ pub fn is_share(path: &str) -> bool {
 
 /// Routes that move the vault's secrets or hand the cluster secret to a third
 /// party: a viewer's token (which a page in a session can obtain) is not enough.
+fn ephemeral_admin(method: &Method, path: &str) -> bool {
+    (*method == Method::POST && matches!(path, "/api/ephemeral/sessions" | "/api/ephemeral/nodes"))
+        || (*method == Method::DELETE
+            && ((path.starts_with("/api/ephemeral/") && path.matches('/').count() == 3)
+                || (path.starts_with("/api/peers/")
+                    && path.contains("/ephemeral/")
+                    && path.matches('/').count() == 5)))
+}
+
 pub fn secret_only(method: &Method, path: &str) -> bool {
-    if method == Method::POST
-        && (path == "/api/ephemeral/sessions"
-            || (path.starts_with("/api/sessions/") && path.ends_with("/expire-unattached")))
+    if ephemeral_admin(method, path)
+        || (method == Method::POST
+            && path.starts_with("/api/sessions/")
+            && path.ends_with("/expire-unattached"))
     {
         return true;
     }
@@ -689,6 +698,24 @@ mod tests {
             ("sec-fetch-site", "same-origin"),
         ]);
         assert_eq!(decide(&a, &r), Err(StatusCode::FORBIDDEN));
+        for (method, path) in [
+            (Method::POST, "/api/ephemeral/nodes"),
+            (Method::DELETE, "/api/ephemeral/abc"),
+            (Method::DELETE, "/api/peers/provider/ephemeral/abc"),
+        ] {
+            let mut r = req(path);
+            r.method = method;
+            r.origin = Some("https://browser.fnuc.test");
+            r.site = Some("same-origin");
+            r.headers = headers(&[("authorization", &format!("Bearer {token}"))]);
+            assert_eq!(decide(&a, &r), Err(StatusCode::FORBIDDEN));
+            r.headers = headers(&[
+                ("cookie", &format!("bd_auth={token}")),
+                ("origin", "https://browser.fnuc.test"),
+                ("sec-fetch-site", "same-origin"),
+            ]);
+            assert_eq!(decide(&a, &r), Ok(Credential::Token));
+        }
     }
 
     #[test]

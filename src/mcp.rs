@@ -341,7 +341,8 @@ fn own_tools(
                     "profile": { "type": "string", "description": "Name of a profile from browser_status." },
                     "node": { "type": "string", "description": "Destination node. An idle saved profile is moved here automatically; active profiles are not interrupted." },
                     "group": { "type": "string", "description": "Restrict placement to this node group, such as cloud. Never falls back outside it; node, if supplied, must belong to it." },
-                    "ephemeral": { "type": "boolean", "description": "Create a dedicated short-lived node for this browser." }
+                    "ephemeral": { "type": "boolean", "description": "Create a dedicated short-lived node for this browser." },
+                    "ephemeral_ttl_seconds": { "type": "integer", "minimum": 60, "maximum": 86400, "description": "Maximum lifetime of the dedicated node in seconds." }
                 },
                 "additionalProperties": false
             },
@@ -1700,7 +1701,7 @@ impl State {
                 .http
                 .post(format!("{}/api/ephemeral/sessions", self.base))
                 .timeout(Duration::from_secs(1800))
-                .json(&json!({"persistent": false}));
+                .json(&json!({"persistent": false, "ephemeral_ttl_seconds": args["ephemeral_ttl_seconds"]}));
             if let Some(secret) = &self.secret {
                 request = request.header("X-Browser-Cluster-Secret", secret);
             }

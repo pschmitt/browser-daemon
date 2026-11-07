@@ -158,6 +158,8 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         return None;
     }
     let (devtools, wait) = match (method.as_str(), segments.as_slice()) {
+        ("POST", ["ephemeral", _, "sessions"]) => (false, Long),
+        ("DELETE", ["ephemeral", _]) => (false, Long),
         ("GET" | "POST" | "PUT" | "PATCH" | "DELETE", ["ephemeral", _, "proxy", ..]) => {
             (false, Long)
         }

@@ -69,6 +69,18 @@ be idempotent, including when provisioning failed before creating anything.
 The provider must retain the lease-to-resource mapping across restarts and
 coordinate concurrent up/down calls. Use a provider-side maximum lifetime as
 a backstop for failures outside the daemon's control.
+When a lifetime is requested, the up command also receives
+`BROWSER_DAEMON_EPHEMERAL_TTL_SECONDS` as a decimal number of seconds. Providers
+can use it to set their own maximum lifetime.
+
+To provision a node ahead of a session, choose **Add a node → Ephemeral** in
+the dashboard, or call `POST /api/ephemeral/nodes` with optional `ttl_seconds`.
+The default is two hours; the API accepts 60 seconds through 24 hours. The
+node remains available until its lifetime expires or its single session ends.
+The lifetime is a maximum even while a session is active. Ready nodes appear in
+the Nodes view, where a session can be started or the node removed. The API
+equivalents are `POST /api/ephemeral/<lease_id>/sessions` and
+`DELETE /api/ephemeral/<lease_id>`.
 
 Call authenticated `POST /api/ephemeral/sessions` with the usual session
 creation options, `browser-daemon session new --ephemeral-node`, or MCP

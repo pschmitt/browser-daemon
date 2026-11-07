@@ -3,16 +3,114 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import socket
 import sys
+import time
 from pathlib import Path
 
 import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
+
+
+@pytest.mark.skipif(not os.environ.get("BD_TEST_BINARY"), reason="requires a built daemon")
+async def test_manually_provisioned_node_lifetime_and_recovery(tmp_path):
+    session_id = "00000000-0000-0000-0000-000000000001"
+    alive = True
+    async def sessions(request):
+        if request.method == "POST":
+            assert (await request.json())["persistent"] is False
+            return web.json_response({"id": session_id, "port": 9222, "ws_path": "devtools/browser/test",
+                                      "profile": None, "persistent": False, "uptime_seconds": 0,
+                                      "client_count": 0, "tabs_count": 0, "is_recording": False})
+        return web.json_response({"session": {"client_count": 1}}) if alive else web.Response(status=404)
+    app = web.Application()
+    app.router.add_route("*", "/api/sessions{tail:.*}", sessions)
+    node = TestServer(app)
+    await node.start_server()
+    up, down, marker, ttl_file = (tmp_path / name for name in ("up", "down", "destroyed", "ttl"))
+    up.write_text(f"#!{sys.executable}\nimport json,os\nfrom pathlib import Path\n"
+                  f"Path({str(ttl_file)!r}).write_text(os.environ['BROWSER_DAEMON_EPHEMERAL_TTL_SECONDS'])\n"
+                  f"print(json.dumps({{'url': {str(node.make_url('/')).rstrip('/')!r}}}))\n")
+    down.write_text(f"#!{sys.executable}\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n")
+    up.chmod(0o700)
+    down.chmod(0o700)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    base = f"http://127.0.0.1:{port}"
+    async def start():
+        proc = await asyncio.create_subprocess_exec(
+            os.environ["BD_TEST_BINARY"], "run", "--bind", f"127.0.0.1:{port}",
+            "--profile-dir", str(tmp_path / "profiles"), "--recordings-dir", str(tmp_path / "recordings"),
+            "--ephemeral-up", str(up), "--ephemeral-down", str(down),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        async with aiohttp.ClientSession() as client:
+            for _ in range(100):
+                try:
+                    async with client.get(f"{base}/api/mesh/node"):
+                        return proc
+                except aiohttp.ClientError:
+                    await asyncio.sleep(0.1)
+        proc.kill()
+        await proc.wait()
+        raise AssertionError("daemon did not start")
+    async def wait_destroyed():
+        for _ in range(100):
+            if marker.exists():
+                return
+            await asyncio.sleep(0.1)
+        pytest.fail("worker was not decommissioned")
+    proc = await start()
+    try:
+        async with aiohttp.ClientSession() as client:
+            for invalid in (59, 86401):
+                async with client.post(f"{base}/api/ephemeral/nodes", json={"ttl_seconds": invalid}) as response:
+                    assert response.status == 400
+            async with client.post(f"{base}/api/ephemeral/nodes", json={"ttl_seconds": 3600}) as response:
+                assert response.status == 200
+                created = await response.json()
+            assert ttl_file.read_text() == "3600"
+            assert 3590 <= created["expires_at"] - int(time.time()) <= 3600
+            lease = created["lease_id"]
+            await asyncio.sleep(2.2)
+            assert not marker.exists(), "an unused manual node should remain until its TTL"
+            proc.terminate()
+            await proc.wait()
+            proc = await start()
+            await asyncio.sleep(2.2)
+            assert not marker.exists(), "an unused node must survive coordinator restart"
+            async with client.post(f"{base}/api/ephemeral/{lease}/sessions", json={"persistent": True}) as response:
+                assert response.status == 200
+                assert (await response.json())["session"]["persistent"] is False
+            async with client.post(f"{base}/api/ephemeral/{lease}/sessions", json={}) as response:
+                assert response.status == 409
+            alive = False
+            await wait_destroyed()
+            marker.unlink()
+            async with client.post(f"{base}/api/ephemeral/nodes", json={}) as response:
+                assert response.status == 200
+                expiring = await response.json()
+            assert ttl_file.read_text() == "7200"
+            file = tmp_path / "ephemeral-nodes" / f"{expiring['lease_id']}.json"
+            data = json.loads(file.read_text())
+            data["expires_at"] = int(time.time()) - 1
+            file.write_text(json.dumps(data))
+            await wait_destroyed()
+            marker.unlink()
+            async with client.post(f"{base}/api/ephemeral/nodes", json={"ttl_seconds": 1800}) as response:
+                removable = await response.json()
+            async with client.delete(f"{base}/api/ephemeral/{removable['lease_id']}") as response:
+                assert response.status == 202
+            await wait_destroyed()
+    finally:
+        proc.terminate()
+        await proc.wait()
+        await node.close()
 
 
 @pytest.mark.skipif(not os.environ.get("BD_TEST_BINARY"), reason="requires a built daemon")
@@ -259,9 +357,19 @@ async def test_dashboard_launches_and_closes_dedicated_worker(tmp_path, engine):
             page = await browser.new_page()
             await page.goto(f"http://127.0.0.1:{router_port}")
             await page.wait_for_function("typeof nodes !== 'undefined' && nodes.some(n => n.ephemeral_provider)", timeout=30_000)
-            await page.locator("#newSessionAction").click()
-            await page.locator("#sessionDedicatedField").click()
-            assert await page.locator("#sessionDedicated").is_checked()
+            if engine == "chromium":
+                await page.locator('[data-view="nodes"]').click()
+                await page.locator('[data-act="add-node"]').click()
+                await page.locator('[data-add-tab="ephemeral"]').click()
+                assert await page.locator("#nodeTtl").input_value() == "7200"
+                await page.locator("#nodeTtl").select_option("3600")
+                await page.locator('#addEphemeralForm button[type="submit"]').click()
+                card = page.locator(".node-card").filter(has_text="Dedicated worker")
+                await card.locator("[data-ephemeral-launch]").click(timeout=30_000)
+            else:
+                await page.locator("#newSessionAction").click()
+                await page.locator("#sessionDedicatedField").click()
+                assert await page.locator("#sessionDedicated").is_checked()
             if engine == "firefox":
                 await page.locator('#sessionEngines [data-engine="firefox"]').click()
             await page.locator("#sessionUrl").fill("data:text/html,ephemeral-test")

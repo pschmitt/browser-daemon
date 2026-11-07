@@ -217,6 +217,8 @@ pub struct AppState {
     pub ephemeral_node: bool,
     pub ephemeral_up: Option<PathBuf>,
     pub ephemeral_down: Option<PathBuf>,
+    /// Serializes lifecycle changes to each provider lease.
+    pub ephemeral_locks: Arc<Mutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
     pub public_url: String,
     /// Origins an extension may use to connect across this daemon cluster.
     pub extension_origins: Vec<String>,

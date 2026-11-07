@@ -678,6 +678,9 @@ pub(crate) const PHONE_SIZE: (u32, u32) = (412, 915);
 pub struct CreateSessionRequest {
     /// Optional; generated when absent or empty.
     pub name: Option<String>,
+    /// Optional maximum lifetime of a dedicated node, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral_ttl_seconds: Option<u64>,
     #[serde(default)]
     pub engine: BrowserEngine,
     pub profile: Option<String>,

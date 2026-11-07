@@ -1208,6 +1208,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="seg" role="tablist" aria-label="Kind of node">
         <button type="button" role="tab" id="addTabBrowser" class="on" aria-selected="true" aria-controls="addPaneBrowser" data-add-tab="browser"><svg class="i sm"><use href="#i-globe"/></svg> Browser</button>
         <button type="button" role="tab" id="addTabDaemon" aria-selected="false" aria-controls="addPeerForm" data-add-tab="daemon"><svg class="i sm"><use href="#i-server"/></svg> Daemon</button>
+        <button type="button" role="tab" id="addTabEphemeral" aria-selected="false" aria-controls="addEphemeralForm" data-add-tab="ephemeral" hidden><svg class="i sm"><use href="#i-clock"/></svg> Ephemeral</button>
       </div>
       <div class="add-grid" id="addPaneBrowser" role="tabpanel" aria-labelledby="addTabBrowser">
         <div class="add-card">
@@ -1222,6 +1223,14 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
         <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-server"/></svg></span>
           <div><h3>Another daemon</h3><p>Connect this daemon to another browser-daemon host's mesh.</p></div></div>
         <div class="add-row"><input class="input" type="url" id="peerUrl" required placeholder="https://browser.host.example" aria-label="Daemon URL"><button class="btn primary" type="submit"><svg class="i sm"><use href="#i-plus"/></svg>Add daemon</button></div>
+      </form>
+      <form id="addEphemeralForm" class="add-card" role="tabpanel" aria-labelledby="addTabEphemeral" hidden>
+        <div class="add-head"><span class="add-icon"><svg class="i"><use href="#i-server"/></svg></span>
+          <div><h3>Short-lived worker</h3><p>Start a dedicated node now and create one throwaway session on it later.</p></div></div>
+        <div class="field"><label for="nodeTtl">Maximum lifetime</label><select class="input" id="nodeTtl">
+          <option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="7200" selected>2 hours</option><option value="14400">4 hours</option><option value="28800">8 hours</option><option value="86400">24 hours</option>
+        </select><span class="hint">The worker is removed at this limit, or after its session ends.</span></div>
+        <div class="add-row"><button class="btn primary" type="submit"><svg class="i sm"><use href="#i-plus"/></svg>Start worker</button></div>
       </form>
     </div>
   </div>
@@ -1243,6 +1252,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="field" id="sessionNodeField"><span class="field-label">Node</span><div class="seg" id="sessionNodes"></div></div>
       <span class="hint browser-only" id="sessionBrowserHint"></span>
       <label class="switch managed-only" id="sessionDedicatedField" hidden><input type="checkbox" id="sessionDedicated"><span class="track"></span><span class="txt"><b>Dedicated short-lived node</b><span>Start a worker for this session. It is removed after the last client disconnects.</span></span></label>
+      <div class="field managed-only" id="sessionNodeTtlField" hidden><label for="sessionNodeTtl">Maximum node lifetime</label><select class="input" id="sessionNodeTtl"><option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="3600">1 hour</option><option value="7200" selected>2 hours</option><option value="14400">4 hours</option><option value="28800">8 hours</option><option value="86400">24 hours</option></select></div>
       <div class="field managed-only"><span class="field-label">Engine</span>
         <div class="seg" id="sessionEngines">
           <button type="button" data-engine="chromium" class="on"><svg class="i" style="color:var(--chromium)"><use href="#i-chromium"/></svg>Chromium</button>
@@ -2394,7 +2404,7 @@ function renderHeader() {
   }
   const ephemeral = ephemeralNodes();
   $('countNodes').classList.toggle('warn', ov.online_nodes < ov.total_nodes || ephemeral.some(n => n.status === 'unreachable'));
-  $('countNodes').title = `${ov.online_nodes + extensionBrowserNodes.filter(n => n.online !== false).length + ephemeral.filter(n => n.status === 'online').length}/${ov.total_nodes + extensionBrowserNodes.length + ephemeral.length} online`;
+  $('countNodes').title = `${ov.online_nodes + extensionBrowserNodes.filter(n => n.online !== false).length + ephemeral.filter(n => n.status === 'online' || n.status === 'ready').length}/${ov.total_nodes + extensionBrowserNodes.length + ephemeral.length} online`;
 }
 
 function renderStats() {
@@ -3092,7 +3102,7 @@ function fallbackCopy(text, done) {
 }
 
 /* ---------------------------------------------------------------- sessions */
-let sessionNode = null, sessionEngine = 'chromium';
+let sessionNode = null, sessionEngine = 'chromium', sessionProvisioned = null;
 
 // Placement labels a node advertises (--node-group / nodeGroups); profiles can be placed by them.
 const groupChips = (n) => (n.groups || []).map((g) => `<span class="chip group" title="Node group: placement can target it">${icon('tag', 'sm')}${esc(g)}</span>`).join(' ');
@@ -3157,7 +3167,8 @@ $('sessionAdblock').addEventListener('change', () => { adblockTouched = true; })
 const engineDefaults = (node, engine) => nodes.find((n) => n.name === node)?.settings?.engines?.[engine] || {};
 
 function openNewSession(prefill = {}) {
-  sessionNode = prefill.node || (filter !== 'all' && extensionNodeOf(filter)?.online !== false ? filter : localName());
+  sessionProvisioned = prefill.ephemeral || null;
+  sessionNode = sessionProvisioned?.provider || prefill.node || (filter !== 'all' && extensionNodeOf(filter)?.online !== false ? filter : localName());
   nodePills($('sessionNodes'), sessionNode, (n) => { sessionNode = n; setEngine(sessionEngine); }, { onlineOnly: true, browsers: true });
   sessionProfile = prefill.profile ? { node: sessionNode, name: prefill.profile } : null;
   sessionProxy = null;
@@ -3169,8 +3180,9 @@ function openNewSession(prefill = {}) {
   $('sessionName').value = '';
   $('sessionUrl').value = prefill.url || '';
   $('sessionPublic').checked = false;
-  $('sessionDedicated').checked = false;
-  $('sessionDedicatedField').hidden = !nodes.some((n) => n.status === 'online' && n.ephemeral_provider);
+  $('sessionDedicated').checked = !!sessionProvisioned;
+  $('sessionDedicatedField').hidden = !!sessionProvisioned || !nodes.some((n) => n.status === 'online' && n.ephemeral_provider);
+  $('sessionNodeTtl').value = '7200';
   syncDedicated();
   setEngine(prefill.engine || 'chromium');
   openModal('newSessionModal');
@@ -3180,6 +3192,7 @@ function openNewSession(prefill = {}) {
 function syncDedicated() {
   const on = $('sessionDedicated').checked;
   $('sessionNodeField').hidden = on;
+  $('sessionNodeTtlField').hidden = !on || !!sessionProvisioned;
   $('sessionProfileField').hidden = on;
   $('sessionTabsField').hidden = on || !$('sessionTabsHint').textContent;
   $('sessionPublicField').hidden = on;
@@ -3400,6 +3413,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     proxy: $('sessionDedicated').checked ? null : sessionProxy,
     color_scheme: sessionScheme,
     persistent: !$('sessionEphemeral').checked,
+    ephemeral_ttl_seconds: $('sessionDedicated').checked && !sessionProvisioned ? Number($('sessionNodeTtl').value) : undefined,
     record: $('sessionRecord').checked,
     // Untouched: the node applies the engine's default.
     adblock: adblockTouched ? $('sessionAdblock').checked : undefined,
@@ -3435,7 +3449,7 @@ $('newSessionForm').addEventListener('submit', async (e) => {
       await request('POST', api(node, '/profiles'), { name: payload.profile, engine: sessionEngine, proxy: newProxy, color_scheme: sessionScheme });
     }
     const dedicated = $('sessionDedicated').checked;
-    const created = dedicated ? await request('POST', '/api/ephemeral/sessions', payload) : null;
+    const created = dedicated ? await request('POST', sessionProvisioned ? api(sessionProvisioned.provider, `/ephemeral/${enc(sessionProvisioned.lease_id)}/sessions`) : '/api/ephemeral/sessions', payload) : null;
     const s = dedicated ? created.session : await request('POST', api(node, '/sessions'), payload);
     const provider = dedicated ? created.node_name : node;
     const proxy = dedicated ? api(provider, `/ephemeral/${enc(created.lease_id)}/proxy`) : null;
@@ -4537,7 +4551,7 @@ $('transferForm').addEventListener('submit', async (e) => {
 const nodeDefaultProxy = (node) => nodes.find((n) => n.name === node)?.settings?.default_proxy || null;
 const ephemeralNodes = () => nodes.flatMap((provider) => (provider.ephemeral_nodes || []).map((node) => ({ ...node, provider: provider.name })));
 function ephemeralNodeCard(n) {
-  const online = n.status === 'online';
+  const online = n.status === 'online' || n.status === 'ready';
   const url = n.session_id ? `${nodeBase(n.provider)}/handoff/?ephemeral=${enc(n.lease_id)}&session=${enc(n.session_id)}` : '';
   const age = n.created_at ? cardAge(Math.max(0, Date.now() / 1000 - n.created_at)) : '';
   return `<div class="node-card" style="--node:${nodeColor(n.name)}">
@@ -4545,8 +4559,9 @@ function ephemeralNodeCard(n) {
       <div class="t"><b>${esc(n.name)} <span class="chip accent">ephemeral</span> <span class="chip ${online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad'}">${esc(n.status)}</span></b>
         <span>Dedicated worker · via ${esc(n.provider)}</span></div>
       <div class="node-ctl">${online && url ? `<a class="btn sm" href="${esc(url)}">${icon('takeover', 'sm')}Take over</a>` : ''}
-        ${n.session_id ? `<button class="btn sm" data-ephemeral-stop="${esc(n.lease_id)}" data-provider="${esc(n.provider)}" data-session="${esc(n.session_id)}">Stop</button>` : ''}</div>
-    </div><div class="node-stats"><div class="node-stat"><b>${n.session_id ? '1/1' : '0/1'}</b><span>sessions</span></div>${age ? `<div class="node-stat"><b>${esc(age)}</b><span>uptime</span></div>` : ''}</div>
+        ${n.status === 'ready' ? `<button class="btn sm" data-ephemeral-launch="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">${icon('plus', 'sm')}New session</button>` : ''}
+        ${n.session_id ? `<button class="btn sm" data-ephemeral-stop="${esc(n.lease_id)}" data-provider="${esc(n.provider)}" data-session="${esc(n.session_id)}">Stop</button>` : n.status === 'ready' ? `<button class="btn sm" data-ephemeral-remove="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">Remove</button>` : ''}</div>
+    </div><div class="node-stats"><div class="node-stat"><b>${n.session_id ? '1/1' : '0/1'}</b><span>sessions</span></div>${age ? `<div class="node-stat"><b>${esc(age)}</b><span>uptime</span></div>` : ''}${n.expires_at ? `<div class="node-stat"><b>${esc(untilShort(n.expires_at))}</b><span>remaining</span></div>` : ''}</div>
   </div>`;
 }
 function renderNodes() {
@@ -4818,6 +4833,16 @@ $('settingsBody').addEventListener('change', async (e) => {
   renderNodes();
 });
 $('nodesList').addEventListener('click', (e) => {
+  const launchEphemeral = e.target.closest('[data-ephemeral-launch]');
+  if (launchEphemeral) {
+    openNewSession({ ephemeral: { lease_id: launchEphemeral.dataset.ephemeralLaunch, provider: launchEphemeral.dataset.provider } });
+    return;
+  }
+  const remove = e.target.closest('[data-ephemeral-remove]');
+  if (remove) {
+    act('Removing worker', () => request('DELETE', api(remove.dataset.provider, `/ephemeral/${enc(remove.dataset.ephemeralRemove)}`)), 'Worker removal started');
+    return;
+  }
   const stop = e.target.closest('[data-ephemeral-stop]');
   if (stop) {
     act('Stopping session', () => request('DELETE', api(stop.dataset.provider, `/ephemeral/${enc(stop.dataset.ephemeralStop)}/proxy/api/sessions/${enc(stop.dataset.session)}`)), 'Session stopped');
@@ -4841,12 +4866,14 @@ $('settingsBody').addEventListener('click', async (e) => {
   }
 });
 function showAddTab(tab) {
+  $('addTabEphemeral').hidden = !nodes.some((n) => n.status === 'online' && n.ephemeral_provider);
   for (const b of document.querySelectorAll('[data-add-tab]')) {
     const on = b.dataset.addTab === tab;
     b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on));
   }
   $('addPaneBrowser').hidden = tab !== 'browser';
   $('addPeerForm').hidden = tab !== 'daemon';
+  $('addEphemeralForm').hidden = tab !== 'ephemeral';
 }
 for (const b of document.querySelectorAll('[data-add-tab]')) b.addEventListener('click', () => showAddTab(b.dataset.addTab));
 $('addPeerForm').addEventListener('submit', async (e) => {
@@ -4854,6 +4881,22 @@ $('addPeerForm').addEventListener('submit', async (e) => {
   const url = $('peerUrl').value.trim();
   const r = await act('Adding peer', () => request('POST', '/api/peers', { url }), 'Peer added');
   if (r !== undefined) { $('peerUrl').value = ''; closeModal('addNodeModal'); setTimeout(renderNodes, 600); }
+});
+$('addEphemeralForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = e.submitter;
+  button.disabled = true;
+  const t = createProgressToast('provision-node', 'Starting a short-lived worker', 'Provisioning the node…');
+  try {
+    await request('POST', '/api/ephemeral/nodes', { ttl_seconds: Number($('nodeTtl').value) });
+    closeModal('addNodeModal');
+    t.done('Worker ready', 'Create a session from the Nodes view.');
+    refreshData(true);
+  } catch (err) {
+    t.error('Could not start the worker', err.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 async function renderConnect() {
@@ -6806,7 +6849,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // #nodes/add: the browser-pairing sheet (the extension's "Pair" button opens it).
-const addNodeLink = () => { if (!['#nodes/add', '#nodes/add/connect'].includes(location.hash)) return false; setView('nodes'); openModal('addNodeModal'); return true; };
+const addNodeLink = () => { if (!['#nodes/add', '#nodes/add/connect'].includes(location.hash)) return false; setView('nodes'); showAddTab('browser'); openModal('addNodeModal'); return true; };
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
 if (handoffPicker) setView('sessions');
