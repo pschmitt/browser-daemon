@@ -13,7 +13,7 @@
     "custom_components.browser_daemon"
   ],
   "requirements": [
-    "browser-daemon-client==0.13.1"
+    "browser-daemon-client==0.14.0"
   ],
   "version": "0.14.0"
 }
