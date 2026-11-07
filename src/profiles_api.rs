@@ -625,7 +625,15 @@ pub(crate) async fn api_update_profile(
         labels.retain(|l| !removed.contains(l));
         let labels = profiles::normalize_labels(&labels).map_err(bad)?;
         if labels != profile.meta.labels {
+            let added: Vec<String> = labels
+                .iter()
+                .filter(|l| !profile.meta.labels.contains(l))
+                .cloned()
+                .collect();
             profile.meta.labels = labels;
+            if let Some(delta) = labels::note_assigned(&state, &added).await {
+                labels::push(&state, &delta).await;
+            }
             profiles::write_meta(&profile.dir, &profile.meta)
                 .await
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

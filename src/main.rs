@@ -22,6 +22,7 @@ mod history;
 mod httpproxy;
 mod idle;
 mod json_api;
+mod labels;
 mod live_ws;
 mod login_api;
 mod mcp;
@@ -438,6 +439,9 @@ pub enum Command {
     /// Recordings: list, export, delete.
     #[command(visible_alias = "recordings")]
     Recording(ctl::RecordingArgs),
+    /// Labels on nodes, profiles, sessions and recordings: list, edit, delete, apply.
+    #[command(visible_alias = "labels")]
+    Label(ctl::LabelArgs),
     /// The mesh's nodes: list, show, add, remove.
     #[command(visible_alias = "nodes")]
     Node(ctl::NodeArgs),
@@ -506,6 +510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Session(a) => return ctl_exit(ctl::session(a).await),
         Command::Profile(a) => return ctl_exit(ctl::profile(a).await),
         Command::Recording(a) => return ctl_exit(ctl::recording(a).await),
+        Command::Label(a) => return ctl_exit(ctl::label(a).await),
         Command::Node(a) => return ctl_exit(ctl::node(a).await),
         Command::Extension(a) => return ctl_exit(ctl::extension(a).await),
         // stdout carries the protocol: the log goes to stderr, unset.
@@ -1117,6 +1122,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/notes/{kind}/{id}/{note}",
             put(notes::api_edit).delete(notes::api_delete),
         )
+        .route("/api/labels", get(labels::api_list))
+        .route(
+            "/api/labels/{name}",
+            put(labels::api_put).delete(labels::api_delete),
+        )
+        .route("/api/labels/{name}/icon", get(labels::api_icon))
+        .route(
+            "/api/item-labels/{kind}/{id}",
+            get(labels::api_item_get).put(labels::api_item_put),
+        )
+        .route("/api/label-sync", get(labels::api_sync))
+        .route("/api/label-sync/merge", post(labels::api_sync_merge))
+        .route("/api/label-sync/{name}", get(labels::api_sync_def))
         .route("/api/shares/{id}", delete(api_delete_share))
         .route("/chromium", get(handle_chromium_ws))
         .route("/firefox", get(handle_firefox_ws))

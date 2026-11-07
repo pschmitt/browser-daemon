@@ -5,6 +5,10 @@ use super::*;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NodeInfo {
     pub name: String,
+    /// The node's labels (what placement can target).
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// The old name of `labels`, still sent for peers of older versions.
     #[serde(default)]
     pub groups: Vec<String>,
     /// This node can provision dedicated ephemeral nodes.
@@ -48,6 +52,9 @@ pub struct MeshSession {
     /// Its public link, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<ShareView>,
+    /// Its labels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -84,6 +91,9 @@ pub struct MeshRecording {
     /// Its public link, when it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<ShareView>,
+    /// Its labels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -102,6 +112,9 @@ pub struct MeshOverview {
     pub online_nodes: usize,
     pub total_storage_bytes: u64,
     pub max_storage_bytes: u64,
+    /// The label registry: icons, and what was deleted.
+    #[serde(default)]
+    pub labels: labels::Digest,
 }
 
 pub(crate) async fn api_mesh_node(
@@ -140,6 +153,7 @@ pub(crate) async fn api_mesh_node(
             ephemeral::nodes(&state).await
         },
         name: state.node_name.clone(),
+        labels: state.effective_groups(),
         groups: state.effective_groups(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -172,6 +186,7 @@ pub(crate) struct PeerReport {
     pub(crate) recordings: Vec<RecordingMeta>,
     pub(crate) shares: Vec<ShareView>,
     pub(crate) notes: HashMap<String, notes::NotesSummary>,
+    pub(crate) item_labels: HashMap<String, Vec<String>>,
     pub(crate) max_storage_bytes: u64,
 }
 
@@ -240,6 +255,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
             ephemeral_provider: false,
             ephemeral_nodes: Vec::new(),
             name: name.clone(),
+            labels: Vec::new(),
             groups: Vec::new(),
             url: url.clone(),
             status: "unreachable".to_string(),
@@ -265,6 +281,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         recordings: Vec::new(),
         shares: Vec::new(),
         notes: HashMap::new(),
+        item_labels: HashMap::new(),
         max_storage_bytes: 0,
     };
 
@@ -287,14 +304,18 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
     }
 
     // The rest at once: a slow peer costs one wait, not four.
-    let (sessions, profiles, targets, recordings, shares, notes) = tokio::join!(
+    let (sessions, profiles, targets, recordings, shares, notes, label_sync) = tokio::join!(
         peer_poll::<Vec<SessionSummary>>(state, format!("{url}/api/sessions")),
         peer_poll::<Vec<ProfileInfo>>(state, format!("{url}/api/profiles")),
         peer_poll::<Vec<DevToolsTarget>>(state, format!("{url}/json/list")),
         peer_poll::<Vec<RecordingMeta>>(state, format!("{url}/api/recordings")),
         peer_poll::<Vec<ShareView>>(state, format!("{url}/api/shares")),
         peer_poll::<HashMap<String, notes::NotesSummary>>(state, format!("{url}/api/notes")),
+        peer_poll::<labels::LabelSync>(state, format!("{url}/api/label-sync")),
     );
+    // Registries are compared whenever the overview is: a node that was away catches up.
+    labels::reconcile(state, &url, &label_sync.registry).await;
+    let item_labels = label_sync.items;
 
     let (peer, name, max_storage_bytes) = match info {
         Some(info) => (
@@ -302,7 +323,16 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
                 ephemeral_provider: info.ephemeral_provider,
                 ephemeral_nodes: info.ephemeral_nodes,
                 name: info.name.clone(),
-                groups: info.groups,
+                labels: if info.labels.is_empty() {
+                    info.groups.clone()
+                } else {
+                    info.labels.clone()
+                },
+                groups: if info.labels.is_empty() {
+                    info.groups
+                } else {
+                    info.labels
+                },
                 url: url.clone(),
                 status: "online".to_string(),
                 version: Some(info.version),
@@ -328,6 +358,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
                 ephemeral_provider: false,
                 ephemeral_nodes: Vec::new(),
                 name: name.clone(),
+                labels: Vec::new(),
                 groups: Vec::new(),
                 url: url.clone(),
                 status: "online".to_string(),
@@ -359,6 +390,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         recordings,
         shares,
         notes,
+        item_labels,
         max_storage_bytes,
     }
 }
@@ -371,12 +403,13 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
 
     // This node and the peers at the same time.
     let local = async {
-        let (targets, profiles, recordings, shares, notes) = tokio::join!(
+        let (targets, profiles, recordings, shares, notes, item_labels) = tokio::join!(
             get_local_targets(state),
             get_local_profiles(state),
             recorder::list_recordings(&state.recorder_config),
             state.live_shares(),
             notes::summaries(state),
+            labels::items(state),
         );
         // The tab counts come from the target list: no second round of requests.
         let sessions = snapshot_sessions(state).await;
@@ -391,7 +424,15 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
                 s.summary(tabs, active.get(&s.id))
             })
             .collect();
-        (sessions, profiles, targets, recordings, shares, notes)
+        (
+            sessions,
+            profiles,
+            targets,
+            recordings,
+            shares,
+            notes,
+            item_labels,
+        )
     };
     let remote = futures_util::future::join_all(
         peers
@@ -406,6 +447,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
             local_recordings,
             local_shares,
             local_notes,
+            local_item_labels,
         ),
         reports,
     ) = tokio::join!(local, remote);
@@ -419,6 +461,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         ephemeral_provider: state.ephemeral_up.is_some() && state.ephemeral_down.is_some(),
         ephemeral_nodes: ephemeral::nodes(state).await,
         name: state.node_name.clone(),
+        labels: state.effective_groups(),
         groups: state.effective_groups(),
         url: state.public_url.clone(),
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -443,13 +486,19 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     let mut all_recordings = Vec::new();
 
     let (node_name, node_url) = (local_node.name.clone(), local_node.url.clone());
-    all_sessions.extend(local_sessions.into_iter().map(|session| MeshSession {
-        notes: local_notes.get(&format!("session/{}", session.id)).cloned(),
-        share: share_of(&local_shares, ShareKind::Session, session.id),
-        session,
-        node_name: node_name.clone(),
-        node_url: node_url.clone(),
-        is_local: true,
+    all_sessions.extend(local_sessions.into_iter().map(|session| {
+        MeshSession {
+            notes: local_notes.get(&format!("session/{}", session.id)).cloned(),
+            labels: local_item_labels
+                .get(&format!("session/{}", session.id))
+                .cloned()
+                .unwrap_or_default(),
+            share: share_of(&local_shares, ShareKind::Session, session.id),
+            session,
+            node_name: node_name.clone(),
+            node_url: node_url.clone(),
+            is_local: true,
+        }
     }));
     all_profiles.extend(local_profiles.into_iter().map(|profile| MeshProfile {
         notes: profile_notes(&local_notes, &profile),
@@ -469,6 +518,10 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
             notes: local_notes
                 .get(&format!("recording/{}", recording.id))
                 .cloned(),
+            labels: local_item_labels
+                .get(&format!("recording/{}", recording.id))
+                .cloned()
+                .unwrap_or_default(),
             share: share_of(&local_shares, ShareKind::Recording, recording.id),
             recording,
             node_name: node_name.clone(),
@@ -491,14 +544,20 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         }
         peer_states.push(report.state);
         let (node_name, node_url) = (report.name, report.url);
-        let (shares, notes) = (report.shares, report.notes);
-        all_sessions.extend(report.sessions.into_iter().map(|session| MeshSession {
-            notes: notes.get(&format!("session/{}", session.id)).cloned(),
-            share: share_of(&shares, ShareKind::Session, session.id),
-            session,
-            node_name: node_name.clone(),
-            node_url: node_url.clone(),
-            is_local: false,
+        let (shares, notes, item_labels) = (report.shares, report.notes, report.item_labels);
+        all_sessions.extend(report.sessions.into_iter().map(|session| {
+            MeshSession {
+                notes: notes.get(&format!("session/{}", session.id)).cloned(),
+                labels: item_labels
+                    .get(&format!("session/{}", session.id))
+                    .cloned()
+                    .unwrap_or_default(),
+                share: share_of(&shares, ShareKind::Session, session.id),
+                session,
+                node_name: node_name.clone(),
+                node_url: node_url.clone(),
+                is_local: false,
+            }
         }));
         all_profiles.extend(report.profiles.into_iter().map(|profile| MeshProfile {
             notes: profile_notes(&notes, &profile),
@@ -513,19 +572,20 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
             node_url: node_url.clone(),
             is_local: false,
         }));
-        all_recordings.extend(
-            report
-                .recordings
-                .into_iter()
-                .map(|recording| MeshRecording {
-                    notes: notes.get(&format!("recording/{}", recording.id)).cloned(),
-                    share: share_of(&shares, ShareKind::Recording, recording.id),
-                    recording,
-                    node_name: node_name.clone(),
-                    node_url: node_url.clone(),
-                    is_local: false,
-                }),
-        );
+        all_recordings.extend(report.recordings.into_iter().map(|recording| {
+            MeshRecording {
+                notes: notes.get(&format!("recording/{}", recording.id)).cloned(),
+                labels: item_labels
+                    .get(&format!("recording/{}", recording.id))
+                    .cloned()
+                    .unwrap_or_default(),
+                share: share_of(&shares, ShareKind::Recording, recording.id),
+                recording,
+                node_name: node_name.clone(),
+                node_url: node_url.clone(),
+                is_local: false,
+            }
+        }));
     }
 
     all_recordings.sort_by_key(|r| std::cmp::Reverse(r.recording.started_at_secs));
@@ -550,6 +610,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         online_nodes,
         total_storage_bytes,
         max_storage_bytes,
+        labels: labels::digest(state).await,
     };
     state.peer_memory.learn(&overview).await;
     overview

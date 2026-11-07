@@ -5,6 +5,10 @@ use super::*;
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PeerState {
     pub name: String,
+    /// The node's labels (what placement can target).
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// The old name of `labels`, still sent for peers of older versions.
     #[serde(default)]
     pub groups: Vec<String>,
     #[serde(default)]
@@ -205,6 +209,7 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ("POST", ["recordings", _, "keep"]) => (false, Short),
         ("GET" | "POST", ["shares"]) => (false, Short),
         ("GET", ["notes"]) => (false, Short),
+        ("GET" | "PUT", ["item-labels", _, _]) => (false, Short),
         ("GET" | "POST", ["notes", _, _]) => (false, Short),
         ("PUT" | "DELETE", ["notes", _, _, _]) => (false, Short),
         ("DELETE", ["shares", _]) => (false, Short),

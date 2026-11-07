@@ -990,6 +990,201 @@ fn done(c: &Client, v: Value, what: &str) {
     }
 }
 
+// -------------------------------------------------------------------- labels
+
+pub async fn label(args: LabelArgs) -> R<()> {
+    let c = Client::connect(&args.conn).await?;
+    let local = c.ov.local_node.name.clone();
+    match args.cmd {
+        LabelCmd::List => {
+            // Every label with its users: the registry's, plus what carries one.
+            let mut rows: std::collections::BTreeMap<String, [usize; 4]> = Default::default();
+            for name in c.ov.labels.defs.keys() {
+                rows.entry(name.clone()).or_default();
+            }
+            let nodes = std::iter::once(&c.ov.local_node.labels)
+                .chain(c.ov.peers.iter().map(|p| &p.labels));
+            for labels in nodes {
+                for l in labels {
+                    rows.entry(l.clone()).or_default()[0] += 1;
+                }
+            }
+            for p in &c.ov.profiles {
+                for l in &p.profile.labels {
+                    rows.entry(l.clone()).or_default()[1] += 1;
+                }
+            }
+            for s in &c.ov.sessions {
+                for l in &s.labels {
+                    rows.entry(l.clone()).or_default()[2] += 1;
+                }
+            }
+            for r in &c.ov.recordings {
+                for l in &r.labels {
+                    rows.entry(l.clone()).or_default()[3] += 1;
+                }
+            }
+            if c.json {
+                let list: Vec<Value> = rows
+                    .iter()
+                    .map(|(name, n)| {
+                        json!({
+                            "label": name,
+                            "icon": c.ov.labels.defs.get(name).and_then(|d| d.icon.as_ref()),
+                            "nodes": n[0], "profiles": n[1], "sessions": n[2], "recordings": n[3],
+                        })
+                    })
+                    .collect();
+                c.print_json(&json!(list));
+                return Ok(());
+            }
+            let table_rows: Vec<Vec<String>> = rows
+                .iter()
+                .map(|(name, n)| {
+                    let icon = match c.ov.labels.defs.get(name).and_then(|d| d.icon.as_ref()) {
+                        Some(crate::labels::IconDigest::Mdi { name }) => format!("mdi:{name}"),
+                        Some(crate::labels::IconDigest::Image { mime }) => mime.clone(),
+                        None => "-".into(),
+                    };
+                    vec![
+                        name.clone(),
+                        icon,
+                        n[0].to_string(),
+                        n[1].to_string(),
+                        n[2].to_string(),
+                        n[3].to_string(),
+                    ]
+                })
+                .collect();
+            table(
+                &[
+                    "LABEL",
+                    "ICON",
+                    "NODES",
+                    "PROFILES",
+                    "SESSIONS",
+                    "RECORDINGS",
+                ],
+                &table_rows,
+            );
+        }
+        LabelCmd::Set {
+            name,
+            icon,
+            icon_file,
+            clear_icon,
+            rename,
+        } => {
+            let mut body = json!({});
+            if let Some(icon) = icon {
+                let Some(mdi) = icon.strip_prefix("mdi:") else {
+                    return fail(EXIT_USAGE, "An icon is written mdi:NAME (see pictogrammers.com/library/mdi), or use --icon-file");
+                };
+                body["icon"] = json!({ "kind": "mdi", "name": mdi });
+            }
+            if let Some(file) = icon_file {
+                use base64::Engine as _;
+                let mime = match std::path::Path::new(&file)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .as_deref()
+                {
+                    Some("png") => "image/png",
+                    Some("svg") => "image/svg+xml",
+                    Some("webp") => "image/webp",
+                    Some("jpg" | "jpeg") => "image/jpeg",
+                    Some("gif") => "image/gif",
+                    _ => {
+                        return fail(
+                            EXIT_USAGE,
+                            "The picture must be a png, svg, webp, jpeg or gif file",
+                        )
+                    }
+                };
+                let data = base64::engine::general_purpose::STANDARD.encode(std::fs::read(&file)?);
+                body["icon"] = json!({ "kind": "image", "mime": mime, "data": data });
+            }
+            if clear_icon {
+                body["icon"] = Value::Null;
+            }
+            if let Some(to) = rename {
+                body["rename_to"] = json!(to);
+            }
+            if body.as_object().is_some_and(|o| o.is_empty()) {
+                return fail(
+                    EXIT_USAGE,
+                    "Nothing to change: give --icon, --icon-file, --clear-icon or --rename",
+                );
+            }
+            let path = c.api(&local, &format!("/labels/{}", enc(&name)));
+            let v = c.call(c.req(Method::PUT, &path).json(&body)).await?;
+            done(&c, v, "updated");
+        }
+        LabelCmd::Delete { name, yes } => {
+            confirm(
+                &format!("Delete the label {name}? It comes off every node, profile, session and recording."),
+                yes,
+            )?;
+            let path = c.api(&local, &format!("/labels/{}", enc(&name)));
+            let v = c.call(c.req(Method::DELETE, &path)).await?;
+            done(&c, v, "deleted");
+        }
+        LabelCmd::Add {
+            kind,
+            target,
+            labels,
+        } => label_item(&c, kind, &target, json!({ "add": labels })).await?,
+        LabelCmd::Remove {
+            kind,
+            target,
+            labels,
+        } => label_item(&c, kind, &target, json!({ "remove": labels })).await?,
+    }
+    Ok(())
+}
+
+/// Change the labels of one item, on the node that has it.
+async fn label_item(c: &Client, kind: LabelKind, target: &str, body: Value) -> R<()> {
+    let (node, key, kind) = match kind {
+        LabelKind::Node => {
+            c.check_node(target)?;
+            (target.to_string(), target.to_string(), "node")
+        }
+        LabelKind::Profile => {
+            let p = c.profile(target, None)?;
+            (p.node_name.clone(), p.profile.name.clone(), "profile")
+        }
+        LabelKind::Session => {
+            let s = c.session(target, None)?;
+            (s.node_name.clone(), s.session.id.to_string(), "session")
+        }
+        LabelKind::Recording => {
+            let r = c.recording(target)?;
+            (r.node_name.clone(), r.recording.id.to_string(), "recording")
+        }
+    };
+    let path = c.api(&node, &format!("/item-labels/{kind}/{}", enc(&key)));
+    let v = c.call(c.req(Method::PUT, &path).json(&body)).await?;
+    if c.json {
+        c.print_json(&v);
+    } else {
+        let labels: Vec<&str> = v
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        println!(
+            "{kind} {key}: {}",
+            if labels.is_empty() {
+                "no labels".to_string()
+            } else {
+                labels.join(", ")
+            }
+        );
+    }
+    Ok(())
+}
+
 // ------------------------------------------------------------------ profiles
 
 pub async fn profile(args: ProfileArgs) -> R<()> {

@@ -7,10 +7,10 @@ pub(crate) struct UpdateSettingsRequest {
     /// Proxy id; "none" or "" for direct. Absent: unchanged.
     #[serde(default)]
     pub(crate) default_proxy: Option<String>,
-    /// Runtime node groups, replaced as a whole; those from the startup flags
-    /// are immutable and left out. Absent: unchanged.
-    #[serde(default)]
-    pub(crate) groups: Option<Vec<String>>,
+    /// Runtime node labels, replaced as a whole; those from the startup flags
+    /// are immutable and left out. Absent: unchanged. (`groups` is the old name.)
+    #[serde(default, alias = "groups")]
+    pub(crate) labels: Option<Vec<String>>,
     /// Engine defaults, each engine replaced as a whole. Absent: unchanged.
     #[serde(default)]
     pub(crate) engines: Option<EnginesPatch>,
@@ -81,8 +81,8 @@ pub(crate) async fn api_update_settings(
                     state.check_proxy(key)?
                 };
             }
-            if let Some(ref groups) = req.groups {
-                settings.groups = normalize_groups(groups, &state.node_groups)?;
+            if let Some(ref labels) = req.labels {
+                settings.labels = normalize_groups(labels, &state.node_groups)?;
             }
             if let Some(engines) = req.engines {
                 if let Some(chromium) = engines.chromium {

@@ -651,3 +651,67 @@ pub enum ExtensionCmd {
         params: String,
     },
 }
+
+#[derive(Args, Debug)]
+pub struct LabelArgs {
+    #[command(flatten)]
+    pub conn: Conn,
+    #[command(subcommand)]
+    pub cmd: LabelCmd,
+}
+
+/// What a label can be put on.
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum LabelKind {
+    Node,
+    Profile,
+    Session,
+    Recording,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LabelCmd {
+    /// List the labels of the mesh, with their icon and what carries them.
+    #[command(visible_alias = "ls")]
+    List,
+    /// Change a label's icon, or rename it (on every node, profile, session and recording).
+    Set {
+        name: String,
+        /// An icon from Material Design Icons: `mdi:home-assistant`.
+        #[arg(long, value_name = "mdi:NAME", conflicts_with_all = ["icon_file", "clear_icon"])]
+        icon: Option<String>,
+        /// A picture (png, svg, webp, jpeg or gif, up to 128 KB).
+        #[arg(long, value_name = "FILE", conflicts_with = "clear_icon")]
+        icon_file: Option<String>,
+        /// Remove its icon.
+        #[arg(long)]
+        clear_icon: bool,
+        /// Rename it; an existing label of that name takes its items over.
+        #[arg(long, value_name = "NEW")]
+        rename: Option<String>,
+    },
+    /// Delete a label: it comes off every node, profile, session and recording.
+    #[command(visible_alias = "rm")]
+    Delete {
+        name: String,
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Put labels on a node, profile, session or recording.
+    Add {
+        #[arg(value_enum)]
+        kind: LabelKind,
+        /// The node's name, the profile's name or id, the session's id or name, the recording's id.
+        target: String,
+        #[arg(required = true)]
+        labels: Vec<String>,
+    },
+    /// Take labels off a node, profile, session or recording.
+    Remove {
+        #[arg(value_enum)]
+        kind: LabelKind,
+        target: String,
+        #[arg(required = true)]
+        labels: Vec<String>,
+    },
+}

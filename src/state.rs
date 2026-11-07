@@ -367,7 +367,7 @@ impl AppState {
     /// flags, then those added at runtime.
     pub fn effective_groups(&self) -> Vec<String> {
         let mut groups = self.node_groups.clone();
-        for g in self.settings.get().groups {
+        for g in self.settings.get().labels {
             if !groups.contains(&g) {
                 groups.push(g);
             }

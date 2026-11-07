@@ -605,6 +605,7 @@ impl AppState {
             .remove_target(shares::ShareKind::Session, *id)
             .await;
         notes::forget_session(self, *id).await;
+        labels::forget_session(self, *id).await;
         let mut terminated = false;
         if let Some(session) = removed {
             // Out of the session before the slow part (a profile's browser gets up to
