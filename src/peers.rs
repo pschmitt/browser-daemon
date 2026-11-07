@@ -181,7 +181,7 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         ) => (false, Short),
         ("PATCH", ["settings"]) => (false, Short),
         ("POST", ["profiles"]) => (false, Long),
-        ("GET", ["profiles", _, "icon"]) => (false, Short),
+        ("GET" | "PUT" | "DELETE", ["profiles", _, "icon"]) => (false, Short),
         ("GET" | "PATCH" | "PUT", ["profiles", _]) => (false, Short),
         ("DELETE", ["profiles", _]) => (false, Long),
         ("POST", ["profiles", _, "clone" | "clear" | "import" | "transfer"]) => (false, Long),
@@ -598,6 +598,10 @@ mod tests {
         assert!(target(Method::GET, "json/list").unwrap().devtools);
         assert!(target(Method::PUT, "json/new").unwrap().devtools);
         assert!(target(Method::PUT, "json/close/ABC").unwrap().devtools);
+        // A profile's picture can be set and removed on a peer.
+        assert!(target(Method::PUT, "profiles/Work/icon").is_some());
+        assert!(target(Method::DELETE, "profiles/Work/icon").is_some());
+        assert!(target(Method::POST, "profiles/Work/icon").is_none());
         // The method matters.
         assert!(target(Method::GET, "json/new").is_none());
         assert!(target(Method::DELETE, "settings").is_none());
