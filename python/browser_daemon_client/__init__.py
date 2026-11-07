@@ -337,7 +337,7 @@ class BrowserDaemon:
             body = {**options, "persistent": False}
             if self.client and "name" not in body:
                 body["name"] = self.client
-            result = await self._json("POST", "/api/ephemeral/sessions", json=body, timeout=750)
+            result = await self._json("POST", "/api/ephemeral/sessions", json=body, timeout=1800)
             return {**result["session"], "node_url": result["node_url"]}
         placed = None
         if group is not None or (profile is not None and node is not None):

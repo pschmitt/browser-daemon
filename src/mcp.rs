@@ -1698,7 +1698,7 @@ impl State {
             let mut request = self
                 .http
                 .post(format!("{}/api/ephemeral/sessions", self.base))
-                .timeout(Duration::from_secs(750))
+                .timeout(Duration::from_secs(1800))
                 .json(&json!({"persistent": false}));
             if let Some(secret) = &self.secret {
                 request = request.header("X-Browser-Cluster-Secret", secret);

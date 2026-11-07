@@ -84,10 +84,10 @@ restart. A node that is unreachable cannot be confirmed closed, so the
 coordinator keeps retrying; the provider's maximum lifetime is the backstop.
 
 The commands run as the daemon's service user under its systemd restrictions.
-An rworker adapter must arrange its own access to rworker, install and start a
-browser daemon on the worker, and preserve the mapping from lease ID to worker
-name. The stock rworker image is a build worker and does not run a browser
-daemon by itself.
+An rworker adapter can use a dedicated browser-worker image; see the rworker
+profile configuration for its startup and controller access. Start a disposable
+node with `--ephemeral-node`: it allows one session over its lifetime and forces
+that session to be non-persistent, even if a caller requests persistence.
 
 ## Upstream proxies
 

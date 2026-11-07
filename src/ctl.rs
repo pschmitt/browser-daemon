@@ -611,7 +611,7 @@ pub async fn session(args: SessionArgs) -> R<()> {
             let response = if a.ephemeral_node {
                 c.call(
                     c.req(Method::POST, "/api/ephemeral/sessions")
-                        .timeout(Duration::from_secs(750))
+                        .timeout(Duration::from_secs(1800))
                         .json(&body),
                 )
                 .await?

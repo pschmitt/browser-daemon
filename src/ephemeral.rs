@@ -163,7 +163,8 @@ pub(crate) async fn create(
             )
         })?;
         let output = tokio::time::timeout(
-            Duration::from_secs(600),
+            // The provider may wait for a VM boot and then for its service.
+            Duration::from_secs(1500),
             tokio::process::Command::new(up)
                 .arg(&lease.id)
                 .stdin(Stdio::null())
