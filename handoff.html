@@ -495,6 +495,118 @@
   .btn-xs { padding: 6px 12px; border-radius: 999px; border: 0; background: var(--accent-btn); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
   .btn-close { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.15); color: #ef4444; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; }
   .btn-close:hover { background: #ef4444; color: #fff; border-color: #ef4444; }
+
+  /* Phone layout: one top row (session chip, address with the tab count), a toolbar at the
+     bottom and the session sheet. Elements marked .ph exist only here. The query is the same
+     as PHONE_MQ in the script, which moves the settings and profile controls into the sheet.
+     The tab strip and the menus stay on wide screens. */
+  .ph { display: none; }
+  .tabs-n { width: 28px; height: 28px; border-radius: 8px; border: 2px solid currentColor; display: grid; place-items: center; font: 800 12px/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; flex: none; }
+  @keyframes sheetUp { from { transform: translateY(28px); opacity: 0; } }
+  @media (max-width: 640px), (pointer: coarse) and (max-width: 900px) {
+    #tabStrip, #bottom, #reload, #notePill, #settingsBtn, #smSave, #sessMenu .sm-navrow { display: none; }
+    #bar { gap: 8px; padding: 4px 8px; min-height: 52px; }
+    #sessChip { display: inline-flex; align-items: center; gap: 2px; height: 44px; padding: 0 8px 0 8px; border: 0; border-radius: 22px; background: var(--btn); color: var(--fg); cursor: pointer; flex: none; }
+    #sessChip .sm-engine { width: 28px; height: 28px; }
+    #sessChip .sm-engine svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+    #sessChip .sm-engine img { width: 28px; height: 28px; border-radius: 8px; }
+    #sessChip .chev { width: 16px; height: 16px; fill: none; stroke: var(--muted); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+    #urlBar { height: 44px; margin: 0; padding: 0 2px 0 14px; border-radius: 22px; }
+    #urlInput { font-size: 16px; }
+    #urlTabs { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 44px; height: 44px; padding: 0; border: 0; background: transparent; color: var(--fg); cursor: pointer; border-radius: 22px; }
+    #urlClear { width: 36px; height: 36px; font-size: 14px; }
+    #urlGo { width: 36px; height: 36px; margin-right: 4px; }
+    #urlGo svg { width: 16px; height: 16px; }
+    #urlCancel { min-height: 44px; padding: 0 10px; font-size: 15px; }
+    #bar:not(.url-focused):not(:has(#urlBar:focus-within)) #urlGo { display: none; }
+    #bar.url-focused #sessChip, #bar:has(#urlBar:focus-within) #sessChip, #bar.url-focused #urlTabs, #bar:has(#urlBar:focus-within) #urlTabs { display: none; }
+    #bar.url-focused .ib, #bar:has(#urlBar:focus-within) .ib { display: none !important; }
+    #bar.url-focused #urlCancel, #bar:has(#urlBar:focus-within) #urlCancel { display: inline-block !important; }
+    #bar.url-focused #urlBar, #bar:has(#urlBar:focus-within) #urlBar { margin: 0 !important; flex: 1 1 100% !important; width: 100% !important; padding-left: 14px; }
+    #bar .ib { width: 44px; height: 44px; border-radius: 14px; }
+    .rec-pill.pub-pill { width: 44px; height: 44px; padding: 0; margin: 0; border-radius: 14px; justify-content: center; }
+    .pub-pill svg { width: 20px; height: 20px; }
+    .pub-pill > span { display: none; }
+    #sessPop { top: 60px; }
+    #sessPop a { min-height: 52px; }
+
+    /* the toolbar: Back, Forward, Keys, Tabs and Session (their buttons are moved in by the script) */
+    #toolbar { display: grid; grid-template-columns: repeat(5, 1fr); align-items: center; flex: none; height: calc(64px + env(safe-area-inset-bottom)); padding: 0 6px env(safe-area-inset-bottom);
+      background: var(--bar); border-top: 1px solid var(--line); }
+    html.kb-up #toolbar { height: 64px; padding-bottom: 0; }
+    #toolbar > .ib { width: 100%; height: 48px; border-radius: 14px; position: relative; }
+    #toolbar > .ib svg { width: 24px; height: 24px; }
+    #toolbar #kbbtn, #toolbar #fwd { display: inline-flex; }
+    #toolbar #sessBtn svg { transform: rotate(90deg); }
+    #toolbar #sessBtn.rec::after { top: 9px; right: auto; left: calc(50% + 6px); }
+
+    /* the helper row */
+    #keys { gap: 4px; padding: 6px 8px; }
+    #keys button { flex: 1 1 auto; min-width: 40px; height: 44px; padding: 0 6px; }
+    #keys button.primary { flex-grow: 0; min-width: 56px; }
+
+    /* the session sheet: #sessMenu becomes a bottom sheet with the settings and the profile in it */
+    #sessMenu { display: flex; flex-direction: column; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-width: none; max-height: 85vh; max-height: 85dvh;
+      padding: 0 14px calc(14px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 22px 22px 0 0; box-shadow: 0 -10px 40px rgba(0, 0, 0, .45); animation: sheetUp .22s ease-out; }
+    #sessMenu > * { flex: none; }
+    #sessMenu .sheet-grab { display: block; position: sticky; top: 0; z-index: 2; height: 28px; margin: 0 -14px; background: var(--bar); touch-action: none; cursor: grab; }
+    #sessMenu .sheet-grab::before { content: ""; position: absolute; left: 50%; top: 10px; width: 40px; height: 5px; margin-left: -20px; border-radius: 3px; background: var(--line); }
+    #sheetScrim { display: none; }
+    #sessMenu:not([hidden]) ~ #sheetScrim { display: block; position: fixed; inset: 0; z-index: 59; background: rgba(0, 0, 0, .5); animation: fade-in .15s ease-out; }
+    #sessMenu .sm-head { gap: 12px; padding: 0 0 2px; font-size: 18px; }
+    #sessMenu .sm-engine { width: 40px; height: 40px; }
+    #sessMenu .sm-engine svg { width: 30px; height: 30px; }
+    #sessMenu .sm-engine img { width: 40px; height: 40px; border-radius: 11px; }
+    #smTitle { flex: 0 1 auto; }
+    #smRename { display: inline-grid; place-items: center; flex: none; width: 44px; height: 44px; margin-left: -8px; padding: 0; border: 0; border-radius: 12px; background: transparent; color: var(--muted); cursor: pointer; }
+    #smRename:active { background: var(--btn); }
+    #smRename svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    #sessMenu .sm-status { padding: 0 0 8px; font-size: 13px; }
+    #smWatchers { display: block; padding-top: 0; }
+    #sessMenu .sm-rec { gap: 8px; margin: 2px 0 10px; padding: 6px 8px; border-radius: 14px; background: var(--btn); min-height: 56px; }
+    #sessMenu .sm-rec button { width: 44px; height: 44px; border-radius: 12px; background: var(--bar); }
+    #sessMenu .sm-rec button.sm-rec-pill { width: auto; min-width: 88px; height: 44px; padding: 0 16px; border-radius: 22px; font-size: 13px; }
+    #sessMenu .sm-rec .sm-rec-pill { height: 36px; font-size: 13px; background: transparent; }
+    #sessMenu hr { margin: 6px 0; }
+    #smRec + hr { display: none; }
+    #sessMenu .sm-item { min-height: 48px; padding: 0 12px; border-radius: 12px; font-size: 15px; }
+    #sessMenu .sm-item svg { width: 20px; height: 20px; }
+    #sessMenu .sm-item.sm-search { display: flex; }
+    #sessMenu .sm-search select { height: 40px; font-size: 15px; padding: 0 8px; border-radius: 10px; max-width: 58%; }
+    #sessMenu .quality-auto { min-height: 44px; padding: 0 4px; font-size: 13px; }
+    #sessMenu .quality-auto input { width: 20px; height: 20px; }
+    #smQualityRow input[type=range] { width: 30%; }
+    #sessMenu .sm-label { padding: 12px 2px 4px; font-size: 12px; }
+    #sessMenu .sm-sec { display: block; flex: none; }
+    #sessMenu .sm-seg { margin: 2px 0 6px; border-radius: 12px; }
+    #sessMenu .sm-seg button { height: 44px; border-radius: 9px; font-size: 14px; }
+    #sessMenu .sm-pair { display: flex; gap: 8px; }
+    #sessMenu .sm-pair .sm-item { flex: 1; justify-content: center; background: var(--btn); }
+    #sessMenu .pm-note { padding: 2px 2px 6px; }
+    #sessMenu .pm-context { padding: 4px 2px 8px; }
+    #sessMenu .pm-tabs { margin: 4px 0 2px; width: 100%; font-size: 16px; }
+    #smTiles { display: flex; gap: 8px; margin: 0 0 4px; }
+    #smTiles .sm-item { flex: 1; min-width: 0; flex-direction: column; justify-content: center; gap: 6px; height: 68px; padding: 0 4px; background: var(--btn); font-size: 12px; text-align: center; }
+    #smTiles .sm-item svg { width: 22px; height: 22px; }
+    #smTiles .sm-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #sessMenu #smDownloads { order: 1; }
+    #sessMenu #smReopen { order: 2; }
+    #sessMenu #smDevtools { order: 3; }
+    #sessMenu > hr { order: 4; }
+    #sessMenu #smStop { order: 5; }
+
+    /* the tabs list, as touch targets */
+    .tab-close { width: 44px; height: 44px; font-size: 16px; }
+    .btn-close { width: 44px; height: 44px; }
+    #newTabBtn { min-height: 44px; padding: 0 16px; font-size: 13px; }
+    .tabs-search { min-height: 44px; font-size: 16px; }
+    .tabs-modal-card { padding-bottom: env(safe-area-inset-bottom); }
+
+    /* things that float above the page keep clear of the toolbar */
+    #clipToast { bottom: calc(80px + env(safe-area-inset-bottom)); }
+    .file-ask, .dl-tray { bottom: calc(76px + env(safe-area-inset-bottom)); }
+    #sharedInputMode { bottom: calc(76px + env(safe-area-inset-bottom)) !important; }
+  }
 </style>
 </head>
 <body>
@@ -523,6 +635,7 @@
   </button>
 </div>
 <div id="bar">
+  <button type="button" id="sessChip" class="ph" aria-label="Sessions" title="Sessions and dashboard" aria-haspopup="menu" aria-expanded="false"><span class="sm-engine" id="sessChipIcon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg></span><svg class="chev" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
   <button class="ib" id="back" aria-label="Back" disabled title="Back"><svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg></button>
   <button class="ib" id="fwd" aria-label="Forward" disabled title="Forward"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
   <button class="ib" id="reload" aria-label="Reload" title="Reload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg></button>
@@ -532,23 +645,38 @@
     <button type="button" id="urlClear" title="Clear URL" aria-label="Clear">✕</button>
     <button type="submit" id="urlGo" title="Navigate" aria-label="Navigate"><svg viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
     <button type="button" id="urlCancel" title="Cancel" aria-label="Cancel">Cancel</button>
+    <button type="button" id="urlTabs" class="ph" title="Tabs" aria-label="Tabs" tabindex="-1"><span class="tabs-n"><span class="tab-count-n">1</span></span></button>
     <div id="urlSuggest" role="listbox" hidden></div>
   </form>
   <button class="rec-pill note-pill" id="notePill" hidden title="Notes on this session"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></svg><span id="notePillText"></span></button>
   <button class="rec-pill pub-pill" id="pubPill" hidden title="Shared publicly: manage the link"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><span>PUBLIC</span></button>
   <button class="ib" id="kbbtn" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg></button>
+  <span id="extSlot" hidden></span>
   <button class="ib" id="sessBtn" aria-label="Session" title="Session: recording, stop" aria-haspopup="menu"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></svg></button>
 </div>
 <div id="sessPop" role="menu" hidden></div>
-<div id="sessMenu" role="menu" hidden>
-  <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle" title="Rename this session" role="button" tabindex="0">Session</span></div>
+<div id="sessMenu" role="menu" aria-label="Session" hidden>
+  <div class="sheet-grab ph" id="sheetGrab" aria-hidden="true"></div>
+  <div class="sm-head"><span class="sm-engine" id="smEngine"></span><span id="smTitle" title="Rename this session" role="button" tabindex="0">Session</span><button type="button" class="ph" id="smRename" title="Rename this session" aria-label="Rename this session"><svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button></div>
   <div class="sm-status" id="smStatus"></div>
+  <div class="sm-status ph" id="smWatchers" hidden></div>
   <div class="sm-rec" id="smRec"></div>
   <hr>
   <div class="sm-narrow sm-navrow">
     <button class="sm-item" id="smFwd"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>Forward</button>
     <button class="sm-item" id="smReload"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v5h-5"/></svg>Reload</button>
   </div>
+  <!-- On phones the settings dialog's and the profile menu's controls move into these (see "phone layout" in the script). -->
+  <div class="sm-tiles ph" id="smTiles"></div>
+  <div class="sm-sec sm-keep ph" id="smSecScreen"><div class="sm-label">Screen</div></div>
+  <div class="sm-sec ph" id="smSecInput"><div class="sm-label">Input</div>
+    <div class="sm-pair">
+      <button class="sm-item" id="smCopy" title="Copy the selection in the page to this device's clipboard"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>Copy</button>
+      <button class="sm-item" id="smPaste" title="Type this device's clipboard into the page"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 11h6M9 15h4"/></svg>Paste</button>
+    </div>
+  </div>
+  <div class="sm-sec sm-keep ph" id="smSecBrowser"><div class="sm-label">Browser</div></div>
+  <div class="sm-sec ph" id="smSecProfile"><div class="sm-label" id="smProfLabel">Profile</div></div>
   <button class="sm-item" id="smReopen" hidden><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg><span id="smReopenText">Reopen closed tab</span></button>
   <button class="sm-item" id="settingsBtn" aria-haspopup="dialog"><svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/><path d="m19.4 15 .1.1a1.7 1.7 0 1 1-2.4 2.4l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a1.7 1.7 0 1 1-3.4 0v-.2a1.7 1.7 0 0 0-2.9-1.2l-.1.1a1.7 1.7 0 1 1-2.4-2.4l.1-.1a1.7 1.7 0 0 0-1.2-2.9H4a1.7 1.7 0 1 1 0-3.4h.2a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a1.7 1.7 0 1 1 2.4-2.4l.1.1a1.7 1.7 0 0 0 2.9-1.2V2a1.7 1.7 0 1 1 3.4 0v.2a1.7 1.7 0 0 0 2.9 1.2l.1-.1a1.7 1.7 0 1 1 2.4 2.4l-.1.1a1.7 1.7 0 0 0 1.2 2.9h.2a1.7 1.7 0 1 1 0 3.4h-.2a1.7 1.7 0 0 0-1.2 2.9z"/></svg>Settings…</button>
   <button class="sm-item" id="smDownloads" hidden><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span id="smDownloadsText">Downloads</span></button>
@@ -559,12 +687,13 @@
   <hr>
   <button class="sm-item danger" id="smStop"><svg viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span id="smStopText">Stop session</span></button>
 </div>
+<div id="sheetScrim" class="ph"></div>
 <dialog id="settingsDialog" aria-label="Handoff settings">
   <form method="dialog"><button class="settings-close" aria-label="Close settings">✕</button></form>
   <h2>Settings</h2>
   <div class="sm-label">Browser</div>
   <button class="sm-item" id="followBtn" role="menuitemcheckbox" aria-checked="false" hidden title="The tab you switch to here comes to the front in the owner's browser"></button>
-  <label class="sm-item sm-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search provider<select id="smSearch" aria-label="Search provider"></select></label>
+  <label class="sm-item sm-search" id="smSearchRow"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>Search provider<select id="smSearch" aria-label="Search provider"></select></label>
   <label class="sm-item sm-search" id="smProxyRow" hidden><svg viewBox="0 0 24 24"><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/></svg>Proxy<select id="smProxy" aria-label="Proxy"></select></label>
   <div class="sm-label">Screen</div>
   <div class="sm-seg" role="radiogroup" aria-label="Screen" id="smLayout">
@@ -627,11 +756,16 @@
   <div id="keys">
     <button data-key="Tab">Tab</button>
     <button data-key="Escape">Esc</button>
+    <button data-key="ArrowLeft" aria-label="Arrow left">←</button>
+    <button data-key="ArrowRight" aria-label="Arrow right">→</button>
     <button id="copy" title="Copy selection from remote browser">Copy</button>
     <button id="paste" title="Paste clipboard text to remote browser">Paste</button>
     <button data-key="Enter" class="primary">Enter</button>
   </div>
 </div>
+<nav id="toolbar" class="ph" role="toolbar" aria-label="Browser controls">
+  <button type="button" class="ib" id="tbTabs" aria-label="Tabs" title="Tabs"><span class="tabs-n"><span class="tab-count-n">1</span></span></button>
+</nav>
 <div id="bottom"></div>
 <input id="kb" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-hidden="true" tabindex="-1">
 <dialog id="lastTabDialog">
@@ -773,6 +907,8 @@ let pageId = params.get("page");
 // A new tab of a shared browser is being typed in the address bar (see openSharedTab).
 let sharedNewTab = false;
 const testHost = params.get("host");               // testing only: talk to another Browserless
+// Phones: a top row, a toolbar and one session sheet (the CSS has the same query).
+const phoneMQ = matchMedia("(max-width: 640px), (pointer: coarse) and (max-width: 900px)");
 const E = {
   smSearch: $("smSearch"),
   tabStrip: $("tabStrip"), profChip: $("profChip"), tabsScroll: $("tabsScroll"), tabAddBtn: $("tabAddBtn"), tabsDrawerBtn: $("tabsDrawerBtn"), tabCountBadge: $("tabCountBadge"), tabHoverMenu: $("tabHoverMenu"),
@@ -1618,6 +1754,8 @@ if (window.visualViewport) {
   const syncViewport = () => {
     const vv = visualViewport;
     document.documentElement.style.setProperty("--vvh", vv.height + "px");
+    // The phone toolbar's safe-area padding is for the home bar, which the keyboard covers.
+    document.documentElement.classList.toggle("kb-up", innerHeight - vv.height > 120);
     document.body.style.transform = vv.offsetTop > 1 ? `translateY(${vv.offsetTop}px)` : "";
   };
   visualViewport.addEventListener("resize", syncViewport);
@@ -3311,6 +3449,7 @@ async function loadTabs() {
     if (sig === tabsSig) return;
     tabsSig = sig;
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
+    for (const el of document.querySelectorAll(".tab-count-n")) el.textContent = (pages.length || 1) > 99 ? ":D" : pages.length || 1;
     renderTabStrip(pages);
     renderTabsModal(all);
   } catch { /* ignore */ }
@@ -3773,14 +3912,15 @@ async function openTabsModal() {
   E.tabsModal.classList.add("open");
   E.tabsSearch.value = "";
   renderTabsModal(tabsAll);
-  requestAnimationFrame(() => E.tabsSearch.focus({ preventScroll: true }));
+  // Not on phones: the keyboard would cover the list before it is seen.
+  if (!phoneMQ.matches) requestAnimationFrame(() => E.tabsSearch.focus({ preventScroll: true }));
   loadTabs();
 }
 
 function closeTabsModal() {
   E.tabsModal.classList.remove("open");
   closeTabContextMenu();
-  E.tabsDrawerBtn.focus({preventScroll: true});
+  (phoneMQ.matches ? $("tbTabs") : E.tabsDrawerBtn).focus({preventScroll: true});
 }
 
 // Handle local surfaces before the keyboard handlers can forward Escape to the page.
@@ -3805,6 +3945,10 @@ window.addEventListener("keydown", event => {
 
 E.tabAddBtn.onclick = () => openNewTab();
 E.tabsDrawerBtn.onclick = () => openTabsModal();
+$("tbTabs").onclick = () => openTabsModal();
+$("urlTabs").onclick = () => openTabsModal();
+// A tap on the count must not focus the address field (that would start its focus mode).
+$("urlTabs").addEventListener("mousedown", (e) => e.preventDefault());
 E.newTabBtn.onclick = () => openNewTab();
 E.tabsSearch.addEventListener("input", () => renderTabsModal(tabsAll));
 E.tabContextReload.addEventListener("click", () => {
@@ -4490,7 +4634,7 @@ function renderTabOwner() {
     chip.innerHTML = `${owner ? agentSvg(owner) : ''}<span>Tab: ${esc(label)}</span>`;
   }
   E.profChip.title = `Profile: ${sess.profile || "Throwaway"}\nSession: ${sess.name || "Session"}\nCurrent tab owner: ${tab ? (owner ? tabOwnerLabel(owner) : "Unowned") : "Checking…"}`;
-  if (!$('profMenu').hidden) renderProfileContext();
+  if (!$('profMenu').hidden || (phoneMQ.matches && !E.sessMenu.hidden)) renderProfileContext();
 }
 function showProfMenu(open = $("profMenu").hidden) {
   const menu = $("profMenu");
@@ -4502,7 +4646,13 @@ function showProfMenu(open = $("profMenu").hidden) {
   menu.style.top = (r.bottom + 6) + "px";
   menu.style.setProperty("--menu-top", menu.style.top);
   menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + "px";
+  renderProfileMenu();
+}
+// The profile's controls (the menu, or on phones the sheet's Profile section).
+function renderProfileMenu() {
+  if (sharedBrowserId || !sess) return;
   const named = !!sess?.profile;
+  $("smProfLabel").textContent = named ? `Profile · ${sess.profile}` : "Throwaway session";
   $("pmProfile").hidden = !named;
   $("pmThrowaway").hidden = named;
   $("pmEdit").hidden = true;
@@ -5303,13 +5453,14 @@ function reportViewerSize(native) {
 let sessPopTimer = 0;
 async function openSessPop() {
   const pop = $("sessPop");
-  const r = $("dashMore").getBoundingClientRect();
+  const r = (phoneMQ.matches ? $("sessChip") : $("dashMore")).getBoundingClientRect();
   pop.style.top = r.bottom + 6 + "px";
   if (pop.hidden) pop.innerHTML = '<div class="sp-empty">Loading sessions…</div>';
   pop.hidden = false;
   // Under the button, its right edge on the chevron's (the button sits at the right of the bar).
   pop.style.left = Math.max(8, Math.min(r.right - pop.offsetWidth, innerWidth - pop.offsetWidth - 8)) + "px";
   $("dashMore").setAttribute("aria-expanded", "true");
+  $("sessChip").setAttribute("aria-expanded", "true");
   try {
     const res = await fetch("/api/mesh/overview", { headers: authHeaders() });
     if (!res.ok) throw new Error(res.statusText);
@@ -5344,15 +5495,17 @@ function closeSessPop() {
   clearTimeout(sessPopTimer);
   $("sessPop").hidden = true;
   $("dashMore").setAttribute("aria-expanded", "false");
+  $("sessChip").setAttribute("aria-expanded", "false");
 }
 $("dashMore").onclick = (e) => { e.stopPropagation(); $("sessPop").hidden ? openSessPop() : closeSessPop(); };
+$("sessChip").onclick = (e) => { e.stopPropagation(); $("sessPop").hidden ? openSessPop() : closeSessPop(); };
 // Hover (mouse only): open after a short pause, close once the pointer leaves both.
 if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
   const enter = () => { clearTimeout(sessPopTimer); if ($("sessPop").hidden) sessPopTimer = setTimeout(openSessPop, 350); };
   const leave = () => { clearTimeout(sessPopTimer); sessPopTimer = setTimeout(closeSessPop, 300); };
   for (const el of [$("dash"), $("dashMore"), $("sessPop")]) { el.addEventListener("mouseenter", enter); el.addEventListener("mouseleave", leave); }
 }
-document.addEventListener("pointerdown", (e) => { if (!$("sessPop").hidden && !e.target.closest("#sessPop, #dashMore, #dash")) closeSessPop(); });
+document.addEventListener("pointerdown", (e) => { if (!$("sessPop").hidden && !e.target.closest("#sessPop, #dashMore, #dash, #sessChip")) closeSessPop(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("sessPop").hidden) closeSessPop(); });
 
 /* ---------------------------------------------------------------- extensions */
@@ -5429,7 +5582,7 @@ function addExtension(ext) {
     btn.setAttribute("aria-haspopup", "dialog");
     btn.setAttribute("aria-expanded", "false");
     btn.innerHTML = `<img alt="" src="${esc(ext.base + ext.icon)}"><span class="ext-count" hidden></span>`;
-    $("sessBtn").before(btn);
+    $("extSlot").before(btn);
     const pop = document.createElement("div");
     pop.className = "ext-pop";
     pop.setAttribute("role", "dialog");
@@ -5673,6 +5826,7 @@ function renderWatchers() {
   const clients = (sess?.clients || []).filter((c) => !c.agent).length;
   const total = views + pub + clients;
   chip.hidden = !total;
+  $("smWatchers").hidden = !total;
   if (!total) return;
   const parts = [
     views && `${views} other live view${views === 1 ? "" : "s"}`,
@@ -5682,6 +5836,7 @@ function renderWatchers() {
   chip.classList.toggle("public", pub > 0);
   chip.innerHTML = `<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span>${total}</span>`;
   chip.title = `Besides you: ${parts.join(", ")}`;
+  $("smWatchers").textContent = chip.title;
   chip.setAttribute("aria-label", chip.title);
 }
 $("watchChip").onclick = (e) => { e.stopPropagation(); toggleSessMenu(true); };
@@ -5700,6 +5855,7 @@ const sessionProfilePictures = new Map();
 function renderProfilePicture() {
   setEngineIcon($("profChipIcon"), sess?.engine);
   setEngineIcon($("pmEngine"), sess?.engine);
+  setEngineIcon($("sessChipIcon"), sess?.engine);
   const key = sess?.profile_id || sess?.profile;
   if (!key) return;
   if (!sessionProfilePictures.has(key)) {
@@ -5714,7 +5870,7 @@ function renderProfilePicture() {
   }
   const url = sessionProfilePictures.get(key);
   if (!url) return;
-  for (const id of ['smEngine', 'profChipIcon', 'pmEngine']) {
+  for (const id of ['smEngine', 'profChipIcon', 'pmEngine', 'sessChipIcon']) {
     const element = $(id);
     const image = document.createElement('img');
     image.src = url; image.alt = ''; image.title = `Profile ${sess.profile}`;
@@ -5733,6 +5889,7 @@ function renderSession() {
   E.sessBtn.classList.toggle("paused", !!paused);
   E.sessBtn.title = rec ? (paused ? "Session: recording paused" : "Session: recording") : "Session: recording, stop";
   setEngineIcon($("smEngine"), sess.engine);
+  $("smRename").hidden = false; $("smSecProfile").hidden = false;
   $("smDevtools").hidden = (sess.engine || "chromium") !== "chromium";
   $("smTitle").textContent = sess.name || (sess.profile ? `Profile ${sess.profile}` : "Session");
   // The profile (or "Throwaway") in the tab bar; the latter offers to keep the data.
@@ -5785,6 +5942,8 @@ function renderSession() {
       + (sess.audio ? btn("record-audio", sess.recording_audio ? "sound" : "mute", "", sess.recording_audio ? "Recording the sound: tap to mute the recording" : "The recording is silent: tap to record the sound") : ""));
   const box = $("smRec");
   if (box._html !== html) { box.innerHTML = html; box._html = html; }
+  // The sheet's Profile section follows the session, except while its tab editor is open.
+  if (phoneMQ.matches && !E.sessMenu.hidden && $("pmEdit").hidden) renderProfileMenu();
 }
 
 // Capabilities come from the active tab's local grant, never from dashboard controls.
@@ -5795,6 +5954,8 @@ function renderSharedSession() {
   E.sessBtn.hidden = false; E.profChip.hidden = false; $("profChipOwner").hidden = true;
   E.sessBtn.title = 'Real browser';
   setEngineIcon($('profChipIcon'), sharedBrowser.browser);
+  setEngineIcon($('sessChipIcon'), sharedBrowser.browser);
+  $('smRename').hidden = true; $('smSecProfile').hidden = true;
   renderFollow();
   $('profChipText').textContent = sharedBrowser.name + (control ? '' : ' · View only') + (companionMissing ? ' · ⚠' : '');
   E.profChip.title = `${sharedBrowser.name} · ${control ? 'Control allowed' : 'View only'} · Tabs shared by their owner${companionMissing ? ' · Firefox companion unavailable; some clicks and keyboard input may not work' : ''}`;
@@ -5830,7 +5991,7 @@ function renderSharedSession() {
   const recHtml = pill + '<span class="sm-rec-gap"></span>' + (!rec ? ""
     : (paused ? btn("resume-record", "play", "", "Resume recording") : btn("pause-record", "pause", "", "Pause recording")) + btn("stop-record", "stop", "rec", "Stop recording"));
   if ($('smRec')._html !== recHtml) { $('smRec').innerHTML = recHtml; $('smRec')._html = recHtml; }
-  for (const id of ['back', 'fwd', 'reload', 'smFwd', 'smReload', 'kbbtn', 'smKeyboard', 'urlGo', 'smCapture']) { const el = $(id); if (el) el.disabled = !control; }
+  for (const id of ['back', 'fwd', 'reload', 'smFwd', 'smReload', 'kbbtn', 'smKeyboard', 'urlGo', 'smCapture', 'smCopy', 'smPaste']) { const el = $(id); if (el) el.disabled = !control; }
   // No live tab yet: the address bar opens the first one, where that is allowed.
   const typing = control || ((!tab || sharedNewTab) && sharedBrowser.can_open);
   E.urlInput.readOnly = !typing;
@@ -5854,10 +6015,12 @@ for (const el of E.sessMenu.querySelectorAll("button.sm-item:not([role]), a.sm-i
 for (const el of document.querySelectorAll("#smLayout button")) el.setAttribute("role", "radio");
 E.sessMenu.addEventListener("click", (e) => {
   const item = e.target.closest("button.sm-item, a.sm-item, #smLayout button, #smRec button");
-  if (!item || item.disabled || item.id === "smStop" || item.dataset.rec === "sound" || item.dataset.rec === "record-audio" || item.id === "smTitle") return;
+  // The sheet's settings and the profile's tab editor stay open: a choice there is not an exit.
+  if (!item || item.disabled || item.id === "smStop" || item.dataset.rec === "sound" || item.dataset.rec === "record-audio" || item.id === "smTitle"
+    || item.closest(".sm-keep") || item.matches("#pmEditTabs, #pmEditCancel")) return;
   setTimeout(() => toggleSessMenu(false), 0);
 });
-E.sessMenu.addEventListener("change", e => { if (!e.target.closest("#smQualityRow")) setTimeout(() => toggleSessMenu(false), 0); });
+E.sessMenu.addEventListener("change", e => { if (!e.target.closest("#smQualityRow, .sm-keep, #pmEdit")) setTimeout(() => toggleSessMenu(false), 0); });
 addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || E.sessMenu.hidden) return;
   e.preventDefault();
@@ -5871,13 +6034,42 @@ function toggleSessMenu(open = E.sessMenu.hidden) {
   disarmStop();
   if (open) {
     $("profMenu").hidden = true;
-    const r = E.sessBtn.getBoundingClientRect();
-    E.sessMenu.style.top = (r.bottom + 6) + "px";
-    E.sessMenu.style.setProperty("--menu-top", E.sessMenu.style.top);
+    if (phoneMQ.matches) {
+      // A bottom sheet: no anchor, and the profile's controls are part of it.
+      E.sessMenu.style.top = "";
+      E.sessMenu.scrollTop = 0;
+      renderProfileMenu();
+    } else {
+      const r = E.sessBtn.getBoundingClientRect();
+      E.sessMenu.style.top = (r.bottom + 6) + "px";
+      E.sessMenu.style.setProperty("--menu-top", E.sessMenu.style.top);
+    }
     $("smFwd").disabled = E.fwd.disabled;
     refreshSession();
   }
+  sheetHistory(open);
 }
+// The phone's Back button closes the sheet (a history entry is pushed while it is open).
+let sheetHist = false;
+function sheetHistory(open) {
+  if (open && phoneMQ.matches && !sheetHist) { history.pushState({ bdSheet: 1 }, ""); sheetHist = true; }
+  else if (!open && sheetHist) { sheetHist = false; if (history.state?.bdSheet) history.back(); }
+}
+addEventListener("popstate", () => { if (sheetHist) { sheetHist = false; toggleSessMenu(false); } });
+$("sheetScrim").onclick = () => toggleSessMenu(false);
+// Swipe the handle down to close.
+{
+  const grab = $("sheetGrab");
+  let y0 = null;
+  const reset = () => { y0 = null; E.sessMenu.style.transform = ""; };
+  grab.addEventListener("pointerdown", (e) => { y0 = e.clientY; grab.setPointerCapture(e.pointerId); });
+  grab.addEventListener("pointermove", (e) => { if (y0 !== null) E.sessMenu.style.transform = `translateY(${Math.max(0, e.clientY - y0)}px)`; });
+  grab.addEventListener("pointerup", (e) => { const dy = y0 === null ? 0 : e.clientY - y0; reset(); if (dy > 70) toggleSessMenu(false); });
+  grab.addEventListener("pointercancel", reset);
+}
+$("smRename").onclick = () => $("smTitle").click();
+$("smCopy").onclick = async () => { const text = await copyRemoteSelection(); toast(text ? "Copied" : "No selection", 1500); };
+$("smPaste").onclick = () => pasteToRemote();
 function disarmStop() {
   clearTimeout(stopArmed); stopArmed = 0;
   $("smStop").classList.remove("armed");
@@ -5891,7 +6083,7 @@ $("settingsBtn").onclick = (e) => {
   $("settingsDialog").showModal();
 };
 document.addEventListener("pointerdown", (e) => {
-  if (!E.sessMenu.hidden && !e.target.closest("#sessMenu, #sessBtn")) toggleSessMenu(false);
+  if (!E.sessMenu.hidden && !e.target.closest("#sessMenu, #sessBtn, #sheetScrim")) toggleSessMenu(false);
 });
 $("smFwd").onclick = () => { toggleSessMenu(false); E.fwd.click(); };
 $("smReload").onclick = () => { toggleSessMenu(false); E.reload.click(); };
@@ -5950,6 +6142,39 @@ function startSessionPolling() {
   refreshSession();
   sessTimer = setInterval(() => { if (document.visibilityState === "visible") refreshSession(); }, 5000);
 }
+
+/* ---------------------------------------------------------------- phone layout */
+// On phones the browser's own buttons live in the bottom toolbar and the settings dialog's and the
+// profile menu's controls in the session sheet. The nodes themselves move (a marker keeps their
+// place), so every handler, state and condition they have keeps working; wide screens get them back.
+const PHONE_HOMES = [
+  // [id, phone container, the sibling it goes before (none: the end)]
+  ["back", "toolbar", "tbTabs"], ["fwd", "toolbar", "tbTabs"], ["kbbtn", "toolbar", "tbTabs"], ["sessBtn", "toolbar"],
+  ["smShare", "smTiles"], ["smNotes", "smTiles"], ["smReload", "smTiles"],
+  ["smLayout", "smSecScreen"], ["forceBtn", "smSecScreen"], ["smStreamRow", "smSecScreen"], ["smQualityRow", "smSecScreen"],
+  ["touchesBtn", "smSecScreen"], ["audioBtn", "smSecScreen"],
+  ["smCapture", "smSecInput"],
+  ["followBtn", "smSecBrowser"], ["smSearchRow", "smSecBrowser"], ["smProxyRow", "smSecBrowser"],
+  ["pmNote", "smSecProfile"], ["pmContext", "smSecProfile"], ["pmProfile", "smSecProfile"], ["pmEdit", "smSecProfile"], ["pmThrowaway", "smSecProfile"],
+];
+const phoneMarks = new Map();
+function placePhoneLayout() {
+  const phone = phoneMQ.matches;
+  if (phone && !phoneMarks.size) {
+    for (const [id, box, before] of PHONE_HOMES) {
+      const el = $(id), mark = document.createComment(id);
+      el.before(mark);
+      phoneMarks.set(el, mark);
+      $(box).insertBefore(el, before ? $(before) : null);
+    }
+  } else if (!phone && phoneMarks.size) {
+    for (const [el, mark] of phoneMarks) mark.replaceWith(el);
+    phoneMarks.clear();
+  }
+  if (!phone && !E.sessMenu.hidden) toggleSessMenu(false);
+}
+placePhoneLayout();
+phoneMQ.addEventListener("change", placePhoneLayout);
 
 // ?session=<id> (dashboard launch): open that session's first tab.
 async function boot() {
