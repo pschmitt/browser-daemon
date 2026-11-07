@@ -1648,6 +1648,7 @@ impl State {
                     "node": p.node_name,
                     "in_use": p.profile.is_active,
                     "opens": p.profile.tabs,
+                    "labels": p.profile.labels,
                 })
             })
             .collect();

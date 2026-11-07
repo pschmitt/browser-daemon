@@ -995,14 +995,19 @@ fn done(c: &Client, v: Value, what: &str) {
 pub async fn profile(args: ProfileArgs) -> R<()> {
     let c = Client::connect(&args.conn).await?;
     match args.cmd {
-        ProfileCmd::List { node } => {
+        ProfileCmd::List { node, labels } => {
             if let Some(ref n) = node {
                 c.check_node(n)?;
             }
+            let wanted = match crate::profiles::normalize_labels(&labels) {
+                Ok(v) => v,
+                Err(e) => return fail(EXIT_USAGE, &e),
+            };
             let profiles: Vec<&MeshProfile> =
                 c.ov.profiles
                     .iter()
                     .filter(|p| node.as_deref().is_none_or(|n| p.node_name == n))
+                    .filter(|p| wanted.iter().all(|l| p.profile.labels.contains(l)))
                     .collect();
             if c.json {
                 c.print_json(&serde_json::to_value(&profiles)?);
@@ -1020,6 +1025,11 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
                         yes_no(x.is_active),
                         x.proxy.clone().unwrap_or_else(|| "-".into()),
                         format!("{:?}", x.color_scheme).to_lowercase(),
+                        if x.labels.is_empty() {
+                            "-".to_string()
+                        } else {
+                            x.labels.join(",")
+                        },
                         if x.tabs.is_empty() {
                             "-".to_string()
                         } else {
@@ -1030,7 +1040,7 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
                 .collect();
             table(
                 &[
-                    "NAME", "NODE", "ENGINE", "SIZE", "ACTIVE", "PROXY", "SCHEME", "TABS",
+                    "NAME", "NODE", "ENGINE", "SIZE", "ACTIVE", "PROXY", "SCHEME", "LABELS", "TABS",
                 ],
                 &rows,
             );
@@ -1062,6 +1072,7 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             tabs,
             record,
             record_audio,
+            labels,
         } => {
             let node = c.node_or_local(node.as_deref())?;
             let mut body = json!({ "name": name });
@@ -1086,6 +1097,9 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             if let Some(v) = record_audio {
                 body["record_audio"] = v.json()
             }
+            if !labels.is_empty() {
+                body["labels"] = json!(labels)
+            }
             let v = c
                 .call(c.req(Method::POST, &c.api(&node, "/profiles")).json(&body))
                 .await?;
@@ -1103,6 +1117,10 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             record_audio,
             icon,
             clear_icon,
+            labels,
+            add_labels,
+            remove_labels,
+            clear_labels,
         } => {
             let p = c.profile(&profile, node.as_deref())?;
             let icon_given = icon.is_some() || clear_icon;
@@ -1161,6 +1179,17 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             }
             if let Some(v) = record_audio {
                 body["record_audio"] = v.json()
+            }
+            if clear_labels {
+                body["labels"] = json!([])
+            } else if !labels.is_empty() {
+                body["labels"] = json!(labels)
+            }
+            if !add_labels.is_empty() {
+                body["add_labels"] = json!(add_labels)
+            }
+            if !remove_labels.is_empty() {
+                body["remove_labels"] = json!(remove_labels)
             }
             if icon_given && body.as_object().is_some_and(|o| o.is_empty()) {
                 return Ok(());

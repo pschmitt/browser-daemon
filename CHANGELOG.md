@@ -4,6 +4,13 @@
 
 ### Added
 
+* Profile labels: short tags (`ha`, `work`) that group profiles. Set them with
+  `browser-daemon profile new|set --label` (`set` also takes `--add-label`,
+  `--remove-label` and `--clear-labels`), filter with `profile ls --label`,
+  or use the dashboard's **Labels…** menu entry; the API takes `labels`
+  on `POST /api/profiles` and `PATCH /api/profiles/{name}` (plus `add_labels`
+  and `remove_labels`). Labels show in the profile list, the overview and
+  `browser_status`.
 * The dashboard shows each node's groups as chips on the Nodes tab and next to
   the node names in the profile transfer dialog. Groups can be added and removed
   at runtime in a node's settings (`PATCH /api/settings` with `groups`); the
@@ -19,7 +26,8 @@
   only a profile that a down node had still fails, and a restarting node cannot
   lead to a new, empty copy. Other profiles can be found and created as usual.
 * `/api/peers/{node}/...` also forwards arming passkeys and the login of a
-  session, so that sign-ins work for a browser on another node.
+  session, so that sign-ins work for a browser on another node, and setting or
+  removing a profile's picture.
 * Home Assistant integration: `async_get_client()` and `async_get_coordinator()`
   return nothing for an unavailable `entry_id` instead of another entry's.
 

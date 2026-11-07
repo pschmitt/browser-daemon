@@ -104,6 +104,7 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .group-edit .group-add .input { flex: 1; min-width: 0; max-width: 240px; }
 .chip .chip-x { display: inline-flex; border: 0; background: none; color: inherit; padding: 0; margin-right: -4px; cursor: pointer; opacity: .7; }
 .chip .chip-x:hover, .chip .chip-x:focus-visible { opacity: 1; }
+.chip.label { background: color-mix(in oklab, var(--fg, currentColor) 9%, transparent); color: var(--muted, inherit); }
 .chip.node { background: color-mix(in oklab, var(--node) 16%, transparent); color: var(--node); }
 .chip.node::before, .dot { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .chip.ok { background: var(--ok-soft); color: var(--ok); }
@@ -1113,6 +1114,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
   <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.6"/></symbol>
   <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></symbol>
   <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
@@ -1739,6 +1741,7 @@ const nodeColor = (name) => `hsl(${hueOf(name)} 68% var(--node-l))`;
 // Proxies are per node: ids only mean something on the node that defines them.
 const nodeProxies = (node) => nodes.find((n) => n.name === node)?.proxies || [];
 const proxyName = (node, id) => nodeProxies(node).find((x) => x.id === id)?.name || id;
+const labelChips = (p) => (p.labels || []).map((l) => `<span class="chip label" title="Label">${esc(l)}</span>`).join('');
 const proxyChip = (node, id) => (id ? `<span class="chip proxy" title="Traffic goes through ${esc(proxyName(node, id))}">${icon('route')}${esc(proxyName(node, id))}</span>` : '');
 const nodeChip = (name) => `<span class="chip node" style="--node:${nodeColor(name)}">${esc(nodeLabel(name) || 'local')}</span>`;
 
@@ -2700,7 +2703,7 @@ function profileRow(p) {
   return `
   <div class="row" role="row" data-key="${key}">
     <div role="cell" class="main">${profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`}
-      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${labelChips(p)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
     <div role="cell" class="num c-size">${formatBytes(p.size_bytes)}</div>
     <div role="cell" class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
@@ -3001,6 +3004,7 @@ const ACT = {
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
       { icon: 'note', label: 'Notes…', meta: p.notes ? String(p.notes.count) : '', run: () => openNotes('profile', p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
+      { icon: 'tag', label: 'Labels…', meta: p.labels?.length ? p.labels.join(', ') : '', run: () => setProfileLabels(p) },
       { icon: 'image', label: 'Set picture…', run: () => pickProfileIcon(p) },
       p.icon_rev && { icon: 'trash', label: 'Remove picture', run: () => act('Removing the picture', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}/icon`)), 'Picture removed') },
       nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', run: () => openMenu(el, [
@@ -4136,6 +4140,12 @@ async function renameProfile(p) {
   const name = await ask({ title: `Rename ${p.display}`, input: p.display, ok: 'Rename' });
   if (!name || name === p.display) return;
   act('Renaming profile', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { name: profileTargetName(p, name) }), `Renamed to ${name}`);
+}
+async function setProfileLabels(p) {
+  const text = await ask({ title: `Labels of ${p.display}`, text: 'Short tags that group profiles, separated by spaces or commas: letters, digits and - _ . : /', input: (p.labels || []).join(' '), ok: 'Save', placeholder: 'ha work' });
+  if (text === null || text === undefined) return;
+  const labels = text.split(/[\s,]+/).filter(Boolean);
+  act('Setting the labels', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { labels }), labels.length ? `${p.display} is labelled ${labels.join(', ')}` : `${p.display} has no labels`);
 }
 function setSessionProxy(s, id) {
   const label = id === 'none' ? 'direct connections' : proxyName(s.node_name, id);

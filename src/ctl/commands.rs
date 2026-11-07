@@ -274,6 +274,9 @@ pub enum ProfileCmd {
     List {
         #[arg(long)]
         node: Option<String>,
+        /// Only profiles with this label (repeat to require several).
+        #[arg(long = "label")]
+        labels: Vec<String>,
     },
     /// Show one profile.
     Show {
@@ -312,6 +315,9 @@ pub enum ProfileCmd {
         /// Its recordings take the sound (default: the node's setting).
         #[arg(long, value_enum)]
         record_audio: Option<Toggle>,
+        /// A label for the profile (repeat for several).
+        #[arg(long = "label")]
+        labels: Vec<String>,
     },
     /// Change a profile's name or defaults.
     Set {
@@ -343,6 +349,18 @@ pub enum ProfileCmd {
         /// Remove its picture.
         #[arg(long, conflicts_with = "icon")]
         clear_icon: bool,
+        /// Its labels (repeat for several; replaces them).
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        /// Add a label to the ones it has (repeat for several).
+        #[arg(long = "add-label")]
+        add_labels: Vec<String>,
+        /// Take a label off (repeat for several).
+        #[arg(long = "remove-label")]
+        remove_labels: Vec<String>,
+        /// Remove all its labels.
+        #[arg(long, conflicts_with = "labels")]
+        clear_labels: bool,
     },
     /// Copy a profile under a new name (same node).
     Clone {

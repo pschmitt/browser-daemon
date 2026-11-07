@@ -37,6 +37,9 @@ pub struct ProfileInfo {
     /// Changes whenever the profile's picture does; absent without one (`/profiles/{name}/icon`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_rev: Option<u64>,
+    /// Tags that group profiles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -66,6 +69,9 @@ pub struct CreateProfileRequest {
     /// Its recordings take the sound (the node's default when absent or null).
     #[serde(default)]
     pub record_audio: Option<bool>,
+    /// Tags that group profiles: a list, or words separated by spaces or commas.
+    #[serde(default, deserialize_with = "tabs_field")]
+    pub labels: Option<Vec<String>>,
 }
 
 /// Default tabs as a JSON list, or as one string of addresses separated by
@@ -105,6 +111,15 @@ pub struct UpdateProfileRequest {
     /// Recordings take the sound (true/false), or null for the node's default.
     #[serde(default, deserialize_with = "nullable")]
     pub record_audio: Option<Option<bool>>,
+    /// Replace the labels (empty clears them): a list, or words separated by spaces or commas.
+    #[serde(default, deserialize_with = "tabs_field")]
+    pub labels: Option<Vec<String>>,
+    /// Labels to add to the ones it has (after `labels`, if both are given).
+    #[serde(default, deserialize_with = "tabs_field")]
+    pub add_labels: Option<Vec<String>>,
+    /// Labels to take off (after the others).
+    #[serde(default, deserialize_with = "tabs_field")]
+    pub remove_labels: Option<Vec<String>>,
 }
 
 /// A field that may be set to null (Some(None)) as well as left out (None).
@@ -330,6 +345,7 @@ pub(crate) async fn profile_info(state: &AppState, profile: &Profile) -> Profile
         record: profile.meta.record,
         record_audio: profile.meta.record_audio,
         icon_rev: profile.meta.icon.as_ref().map(|i| i.rev),
+        labels: profile.meta.labels.clone(),
     }
 }
 
@@ -434,7 +450,14 @@ pub(crate) async fn api_create_profile(
     };
 
     let tabs = req.tabs.as_deref().map(tab_urls).transpose()?;
+    let labels = req
+        .labels
+        .as_deref()
+        .map(profiles::normalize_labels)
+        .transpose()
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?;
     if proxy.is_some()
+        || labels.is_some()
         || req.color_scheme.is_some()
         || tabs.is_some()
         || req.record.is_some()
@@ -454,6 +477,9 @@ pub(crate) async fn api_create_profile(
         }
         if let Some(tabs) = tabs {
             profile.meta.tabs = tabs;
+        }
+        if let Some(labels) = labels {
+            profile.meta.labels = labels;
         }
         profiles::write_meta(&profile.dir, &profile.meta)
             .await
@@ -582,6 +608,28 @@ pub(crate) async fn api_update_profile(
                 .await
                 .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             info!(profile = %profile.meta.name, tabs = ?profile.meta.tabs, "Profile default tabs changed");
+        }
+    }
+    if req.labels.is_some() || req.add_labels.is_some() || req.remove_labels.is_some() {
+        let bad = |e: String| api_error(StatusCode::BAD_REQUEST, e);
+        let mut labels = match req.labels.as_deref() {
+            Some(replacement) => profiles::normalize_labels(replacement).map_err(bad)?,
+            None => profile.meta.labels.clone(),
+        };
+        labels.extend(
+            profiles::normalize_labels(req.add_labels.as_deref().unwrap_or_default())
+                .map_err(bad)?,
+        );
+        let removed = profiles::normalize_labels(req.remove_labels.as_deref().unwrap_or_default())
+            .map_err(bad)?;
+        labels.retain(|l| !removed.contains(l));
+        let labels = profiles::normalize_labels(&labels).map_err(bad)?;
+        if labels != profile.meta.labels {
+            profile.meta.labels = labels;
+            profiles::write_meta(&profile.dir, &profile.meta)
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            info!(profile = %profile.meta.name, labels = ?profile.meta.labels, "Profile labels changed");
         }
     }
     let (record, record_audio) = (
@@ -956,6 +1004,18 @@ pub(crate) async fn ensure_profile_idle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn labels_come_as_a_list_or_as_words() {
+        let req: UpdateProfileRequest =
+            serde_json::from_str(r#"{"labels": "ha, Work", "add_labels": ["x"]}"#).unwrap();
+        assert_eq!(
+            req.labels.as_deref(),
+            Some(&["ha".into(), "Work".into()][..])
+        );
+        assert_eq!(req.add_labels.as_deref(), Some(&["x".into()][..]));
+        assert!(req.remove_labels.is_none());
+    }
 
     #[test]
     fn default_tabs_come_as_a_list_or_as_words() {

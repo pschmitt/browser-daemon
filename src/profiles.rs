@@ -50,6 +50,9 @@ pub struct ProfileMeta {
     /// The picture shown for the profile on the dashboard and in the TUI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<ProfileIcon>,
+    /// Short tags that group profiles ("ha", "work"): lowercase, sorted, no repeats.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     /// The single start page of earlier versions: folded into `tabs` when read.
     #[serde(default, rename = "homepage", skip_serializing)]
     legacy_homepage: Option<String>,
@@ -188,6 +191,7 @@ pub async fn create(
         record: None,
         record_audio: None,
         icon: None,
+        labels: Vec::new(),
         legacy_homepage: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
@@ -210,6 +214,7 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
     let proxy = old.as_ref().and_then(|m| m.proxy.clone());
     let tabs = old.as_ref().map(|m| m.tabs.clone()).unwrap_or_default();
     let icon = old.as_ref().and_then(|m| m.icon.clone());
+    let labels = old.as_ref().map(|m| m.labels.clone()).unwrap_or_default();
     let color_scheme = old.and_then(|m| m.color_scheme);
     let id = dir
         .file_name()
@@ -226,6 +231,7 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         record,
         record_audio,
         icon,
+        labels,
         legacy_homepage: None,
     };
     write_meta(&dir, &meta).await?;
@@ -325,6 +331,7 @@ pub async fn migrate(profiles_dir: &Path) {
             record: None,
             record_audio: None,
             icon: None,
+            labels: Vec::new(),
             legacy_homepage: None,
         };
         let new = profiles_dir.join(id.to_string());
@@ -476,5 +483,62 @@ mod tests {
         assert!(!root.path().join(".restore-2").exists());
         assert!(!root.path().join(".old-3").exists());
         assert_eq!(list(root.path()).await.len(), 2);
+    }
+}
+
+/// Most labels a profile can carry, and the longest one.
+pub const MAX_LABELS: usize = 16;
+pub const MAX_LABEL_LEN: usize = 32;
+
+/// One label as stored: trimmed and lowercase, made of letters, digits and `-_.:/`.
+pub fn normalize_label(input: &str) -> Result<String, String> {
+    let label = input.trim().to_lowercase();
+    if label.is_empty() || label.chars().count() > MAX_LABEL_LEN {
+        return Err(format!(
+            "A label is 1 to {MAX_LABEL_LEN} characters: letters, digits and - _ . : /"
+        ));
+    }
+    if !label
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-_.:/".contains(c))
+    {
+        return Err(format!(
+            "The label '{label}' may only hold letters, digits and - _ . : /"
+        ));
+    }
+    Ok(label)
+}
+
+/// A list of labels as stored: each normalized (empty entries dropped), sorted, without repeats.
+pub fn normalize_labels(input: &[String]) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for entry in input.iter().filter(|l| !l.trim().is_empty()) {
+        out.push(normalize_label(entry)?);
+    }
+    out.sort();
+    out.dedup();
+    if out.len() > MAX_LABELS {
+        return Err(format!("A profile takes at most {MAX_LABELS} labels"));
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+
+    #[test]
+    fn labels_are_lowercase_sorted_and_unique() {
+        let got =
+            normalize_labels(&[" HA ".into(), "work".into(), "ha".into(), "".into()]).unwrap();
+        assert_eq!(got, ["ha", "work"]);
+    }
+
+    #[test]
+    fn bad_labels_are_refused() {
+        assert!(normalize_labels(&["two words".into()]).is_err());
+        assert!(normalize_labels(&["x".repeat(MAX_LABEL_LEN + 1)]).is_err());
+        let many: Vec<String> = (0..=MAX_LABELS).map(|i| format!("l{i}")).collect();
+        assert!(normalize_labels(&many).is_err());
     }
 }
