@@ -193,6 +193,18 @@ in
       description = "Groups this node belongs to in the browser mesh.";
     };
 
+    ephemeralUp = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Executable that provisions an ephemeral node and prints its JSON descriptor.";
+    };
+
+    ephemeralDown = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Executable called with an ephemeral node id to decommission it.";
+    };
+
     publicUrl = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -589,6 +601,10 @@ in
     (lib.mkIf cfg.enable {
       assertions = [
         {
+          assertion = (cfg.ephemeralUp == null) == (cfg.ephemeralDown == null);
+          message = "services.browser-daemon: ephemeralUp and ephemeralDown must be set together.";
+        }
+        {
           assertion = cfg.clusterSecret == null || cfg.clusterSecretFile == null;
           message = "services.browser-daemon: set only one of clusterSecret and clusterSecretFile.";
         }
@@ -792,6 +808,12 @@ in
                 "--node-group"
                 group
               ]) cfg.nodeGroups
+              ++ lib.optionals (cfg.ephemeralUp != null && cfg.ephemeralDown != null) [
+                "--ephemeral-up"
+                cfg.ephemeralUp
+                "--ephemeral-down"
+                cfg.ephemeralDown
+              ]
               ++ lib.optionals cfg.adblock.enable [
                 "--chromium-adblock"
                 "${cfg.adblock.chromiumExtension}"

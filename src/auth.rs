@@ -337,6 +337,12 @@ pub fn is_share(path: &str) -> bool {
 /// Routes that move the vault's secrets or hand the cluster secret to a third
 /// party: a viewer's token (which a page in a session can obtain) is not enough.
 pub fn secret_only(method: &Method, path: &str) -> bool {
+    if method == Method::POST
+        && (path == "/api/ephemeral/sessions"
+            || (path.starts_with("/api/sessions/") && path.ends_with("/expire-unattached")))
+    {
+        return true;
+    }
     if method == Method::POST && path == "/api/extension/pair" {
         return true;
     }
@@ -844,6 +850,8 @@ mod tests {
                 "/api/secret-agent/00000000-0000-0000-0000-000000000000",
             ),
             (Method::POST, "/api/pages/abc/autofill"),
+            (Method::POST, "/api/ephemeral/sessions"),
+            (Method::POST, "/api/sessions/example/expire-unattached"),
             (Method::POST, "/api/peers"),
             (Method::DELETE, "/api/peers/rofl-13"),
         ] {

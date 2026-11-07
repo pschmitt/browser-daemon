@@ -327,9 +327,18 @@ class BrowserDaemon:
         profile: str | None = None,
         node: str | None = None,
         group: str | None = None,
+        ephemeral_node: bool = False,
         **options: Any,
     ) -> dict[str, Any]:
         """Start a session (or attach to the profile's); options as `POST /api/sessions`."""
+        if ephemeral_node:
+            if profile is not None or node is not None or group is not None:
+                raise ValueError("ephemeral_node cannot be combined with profile, node or group")
+            body = {**options, "persistent": False}
+            if self.client and "name" not in body:
+                body["name"] = self.client
+            result = await self._json("POST", "/api/ephemeral/sessions", json=body, timeout=750)
+            return {**result["session"], "node_url": result["node_url"]}
         placed = None
         if group is not None or (profile is not None and node is not None):
             placed = await self.place_browser(

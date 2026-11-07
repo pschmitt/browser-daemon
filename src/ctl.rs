@@ -608,15 +608,33 @@ pub async fn session(args: SessionArgs) -> R<()> {
             if let Some(v) = a.screen {
                 set("screen", json!(format!("{v:?}").to_lowercase()))
             }
-            let created = c
-                .call(c.req(Method::POST, &c.api(&node, "/sessions")).json(&body))
-                .await?;
+            let response = if a.ephemeral_node {
+                c.call(
+                    c.req(Method::POST, "/api/ephemeral/sessions")
+                        .timeout(Duration::from_secs(750))
+                        .json(&body),
+                )
+                .await?
+            } else {
+                c.call(c.req(Method::POST, &c.api(&node, "/sessions")).json(&body))
+                    .await?
+            };
+            let created = if a.ephemeral_node {
+                &response["session"]
+            } else {
+                &response
+            };
             if c.json {
-                c.print_json(&created);
+                c.print_json(&response);
             } else {
                 let id = created["id"].as_str().unwrap_or("?");
                 let engine = created["engine"].as_str().unwrap_or("chromium");
-                let base = if node == c.ov.local_node.name {
+                let base = if a.ephemeral_node {
+                    response["node_url"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string()
+                } else if node == c.ov.local_node.name {
                     c.ov.local_node.url.clone()
                 } else {
                     c.ov.peers

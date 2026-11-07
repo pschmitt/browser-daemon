@@ -60,16 +60,21 @@ pub(crate) struct ClientSlot {
 }
 
 impl ClientSlot {
-    pub(crate) fn new(state: &AppState, session: &ManagedSession, counted: bool) -> Self {
+    pub(crate) fn new(state: &AppState, session: &ManagedSession, counted: bool) -> Option<Self> {
         if counted {
+            let mut lifecycle = session.client_lifecycle.lock().unwrap();
+            if lifecycle.closing {
+                return None;
+            }
+            lifecycle.generation = lifecycle.generation.wrapping_add(1);
             session.client_count.fetch_add(1, Ordering::SeqCst);
         }
-        Self {
+        Some(Self {
             state: state.clone(),
             session: session.clone(),
             counted,
             client: None,
-        }
+        })
     }
 }
 
@@ -81,13 +86,30 @@ impl Drop for ClientSlot {
         if !self.counted {
             return;
         }
+        let mut lifecycle = self.session.client_lifecycle.lock().unwrap();
         let remaining = self.session.client_count.fetch_sub(1, Ordering::SeqCst) - 1;
+        lifecycle.generation = lifecycle.generation.wrapping_add(1);
+        let generation = lifecycle.generation;
         if !self.session.persistent && remaining == 0 {
             let state = self.state.clone();
-            let id = self.session.id;
+            let session = self.session.clone();
             tokio::spawn(async move {
-                info!(session_id = %id, "Auto-terminating non-persistent session");
-                state.terminate_session(&id).await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let close = {
+                    let mut lifecycle = session.client_lifecycle.lock().unwrap();
+                    if lifecycle.generation == generation
+                        && session.client_count.load(Ordering::SeqCst) == 0
+                    {
+                        lifecycle.closing = true;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if close {
+                    info!(session_id = %session.id, "Auto-terminating non-persistent session");
+                    state.terminate_session(&session.id).await;
+                }
             });
         }
     }
@@ -144,7 +166,9 @@ pub(crate) async fn handle_chromium_ws(
         }
     };
 
-    let mut slot = ClientSlot::new(&state, &session, true);
+    let Some(mut slot) = ClientSlot::new(&state, &session, true) else {
+        return (StatusCode::GONE, "Session is closing").into_response();
+    };
     ws.on_upgrade(move |socket| async move {
         slot.client = Some(client_arrived(&state, &session, &headers, &params).await);
         session.activity.touch();
@@ -246,7 +270,9 @@ pub(crate) async fn handle_firefox_ws(
     // The handoff page attaches as an observer: it must not keep sessions alive.
     let counted = !params.observer.unwrap_or(false);
 
-    let mut slot = ClientSlot::new(&state, &session, counted);
+    let Some(mut slot) = ClientSlot::new(&state, &session, counted) else {
+        return (StatusCode::GONE, "Session is closing").into_response();
+    };
     ws.on_upgrade(move |socket| async move {
         if counted {
             slot.client = Some(client_arrived(&state, &session, &headers, &params).await);

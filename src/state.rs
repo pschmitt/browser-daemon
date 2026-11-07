@@ -20,6 +20,8 @@ pub struct ManagedSession {
     pub record_audio: bool,
     pub created_at: Instant,
     pub client_count: Arc<AtomicUsize>,
+    /// Serializes client arrival with the decision to close an idle session.
+    pub client_lifecycle: Arc<std::sync::Mutex<ClientLifecycle>>,
     /// Open live views (the web UI's view of the session).
     pub viewer_count: Arc<AtomicUsize>,
     pub activity: Arc<idle::Activity>,
@@ -44,6 +46,12 @@ pub struct ManagedSession {
     pub audible: Arc<AtomicBool>,
     pub browser: Arc<Mutex<Option<ActiveBrowser>>>,
     pub bidi: Option<Arc<BidiHub>>,
+}
+
+#[derive(Default)]
+pub struct ClientLifecycle {
+    pub generation: usize,
+    pub closing: bool,
 }
 
 impl ManagedSession {
@@ -206,6 +214,8 @@ pub struct AppState {
     pub node_name: String,
     /// Groups from the startup flags: immutable. Runtime ones live in `settings`.
     pub node_groups: Vec<String>,
+    pub ephemeral_up: Option<PathBuf>,
+    pub ephemeral_down: Option<PathBuf>,
     pub public_url: String,
     /// Origins an extension may use to connect across this daemon cluster.
     pub extension_origins: Vec<String>,

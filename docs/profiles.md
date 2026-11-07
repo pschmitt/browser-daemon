@@ -25,8 +25,9 @@ flags or Nix option.
 MCP `browser_use` accepts `profile`, `node` and `group`. Requesting a saved
 profile on another node moves it there before opening it. A group restricts
 placement to its members; an explicit node must also belong to that group.
-A matching resident profile is preferred, otherwise the least-utilized online
-node with capacity and the required browser engine is selected.
+An active profile stays on its node. Otherwise a group request selects the
+least-utilized online node with capacity and the required browser engine. For
+requests without a group, a matching resident profile is preferred.
 
 The authenticated `POST /api/mesh/placement` endpoint accepts:
 
@@ -53,6 +54,40 @@ move, the profile stays on its destination.
 
 The CLI and dashboard's explicit transfer controls remain available; group
 placement is exposed through the API, MCP and Python client.
+
+## Ephemeral nodes
+
+Configure both `--ephemeral-up` and `--ephemeral-down` (NixOS:
+`services.browser-daemon.ephemeralUp` and `ephemeralDown`) with executable
+paths. The daemon passes a unique lease ID as the only argument to either
+executable. The up command must provision a node running a compatible daemon,
+wait until it accepts requests, and print a JSON object containing its base
+URL, for example `{"url":"https://worker.example.org"}`. The node must
+accept the coordinator's cluster secret and be reachable by the client.
+The down command must destroy the resource associated with the lease ID and
+be idempotent, including when provisioning failed before creating anything.
+The provider must retain the lease-to-resource mapping across restarts and
+coordinate concurrent up/down calls. Use a provider-side maximum lifetime as
+a backstop for failures outside the daemon's control.
+
+Call authenticated `POST /api/ephemeral/sessions` with the usual session
+creation options, `browser-daemon session new --ephemeral-node`, or MCP
+`browser_use` with `{"ephemeral":true}`. The
+response contains `node_url` and `session`; connect to the node's `/chromium`
+or `/firefox` with `session_id` set to that session's ID. The session is always
+non-persistent. Saved profiles and node/group selectors are not supported for
+ephemeral nodes. A session that has never had a client expires after two
+minutes. After the last automation client disconnects, a five-second window
+allows reconnection; then the session closes and the coordinator runs the down
+command. Failed teardown is retried and leases are recovered after coordinator
+restart. A node that is unreachable cannot be confirmed closed, so the
+coordinator keeps retrying; the provider's maximum lifetime is the backstop.
+
+The commands run as the daemon's service user under its systemd restrictions.
+An rworker adapter must arrange its own access to rworker, install and start a
+browser daemon on the worker, and preserve the mapping from lease ID to worker
+name. The stock rworker image is a build worker and does not run a browser
+daemon by itself.
 
 ## Upstream proxies
 

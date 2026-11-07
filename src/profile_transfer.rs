@@ -508,7 +508,13 @@ fn select_placement(
                 || profile.is_some_and(|p| &p.node_name == *name && p.profile.session_id.is_some())
         })
         .min_by(|a, b| {
-            let resident = |name: &str| profile.is_some_and(|p| p.node_name == name);
+            // An active profile cannot move. For a group request, otherwise
+            // choose by load even when an idle profile is resident elsewhere.
+            let resident = |name: &str| {
+                profile.is_some_and(|p| {
+                    p.node_name == name && (req.group.is_none() || p.profile.session_id.is_some())
+                })
+            };
             resident(b.0)
                 .cmp(&resident(a.0))
                 .then_with(|| {
@@ -727,6 +733,25 @@ mod tests {
             &[]
         )
         .is_err());
+    }
+
+    #[test]
+    fn group_placement_uses_capacity_and_keeps_active_profiles() {
+        let mut ov = placement_overview();
+        ov.local_node.groups.push("cloud".into());
+        ov.local_node.active_sessions = 1;
+        ov.local_node.max_sessions = 2;
+        ov.peers[0].active_sessions = 1;
+        ov.peers[0].max_sessions = 4;
+        let req = placement_request(None, None, Some("cloud"));
+        assert_eq!(select_placement(&ov, &req, &[]).unwrap().node, "worker");
+
+        add_profile(&mut ov, "home", false);
+        let req = placement_request(Some("demo"), None, Some("cloud"));
+        assert_eq!(select_placement(&ov, &req, &[]).unwrap().node, "worker");
+        ov.profiles.clear();
+        add_profile(&mut ov, "home", true);
+        assert_eq!(select_placement(&ov, &req, &[]).unwrap().node, "home");
     }
 
     #[test]

@@ -167,6 +167,18 @@ async def test_refused_placement_does_not_create_a_session(daemon):
     assert [item["path"] for item in seen] == ["/api/mesh/placement"]
 
 
+async def test_ephemeral_node_session_uses_provisioning_endpoint(daemon):
+    bd, seen, answers = daemon
+    answers[("POST", "/api/ephemeral/sessions")] = (
+        200, {"node_url": "https://worker.example", "session": {"id": "abc"}}
+    )
+    result = await bd.create_session(ephemeral_node=True, persistent=True, engine="chromium")
+    assert result == {"id": "abc", "node_url": "https://worker.example"}
+    assert seen[0]["json"] == {"persistent": False, "engine": "chromium", "name": "tests"}
+    with pytest.raises(ValueError):
+        await bd.create_session(ephemeral_node=True, group="cloud")
+
+
 async def test_a_session_is_named_after_the_client(daemon):
     bd, seen, answers = daemon
     answers[("POST", "/api/sessions")] = (201, {"id": "abc"})

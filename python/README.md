@@ -49,6 +49,9 @@ async with aiohttp.ClientSession() as http:
   Supplying both `profile` and `node` also enables automatic placement.
   See [profile placement](../docs/profiles.md#automatic-placement-and-node-groups)
   for transfer restrictions and failure behavior.
+- `create_session(ephemeral_node=True)` provisions a dedicated node and returns
+  its `node_url` alongside the session. Connect to that node with the session ID;
+  the session and node are removed after the last client disconnects.
 - `node=` sends a request to another node of the mesh through this one.
 - `read_secret()` reads the cluster secret from its file.
 

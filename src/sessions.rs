@@ -255,6 +255,7 @@ impl AppState {
             record_audio: profile_record_audio.unwrap_or(self.recorder_config.audio),
             created_at: browser.created_at,
             client_count: Arc::new(AtomicUsize::new(0)),
+            client_lifecycle: Arc::default(),
             viewer_count: Arc::new(AtomicUsize::new(0)),
             activity: Arc::new(idle::Activity::new(
                 idle_timeout_minutes.map_or(self.idle_timeout_secs, idle::minutes_to_secs),
@@ -382,6 +383,7 @@ impl AppState {
                         record_audio: self.profile_record_audio(browser.profile_id).await,
                         created_at: browser.created_at,
                         client_count: Arc::new(AtomicUsize::new(0)),
+                        client_lifecycle: Arc::default(),
                         viewer_count: Arc::new(AtomicUsize::new(0)),
                         activity: Arc::new(idle::Activity::new(rec.idle_timeout_secs)),
                         adblock: browser.adblock,
@@ -406,6 +408,11 @@ impl AppState {
                         .write()
                         .await
                         .insert(session.id, session.clone());
+                    // Connections to the previous daemon ended with it. Give
+                    // clients the usual reconnect window before closing.
+                    if !session.persistent {
+                        drop(ClientSlot::new(self, &session, true));
+                    }
                     crate::downloads::watch(self.clone(), &session);
                     self.hook_passkeys(&session);
                     if rec.recording {
@@ -887,6 +894,31 @@ pub(crate) async fn api_delete_session(
     }
 }
 
+/// Close a never-attached session only if no client can attach concurrently.
+pub(crate) async fn api_expire_unattached(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    state.check_auth(&headers)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    {
+        let mut lifecycle = session.client_lifecycle.lock().unwrap();
+        if session.persistent || lifecycle.generation != 0 || lifecycle.closing {
+            return Err(api_error(StatusCode::CONFLICT, "Session has had a client"));
+        }
+        lifecycle.closing = true;
+    }
+    state.terminate_session(&id).await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -905,6 +937,7 @@ mod tests {
             record_audio: false,
             created_at: Instant::now(),
             client_count: Arc::new(AtomicUsize::new(0)),
+            client_lifecycle: Arc::default(),
             viewer_count: Arc::new(AtomicUsize::new(0)),
             activity: Arc::new(idle::Activity::new(0)),
             adblock: false,

@@ -104,6 +104,7 @@ struct Target {
     url: String,
     ws_base: String,
     profile: Option<String>,
+    session_id: Option<String>,
 }
 
 impl Target {
@@ -118,6 +119,9 @@ impl Target {
 /// The CDP endpoint of a target, with the auth token when there is one.
 fn cdp_endpoint(target: &Target, token: Option<&str>) -> String {
     let mut query = Vec::new();
+    if let Some(id) = &target.session_id {
+        query.push(format!("session_id={}", url_component(id)));
+    }
     if let Some(p) = &target.profile {
         query.push(format!(
             "profile={}",
@@ -336,7 +340,8 @@ fn own_tools(
                 "properties": {
                     "profile": { "type": "string", "description": "Name of a profile from browser_status." },
                     "node": { "type": "string", "description": "Destination node. An idle saved profile is moved here automatically; active profiles are not interrupted." },
-                    "group": { "type": "string", "description": "Restrict placement to this node group, such as cloud. Never falls back outside it; node, if supplied, must belong to it." }
+                    "group": { "type": "string", "description": "Restrict placement to this node group, such as cloud. Never falls back outside it; node, if supplied, must belong to it." },
+                    "ephemeral": { "type": "boolean", "description": "Create a dedicated short-lived node for this browser." }
                 },
                 "additionalProperties": false
             },
@@ -1606,6 +1611,7 @@ impl State {
             ws_base: Self::ws_base(&url),
             url,
             profile: None,
+            session_id: None,
         })
     }
 
@@ -1663,6 +1669,7 @@ impl State {
     }
 
     async fn use_browser(&self, args: &Value) -> Result<String, String> {
+        let ephemeral = args["ephemeral"].as_bool().unwrap_or(false);
         let profile = args["profile"]
             .as_str()
             .map(str::trim)
@@ -1675,6 +1682,11 @@ impl State {
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty());
+        if ephemeral && (profile.is_some() || node.is_some() || group.is_some()) {
+            return Err(
+                "An ephemeral browser cannot use a saved profile, node or group selector".into(),
+            );
+        }
         if let Some(name) = profile.filter(|name| !allows(&self.allow, name)) {
             return Err(format!(
                 "Profile '{name}' is not open to agents here. Allowed: {}.",
@@ -1682,7 +1694,45 @@ impl State {
             ));
         }
         let mut ov = self.overview().await?;
-        let target = if group.is_some() || (profile.is_some() && node.is_some()) {
+        let target = if ephemeral {
+            let mut request = self
+                .http
+                .post(format!("{}/api/ephemeral/sessions", self.base))
+                .timeout(Duration::from_secs(750))
+                .json(&json!({"persistent": false}));
+            if let Some(secret) = &self.secret {
+                request = request.header("X-Browser-Cluster-Secret", secret);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|_| "Ephemeral provisioning request failed".to_string())?;
+            if !response.status().is_success() {
+                return Err(format!(
+                    "Ephemeral provisioning failed (HTTP {})",
+                    response.status()
+                ));
+            }
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|_| "Invalid ephemeral session response".to_string())?;
+            let url = body["node_url"]
+                .as_str()
+                .ok_or("Missing ephemeral node URL")?
+                .to_string();
+            let id = body["session"]["id"]
+                .as_str()
+                .ok_or("Missing ephemeral session ID")?
+                .to_string();
+            Target {
+                node: "ephemeral".into(),
+                ws_base: Self::ws_base(&url),
+                url,
+                profile: None,
+                session_id: Some(id),
+            }
+        } else if group.is_some() || (profile.is_some() && node.is_some()) {
             let mut request = self
                 .http
                 .post(format!("{}/api/mesh/placement", self.base))
@@ -1707,6 +1757,7 @@ impl State {
                 ws_base: Self::ws_base(&placed.node_url),
                 url: placed.node_url,
                 profile: placed.profile,
+                session_id: None,
             }
         } else {
             match profile {
@@ -1765,6 +1816,7 @@ impl State {
                         url: p.node_url.clone(),
                         ws_base: Self::ws_base(&p.node_url),
                         profile: Some(name.to_string()),
+                        session_id: None,
                     }
                 }
                 None => {
@@ -1774,6 +1826,7 @@ impl State {
                         ws_base: Self::ws_base(&url),
                         url,
                         profile: None,
+                        session_id: None,
                     }
                 }
             }
@@ -1794,8 +1847,13 @@ impl State {
         if let Some(old) = old {
             old.stop().await;
         }
+        let start = if ephemeral {
+            "The dedicated node and session are ready"
+        } else {
+            "It starts when you first use a browser tool"
+        };
         Ok(format!(
-            "Now using {}. It starts when you first use a browser tool; the previous browser was closed.{}",
+            "Now using {}. {start}; the previous browser was closed.{}",
             target.describe(),
             warning
         ))
@@ -2040,6 +2098,7 @@ mod tests {
             url: String::new(),
             ws_base: String::new(),
             profile: Some("work".into()),
+            session_id: None,
         };
         assert!(profile_warning(&ov, &target, 0).is_none());
         ov.sessions.push(serde_json::from_value(json!({
@@ -2215,6 +2274,7 @@ mod tests {
             url: "https://b.test".into(),
             ws_base: "wss://b.test".into(),
             profile: profile.map(str::to_string),
+            session_id: None,
         };
         assert_eq!(cdp_endpoint(&t(None), None), "wss://b.test/chromium");
         assert_eq!(
@@ -2228,6 +2288,12 @@ mod tests {
         assert_eq!(
             cdp_endpoint(&t(Some("work")), None),
             "wss://b.test/chromium?profile=work"
+        );
+        let mut ephemeral = t(None);
+        ephemeral.session_id = Some("session-1".into());
+        assert_eq!(
+            cdp_endpoint(&ephemeral, Some("123.abc")),
+            "wss://b.test/chromium?session_id=session-1&auth=123.abc"
         );
     }
 }

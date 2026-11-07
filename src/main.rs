@@ -15,6 +15,7 @@ mod ctl;
 mod display;
 mod downloads;
 mod egress;
+mod ephemeral;
 mod extension;
 mod favicon;
 mod history;
@@ -195,6 +196,14 @@ pub struct Args {
     /// Groups this node belongs to (repeatable).
     #[arg(long = "node-group")]
     pub node_groups: Vec<String>,
+
+    /// Executable that creates an ephemeral node and prints its JSON descriptor.
+    #[arg(long, requires = "ephemeral_down")]
+    pub ephemeral_up: Option<PathBuf>,
+
+    /// Executable called with the node's opaque id to destroy it.
+    #[arg(long, requires = "ephemeral_up")]
+    pub ephemeral_down: Option<PathBuf>,
 
     #[arg(long)]
     pub public_url: Option<String>,
@@ -831,6 +840,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build()?,
         node_name,
         node_groups: args.node_groups,
+        ephemeral_up: args.ephemeral_up,
+        ephemeral_down: args.ephemeral_down,
         public_url,
         extension_origins,
         share_url,
@@ -871,6 +882,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The peers' proxies first: a session that was routed through one must find it.
     let _ = tokio::time::timeout(Duration::from_secs(4), mesh::refresh_mesh_proxies(&state)).await;
     state.adopt_sessions().await;
+    ephemeral::recover(&state).await;
     let mesh_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -1125,6 +1137,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_settings).patch(api_update_settings),
         )
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
+        .route(
+            "/api/sessions/{id}/expire-unattached",
+            post(api_expire_unattached),
+        )
         .route("/api/sessions/{id}/passkey", post(api_session_passkey))
         .route(
             "/api/sessions/{id}/agent-passkey",
@@ -1268,6 +1284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/mesh/node", get(api_mesh_node))
         .route("/api/mesh/overview", get(api_mesh_overview))
         .route("/api/mesh/placement", post(api_place_browser))
+        .route("/api/ephemeral/sessions", post(ephemeral::create))
         .route("/api/run", post(run_api::api_run))
         .route("/api/ws/overview", get(handle_overview_ws))
         .route("/api/peers", get(api_list_peers).post(api_add_peer))

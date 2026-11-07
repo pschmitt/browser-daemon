@@ -214,6 +214,9 @@ pub struct NewSession {
     /// Stop the session when its last client disconnects.
     #[arg(long)]
     pub ephemeral: bool,
+    /// Provision a dedicated short-lived node for this session.
+    #[arg(long, conflicts_with_all = ["node", "profile"])]
+    pub ephemeral_node: bool,
     /// Do not open the profile's default tabs (a blank tab instead).
     #[arg(long)]
     pub no_default_tabs: bool,
