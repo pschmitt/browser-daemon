@@ -151,7 +151,8 @@ async def test_ephemeral_session_survives_coordinator_restart_and_cleans_up(tmp_
 @pytest.mark.skipif(
     not os.environ.get("BD_TEST_BROWSER"), reason="requires Chromium and Xvfb"
 )
-async def test_last_client_grace_period_allows_reconnect(tmp_path):
+@pytest.mark.parametrize("observer", ["true", "false"])
+async def test_last_client_grace_period_allows_reconnect(tmp_path, observer):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -190,7 +191,7 @@ async def test_last_client_grace_period_allows_reconnect(tmp_path):
             async with client.get(f"{base}/json/list") as response:
                 pages = await response.json()
             page = next(item for item in pages if item["type"] == "page")
-            view = await client.ws_connect(f"ws://127.0.0.1:{port}/devtools/page/{page['id']}?observer=true")
+            view = await client.ws_connect(f"ws://127.0.0.1:{port}/devtools/page/{page['id']}?observer={observer}")
             await ws.close()
             await asyncio.sleep(6)
             async with client.get(f"{base}/api/sessions/{session['id']}") as response:

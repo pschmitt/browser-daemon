@@ -321,7 +321,7 @@ pub(crate) async fn handle_page_ws(
 
     // The handoff page attaches as an observer: watching alone is not activity.
     let observer = params.observer.unwrap_or(false);
-    let Some(slot) = ClientSlot::new(&state, &session, state.ephemeral_node && observer) else {
+    let Some(slot) = ClientSlot::new(&state, &session, state.ephemeral_node) else {
         return (StatusCode::GONE, "Session is closing").into_response();
     };
     if !observer {
