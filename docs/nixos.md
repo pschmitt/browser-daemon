@@ -77,7 +77,7 @@ The flake's own package is the module's default, so no overlay is needed. More o
 | `adblock.enable`, `adblock.default` | uBlock Origin (Lite) for the sessions, on by default |
 | `recordSessions`, `recordAudio` | record new sessions (with sound); `recordingMax{StorageMB,AgeHours,Count}` are the cleanup limits |
 | `maxSessions`, `sessionMemoryMaxMB`, `idleTimeoutMinutes` | per-node and per-session limits |
-| `nodeGroups` | labels advertised for strict [profile placement](profiles.md#automatic-placement-and-node-groups), e.g. `[ "cloud" ]` |
+| `nodeGroups` | locked node labels (`--node-group`) advertised for strict [profile placement](profiles.md#automatic-placement-and-node-labels), e.g. `[ "cloud" ]` |
 | `memoryMax`, `memoryHigh`, `cpuQuota` | systemd limits of the service |
 | `keepSessionsOnRestart` | leave the browsers running when the service restarts (the next daemon adopts them) |
 | `allowedHosts` | `Host` header values accepted besides `publicUrl` and loopback (`--allowed-host`) |

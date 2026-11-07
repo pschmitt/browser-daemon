@@ -174,6 +174,34 @@ pub(crate) async fn common_js() -> impl IntoResponse {
     )
 }
 
+/// The icon sets of the label icon picker (licenses: assets/iconsets/LICENSES.md):
+/// `{"set", "version", "icons": [[name, path, aliases?], ...]}`, gzipped.
+const ICONSET_MDI_GZ: &[u8] = include_bytes!("../assets/iconsets/mdi.json.gz");
+const ICONSET_SIMPLE_GZ: &[u8] = include_bytes!("../assets/iconsets/simple-icons.json.gz");
+
+pub(crate) async fn icon_set(AxumPath(file): AxumPath<String>) -> Response {
+    let data = match file.as_str() {
+        "mdi.json" => ICONSET_MDI_GZ,
+        "simple-icons.json" => ICONSET_SIMPLE_GZ,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            ),
+            (header::CONTENT_ENCODING, HeaderValue::from_static("gzip")),
+            (
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=86400"),
+            ),
+        ],
+        data,
+    )
+        .into_response()
+}
+
 pub(crate) async fn common_css() -> impl IntoResponse {
     (
         [

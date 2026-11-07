@@ -104,7 +104,37 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .group-edit .group-add .input { flex: 1; min-width: 0; max-width: 240px; }
 .chip .chip-x { display: inline-flex; border: 0; background: none; color: inherit; padding: 0; margin-right: -4px; cursor: pointer; opacity: .7; }
 .chip .chip-x:hover, .chip .chip-x:focus-visible { opacity: 1; }
-.chip.label { background: color-mix(in oklab, var(--fg, currentColor) 9%, transparent); color: var(--muted, inherit); }
+.chip.label { background: color-mix(in oklab, var(--fg, currentColor) 9%, transparent); color: var(--muted, inherit); gap: 5px; }
+.chip.label .i { width: 13px; height: 13px; }
+.chip.label.colored, .avatar.colored { background: color-mix(in oklab, var(--lc) 18%, transparent); color: var(--lc); }
+.color-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; background: var(--c); cursor: pointer; padding: 0; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .15); }
+.swatch.on { border-color: var(--fg, currentColor); }
+input[type=color].color-input { width: 36px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+.lbl-img { width: 14px; height: 14px; object-fit: contain; border-radius: 3px; flex: none; }
+.lbl-img.lg { width: 28px; height: 28px; border-radius: 6px; }
+button.chip.label { border: 0; cursor: pointer; font: inherit; font-size: 11.5px; font-weight: 600; }
+button.chip.label.on { background: var(--accent-soft); color: var(--accent); }
+button.chip.label .i:last-child { opacity: .7; }
+.label-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.label-filter[hidden] { display: none; }
+.scard-labels { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.labels .list-head, .labels .row { grid-template-columns: minmax(0, 1.6fr) minmax(0, 2fr) 70px 150px; }
+.labels .row .avatar .i { width: 20px; height: 20px; }
+.labels .row .avatar .lbl-img { width: 24px; height: 24px; }
+.labels .c-used { color: var(--muted); font-size: 12.5px; }
+.label-icon-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.label-icon-row .avatar { width: 44px; height: 44px; }
+.label-icon-row .avatar .i { width: 24px; height: 24px; }
+.mdi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; max-height: 46vh; overflow: auto; padding: 2px; }
+.mdi-cell { display: grid; place-items: center; height: 44px; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--fg, inherit); cursor: pointer; }
+.mdi-cell:hover, .mdi-cell:focus-visible { background: var(--hover); border-color: var(--accent); }
+.mdi-cell svg { width: 24px; height: 24px; fill: currentColor; }
+@media (max-width: 720px) {
+  .labels .list-head { display: none; }
+  .labels .row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; padding: 10px 12px; }
+  .labels .row .c-used, .labels .row .num { display: none; }
+}
 .chip.node { background: color-mix(in oklab, var(--node) 16%, transparent); color: var(--node); }
 .chip.node::before, .dot { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .chip.ok { background: var(--ok-soft); color: var(--ok); }
@@ -1174,10 +1204,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <button data-act="view" data-view="recordings" role="tab"><svg class="i sm"><use href="#i-film"/></svg>Recordings <span class="count" id="countRecordings">0</span></button>
       <button data-act="view" data-view="engines" role="tab"><svg class="i sm"><use href="#i-globe"/></svg>Engines <span class="count" id="countEngines">0</span></button>
       <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes <span class="count" id="countNodes">0</span></button>
+      <button data-act="view" data-view="labels" role="tab"><svg class="i sm"><use href="#i-tag"/></svg>Labels <span class="count" id="countLabels">0</span></button>
     </nav>
     <button class="node-filter" id="nodeFilterChip" data-act="filter" data-node="all" title="Filtered to one node: click to show all nodes" hidden>
       <span class="dot"></span>Filter: <b id="nodeFilterName"></b><svg class="i sm"><use href="#i-x"/></svg>
     </button>
+    <div class="label-filter" id="labelFilter" hidden></div>
     <div class="view-actions" id="viewActions"></div>
   </div>
 
@@ -1192,6 +1224,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <label class="rec-search" id="recSearchWrap" hidden><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="recSearch" placeholder="Search recordings: title, address, profile, node, date…" autocomplete="off" spellcheck="false" aria-label="Search recordings"></label>
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
+  <section class="view labels" id="view-labels" hidden></section>
   <section class="view nodes" id="view-nodes" hidden>
     <div id="nodesList" class="nodes-list"></div>
   </section>
@@ -1328,6 +1361,55 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
       <div class="te" id="tabsEditor"></div>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="tabsSave"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
+  </form>
+</dialog>
+
+<!-- Labels: edit one (name, icon), pick an icon, put labels on an item -->
+<dialog class="modal" id="labelModal" aria-labelledby="labelTitle">
+  <form class="sheet" id="labelForm">
+    <div class="sheet-head"><h2 id="labelTitle">Label</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <label class="field"><span>Name</span><input class="input" id="labelName" maxlength="32" autocomplete="off" spellcheck="false" placeholder="ha"></label>
+      <div class="field"><span>Icon</span>
+        <div class="label-icon-row">
+          <span class="avatar" id="labelIconPreview"></span>
+          <button type="button" class="btn" id="labelPickIcon">Choose icon…</button>
+          <button type="button" class="btn" id="labelUploadIcon">Upload image…</button>
+          <button type="button" class="btn ghost" id="labelClearIcon">Remove</button>
+        </div>
+        <span class="hint" id="labelIconHint"></span>
+      </div>
+      <div class="field"><span>Color</span>
+        <div class="color-row" id="labelColors"></div>
+      </div>
+      <span class="hint" id="labelHint">Letters, digits and - _ . : / (lowercase). Renaming changes it on every node, profile, session and recording.</span>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal" id="mdiModal" aria-labelledby="mdiTitle">
+  <div class="sheet">
+    <div class="sheet-head"><h2 id="mdiTitle">Choose an icon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <div class="label-icon-row" id="mdiSets"></div>
+      <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="mdiSearch" placeholder="Search icons: home, server, robot…" autocomplete="off" spellcheck="false" aria-label="Search icons"></label>
+      <div class="mdi-grid" id="mdiGrid"></div>
+      <span class="hint" id="mdiCount"></span>
+    </div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="itemLabelsModal" aria-labelledby="itemLabelsTitle">
+  <form class="sheet" id="itemLabelsForm">
+    <div class="sheet-head"><h2 id="itemLabelsTitle">Labels</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body">
+      <span class="hint" id="itemLabelsIntro"></span>
+      <div class="group-edit"><div class="group-chips" id="itemLabelsChips"></div></div>
+      <div class="group-edit"><div class="group-add"><input class="input" id="itemLabelsInput" list="labelSuggestions" maxlength="32" placeholder="Add a label" autocomplete="off" spellcheck="false" aria-label="Add a label"><button type="button" class="btn sm" id="itemLabelsAdd">Add</button></div></div>
+      <datalist id="labelSuggestions"></datalist>
+    </div>
+    <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
   </form>
 </dialog>
 
@@ -1751,7 +1833,6 @@ const nodeColor = (name) => `hsl(${hueOf(name)} 68% var(--node-l))`;
 // Proxies are per node: ids only mean something on the node that defines them.
 const nodeProxies = (node) => nodes.find((n) => n.name === node)?.proxies || [];
 const proxyName = (node, id) => nodeProxies(node).find((x) => x.id === id)?.name || id;
-const labelChips = (p) => (p.labels || []).map((l) => `<span class="chip label" title="Label">${esc(l)}</span>`).join('');
 const proxyChip = (node, id) => (id ? `<span class="chip proxy" title="Traffic goes through ${esc(proxyName(node, id))}">${icon('route')}${esc(proxyName(node, id))}</span>` : '');
 const nodeChip = (name) => `<span class="chip node" style="--node:${nodeColor(name)}">${esc(nodeLabel(name) || 'local')}</span>`;
 
@@ -2255,8 +2336,9 @@ const keyOf = {
   session: (s) => `${s.node_name}|${s.id}`,
   profile: (p) => `${p.node_name}|${p.id || p.name}`,
   recording: (r) => `${r.node_name}|${r.id}`,
+  label: (l) => l.name,
 };
-const inFilter = (x) => filter === 'all' || x.node_name === filter;
+const inFilter = (x) => (filter === 'all' || x.node_name === filter) && inLabels(x);
 
 // Profiles carry an id, a display name and their engine. Nodes still on the
 // name-based layout report bare directory names ("firefox_<name>" for Firefox).
@@ -2319,8 +2401,332 @@ function pagesOf(session) {
   return (ov?.targets || []).filter((t) => t.type === 'page' && t.node_name === session.node_name && t.sessionId === session.id);
 }
 
+
+/* ================================================================ labels */
+// Icon sets for label icons, each loaded the first time one of its icons is needed:
+// Material Design Icons (`mdi`) and Simple Icons brand logos (`simple-icons`).
+const ICON_SETS = {
+  mdi: { title: 'Material Design', paths: null, list: [], loading: null },
+  'simple-icons': { title: 'Brands', paths: null, list: [], loading: null },
+};
+function loadIconSet(set) {
+  const s_ = ICON_SETS[set];
+  if (!s_) return null;
+  s_.loading ||= fetch(`/assets/iconsets/${set}.json`).then((r) => r.json()).then((d) => {
+    s_.list = d.icons;
+    s_.paths = new Map(d.icons.map((i) => [i[0], i[1]]));
+    if (ov) render();
+    if ($('mdiModal').open) renderMdiPicker();
+    if ($('labelModal').open) syncLabelEditor();
+  }).catch(() => { s_.loading = null; });
+  return s_.loading;
+}
+const lblLocal = () => ov.local_node.name;
+const lblDef = (name) => ov?.labels?.defs?.[name];
+const lblImages = new Map();   // name/updated -> blob URL, or '' while loading
+function lblImage(name) {
+  const key = `${name}/${lblDef(name)?.updated_at}`;
+  if (lblImages.has(key)) return lblImages.get(key);
+  lblImages.set(key, '');
+  fetch(api(lblLocal(), `/labels/${enc(name)}/icon`), { headers: authHeaders() })
+    .then((res) => (res.ok ? res.blob() : null))
+    .then((blob) => { if (!blob) return; lblImages.set(key, URL.createObjectURL(blob)); if (ov) render(); })
+    .catch(() => { /* the tag icon stays */ });
+  return '';
+}
+// An icon (`{kind: 'mdi' | 'simple-icons', name}`), drawn; the tag until its set is in.
+function lblIconSvg(ic, cls = 'sm') {   // coloured by its parent
+  const set = ICON_SETS[ic?.kind];
+  if (set) {
+    if (!set.paths) { loadIconSet(ic.kind); return icon('tag', cls); }
+    const d = set.paths.get(ic.name);
+    if (d) return `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true"><path d="${esc(d)}" fill="currentColor" stroke="none"/></svg>`;
+  }
+  return icon('tag', cls);
+}
+function lblIconHtml(name, cls = 'sm', tint = false) {
+  const def = lblDef(name), ic = def?.icon;
+  let html;
+  if (ic?.kind === 'image') {
+    const url = lblImage(name);
+    html = url ? `<img class="lbl-img" src="${esc(url)}" alt="">` : icon('tag', cls);
+  } else html = lblIconSvg(ic, cls);
+  return tint && def?.color ? `<span style="display:inline-flex;color:${esc(def.color)}">${html}</span>` : html;
+}
+const lblColorAttr = (name) => { const c = lblDef(name)?.color; return c ? { cls: ' colored', style: ` style="--lc:${esc(c)}"` } : { cls: '', style: '' }; };
+const lblChip = (name) => { const k = lblColorAttr(name); return `<span class="chip label${k.cls}"${k.style} data-label="${esc(name)}" title="Label ${esc(name)}">${lblIconHtml(name)}${esc(name)}</span>`; };
+const lblChips = (labels) => (labels || []).map(lblChip).join(' ');
+
+// Who carries each label, from the overview.
+function lblUsage() {
+  const usage = new Map();
+  const bump = (l, k) => { const e = usage.get(l) || { nodes: 0, profiles: 0, sessions: 0, recordings: 0 }; e[k]++; usage.set(l, e); };
+  for (const n of nodes) for (const l of (n.labels?.length ? n.labels : n.groups) || []) bump(l, 'nodes');
+  for (const p of ov.profiles) for (const l of p.labels || []) bump(l, 'profiles');
+  for (const x of ov.sessions) for (const l of x.labels || []) bump(l, 'sessions');
+  for (const r of ov.recordings || []) for (const l of r.labels || []) bump(l, 'recordings');
+  for (const name of Object.keys(ov.labels?.defs || {})) if (!usage.has(name)) usage.set(name, { nodes: 0, profiles: 0, sessions: 0, recordings: 0 });
+  return usage;
+}
+const lblTotal = (u) => u.nodes + u.profiles + u.sessions + u.recordings;
+const lblUsageText = (u) => [['node', u.nodes], ['profile', u.profiles], ['session', u.sessions], ['recording', u.recordings]]
+  .filter(([, n]) => n).map(([w, n]) => plural(n, w)).join(' · ') || 'Not used yet';
+
+// The filter: only what has every selected label (sessions, profiles, recordings, nodes).
+let labelFilter = new Set();
+try { labelFilter = new Set(JSON.parse(localStorage.getItem('dash.labels') || '[]')); } catch { /* storage unavailable */ }
+const saveLabelFilter = () => { try { localStorage.setItem('dash.labels', JSON.stringify([...labelFilter])); } catch { /* storage unavailable */ } };
+const inLabels = (x) => !labelFilter.size || [...labelFilter].every((l) => (x.labels || x.groups || []).includes(l));
+const LABEL_TABS = { sessions: 'sessions', profiles: 'profiles', recordings: 'recordings', nodes: 'nodes' };
+function renderLabelFilter() {
+  const box = $('labelFilter');
+  const usage = ov ? lblUsage() : new Map();
+  const show = LABEL_TABS[view] && (usage.size || labelFilter.size);
+  box.hidden = !show;
+  if (!show) return;
+  const html = `<button class="btn sm" data-act="label-filter" aria-haspopup="menu" title="Show only what has these labels">${icon('tag', 'sm')}<span class="lbl">Labels</span></button>`
+    + [...labelFilter].map((l) => { const k = lblColorAttr(l); return `<button class="chip label on${k.cls}"${k.style} data-act="label-filter-remove" data-label="${esc(l)}" title="Stop filtering by ${esc(l)}">${lblIconHtml(l)}${esc(l)}${icon('x', 'sm')}</button>`; }).join('');
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+function openLabelFilter(el) {
+  const usage = lblUsage(), tab = LABEL_TABS[view];
+  const names = [...new Set([...usage.keys(), ...labelFilter])].sort();
+  const items = names.map((name) => ({
+    label: name, lead: lblIconHtml(name, 'sm', true), meta: tab ? String(usage.get(name)?.[tab] || 0) : '', on: labelFilter.has(name),
+    run: () => { labelFilter.has(name) ? labelFilter.delete(name) : labelFilter.add(name); saveLabelFilter(); render(); openLabelFilter(el); },
+  }));
+  if (!items.length) items.push({ label: 'No labels yet: put one on something from its menu' });
+  if (labelFilter.size) items.push('-', { icon: 'x', label: 'Clear the filter', run: () => { labelFilter.clear(); saveLabelFilter(); render(); } });
+  items.push('-', { icon: 'tag', label: 'Manage labels…', run: () => setView('labels') });
+  openMenu(el, items, { align: 'left' });
+}
+
+// The Labels tab.
+function renderLabels() {
+  if (!ov) return;
+  const sec = $('view-labels');
+  const usage = lblUsage();
+  $('countLabels').textContent = usage.size;
+  const list = [...usage].map(([name, u]) => ({ name, ...u })).sort((a, b) => a.name.localeCompare(b.name));
+  if (!list.length) {
+    setStatic(sec, emptyState('tag', 'No labels',
+      'Labels group nodes, profiles, sessions and recordings, and filter the tabs. Create one here, or put one on something from its menu.',
+      `<button class="btn primary" data-act="new-label">${icon('plus')}New label</button>`));
+    return;
+  }
+  if (sec._static !== undefined || !sec.querySelector('.list')) {
+    clearStatic(sec);
+    sec.innerHTML = `<div class="list" role="table" aria-label="Labels"><div class="list-head" role="row"><span role="columnheader">Label</span><span role="columnheader">Used by</span><span role="columnheader">Items</span><span role="columnheader" aria-label="Actions"></span></div><div class="rows" role="rowgroup"></div></div>`;
+  }
+  reconcile(sec.querySelector('.rows'), list, keyOf.label, labelRow);
+}
+function labelRow(l) {
+  const key = esc(l.name), def = lblDef(l.name), ic = def?.icon;
+  const what = [ICON_SETS[ic?.kind] ? `${ic.kind}:${ic.name}` : ic?.kind === 'image' ? 'custom image' : 'no icon', def?.color].filter(Boolean).join(' · ');
+  return `
+  <div class="row" role="row" data-key="${key}">
+    <div role="cell" class="main"><div class="avatar${lblColorAttr(l.name).cls}"${lblColorAttr(l.name).style}>${lblIconHtml(l.name, 'md')}</div>
+      <div class="t"><b><span class="name">${esc(l.name)}</span></b><span>${esc(what)}</span></div></div>
+    <div role="cell" class="c-used">${esc(lblUsageText(l))}</div>
+    <div role="cell" class="num">${lblTotal(l)}</div>
+    <div role="cell" class="acts"><button class="btn sm" data-act="edit-label" data-key="${key}">${icon('edit', 'sm')}Edit</button><button class="btn icon sm ghost" data-act="label-menu" data-key="${key}" aria-label="Label actions">${icon('more')}</button></div>
+  </div>`;
+}
+async function deleteLabel(name) {
+  const u = lblUsage().get(name) || { nodes: 0, profiles: 0, sessions: 0, recordings: 0 };
+  const ok = await ask({
+    title: `Delete the label ${name}?`,
+    text: lblTotal(u) ? `It comes off ${lblUsageText(u)}, on every node of the mesh. This cannot be undone.` : 'Nothing carries it any more.',
+    ok: 'Delete', danger: true,
+  });
+  if (!ok) return;
+  const r = await act('Deleting the label', () => request('DELETE', api(lblLocal(), `/labels/${enc(name)}`)), `Label ${name} deleted`);
+  if (r?.kept_by_flags) showToast(`${name} stays on a node whose startup flags set it`, 'info');
+  labelFilter.delete(name); saveLabelFilter();
+  refreshData();
+}
+
+// Create or edit a label: its name, and its icon (an mdi icon, or an image).
+let labelEdit = null;   // { name, icon: undefined (unchanged) | null (none) | {…}, current }
+function openLabelEditor(name = null) {
+  labelEdit = { name, icon: undefined, current: name ? lblDef(name)?.icon || null : null, color: undefined, currentColor: name ? lblDef(name)?.color || null : null };
+  $('labelTitle').textContent = name ? `Edit ${name}` : 'New label';
+  $('labelName').value = name || '';
+  syncLabelEditor();
+  openModal('labelModal');
+  setTimeout(() => $('labelName').focus(), 40);
+}
+function syncLabelEditor() {
+  if (!labelEdit) return;
+  const ic = labelEdit.icon !== undefined ? labelEdit.icon : labelEdit.current;
+  let preview;
+  if (ic?.kind === 'image') {
+    const src = ic.data ? `data:${ic.mime};base64,${ic.data}` : labelEdit.name ? lblImage(labelEdit.name) : '';
+    preview = src ? `<img class="lbl-img lg" src="${esc(src)}" alt="">` : icon('tag');
+  } else preview = lblIconSvg(ic, 'lg');
+  $('labelIconPreview').innerHTML = preview;
+  const color = labelEdit.color !== undefined ? labelEdit.color : labelEdit.currentColor;
+  $('labelIconPreview').classList.toggle('colored', !!color);
+  $('labelIconPreview').style.setProperty('--lc', color || '');
+  $('labelColors').innerHTML = LABEL_COLORS.map((c) => `<button type="button" class="swatch${c === color ? ' on' : ''}" style="--c:${c}" data-color="${c}" title="${c}" aria-label="${c}"></button>`).join('')
+    + `<input type="color" class="color-input" id="labelColorInput" value="${color || '#03a9f4'}" aria-label="Pick a color"><button type="button" class="btn ghost sm" data-color="" ${color ? '' : 'hidden'}>No color</button>`;
+  $('labelClearIcon').hidden = !ic;
+  $('labelIconHint').textContent = ICON_SETS[ic?.kind] ? `${ic.kind}:${ic.name}` : ic?.kind === 'image' ? 'Your image' : 'No icon: the tag is shown';
+}
+const LABEL_COLORS = ['#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5', '#03a9f4', '#009688', '#4caf50', '#ff9800', '#795548', '#607d8b'];
+$('labelColors').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-color]');
+  if (!b || !labelEdit) return;
+  labelEdit.color = b.dataset.color || null;
+  syncLabelEditor();
+});
+$('labelColors').addEventListener('input', (e) => {
+  if (e.target.id !== 'labelColorInput' || !labelEdit) return;
+  labelEdit.color = e.target.value;
+  $('labelIconPreview').classList.add('colored');
+  $('labelIconPreview').style.setProperty('--lc', e.target.value);
+});
+$('labelPickIcon').addEventListener('click', () => openMdiPicker());
+$('labelClearIcon').addEventListener('click', () => { labelEdit.icon = null; syncLabelEditor(); });
+const blobToB64 = (blob) => new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(String(fr.result).split(',')[1]); fr.onerror = reject; fr.readAsDataURL(blob); });
+$('labelUploadIcon').addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/svg+xml,image/webp,image/jpeg,image/gif';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      let blob = file;
+      if (file.type !== 'image/svg+xml') {   // shown at a few dozen pixels: shrink first
+        const bmp = await createImageBitmap(file);
+        const k = Math.min(1, 128 / Math.max(bmp.width, bmp.height));
+        const c = new OffscreenCanvas(Math.max(1, Math.round(bmp.width * k)), Math.max(1, Math.round(bmp.height * k)));
+        c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+        blob = await c.convertToBlob({ type: 'image/png' });
+      }
+      labelEdit.icon = { kind: 'image', mime: blob.type, data: await blobToB64(blob) };
+      syncLabelEditor();
+    } catch (e) { showToast(`Could not read the image: ${e.message || e}`, 'danger'); }
+  };
+  input.click();
+});
+$('labelForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const typed = $('labelName').value.trim().toLowerCase(), old = labelEdit.name;
+  if (!typed) { $('labelName').focus(); return; }
+  const body = {};
+  if (labelEdit.icon !== undefined) body.icon = labelEdit.icon;
+  if (labelEdit.color !== undefined) body.color = labelEdit.color;
+  if (old && typed !== old) body.rename_to = typed;
+  if (old && !Object.keys(body).length) { closeModal('labelModal'); return; }
+  const r = await act(old ? 'Saving the label' : 'Creating the label', () => request('PUT', api(lblLocal(), `/labels/${enc(old || typed)}`), body),
+    old ? `Label ${typed} saved` : `Label ${typed} created`);
+  if (r === undefined) return;
+  if (old && body.rename_to && labelFilter.delete(old)) { labelFilter.add(typed); saveLabelFilter(); }
+  closeModal('labelModal');
+  refreshData();
+});
+
+// The icon picker.
+let mdiQuery = '', pickerSet = 'mdi';
+const POPULAR = {
+  mdi: ['home-assistant', 'tag', 'home', 'server', 'laptop', 'cloud', 'briefcase', 'account-group', 'shield-check', 'robot', 'bug', 'flask', 'star', 'heart', 'lightning-bolt', 'cog', 'wrench', 'database', 'lock', 'earth', 'chart-line', 'bell', 'flag', 'fire', 'rocket-launch', 'school', 'cart', 'music', 'video', 'camera'],
+  'simple-icons': ['homeassistant', 'microsoftteams', 'microsoft', 'github', 'gitlab', 'nixos', 'docker', 'kubernetes', 'openstack', 'google', 'firefox', 'googlechrome', 'slack', 'python', 'rust', 'linux', 'grafana', 'prometheus', 'bitwarden', 'tailscale', 'signal', 'telegram', 'anthropic', 'openai'],
+};
+function openMdiPicker() {
+  const cur = labelEdit?.icon !== undefined ? labelEdit.icon : labelEdit?.current;
+  pickerSet = ICON_SETS[cur?.kind] ? cur.kind : 'mdi';
+  mdiQuery = '';
+  $('mdiSearch').value = '';
+  loadIconSet(pickerSet);
+  renderMdiPicker();
+  openModal('mdiModal');
+  setTimeout(() => $('mdiSearch').focus(), 40);
+}
+function renderMdiPicker() {
+  const set = ICON_SETS[pickerSet], grid = $('mdiGrid');
+  $('mdiSets').innerHTML = Object.entries(ICON_SETS).map(([k, v]) => `<button type="button" class="btn sm${k === pickerSet ? ' primary' : ''}" data-icon-set="${k}" aria-pressed="${k === pickerSet}">${esc(v.title)}</button>`).join('');
+  if (!set.paths) { grid.innerHTML = ''; $('mdiCount').textContent = 'Loading the icons…'; return; }
+  const words = mdiQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = words.length ? set.list.filter((i) => words.every((w) => i[0].includes(w) || (i[2] || '').includes(w)))
+    : POPULAR[pickerSet].filter((n) => set.paths.has(n)).map((n) => [n, set.paths.get(n)]);
+  const shown = hits.slice(0, 240);
+  grid.innerHTML = shown.map((i) => `<button type="button" class="mdi-cell" data-icon="${esc(i[0])}" title="${esc(i[0])}" aria-label="${esc(i[0])}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${esc(i[1])}"/></svg></button>`).join('');
+  $('mdiCount').textContent = !words.length ? `${plural(set.list.length, 'icon')}: search to find more`
+    : hits.length > shown.length ? `Showing ${shown.length} of ${hits.length}: narrow it down` : plural(hits.length, 'icon');
+}
+$('mdiSearch').addEventListener('input', (e) => { mdiQuery = e.target.value; renderMdiPicker(); });
+$('mdiSets').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-icon-set]');
+  if (!b) return;
+  pickerSet = b.dataset.iconSet;
+  loadIconSet(pickerSet);
+  renderMdiPicker();
+});
+$('mdiGrid').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-icon]');
+  if (!b || !labelEdit) return;
+  labelEdit.icon = { kind: pickerSet, name: b.dataset.icon };
+  syncLabelEditor();
+  closeModal('mdiModal');
+});
+
+// Put labels on one item: a node, profile, session or recording.
+let itemLabels = null;   // { kind, node, key, display, fixed, labels }
+function openItemLabels(kind, item) {
+  const display = { node: () => item.name, profile: () => item.display, session: () => sessName(item), recording: () => item.title || item.id.slice(0, 8) }[kind]();
+  let labels = item.labels || [], fixed = [];
+  if (kind === 'node') {
+    labels = item.labels?.length ? item.labels : item.groups || [];
+    const added = item.settings?.labels || [];
+    fixed = labels.filter((l) => !added.includes(l));
+    labels = labels.filter((l) => added.includes(l));
+  }
+  itemLabels = { kind, node: kind === 'node' ? item.name : item.node_name, key: { node: () => item.name, profile: () => item.key, session: () => item.id, recording: () => item.id }[kind](), display, fixed, labels: [...labels] };
+  $('itemLabelsTitle').textContent = `Labels of ${display}`;
+  $('itemLabelsIntro').textContent = kind === 'node' ? 'Placement can target a node label. Locked ones come from the node\'s startup flags.'
+    : kind === 'session' ? 'Labels of this session only: it keeps them until it ends.' : `Short tags that group ${kind}s. Letters, digits and - _ . : /`;
+  $('itemLabelsInput').value = '';
+  syncItemLabels();
+  openModal('itemLabelsModal');
+  setTimeout(() => $('itemLabelsInput').focus(), 40);
+}
+function syncItemLabels() {
+  if (!itemLabels) return;
+  $('itemLabelsChips').innerHTML = itemLabels.fixed.map((l) => `<span class="chip label" title="Set by the node's startup flags: change it there">${icon('lock', 'sm')}${esc(l)}</span>`).join(' ')
+    + itemLabels.labels.map((l) => `<span class="chip label">${lblIconHtml(l)}${esc(l)}<button type="button" class="chip-x" data-item-label-remove="${esc(l)}" aria-label="Remove ${esc(l)}">${icon('x', 'sm')}</button></span>`).join(' ')
+    || '<span class="hint">No labels yet</span>';
+  const known = [...lblUsage().keys()].filter((l) => !itemLabels.labels.includes(l) && !itemLabels.fixed.includes(l)).sort();
+  $('labelSuggestions').innerHTML = known.map((l) => `<option value="${esc(l)}"></option>`).join('');
+}
+function addItemLabel() {
+  const inp = $('itemLabelsInput');
+  for (const w of inp.value.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean)) if (!itemLabels.labels.includes(w)) itemLabels.labels.push(w);
+  itemLabels.labels.sort();
+  inp.value = '';
+  syncItemLabels();
+}
+$('itemLabelsAdd').addEventListener('click', addItemLabel);
+$('itemLabelsInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addItemLabel(); } });
+$('itemLabelsChips').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-item-label-remove]');
+  if (!b || !itemLabels) return;
+  itemLabels.labels = itemLabels.labels.filter((l) => l !== b.dataset.itemLabelRemove);
+  syncItemLabels();
+});
+$('itemLabelsForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if ($('itemLabelsInput').value.trim()) addItemLabel();
+  const c = itemLabels;
+  if (!c) return;
+  const r = await act('Saving the labels', () => request('PUT', api(c.node, `/item-labels/${c.kind}/${enc(c.key)}`), { labels: c.labels }),
+    c.labels.length ? `${c.display}: ${c.labels.join(', ')}` : `${c.display} has no labels`);
+  if (r !== undefined) { closeModal('itemLabelsModal'); refreshData(); }
+});
+
 /* ================================================================ render */
-const VIEWS = ['sessions', 'profiles', 'recordings', 'engines', 'nodes'];
+const VIEWS = ['sessions', 'profiles', 'recordings', 'engines', 'nodes', 'labels'];
 let view = 'sessions';
 const selectedRecordings = new Set();
 
@@ -2388,11 +2794,13 @@ function render() {
   renderRecordings();
   renderNodes();
   renderEngines();
+  renderLabels();
 }
 
 // The node filter lives on the Nodes tab; this shows when one is active (and
 // lets it be dropped from any tab), and flags offline nodes on the tab itself.
 function renderHeader() {
+  renderLabelFilter();
   const ext = extensionNodeOf(filter);
   const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter) || (ext && {name: filter, status: ext.online === false ? 'offline' : 'online', active_sessions: ext.tabs.length ? 1 : 0, max_sessions: 0});
   const chip = $('nodeFilterChip');
@@ -2675,6 +3083,7 @@ function sessionCard(s) {
       <div style="min-width:0;flex:1">
         <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span>${s._extension ? addonBadge() : ''}</div>
         <div class="scard-sub">${meta}${inds ? `<span class="scard-inds">${inds}</span>` : ''}</div>
+        ${s.labels?.length ? `<div class="scard-labels">${lblChips(s.labels)}</div>` : ''}
       </div>
       <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
     </div>
@@ -2713,7 +3122,7 @@ function profileRow(p) {
   return `
   <div class="row" role="row" data-key="${key}">
     <div role="cell" class="main">${profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`}
-      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${labelChips(p)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${lblChips(p.labels)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
     <div role="cell" class="num c-size">${formatBytes(p.size_bytes)}</div>
     <div role="cell" class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
@@ -2787,6 +3196,11 @@ function renderViewActions(recordings = listedRecordings()) {
     const offlineCount = offlineNodeTargets().length;
     const html = `<button class="btn sm" data-act="add-node" title="Pair a browser or join another daemon">${icon('plus', 'sm')}<span class="lbl">Add node</span></button>
       ${offlineCount ? `<button class="btn sm danger-ghost" data-act="remove-offline-nodes" aria-label="Remove ${offlineCount} offline nodes" title="Remove all ${offlineCount} offline or unreachable nodes">${icon('trash', 'sm')}<span class="lbl">Prune nodes</span></button>` : ''}`;
+    if (actions.innerHTML !== html) actions.innerHTML = html;
+    return;
+  }
+  if (view === 'labels') {
+    const html = `<button class="btn sm" data-act="new-label" title="New label">${icon('plus', 'sm')}<span class="lbl">New label</span></button>`;
     if (actions.innerHTML !== html) actions.innerHTML = html;
     return;
   }
@@ -2865,7 +3279,7 @@ function recordingRow(r) {
     <div role="cell"><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div role="cell"><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
     <div role="cell" class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
-      <div class="t"><b><span class="name">${esc(title)}</span>${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}${noteBadge('recording', key, r.notes)}</b><span>${esc(sub)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(title)}</span>${lblChips(r.labels)}${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}${noteBadge('recording', key, r.notes)}</b><span>${esc(sub)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(r.node_name)}</div>
     <div role="cell" class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
     <div role="cell" class="num c-dur">${formatUptime(r.duration_seconds)}</div>
@@ -2888,6 +3302,7 @@ function setView(v) {
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   for (const name of VIEWS) $('view-' + name).hidden = name !== v;
   $('recSearchWrap').hidden = v !== 'recordings';
+  if (ov) renderLabelFilter();
   document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
   document.querySelectorAll('.views button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === v)));
   document.querySelector(`.views button[data-view="${v}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
@@ -2928,6 +3343,19 @@ const ACT = {
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
+  'new-label': () => openLabelEditor(),
+  'edit-label': (el) => openLabelEditor(el.dataset.key),
+  'label-menu': (el) => {
+    const name = el.dataset.key, u = lblUsage().get(name) || {};
+    openMenu(el, [
+      { icon: 'edit', label: 'Edit…', run: () => openLabelEditor(name) },
+      { icon: 'search', label: 'Show what has it', run: () => { labelFilter = new Set([name]); saveLabelFilter(); setView(lblTotal(u) && u.sessions ? 'sessions' : u.profiles ? 'profiles' : u.recordings ? 'recordings' : 'nodes'); render(); } },
+      '-',
+      { icon: 'trash', label: 'Delete…', danger: true, run: () => deleteLabel(name) },
+    ]);
+  },
+  'label-filter': (el) => openLabelFilter(el),
+  'label-filter-remove': (el) => { labelFilter.delete(el.dataset.label); saveLabelFilter(); render(); },
   'add-node': () => { showAddTab('browser'); openModal('addNodeModal'); },
   'remove-offline-nodes': () => removeOfflineNodes(),
   'vacuum': () => vacuum(),
@@ -2979,6 +3407,7 @@ const ACT = {
       { label: 'Session' },
       { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
       { icon: 'gear', label: 'Settings…', run: () => openSessionSettings(s) },
+      { icon: 'tag', label: 'Labels…', meta: s.labels?.length ? s.labels.join(', ') : '', run: () => openItemLabels('session', s) },
       { icon: 'note', label: 'Notes…', meta: s.notes ? String(s.notes.count) : '', run: () => openNotes('session', s) },
       { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
       '-',
@@ -3014,7 +3443,7 @@ const ACT = {
       { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
       { icon: 'note', label: 'Notes…', meta: p.notes ? String(p.notes.count) : '', run: () => openNotes('profile', p) },
       !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
-      { icon: 'tag', label: 'Labels…', meta: p.labels?.length ? p.labels.join(', ') : '', run: () => setProfileLabels(p) },
+      { icon: 'tag', label: 'Labels…', meta: p.labels?.length ? p.labels.join(', ') : '', run: () => openItemLabels('profile', p) },
       { icon: 'image', label: 'Set picture…', run: () => pickProfileIcon(p) },
       p.icon_rev && { icon: 'trash', label: 'Remove picture', run: () => act('Removing the picture', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}/icon`)), 'Picture removed') },
       nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', run: () => openMenu(el, [
@@ -3046,6 +3475,7 @@ const ACT = {
     openMenu(el, [
       { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
       { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
+      { icon: 'tag', label: 'Labels…', meta: r.labels?.length ? r.labels.join(', ') : '', run: () => openItemLabels('recording', r) },
       { icon: 'note', label: 'Notes…', meta: r.notes ? String(r.notes.count) : '', run: () => openNotes('recording', r) },
       { icon: 'share', label: r.share ? 'Public link…' : 'Share…', run: () => openShare('recording', r) },
       r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
@@ -3105,7 +3535,7 @@ function fallbackCopy(text, done) {
 let sessionNode = null, sessionEngine = 'chromium', sessionProvisioned = null;
 
 // Placement labels a node advertises (--node-group / nodeGroups); profiles can be placed by them.
-const groupChips = (n) => (n.groups || []).map((g) => `<span class="chip group" title="Node group: placement can target it">${icon('tag', 'sm')}${esc(g)}</span>`).join(' ');
+const groupChips = (n) => lblChips(n.labels?.length ? n.labels : n.groups);
 function nodePills(container, selected, onPick, { onlineOnly = false, exclude = null, browsers = false } = {}) {
   const list = nodes.filter((n) => n.name !== exclude);
   container.innerHTML = list.map((n) => {
@@ -4155,12 +4585,6 @@ async function renameProfile(p) {
   if (!name || name === p.display) return;
   act('Renaming profile', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { name: profileTargetName(p, name) }), `Renamed to ${name}`);
 }
-async function setProfileLabels(p) {
-  const text = await ask({ title: `Labels of ${p.display}`, text: 'Short tags that group profiles, separated by spaces or commas: letters, digits and - _ . : /', input: (p.labels || []).join(' '), ok: 'Save', placeholder: 'ha work' });
-  if (text === null || text === undefined) return;
-  const labels = text.split(/[\s,]+/).filter(Boolean);
-  act('Setting the labels', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { labels }), labels.length ? `${p.display} is labelled ${labels.join(', ')}` : `${p.display} has no labels`);
-}
 function setSessionProxy(s, id) {
   const label = id === 'none' ? 'direct connections' : proxyName(s.node_name, id);
   act('Switching the proxy', () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/proxy`), { proxy: id }), `Session now uses ${label}`);
@@ -4580,7 +5004,7 @@ function renderNodes() {
   const odd = new Set(tally.size > 1 ? known.filter((n) => buildOf(n) !== mainBuild).map((n) => n.name) : []);
   const mismatch = odd.size
     ? `<div class="node-warn" role="alert">${icon('alert', 'sm')}<span>${[...odd].map(esc).join(', ')} ${odd.size === 1 ? 'runs' : 'run'} another version than the other nodes (${esc(mainBuild)}). Mixed versions can behave differently: update them together.</span></div>` : '';
-  const html = mismatch + nodes.map((n) => {
+  const html = mismatch + nodes.filter(inLabels).map((n) => {
     const online = n.status === 'online';
     const rev = n.revision ? ` · ${n.revision.slice(0, 7)}` : '';
     const stat = (value, label, cls = '', pct = null) => `<div class="node-stat ${cls}${pct === null ? '' : ' has-meter'}"><b>${value}</b><span>${label}</span>${pct === null ? '' : `<i class="meter" role="presentation"><span style="width:${pct}%;background:${pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)'}"></span></i>`}</div>`;
@@ -4688,38 +5112,15 @@ function openSettings(kind, key) {
 }
 // Groups from the node's startup flags are fixed; the ones added here live in its settings.
 function groupsEditor(n) {
-  const added = n.settings?.groups || [], fixed = (n.groups || []).filter((g) => !added.includes(g));
-  return `<div class="node-setting group-edit"><span>${icon('tag', 'sm')}Groups</span>
-    <div class="group-chips">${fixed.map((g) => `<span class="chip group" title="Set by the node's startup flags (--node-group / nodeGroups): change it there">${icon('lock', 'sm')}${esc(g)}</span>`).join(' ')}
-    ${added.map((g) => `<span class="chip group">${esc(g)}<button type="button" class="chip-x" data-group-remove="${esc(g)}" data-node="${esc(n.name)}" aria-label="Remove group ${esc(g)}">${icon('x', 'sm')}</button></span>`).join(' ')}${fixed.length || added.length ? '' : '<span class="muted">None</span>'}</div>
-    <div class="group-add"><input class="input" data-group-add="${esc(n.name)}" placeholder="New group name" maxlength="64" autocomplete="off" spellcheck="false" aria-label="Add a group to ${esc(n.name)}"><button type="button" class="btn sm primary" data-group-add-btn="${esc(n.name)}">${icon('plus', 'sm')}Add</button></div>
-    <span class="hint">Placement can target a group. Locked ones come from the startup flags.</span></div>`;
+  const labels = n.labels?.length ? n.labels : n.groups || [];
+  return `<div class="node-setting group-edit"><span>${icon('tag', 'sm')}Labels</span>
+    <div class="group-chips">${lblChips(labels)}<button type="button" class="btn sm" data-edit-labels="${esc(n.name)}">${labels.length ? 'Edit' : 'Add'}…</button></div>
+    <span class="hint">Placement can target a label. Locked ones come from the startup flags.</span></div>`;
 }
-async function saveGroups(node, groups) {
-  const r = await act(`Saving ${node}'s groups`, () => request('PATCH', api(node, '/settings'), { groups }), `${node}: groups saved`);
-  if (r !== undefined) { const n = nodes.find((x) => x.name === node); if (n) n.settings = r; }
-  refreshData();
-}
-function addGroup(node) {
-  const inp = $('settingsBody').querySelector(`input[data-group-add="${CSS.escape(node)}"]`);
-  const name = inp?.value.trim(), n = nodes.find((x) => x.name === node);
-  if (!name || !n) return;
-  inp.value = '';
-  saveGroups(node, [...(n.settings?.groups || []), name]);
-}
-$('settingsBody').addEventListener('keydown', (e) => {
-  const inp = e.target.closest('[data-group-add]');
-  if (!inp || e.key !== 'Enter') return;
-  e.preventDefault();
-  addGroup(inp.dataset.groupAdd);
-});
 $('settingsBody').addEventListener('click', (e) => {
-  const add = e.target.closest('[data-group-add-btn]');
-  if (add) { addGroup(add.dataset.groupAddBtn); return; }
-  const rm = e.target.closest('[data-group-remove]');
-  if (!rm) return;
-  const node = rm.dataset.node, n = nodes.find((x) => x.name === node);
-  if (n) saveGroups(node, (n.settings?.groups || []).filter((g) => g !== rm.dataset.groupRemove));
+  const b = e.target.closest('[data-edit-labels]');
+  const n = b && nodes.find((x) => x.name === b.dataset.editLabels);
+  if (n) openItemLabels('node', n);
 });
 // Also on every overview while it is open.
 function renderSettings() {
@@ -4741,7 +5142,7 @@ function renderSettings() {
             ${proxies.map((x) => `<option value="${esc(x.id)}"${def === x.id ? ' selected' : ''}>${esc(x.name)} (${esc(x.host)}:${x.port})</option>`).join('')}
           </select>`
         : '<span class="muted">No proxies on this node</span>'}<span class="hint">For new sessions that pick no proxy and whose profile has none.</span></label>` : ''}
-      ${online && n.settings ? groupsEditor(n) : n.groups?.length ? `<div class="node-setting"><span>${icon('tag', 'sm')}Groups</span>${groupChips(n)}</div>` : ''}
+      ${online && n.settings ? groupsEditor(n) : (n.labels?.length || n.groups?.length) ? `<div class="node-setting"><span>${icon('tag', 'sm')}Labels</span>${groupChips(n)}</div>` : ''}
       ${!n.isLocal ? `<div class="settings-danger"><button class="btn danger" data-node-remove="${esc(n.name)}">${icon('trash', 'sm')}Remove peer</button><span class="hint">Configured peers come back when this node restarts.</span></div>` : ''}
     </div>`;
   } else if (kind === 'browser') {

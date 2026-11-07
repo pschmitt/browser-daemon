@@ -28,7 +28,7 @@
 - **Recordings** with sound, a scrubbing player, WebM export and merging.
 - **Persistent profiles** with free-text names, backups, exports, per-profile
   proxies and automatic idle-profile transfers to a requested node or group.
-  See [profile placement](docs/profiles.md#automatic-placement-and-node-groups).
+  See [profile placement](docs/profiles.md#automatic-placement-and-node-labels).
 - **Playwright over HTTP**: `POST /api/run` runs a script or a list of steps
   in a session and answers with the result, for clients without Playwright.
 - **Home Assistant integration** (Marketplace; HACS custom repository on older

@@ -10,29 +10,27 @@ cookies (including the ones without an expiry that many logins use), localStorag
 
 Discovers peer nodes across Tailscale/wireguard meshes and transfers persistent browser profiles between nodes with live progress toasts.
 
-### Automatic placement and node groups
+### Automatic placement and node labels
 
-Advertise labels with repeated `--node-group` arguments or NixOS
-`services.browser-daemon.nodeGroups = [ "cloud" ];`. Groups appear in mesh
-inventory and MCP `browser_status`. Nodes without groups remain usable when
-no group is requested.
+A node's labels are what placement can target. Give a node labels with repeated
+`--node-group` arguments (or NixOS `services.browser-daemon.nodeGroups = [ "cloud" ];`),
+or in its settings on the dashboard's Nodes tab, the Labels tab, `browser-daemon label add node NAME cloud`, or
+`PATCH /api/settings` with `{"labels": [...]}` (`groups` is the old name). Labels from
+the startup flags are locked: change them in the flags or Nix option. They appear in
+the mesh inventory and MCP `browser_status`. Nodes without labels remain usable when
+no label is requested.
 
-Groups can also be added at runtime in a node's settings on the dashboard's
-Nodes tab (or `PATCH /api/settings` with `{"groups": [...]}`) and are kept across
-restarts. Groups from the startup flags are immutable there: change them in the
-flags or Nix option.
-
-MCP `browser_use` accepts `profile`, `node` and `group`. Requesting a saved
-profile on another node moves it there before opening it. A group restricts
-placement to its members; an explicit node must also belong to that group.
-An active profile stays on its node. Otherwise a group request selects the
+MCP `browser_use` accepts `profile`, `node` and `label` (`group` is the old name). Requesting a saved
+profile on another node moves it there before opening it. A label restricts
+placement to the nodes that carry it; an explicit node must carry it too.
+An active profile stays on its node. Otherwise a label request selects the
 least-utilized online node with capacity and the required browser engine. For
-requests without a group, a matching resident profile is preferred.
+requests without a label, a matching resident profile is preferred.
 
 The authenticated `POST /api/mesh/placement` endpoint accepts:
 
 ```json
-{"profile": "work", "group": "cloud", "engine": "chromium"}
+{"profile": "work", "group": "cloud", "engine": "chromium"}   // "group" names a node label
 ```
 
 It returns `node`, `node_url` and `profile`. Call the selected node's session
@@ -116,7 +114,12 @@ Route a session through a SOCKS or HTTP proxy configured on its node (`services.
 
 ## Labels
 
-A profile can carry up to 16 labels: short tags that group profiles (`ha`, `work`). A label is 1 to 32 characters (letters, digits and `- _ . : /`, stored in lowercase). `browser-daemon profile new NAME --label ha`, `profile set NAME --label a --label b` (replaces them), `--add-label`, `--remove-label`, `--clear-labels`, `profile ls --label ha` (repeat to require several); the dashboard's **Labels…** menu entry; `POST /api/profiles` and `PATCH /api/profiles/<name>` take `labels` (a list, or words separated by spaces or commas; empty clears), `add_labels` and `remove_labels`. They are in the profile's metadata, so they move, back up and export with it. The overview, `GET /api/profiles` and `browser_status` carry them as `labels`.
+Labels are short tags (`ha`, `work`) that group **nodes, profiles, sessions and recordings**, and that the dashboard's tabs filter by (the **Labels** button next to the tabs; an item must carry every selected label). A label is 1 to 32 characters (letters, digits and `- _ . : /`, stored in lowercase); an item carries up to 16.
+
+- **Where they live.** A node's in its settings (plus the locked ones from `--node-group`), a profile's in its metadata (they move, back up and export with it), a recording's in its directory, a session's beside its state until it ends. A session of a profile starts with the profile's labels (a copy), and `POST /api/sessions` takes `labels` on top.
+- **Putting them on things.** The **Labels…** entry of an item's menu (the Nodes tab's settings for a node); `browser-daemon label add|remove node|profile|session|recording TARGET LABEL...`; `profile new|set --label` (also `--add-label`, `--remove-label`, `--clear-labels`; `profile ls --label ha`); `PUT /api/item-labels/<kind>/<id>` with `labels` (replace), `add`, `remove`; `labels` on `POST|PATCH /api/profiles`. Overview, `GET /api/profiles` and `browser_status` carry them as `labels`.
+- **The Labels tab** lists every label with what carries it, and edits them: rename (on every node, profile, session and recording), delete (the label comes off all of them: a node whose startup flags set it keeps it), and give each an **icon** and a **color**. An icon is a [Material Design Icons](https://pictogrammers.com/library/mdi/) icon (`mdi:home-assistant`), a [Simple Icons](https://simpleicons.org) brand logo (`simple-icons:homeassistant`) or an image of your own (png, svg, webp, jpeg or gif, up to 128 KB); the picker searches both sets, which the daemon serves from `/assets/iconsets/` (licenses in `assets/iconsets/LICENSES.md`). A color is `#rrggbb`; it tints the label wherever it is shown. The same from the shell: `browser-daemon label ls|set|rm`, `label set NAME --icon mdi:home-assistant | --icon simple-icons:homeassistant | --icon-file FILE | --clear-icon`, `--color "#18bcf2" | --clear-color`, `--rename NEW`; `PUT|DELETE /api/labels/<name>` (`icon`, `color`, `rename_to`).
+- **One registry per mesh.** Icons, colors and deletions are kept by every node. An edit is pushed to the peers that are up, and nodes compare registries whenever the mesh overview is fetched, so a node that was away catches up (the newest change wins; a delete or rename leaves a tombstone for 30 days, which takes the label off, or replaces it on, that node's items). A label exists as soon as an item carries it: the registry only holds its icon and color.
 
 ## Notes
 

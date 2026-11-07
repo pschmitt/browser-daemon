@@ -677,8 +677,8 @@ pub enum LabelCmd {
     /// Change a label's icon, or rename it (on every node, profile, session and recording).
     Set {
         name: String,
-        /// An icon from Material Design Icons: `mdi:home-assistant`.
-        #[arg(long, value_name = "mdi:NAME", conflicts_with_all = ["icon_file", "clear_icon"])]
+        /// An icon: `mdi:home-assistant` (Material Design Icons) or `simple-icons:homeassistant` (brand logos; `si:` for short).
+        #[arg(long, value_name = "SET:NAME", conflicts_with_all = ["icon_file", "clear_icon"])]
         icon: Option<String>,
         /// A picture (png, svg, webp, jpeg or gif, up to 128 KB).
         #[arg(long, value_name = "FILE", conflicts_with = "clear_icon")]
@@ -686,6 +686,12 @@ pub enum LabelCmd {
         /// Remove its icon.
         #[arg(long)]
         clear_icon: bool,
+        /// Its color, `#rrggbb`.
+        #[arg(long, value_name = "#RRGGBB", conflicts_with = "clear_color")]
+        color: Option<String>,
+        /// Remove its color.
+        #[arg(long)]
+        clear_color: bool,
         /// Rename it; an existing label of that name takes its items over.
         #[arg(long, value_name = "NEW")]
         rename: Option<String>,

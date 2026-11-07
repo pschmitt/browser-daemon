@@ -50,25 +50,32 @@ impl Kind {
     }
 }
 
-/// A label's picture: a Material Design Icons name (`home-assistant`), or an image.
+/// A label's picture: a Material Design Icons name (`home-assistant`), a Simple Icons
+/// brand logo (`homeassistant`), or an image.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[serde(tag = "kind")]
 pub enum LabelIcon {
+    #[serde(rename = "mdi")]
     Mdi { name: String },
+    #[serde(rename = "simple-icons")]
+    SimpleIcons { name: String },
+    #[serde(rename = "image")]
     Image { mime: String, data: String },
 }
 
 impl LabelIcon {
     fn check(&self) -> Result<(), String> {
         match self {
-            Self::Mdi { name } => {
+            Self::Mdi { name } | Self::SimpleIcons { name } => {
                 let ok = !name.is_empty()
                     && name.len() <= 64
                     && name
                         .chars()
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-                ok.then_some(())
-                    .ok_or_else(|| "An mdi icon name is lowercase letters, digits and -".into())
+                ok.then_some(()).ok_or_else(|| {
+                    "An icon name is lowercase letters, digits and - (see pictogrammers.com/library/mdi or simpleicons.org)"
+                        .into()
+                })
             }
             Self::Image { mime, data } => {
                 use base64::Engine as _;
@@ -94,6 +101,9 @@ impl LabelIcon {
 pub struct LabelDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<LabelIcon>,
+    /// `#rrggbb`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     /// Milliseconds; the newest definition of a label wins.
     pub updated_at: u64,
 }
@@ -116,9 +126,13 @@ pub struct Registry {
 
 /// A label's picture without the image itself (`GET /api/labels/<name>/icon`).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[serde(tag = "kind")]
 pub enum IconDigest {
+    #[serde(rename = "mdi")]
     Mdi { name: String },
+    #[serde(rename = "simple-icons")]
+    SimpleIcons { name: String },
+    #[serde(rename = "image")]
     Image { mime: String },
 }
 
@@ -127,6 +141,8 @@ pub struct DefDigest {
     pub updated_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<IconDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// The registry as the overview and the peers' comparison carry it.
@@ -164,6 +180,9 @@ impl Registry {
                 .map(|(name, d)| {
                     let icon = d.icon.as_ref().map(|i| match i {
                         LabelIcon::Mdi { name } => IconDigest::Mdi { name: name.clone() },
+                        LabelIcon::SimpleIcons { name } => {
+                            IconDigest::SimpleIcons { name: name.clone() }
+                        }
                         LabelIcon::Image { mime, .. } => IconDigest::Image { mime: mime.clone() },
                     });
                     (
@@ -171,6 +190,7 @@ impl Registry {
                         DefDigest {
                             updated_at: d.updated_at,
                             icon,
+                            color: d.color.clone(),
                         },
                     )
                 })
@@ -260,6 +280,20 @@ pub fn rewrite(labels: &mut Vec<String>, old: &str, new: Option<&str>) -> bool {
     true
 }
 
+/// A color as stored: `#rrggbb`, lowercase (`#abc` and no `#` are accepted).
+pub fn normalize_color(input: &str) -> Result<String, String> {
+    let hex = input.trim().trim_start_matches('#').to_lowercase();
+    if !hex.chars().all(|c| c.is_ascii_hexdigit()) || !matches!(hex.len(), 3 | 6) {
+        return Err("A color is #rrggbb (hexadecimal)".into());
+    }
+    let full: String = if hex.len() == 3 {
+        hex.chars().flat_map(|c| [c, c]).collect()
+    } else {
+        hex
+    };
+    Ok(format!("#{full}"))
+}
+
 // ------------------------------------------------------------------ storage
 
 /// One change at a time: reads, changes and writes are a unit.
@@ -313,6 +347,24 @@ async fn write_list(path: &Path, labels: &[String]) -> std::io::Result<()> {
         persist::private_dir(dir).await.ok();
     }
     persist::write_atomic(path, &serde_json::to_vec_pretty(labels)?).await
+}
+
+/// A session of a profile starts with the profile's labels (a copy: later changes to
+/// either do not follow).
+pub async fn inherit_from_profile(state: &AppState, session: &ManagedSession) {
+    let Some(id) = session.profile_id else {
+        return;
+    };
+    let Ok(profile) = lookup_profile(state, &id.to_string()).await else {
+        return;
+    };
+    if profile.meta.labels.is_empty() {
+        return;
+    }
+    let path = sessions_dir(state).join(format!("{}.json", session.id));
+    if let Err(e) = write_list(&path, &profile.meta.labels).await {
+        warn!(session_id = %session.id, error = %e, "Could not label the session");
+    }
 }
 
 /// A session ended: its labels go with it.
@@ -423,6 +475,7 @@ pub async fn note_assigned(state: &AppState, labels: &[String]) -> Option<Regist
         if registry.deleted.remove(label).is_some() {
             let def = LabelDef {
                 icon: None,
+                color: None,
                 updated_at: now_ms(),
             };
             registry.defs.insert(label.clone(), def.clone());
@@ -593,6 +646,7 @@ pub async fn reconcile(state: &AppState, peer_url: &str, theirs: &Digest) {
                     name.clone(),
                     LabelDef {
                         icon: None,
+                        color: d.color.clone(),
                         updated_at: d.updated_at,
                     },
                 );
@@ -602,6 +656,17 @@ pub async fn reconcile(state: &AppState, peer_url: &str, theirs: &Digest) {
                     name.clone(),
                     LabelDef {
                         icon: Some(LabelIcon::Mdi { name: icon.clone() }),
+                        color: d.color.clone(),
+                        updated_at: d.updated_at,
+                    },
+                );
+            }
+            Some(IconDigest::SimpleIcons { name: icon }) => {
+                incoming.defs.insert(
+                    name.clone(),
+                    LabelDef {
+                        icon: Some(LabelIcon::SimpleIcons { name: icon.clone() }),
+                        color: d.color.clone(),
                         updated_at: d.updated_at,
                     },
                 );
@@ -739,6 +804,9 @@ pub(crate) struct PutLabel {
     /// Absent: unchanged; null: no icon.
     #[serde(default, deserialize_with = "profiles_api::nullable")]
     pub(crate) icon: Option<Option<LabelIcon>>,
+    /// Absent: unchanged; null: no color; `#rrggbb`.
+    #[serde(default, deserialize_with = "profiles_api::nullable")]
+    pub(crate) color: Option<Option<String>>,
     /// Rename the label (on every node's items); an existing label of that name
     /// takes the items over.
     #[serde(default)]
@@ -758,6 +826,10 @@ pub(crate) async fn api_put(
     if let Some(Some(ref icon)) = req.icon {
         icon.check().map_err(bad)?;
     }
+    let color = match req.color {
+        Some(Some(ref c)) => Some(Some(normalize_color(c).map_err(bad)?)),
+        other => other,
+    };
     let target = req
         .rename_to
         .as_deref()
@@ -775,6 +847,9 @@ pub(crate) async fn api_put(
         if let Some(icon) = req.icon {
             def.icon = icon;
         }
+        if let Some(color) = color {
+            def.color = color;
+        }
         def.updated_at = now;
         match target {
             None => {
@@ -787,6 +862,9 @@ pub(crate) async fn api_put(
                 let mut new_def = registry.defs.get(to).cloned().unwrap_or_default();
                 if new_def.icon.is_none() {
                     new_def.icon = def.icon.clone();
+                }
+                if new_def.color.is_none() {
+                    new_def.color = def.color.clone();
                 }
                 new_def.updated_at = now;
                 registry.deleted.remove(to);
@@ -888,6 +966,7 @@ mod tests {
     fn def(n: u64) -> LabelDef {
         LabelDef {
             icon: None,
+            color: None,
             updated_at: at(n),
         }
     }
@@ -970,6 +1049,14 @@ mod tests {
         assert_eq!(delta.defs.keys().collect::<Vec<_>>(), ["b"]);
         assert_eq!(delta.deleted.keys().collect::<Vec<_>>(), ["c"]);
         assert!(ours.newer_than(&ours.digest()).is_empty());
+    }
+
+    #[test]
+    fn colors_are_normalised() {
+        assert_eq!(normalize_color("#ABC").unwrap(), "#aabbcc");
+        assert_eq!(normalize_color(" 03a9f4 ").unwrap(), "#03a9f4");
+        assert!(normalize_color("#12345").is_err());
+        assert!(normalize_color("red").is_err());
     }
 
     #[test]

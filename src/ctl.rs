@@ -1031,6 +1031,7 @@ pub async fn label(args: LabelArgs) -> R<()> {
                         json!({
                             "label": name,
                             "icon": c.ov.labels.defs.get(name).and_then(|d| d.icon.as_ref()),
+                            "color": c.ov.labels.defs.get(name).and_then(|d| d.color.as_ref()),
                             "nodes": n[0], "profiles": n[1], "sessions": n[2], "recordings": n[3],
                         })
                     })
@@ -1043,12 +1044,20 @@ pub async fn label(args: LabelArgs) -> R<()> {
                 .map(|(name, n)| {
                     let icon = match c.ov.labels.defs.get(name).and_then(|d| d.icon.as_ref()) {
                         Some(crate::labels::IconDigest::Mdi { name }) => format!("mdi:{name}"),
+                        Some(crate::labels::IconDigest::SimpleIcons { name }) => {
+                            format!("simple-icons:{name}")
+                        }
                         Some(crate::labels::IconDigest::Image { mime }) => mime.clone(),
                         None => "-".into(),
                     };
                     vec![
                         name.clone(),
                         icon,
+                        c.ov.labels
+                            .defs
+                            .get(name)
+                            .and_then(|d| d.color.clone())
+                            .unwrap_or_else(|| "-".into()),
                         n[0].to_string(),
                         n[1].to_string(),
                         n[2].to_string(),
@@ -1060,6 +1069,7 @@ pub async fn label(args: LabelArgs) -> R<()> {
                 &[
                     "LABEL",
                     "ICON",
+                    "COLOR",
                     "NODES",
                     "PROFILES",
                     "SESSIONS",
@@ -1073,14 +1083,30 @@ pub async fn label(args: LabelArgs) -> R<()> {
             icon,
             icon_file,
             clear_icon,
+            color,
+            clear_color,
             rename,
         } => {
             let mut body = json!({});
+            if let Some(color) = color {
+                body["color"] = json!(color);
+            }
+            if clear_color {
+                body["color"] = Value::Null;
+            }
             if let Some(icon) = icon {
-                let Some(mdi) = icon.strip_prefix("mdi:") else {
-                    return fail(EXIT_USAGE, "An icon is written mdi:NAME (see pictogrammers.com/library/mdi), or use --icon-file");
+                let parsed = if let Some(n) = icon.strip_prefix("mdi:") {
+                    Some(("mdi", n))
+                } else {
+                    ["simple-icons:", "si:"]
+                        .iter()
+                        .find_map(|p| icon.strip_prefix(p))
+                        .map(|n| ("simple-icons", n))
                 };
-                body["icon"] = json!({ "kind": "mdi", "name": mdi });
+                let Some((kind, name)) = parsed else {
+                    return fail(EXIT_USAGE, "An icon is written mdi:NAME (pictogrammers.com/library/mdi) or simple-icons:NAME (simpleicons.org); or use --icon-file");
+                };
+                body["icon"] = json!({ "kind": kind, "name": name });
             }
             if let Some(file) = icon_file {
                 use base64::Engine as _;
@@ -1114,7 +1140,7 @@ pub async fn label(args: LabelArgs) -> R<()> {
             if body.as_object().is_some_and(|o| o.is_empty()) {
                 return fail(
                     EXIT_USAGE,
-                    "Nothing to change: give --icon, --icon-file, --clear-icon or --rename",
+                    "Nothing to change: give --icon, --icon-file, --clear-icon, --color, --clear-color or --rename",
                 );
             }
             let path = c.api(&local, &format!("/labels/{}", enc(&name)));

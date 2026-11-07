@@ -4,20 +4,17 @@
 
 ### Added
 
-* Profile labels: short tags (`ha`, `work`) that group profiles. Set them with
-  `browser-daemon profile new|set --label` (`set` also takes `--add-label`,
-  `--remove-label` and `--clear-labels`), filter with `profile ls --label`,
-  or use the dashboard's **Labels…** menu entry; the API takes `labels`
-  on `POST /api/profiles` and `PATCH /api/profiles/{name}` (plus `add_labels`
-  and `remove_labels`). Labels show in the profile list, the overview and
-  `browser_status`.
-* The dashboard shows each node's groups as chips on the Nodes tab and next to
-  the node names in the profile transfer dialog. Groups can be added and removed
-  at runtime in a node's settings (`PATCH /api/settings` with `groups`); the
-  ones from `--node-group` or `nodeGroups` are immutable and shown locked.
-* Home Assistant integration: `async_get_daemon()` gives other integrations a
-  `browser_daemon_client` client configured from a Browser Daemon entry, so they
-  need no URL or cluster secret of their own.
+* Labels on nodes, profiles, sessions and recordings, replacing profile-only
+  labels and node groups (`--node-group`, `nodeGroups`, `groups` in settings and
+  the API, and the placement `group` keep working as aliases). A **Labels** tab
+  lists the labels, renames and deletes them on the whole mesh (a deleted label
+  comes off every node, profile, session and recording, also on nodes that were
+  away), and gives each an icon (any Material Design Icons icon, a Simple Icons brand logo, or an image) and a color. A
+  **Labels** button next to the tabs filters sessions, profiles, recordings and
+  nodes by label. `browser-daemon label ls|set|rm|add|remove`,
+  `PUT /api/item-labels/<kind>/<id>`, `PUT|DELETE /api/labels/<name>`; a session
+  of a profile starts with its labels; `browser_use` takes `label` and
+  `browser_status` lists labels.
 
 ### Fixed
 

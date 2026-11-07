@@ -313,6 +313,7 @@ impl AppState {
             let mut guard = self.sessions.write().await;
             guard.insert(session.id, session.clone());
         }
+        labels::inherit_from_profile(self, &session).await;
         crate::downloads::watch(self.clone(), &session);
         self.hook_passkeys(&session);
         // In the map: the reservation is no longer needed.
@@ -706,6 +707,10 @@ pub struct CreateSessionRequest {
     pub screen: ScreenMode,
     /// Live views mark taps and clicks when they open; defaults to the engine's setting.
     pub show_touches: Option<bool>,
+    /// Labels for the session, on top of its profile's: a list, or words separated by
+    /// spaces or commas.
+    #[serde(default, deserialize_with = "profiles_api::tabs_field")]
+    pub labels: Option<Vec<String>>,
 }
 
 /// Chromium writes into unpacked extensions and shows a blocking "Error
@@ -829,6 +834,13 @@ pub(crate) async fn api_create_session(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     state.check_auth(&headers)?;
+    let extra_labels = profiles::normalize_labels(req.labels.as_deref().unwrap_or_default())
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": e })),
+            )
+        })?;
     let phone = req.screen == ScreenMode::Phone;
     let session = state
         .spawn_session(
@@ -854,6 +866,22 @@ pub(crate) async fn api_create_session(
     }
     *session.screen.write().unwrap() = req.screen;
     *session.show_touches.write().unwrap() = req.show_touches;
+    if !extra_labels.is_empty() {
+        let change = labels::LabelChange {
+            add: Some(extra_labels),
+            ..Default::default()
+        };
+        if let Err((_, e)) = labels::change_item(
+            &state,
+            labels::Kind::Session,
+            &session.id.to_string(),
+            &change,
+        )
+        .await
+        {
+            warn!(session_id = %session.id, error = ?e, "Could not label the session");
+        }
+    }
 
     let rec = state
         .active_recordings

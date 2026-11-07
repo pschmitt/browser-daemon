@@ -340,7 +340,8 @@ fn own_tools(
                 "properties": {
                     "profile": { "type": "string", "description": "Name of a profile from browser_status." },
                     "node": { "type": "string", "description": "Destination node. An idle saved profile is moved here automatically; active profiles are not interrupted." },
-                    "group": { "type": "string", "description": "Restrict placement to this node group, such as cloud. Never falls back outside it; node, if supplied, must belong to it." },
+                    "label": { "type": "string", "description": "Restrict placement to nodes with this label, such as cloud (see the labels of the nodes in browser_status). Never falls back outside it; node, if supplied, must have it." },
+                    "group": { "type": "string", "description": "Old name of `label`." },
                     "ephemeral": { "type": "boolean", "description": "Create a dedicated short-lived node for this browser." },
                     "ephemeral_ttl_seconds": { "type": "integer", "minimum": 60, "maximum": 86400, "description": "Maximum lifetime of the dedicated node in seconds." }
                 },
@@ -1627,7 +1628,7 @@ impl State {
         let nodes: Vec<Value> = Self::nodes(&ov)
             .iter()
             .map(|n| {
-                let groups = if n.0 == ov.local_node.name {
+                let labels = if n.0 == ov.local_node.name {
                     &ov.local_node.groups
                 } else {
                     &ov.peers
@@ -1636,7 +1637,7 @@ impl State {
                         .expect("listed node")
                         .groups
                 };
-                json!({ "node": n.0, "groups": groups, "sessions": format!("{}/{}", n.2, n.3) })
+                json!({ "node": n.0, "labels": labels, "sessions": format!("{}/{}", n.2, n.3) })
             })
             .collect();
         let profiles: Vec<Value> = ov
@@ -1680,13 +1681,14 @@ impl State {
             .as_str()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-        let group = args["group"]
+        let group = args["label"]
             .as_str()
+            .or_else(|| args["group"].as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty());
         if ephemeral && (profile.is_some() || node.is_some() || group.is_some()) {
             return Err(
-                "An ephemeral browser cannot use a saved profile, node or group selector".into(),
+                "An ephemeral browser cannot use a saved profile, node or label selector".into(),
             );
         }
         if let Some(name) = profile.filter(|name| !allows(&self.allow, name)) {
@@ -1748,7 +1750,7 @@ impl State {
                 .await
                 .map_err(|_| "Browser placement request failed".to_string())?;
             if !response.status().is_success() {
-                return Err(format!("Browser placement refused (HTTP {}): check node/group capacity, active profile sessions and duplicate copies", response.status()));
+                return Err(format!("Browser placement refused (HTTP {}): check node/label capacity, active profile sessions and duplicate copies", response.status()));
             }
             let placed: crate::profile_transfer::Placement = response
                 .json()

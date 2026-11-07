@@ -47,7 +47,7 @@ async with aiohttp.ClientSession() as http:
 - `create_session(profile="work", group="cloud")` places the profile before
   opening it and returns `node_name` for subsequent node-specific calls.
   Supplying both `profile` and `node` also enables automatic placement.
-  See [profile placement](../docs/profiles.md#automatic-placement-and-node-groups)
+  See [profile placement](../docs/profiles.md#automatic-placement-and-node-labels)
   for transfer restrictions and failure behavior.
 - `create_session(ephemeral_node=True)` provisions a dedicated node and returns
   its `node_url` alongside the session. Connect to that node with the session ID;

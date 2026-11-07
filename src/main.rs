@@ -1062,6 +1062,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/download-worker.js", get(download_worker_js))
         .route("/assets/common.js", get(common_js))
         .route("/assets/common.css", get(common_css))
+        .route("/assets/iconsets/{file}", get(pages::icon_set))
         .route("/health", get(health_check))
         .route("/api/auth/token", get(api_auth_token))
         .route("/extension/", get(extension::page))

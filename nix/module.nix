@@ -190,7 +190,7 @@ in
     nodeGroups = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Groups this node belongs to in the browser mesh.";
+      description = "Labels this node carries in the browser mesh (locked: change them here, not in the dashboard); placement can target them.";
     };
 
     ephemeralUp = lib.mkOption {
