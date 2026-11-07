@@ -743,12 +743,11 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 #askModal .ask-extra .node-card { padding: 10px 12px; }
 /* Prune recordings: the list's rows, without the selection. */
 #pruneRecList { margin-top: 12px; max-height: 55vh; overflow-y: auto; }
-#pruneRecList .row { grid-template-columns: 0 40px minmax(0, 1fr) 100px 90px 70px 44px; }
-#pruneRecList .row > [role="cell"]:first-child { visibility: hidden; }
+#pruneRecList .row { grid-template-columns: 44px minmax(0, 1fr) 100px 90px 70px 44px; }
 #pruneRecList .c-started, #pruneRecList .c-size { display: block; }
 #pruneRecList .c-dur { display: none; }
 @media (max-width: 760px) {
-  #pruneRecList .row { grid-template-columns: 0 40px minmax(0, 1fr) 44px; }
+  #pruneRecList .row { grid-template-columns: 44px minmax(0, 1fr) 44px; }
   #pruneRecList .c-started, #pruneRecList .c-size { display: none; }
 }
 /* The header's checkbox selects them all; a phone has no header and keeps the button. */
@@ -1217,7 +1216,7 @@ body.selecting .recordings .sel-mark { display: grid; }
   padding: 8px max(10px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
   background: var(--raised); border-top: 1px solid var(--line-strong); box-shadow: 0 -8px 24px rgba(0, 0, 0, .25); }
 .selbar[hidden] { display: none; }
-body.selecting .appnav { visibility: hidden; }
+@media (max-width: 760px) { body.selecting .appnav { visibility: hidden; } }
 .selbar-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .selbar-head .muted { flex: 1; text-align: center; }
 .selbar-head .btn { height: 40px; }
@@ -2454,7 +2453,8 @@ syncThemeColor();
 // submenu, like a profile's proxy) becomes the sheet's next level.
 const sheetQuery = matchMedia('(max-width: 760px), (pointer: coarse)');
 function openMenu(anchor, items, { align = 'right' } = {}) {
-  if (sheetQuery.matches || $('objSheet').open) { pushSheetLevel(items.filter(Boolean)); return; }
+  const sheetOpen = $('objSheet').open;
+  if ((sheetOpen && topModal() === $('objSheet')) || (sheetQuery.matches && !sheetOpen)) { pushSheetLevel(items.filter(Boolean)); return; }
   const menu = $('menu');
   menuItems = items.filter(Boolean);
   const anyTick = menuItems.some((it) => it.on !== undefined);
@@ -2642,6 +2642,7 @@ function sessionSheetSpec(s) {
       primary: `<a class="btn primary big" href="${href}">${icon('takeover')}${control ? 'Take over' : 'View'}</a>`,
       items: [
         s._extension.public_share && { tile: true, icon: 'share', label: 'Share', run: () => openShare('session', s) },
+        { icon: 'tabs', label: 'Shared tabs', meta: plural(pagesOf(s).length, 'tab'), more: true, run: () => showSessionDetails(s) },
         { icon: control ? 'takeover' : 'eye', label: control ? 'Control allowed' : 'View only', sub: 'Sharing and control are set in the browser extension' },
         { icon: 'server', label: 'Node details', more: true, run: () => afterSheet(() => { filter = s.node_name; setView('nodes'); render(); }) },
         '-',
@@ -2698,7 +2699,7 @@ function profileSheetSpec(p) {
     head: sheetHead(pic, esc(p.display), subLine(status, nodeChip(p.node_name), engine, formatBytes(p.size_bytes)), p.labels?.length ? `<div class="obj-facts">${lblChips(p.labels)}</div>` : ''),
     primary: p.session
       ? `<a class="btn primary big" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)}>${icon('takeover')}Take over</a>`
-      : `<button class="btn primary big" data-act="launch-profile" data-key="${esc(key)}">${icon('play', 'fill')}Launch</button>${p.tabs?.length ? `<button class="btn big" data-act="launch-profile-bare" data-key="${esc(key)}">Without tabs</button>` : ''}`,
+      : `<button class="btn primary big" data-act="sheet-launch" data-key="${esc(key)}">${icon('play', 'fill')}Launch in ${engine}</button>${p.tabs?.length ? `<button class="btn big" data-act="sheet-launch-bare" data-key="${esc(key)}" title="Launch without the default tabs">Without tabs</button>` : ''}`,
     items: [
       { label: p.session ? 'Every launch (from the next one)' : 'Every launch' },
       nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', more: true, run: () => openMenu(null, [
@@ -2742,7 +2743,7 @@ function recordingSheetSpec(r) {
     head: sheetHead(`<span class="site-fav lg">${favicon(url, recFavicon(r), r.favicon_url)}</span>`, esc(recordingTitle(r)),
       subLine(esc(shortUrl(url) || plural(r.frame_count, 'frame')), nodeChip(r.node_name), esc(relTime(r.started_at_secs)), esc(formatUptime(r.duration_seconds)), esc(formatBytes(r.size_bytes))),
       `${flags.length ? `<div class="obj-facts">${flags.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}${r.labels?.length ? `<div class="obj-facts">${lblChips(r.labels)}</div>` : ''}`),
-    primary: `<button class="btn primary big" data-act="play" data-key="${esc(key)}">${icon('play', 'fill')}Play</button>`,
+    primary: `<button class="btn primary big" data-act="sheet-play" data-key="${esc(key)}">${icon('play', 'fill')}Play</button>`,
     items: [
       { tile: true, icon: 'pin', on: !!r.keep, label: r.keep ? 'Kept' : 'Keep', run: () => setRecordingKeep([r], !r.keep) },
       { tile: true, icon: r.share ? 'globe' : 'share', on: !!r.share, label: r.share ? 'Public' : 'Share', run: () => openShare('recording', r) },
@@ -2777,6 +2778,11 @@ document.addEventListener('click', (e) => {
     if (document.body.classList.contains('selecting')) { toggleRecordingSelected(rrow.dataset.key); return; }
     openRecordingSheet(rrow.dataset.key);
   }
+});
+document.addEventListener('keydown', (e) => {
+  if ((e.key !== 'Enter' && e.key !== ' ') || !e.target.matches?.('#sessionGrid .scard[tabindex], #view-profiles .row[tabindex]')) return;
+  e.preventDefault();
+  if (e.target.matches('.scard')) openSessionSheet(e.target.dataset.key); else openProfileSheet(e.target.dataset.key);
 });
 function toggleRecordingSelected(key) {
   if (selectedRecordings.has(key)) selectedRecordings.delete(key); else selectedRecordings.add(key);
@@ -3746,7 +3752,7 @@ function sessionCard(s) {
   ].filter(Boolean).join('');
 
   return `
-  <article class="scard${lead ? ' driven' : ''}${sh ? ' public' : ''}" data-key="${key}">
+  <article class="scard${lead ? ' driven' : ''}${sh ? ' public' : ''}" data-key="${key}" tabindex="0" aria-label="${esc(`${sessName(s)}: details and actions`)}">
     ${hero}
     <div class="scard-head">
       ${sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`}
@@ -3786,7 +3792,7 @@ function profileRow(p) {
     ? `<a class="round-go on" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)} title="Take over" aria-label="Take over ${esc(p.display)}">${icon('takeover')}</a>`
     : `<button class="round-go" data-act="launch-profile" data-key="${key}" title="Launch" aria-label="Launch ${esc(p.display)}">${icon('play', 'fill')}</button>`;
   return `
-  <div class="row" role="row" data-key="${key}">
+  <div class="row" role="row" data-key="${key}" tabindex="0" aria-label="${esc(`${p.display}: details and actions`)}">
     <div role="cell" class="main">${profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`}
       <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${lblChips(p.labels)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
@@ -3980,8 +3986,10 @@ try { lastMesh = localStorage.getItem('dash.mesh') || 'nodes'; } catch { /* stor
 const isView = (v) => VIEWS.includes(v) || v === 'mesh' || v === 'settings';
 function setView(v) {
   if (handoffPicker) v = 'sessions';
-  // #settings is the old name of the group that held profiles, engines and labels.
-  if (v === 'mesh' || v === 'settings') v = MESH_VIEWS.includes(lastMesh) ? lastMesh : 'nodes';
+  // #settings is the old name of the group that held profiles (first), engines and labels.
+  if (v === 'settings') v = 'profiles';
+  if (v === 'mesh') v = MESH_VIEWS.includes(lastMesh) ? lastMesh : 'nodes';
+  if (v !== 'recordings' && (selectMode || selectedRecordings.size)) { selectMode = false; selectedRecordings.clear(); }
   view = v;
   const group = secOf(v);
   if (group === 'mesh') { lastMesh = v; try { localStorage.setItem('dash.mesh', v); } catch { /* storage unavailable */ } }
@@ -4086,7 +4094,9 @@ const ACT = {
   'public-links': () => openPublicLinks(),
   'new-tab': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) newTab(s); },
   'launch-profile': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) launchProfile(p); },
-  'launch-profile-bare': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) launchProfile(p, { tabs: false }); },
+  'sheet-launch': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) afterSheet(() => launchProfile(p)); },
+  'sheet-launch-bare': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) afterSheet(() => launchProfile(p, { tabs: false })); },
+  'sheet-play': (el) => { const r = byKey.recordings.get(el.dataset.key); if (r) afterSheet(() => openPlayerModal(r.id, r.node_name)); },
   'profile-menu': (el) => openProfileSheet(el.dataset.key),
   'play': (el) => { const r = byKey.recordings.get(el.dataset.key); if (r) openPlayerModal(r.id, r.node_name); },
   'recording-menu': (el) => openRecordingSheet(el.dataset.key),
