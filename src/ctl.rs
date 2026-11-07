@@ -1893,6 +1893,21 @@ pub async fn node(args: NodeArgs) -> R<()> {
                     duration(p.uptime_seconds),
                 ]);
             }
+            for n in l
+                .ephemeral_nodes
+                .iter()
+                .chain(c.ov.peers.iter().flat_map(|p| &p.ephemeral_nodes))
+            {
+                rows.push(vec![
+                    n.name.clone(),
+                    format!("{} (ephemeral)", n.status),
+                    format!("{}/1", usize::from(n.session_id.is_some())),
+                    "-".into(),
+                    "-".into(),
+                    "-".into(),
+                    duration(crate::clients::now_secs().saturating_sub(n.created_at)),
+                ]);
+            }
             table(
                 &[
                     "NODE", "STATUS", "SESSIONS", "PROFILES", "LATENCY", "VERSION", "UP",

@@ -271,12 +271,30 @@ async def test_dashboard_launches_and_closes_dedicated_worker(tmp_path, engine):
             assert response.ok, f"{response.status}: {await response.text()}"
             await page.wait_for_url("**/handoff/?ephemeral=**", timeout=120_000)
             await page.wait_for_function("document.querySelector('#dot')?.className === 'live'", timeout=60_000)
+            dashboard = await browser.new_page()
+            await dashboard.goto(f"http://127.0.0.1:{router_port}")
+            await dashboard.locator('[data-view="nodes"]').click()
+            card = dashboard.locator(".node-card").filter(has_text="Dedicated worker")
+            await card.wait_for(timeout=30_000)
+            assert "worker" in await card.inner_text()
+            assert "ephemeral" in await card.inner_text()
+            cli = await asyncio.create_subprocess_exec(
+                os.environ["BD_TEST_BINARY"], "node", "list", "--url", f"http://127.0.0.1:{router_port}",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            output, error = await cli.communicate()
+            assert cli.returncode == 0, error.decode()
+            assert "worker" in output.decode() and "ephemeral" in output.decode()
+            if engine == "firefox":
+                await card.locator("[data-ephemeral-stop]").click()
             await page.close()
             for _ in range(150):
                 if marker.exists():
                     break
                 await asyncio.sleep(0.2)
             assert marker.exists(), "closing the live view must decommission the worker"
+            await card.wait_for(state="hidden", timeout=30_000)
+            await dashboard.close()
             await browser.close()
     finally:
         router.terminate()

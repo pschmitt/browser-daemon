@@ -86,6 +86,9 @@ allows reconnection; then the session closes and the coordinator runs the down
 command. Failed teardown is retried and leases are recovered after coordinator
 restart. A node that is unreachable cannot be confirmed closed, so the
 coordinator keeps retrying; the provider's maximum lifetime is the backstop.
+Active and starting workers appear in the dashboard's **Nodes** view and in
+`browser-daemon node list`. The dashboard can open their live view or stop their
+session, which also decommissions the worker.
 Requests sent to another mesh node are forwarded to an online provider; nodes
 advertise the capability as `ephemeral_provider` in mesh inventory.
 

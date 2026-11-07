@@ -9,6 +9,8 @@ pub struct PeerState {
     pub groups: Vec<String>,
     #[serde(default)]
     pub ephemeral_provider: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ephemeral_nodes: Vec<ephemeral::EphemeralNode>,
     pub url: String,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

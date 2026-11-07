@@ -16,6 +16,79 @@ struct Lease {
     seen_client: bool,
 }
 
+/// A provider-owned worker, without exposing its private URL.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EphemeralNode {
+    pub lease_id: Uuid,
+    pub name: String,
+    pub session_id: Option<Uuid>,
+    pub status: String,
+    pub created_at: u64,
+}
+
+pub(crate) async fn nodes(state: &AppState) -> Vec<EphemeralNode> {
+    if state.ephemeral_up.is_none() {
+        return Vec::new();
+    }
+    let Ok(mut entries) = fs::read_dir(lease_dir(state)).await else {
+        return Vec::new();
+    };
+    let mut leases = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(id) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+        else {
+            continue;
+        };
+        if let Ok(data) = fs::read(path).await {
+            if let Ok(lease) = serde_json::from_slice::<Lease>(&data) {
+                leases.push((id, lease));
+            }
+        }
+    }
+    futures_util::future::join_all(leases.into_iter().map(|(id, lease)| async move {
+        let info = if lease.url.is_empty() {
+            None
+        } else {
+            match state
+                .peer_request(state.http_client.get(format!(
+                    "{}/api/mesh/node?without_ephemeral=1",
+                    lease.url.trim_end_matches('/')
+                )))
+                .timeout(Duration::from_millis(1000))
+                .send()
+                .await
+            {
+                Ok(res) if res.status().is_success() => res.json::<NodeInfo>().await.ok(),
+                _ => None,
+            }
+        };
+        let status = if lease.session.is_none() {
+            "starting"
+        } else if info.is_some() {
+            "online"
+        } else {
+            "unreachable"
+        };
+        EphemeralNode {
+            lease_id: id,
+            name: info
+                .map(|n| n.name)
+                .unwrap_or_else(|| format!("ephemeral-{}", &id.to_string()[..8])),
+            session_id: lease.session,
+            status: status.into(),
+            created_at: lease.created,
+        }
+    }))
+    .await
+}
+
 fn lease_dir(state: &AppState) -> PathBuf {
     state.config.state_dir().join("ephemeral-nodes")
 }
@@ -236,7 +309,9 @@ async fn save(state: &AppState, key: Uuid, lease: &Lease) -> std::io::Result<()>
     let data = serde_json::to_vec(lease).map_err(std::io::Error::other)?;
     let tmp = dir.join(format!("{key}.tmp"));
     fs::write(&tmp, data).await?;
-    fs::rename(tmp, dir.join(format!("{key}.json"))).await
+    fs::rename(tmp, dir.join(format!("{key}.json"))).await?;
+    state.overview.invalidate();
+    Ok(())
 }
 
 async fn destroy(state: &AppState, key: Uuid, lease: &Lease) {
@@ -257,6 +332,7 @@ async fn destroy(state: &AppState, key: Uuid, lease: &Lease) {
         .await;
         if matches!(result, Ok(Ok(status)) if status.success()) {
             let _ = fs::remove_file(lease_dir(state).join(format!("{key}.json"))).await;
+            state.overview.invalidate();
             return;
         }
         warn!(node = %lease.id, "Ephemeral node teardown failed; retrying");

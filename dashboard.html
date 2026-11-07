@@ -2389,8 +2389,9 @@ function renderHeader() {
     chip.classList.toggle('off', sel.status !== 'online');
     $('nodeFilterName').textContent = nodeLabel(sel.name);
   }
-  $('countNodes').classList.toggle('warn', ov.online_nodes < ov.total_nodes);
-  $('countNodes').title = `${ov.online_nodes + extensionBrowserNodes.filter(n => n.online !== false).length}/${ov.total_nodes + extensionBrowserNodes.length} online`;
+  const ephemeral = ephemeralNodes();
+  $('countNodes').classList.toggle('warn', ov.online_nodes < ov.total_nodes || ephemeral.some(n => n.status === 'unreachable'));
+  $('countNodes').title = `${ov.online_nodes + extensionBrowserNodes.filter(n => n.online !== false).length + ephemeral.filter(n => n.status === 'online').length}/${ov.total_nodes + extensionBrowserNodes.length + ephemeral.length} online`;
 }
 
 function renderStats() {
@@ -2419,7 +2420,7 @@ function renderStats() {
   $('countSessions').textContent = dashboardSessions().filter(inFilter).length;
   $('countProfiles').textContent = profs.length;
   $('countRecordings').textContent = visibleRecordings().length;
-  $('countNodes').textContent = nodes.length + extensionBrowserNodes.length;
+  $('countNodes').textContent = nodes.length + extensionBrowserNodes.length + ephemeralNodes().length;
   $('countEngines').textContent = availableEngines().length;
 }
 
@@ -4524,6 +4525,20 @@ $('transferForm').addEventListener('submit', async (e) => {
 /* ---------------------------------------------------------------- nodes & endpoints */
 // A node's default proxy: for sessions that pick none and whose profile has none.
 const nodeDefaultProxy = (node) => nodes.find((n) => n.name === node)?.settings?.default_proxy || null;
+const ephemeralNodes = () => nodes.flatMap((provider) => (provider.ephemeral_nodes || []).map((node) => ({ ...node, provider: provider.name })));
+function ephemeralNodeCard(n) {
+  const online = n.status === 'online';
+  const url = n.session_id ? `${nodeBase(n.provider)}/handoff/?ephemeral=${enc(n.lease_id)}&session=${enc(n.session_id)}` : '';
+  const age = n.created_at ? cardAge(Math.max(0, Date.now() / 1000 - n.created_at)) : '';
+  return `<div class="node-card" style="--node:${nodeColor(n.name)}">
+    <div class="node-head"><div class="avatar">${icon('server')}</div>
+      <div class="t"><b>${esc(n.name)} <span class="chip accent">ephemeral</span> <span class="chip ${online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad'}">${esc(n.status)}</span></b>
+        <span>Dedicated worker · via ${esc(n.provider)}</span></div>
+      <div class="node-ctl">${online && url ? `<a class="btn sm" href="${esc(url)}">${icon('takeover', 'sm')}Take over</a>` : ''}
+        ${n.session_id ? `<button class="btn sm" data-ephemeral-stop="${esc(n.lease_id)}" data-provider="${esc(n.provider)}" data-session="${esc(n.session_id)}">Stop</button>` : ''}</div>
+    </div><div class="node-stats"><div class="node-stat"><b>${n.session_id ? '1/1' : '0/1'}</b><span>sessions</span></div>${age ? `<div class="node-stat"><b>${esc(age)}</b><span>uptime</span></div>` : ''}</div>
+  </div>`;
+}
 function renderNodes() {
   if (!ov) return;
   // Not while a setting is being changed: re-rendering would close its picker.
@@ -4565,7 +4580,7 @@ function renderNodes() {
         ${n.supported_engines?.length ? stat(n.supported_engines.map((e) => icon(e, 'sm')).join(' '), plural(n.supported_engines.length, 'engine').replace(/^\d+ /, '')) : ''}
       </div>` : ''}
     </div>`;
-  }).join('') + extensionBrowserNodes.map(extensionNodeCard).join('');
+  }).join('') + ephemeralNodes().map(ephemeralNodeCard).join('') + extensionBrowserNodes.map(extensionNodeCard).join('');
   if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
   renderSettings();
 }
@@ -4793,6 +4808,11 @@ $('settingsBody').addEventListener('change', async (e) => {
   renderNodes();
 });
 $('nodesList').addEventListener('click', (e) => {
+  const stop = e.target.closest('[data-ephemeral-stop]');
+  if (stop) {
+    act('Stopping session', () => request('DELETE', api(stop.dataset.provider, `/ephemeral/${enc(stop.dataset.ephemeralStop)}/proxy/api/sessions/${enc(stop.dataset.session)}`)), 'Session stopped');
+    return;
+  }
   const launch = e.target.closest('[data-node-launch]');
   if (launch) openNewSession({ node: launch.dataset.nodeLaunch });
 });
