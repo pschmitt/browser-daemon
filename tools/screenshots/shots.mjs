@@ -1,6 +1,6 @@
 // Screenshots of the dashboard (see run.sh), light and dark:
 //   desktop (1280 wide, 2x): dashboard.png, dashboard-profiles.png
-//   phone (390x844, 3x, touch): dashboard-phone.png, dashboard-phone-sheet.png
+//   phone (390x844, 2x, touch): dashboard-phone.png, dashboard-phone-sheet.png
 //     (first session's sheet open) and live-phone.png (the live view of the
 //     session spry-quokka); each with a -dark twin.
 // Environment: PLAYWRIGHT_DIR (where playwright-core is
@@ -37,7 +37,7 @@ const newContext = async (browser, theme, options) => {
 
 const phone = {
   viewport: { width: 390, height: 844 },
-  deviceScaleFactor: 3,
+  deviceScaleFactor: 2,
   isMobile: true,
   hasTouch: true,
 };

@@ -18,6 +18,21 @@
   <img src="dashboard.png" alt="Dashboard: running sessions across two nodes, with their tabs">
 </picture>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="dashboard-phone-dark.png">
+    <img src="dashboard-phone.png" width="260" alt="Dashboard on a phone: session cards and the section bar at the bottom">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="dashboard-phone-sheet-dark.png">
+    <img src="dashboard-phone-sheet.png" width="260" alt="A session's sheet on a phone: take over, recording, share, notes and settings">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="live-phone-dark.png">
+    <img src="live-phone.png" width="260" alt="The live view on a phone: the remote page with a toolbar at the bottom">
+  </picture>
+</p>
+
 ## Features
 
 - **A browser per connection**, Chromium over CDP (`/chromium`) and Firefox over

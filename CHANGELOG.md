@@ -4,9 +4,23 @@
 
 ### Changed
 
-* The dashboard has four tabs: Sessions, Recordings, Nodes and Settings. Profiles,
-  Engines and Labels moved under Settings (a second row of tabs); `#profiles`,
-  `#engines` and `#labels` still open them.
+* The web UI is built for phones first. The dashboard has a bar at the bottom
+  (a rail on the left on wide screens) with Sessions, Profiles, Recordings and
+  Mesh (nodes, engines and labels) and a large New button; the stat cards are a
+  line under each section's title. A session, profile or recording opens a sheet
+  (a side panel on wide screens) with its main action, frequent actions as tiles
+  and the rest as rows that show their value; menus are sheets on touch screens.
+  Recordings are selected with a long press, with their actions in a bar at the
+  bottom. `#profiles`, `#nodes`, `#engines`, `#labels` and `#mesh` open their
+  section; the old `#settings` opens Profiles.
+* The live view on a phone has one row at the top (a session switcher, and the
+  address with the tab count) and a toolbar at the bottom: Back, Forward, Keys,
+  Tabs, Session. Its session menu, settings dialog and profile menu are one
+  session sheet; Copy and Paste work without the keyboard; the tabs are a grid of
+  previews with the owning agent on each; the keys row has Ctrl and arrows.
+* The public share page has the app's colours and theme, two-finger zoom on the
+  live picture, and in-page confirmations instead of the browser's dialogs.
+* Touch targets are 44px or larger throughout.
 
 ## [0.14.0] - 2026-11-07
 

@@ -13,7 +13,7 @@
 #     -c tools/screenshots/run.sh
 #
 # Writes dashboard.png, dashboard-profiles.png (desktop), dashboard-phone.png,
-# dashboard-phone-sheet.png and live-phone.png (phone, 390x844 at 3x), each
+# dashboard-phone-sheet.png and live-phone.png (phone, 390x844 at 2x), each
 # with a -dark twin, to the output directory (default: the repository root). Ports, the binary and the browser can be set with the variables below.
 
 usage() {
