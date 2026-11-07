@@ -102,6 +102,13 @@ svg.i.fill { fill: currentColor; stroke: none; }
 .group-edit .group-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .group-edit .group-add { display: flex; gap: 8px; align-items: center; }
 .group-edit .group-add .input { flex: 1; min-width: 0; max-width: 240px; }
+.group-add { position: relative; }
+.label-suggest { position: absolute; left: 0; top: 100%; margin-top: 6px; min-width: 280px; max-width: 100%; max-height: 260px; overflow: auto; padding: 5px; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: var(--shadow); z-index: 20; }
+.label-suggest[hidden] { display: none; }
+.suggest-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; min-height: 36px; padding: 4px 8px; border: 0; border-radius: 8px; background: none; color: var(--fg); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.suggest-row:hover, .suggest-row.active { background: var(--hover); }
+.suggest-row .meta { color: var(--faint); font-size: 11.5px; white-space: nowrap; }
+.suggest-row .make { color: var(--muted); }
 .chip .chip-x { display: inline-flex; border: 0; background: none; color: inherit; padding: 0; margin-right: -4px; cursor: pointer; opacity: .7; }
 .chip .chip-x:hover, .chip .chip-x:focus-visible { opacity: 1; }
 .chip.label { background: color-mix(in oklab, var(--fg, currentColor) 9%, transparent); color: var(--muted, inherit); gap: 5px; }
@@ -126,7 +133,11 @@ button.chip.label .i:last-child { opacity: .7; }
 .label-icon-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .label-icon-row .avatar { width: 44px; height: 44px; }
 .label-icon-row .avatar .i { width: 24px; height: 24px; }
-.mdi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; max-height: 46vh; overflow: auto; padding: 2px; }
+.mdi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); grid-auto-rows: auto; align-content: start; gap: 6px; flex: none; height: min(46vh, 400px); min-height: min(46vh, 400px); box-sizing: border-box; overflow: auto; padding: 2px; }
+.mdi-empty { grid-column: 1 / -1; grid-row: 1 / span 6; align-self: center; justify-self: center; color: var(--muted); font-size: 13px; }
+#mdiModal .sheet { width: min(560px, 94vw); }
+#mdiCount { min-height: 1.4em; display: block; }
+.mdi-section { grid-column: 1 / -1; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); align-self: end; }
 .mdi-cell { display: grid; place-items: center; height: 44px; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--fg, inherit); cursor: pointer; }
 .mdi-cell:hover, .mdi-cell:focus-visible { background: var(--hover); border-color: var(--accent); }
 .mdi-cell svg { width: 24px; height: 24px; fill: currentColor; }
@@ -1392,7 +1403,6 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <div class="sheet">
     <div class="sheet-head"><h2 id="mdiTitle">Choose an icon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
-      <div class="label-icon-row" id="mdiSets"></div>
       <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="mdiSearch" placeholder="Search icons: home, server, robot…" autocomplete="off" spellcheck="false" aria-label="Search icons"></label>
       <div class="mdi-grid" id="mdiGrid"></div>
       <span class="hint" id="mdiCount"></span>
@@ -1405,9 +1415,7 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="sheet-head"><h2 id="itemLabelsTitle">Labels</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <span class="hint" id="itemLabelsIntro"></span>
-      <div class="group-edit"><div class="group-chips" id="itemLabelsChips"></div></div>
-      <div class="group-edit"><div class="group-add"><input class="input" id="itemLabelsInput" list="labelSuggestions" maxlength="32" placeholder="Add a label" autocomplete="off" spellcheck="false" aria-label="Add a label"><button type="button" class="btn sm" id="itemLabelsAdd">Add</button></div></div>
-      <datalist id="labelSuggestions"></datalist>
+      <div id="itemLabelsEditor"></div>
     </div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary"><svg class="i"><use href="#i-check"/></svg>Save</button></div>
   </form>
@@ -2628,101 +2636,204 @@ $('labelForm').addEventListener('submit', async (e) => {
   refreshData();
 });
 
-// The icon picker.
-let mdiQuery = '', pickerSet = 'mdi';
-const POPULAR = {
-  mdi: ['home-assistant', 'tag', 'home', 'server', 'laptop', 'cloud', 'briefcase', 'account-group', 'shield-check', 'robot', 'bug', 'flask', 'star', 'heart', 'lightning-bolt', 'cog', 'wrench', 'database', 'lock', 'earth', 'chart-line', 'bell', 'flag', 'fire', 'rocket-launch', 'school', 'cart', 'music', 'video', 'camera'],
-  'simple-icons': ['homeassistant', 'microsoftteams', 'microsoft', 'github', 'gitlab', 'nixos', 'docker', 'kubernetes', 'openstack', 'google', 'firefox', 'googlechrome', 'slack', 'python', 'rust', 'linux', 'grafana', 'prometheus', 'bitwarden', 'tailscale', 'signal', 'telegram', 'anthropic', 'openai'],
+// The icon picker: one search over every icon of every set.
+let mdiQuery = '';
+const POPULAR = [
+  ['mdi', ['home-assistant', 'tag', 'home', 'server', 'laptop', 'cloud', 'briefcase', 'account-group', 'shield-check', 'robot', 'bug', 'flask', 'star', 'heart', 'lightning-bolt', 'cog', 'wrench', 'database', 'lock', 'earth', 'chart-line', 'bell', 'flag', 'fire', 'rocket-launch']],
+  ['simple-icons', ['homeassistant', 'microsoftteams', 'github', 'gitlab', 'nixos', 'docker', 'kubernetes', 'openstack', 'google', 'firefox', 'slack', 'python', 'rust', 'linux', 'grafana', 'bitwarden', 'tailscale', 'anthropic']],
+];
+// Icons that fit common label names, before the name search turns up its own.
+const ICON_HINTS = {
+  ha: ['mdi:home-assistant', 'simple-icons:homeassistant'], homeassistant: ['mdi:home-assistant', 'simple-icons:homeassistant'], hass: ['mdi:home-assistant', 'simple-icons:homeassistant'],
+  teams: ['simple-icons:microsoftteams', 'mdi:microsoft-teams'], msteams: ['simple-icons:microsoftteams', 'mdi:microsoft-teams'],
+  work: ['mdi:briefcase', 'mdi:domain'], office: ['mdi:domain', 'mdi:briefcase'], private: ['mdi:lock', 'mdi:account'], personal: ['mdi:account', 'mdi:heart'],
+  cloud: ['mdi:cloud', 'mdi:server-network'], edge: ['mdi:server-network', 'mdi:lan'], homelab: ['mdi:home-lightning-bolt', 'mdi:server'], home: ['mdi:home', 'mdi:home-assistant'],
+  prod: ['mdi:shield-check', 'mdi:server'], production: ['mdi:shield-check', 'mdi:server'], staging: ['mdi:flask', 'mdi:server'], dev: ['mdi:code-braces', 'mdi:bug'], test: ['mdi:flask', 'mdi:bug'],
+  agent: ['mdi:robot', 'simple-icons:anthropic'], agents: ['mdi:robot', 'simple-icons:anthropic'], bot: ['mdi:robot'], ai: ['mdi:robot', 'simple-icons:anthropic'],
+  mail: ['mdi:email', 'simple-icons:gmail'], email: ['mdi:email'], bank: ['mdi:bank'], finance: ['mdi:cash-multiple', 'mdi:bank'], shop: ['mdi:cart'], shopping: ['mdi:cart'],
+  monitoring: ['mdi:chart-line', 'simple-icons:grafana'], ci: ['mdi:cog-sync', 'simple-icons:github'], backup: ['mdi:backup-restore', 'mdi:database'], vpn: ['mdi:vpn', 'mdi:shield-lock'],
+  media: ['mdi:play-circle', 'mdi:video'], admin: ['mdi:shield-account', 'mdi:cog'], temp: ['mdi:timer-sand', 'mdi:clock-outline'], tmp: ['mdi:timer-sand', 'mdi:clock-outline'],
 };
+let iconPool = null;   // every icon of every set, once they are all in
+const iconSetsReady = () => Object.values(ICON_SETS).every((x) => x.paths);
 function openMdiPicker() {
-  const cur = labelEdit?.icon !== undefined ? labelEdit.icon : labelEdit?.current;
-  pickerSet = ICON_SETS[cur?.kind] ? cur.kind : 'mdi';
   mdiQuery = '';
   $('mdiSearch').value = '';
-  loadIconSet(pickerSet);
+  Object.keys(ICON_SETS).forEach(loadIconSet);
   renderMdiPicker();
   openModal('mdiModal');
   setTimeout(() => $('mdiSearch').focus(), 40);
 }
+// How well an icon matches the words: 0 is the name itself, then its start, a part of it, an alias.
+function iconRank(ic, words, query) {
+  if (ic.name === query) return 0;
+  if (ic.name.startsWith(words[0])) return 1;
+  if (words.every((w) => ic.name.includes(w))) return 2;
+  return 3;
+}
+// Icons that fit the label's name: the hints for it, then icons named like it (or like its parts).
+function suggestIcons(name) {
+  const text = (name || '').trim().toLowerCase();
+  if (!text || !iconPool) return [];
+  const parts = [...new Set([text, ...text.split(/[^a-z0-9]+/).filter((w) => w.length > 1)])];
+  const out = [], add = (ic) => { if (ic && !out.includes(ic)) out.push(ic); };
+  for (const part of parts) for (const h of ICON_HINTS[part] || []) { const [set, n] = h.split(':'); add(iconPool.find((ic) => ic.set === set && ic.name === n)); }
+  for (const part of parts) {
+    const hits = iconPool.filter((ic) => ic.name.includes(part) || ic.alias.split(' ').includes(part))
+      .sort((a, b) => iconRank(a, [part], part) - iconRank(b, [part], part) || a.name.length - b.name.length || (a.set === 'mdi' ? -1 : 1));
+    // A short name like "ha" matches too much by name alone: only exact names and aliases then.
+    for (const ic of hits.slice(0, 12)) if (part.length > 3 || iconRank(ic, [part], part) === 0 || ic.alias.split(' ').includes(part)) add(ic);
+  }
+  return out.slice(0, 18);
+}
+const iconCell = (ic) => `<button type="button" class="mdi-cell" data-set="${ic.set}" data-icon="${esc(ic.name)}" title="${esc(`${ic.set}:${ic.name}`)}" aria-label="${esc(`${ic.set}:${ic.name}`)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${esc(ic.d)}"/></svg></button>`;
 function renderMdiPicker() {
-  const set = ICON_SETS[pickerSet], grid = $('mdiGrid');
-  $('mdiSets').innerHTML = Object.entries(ICON_SETS).map(([k, v]) => `<button type="button" class="btn sm${k === pickerSet ? ' primary' : ''}" data-icon-set="${k}" aria-pressed="${k === pickerSet}">${esc(v.title)}</button>`).join('');
-  if (!set.paths) { grid.innerHTML = ''; $('mdiCount').textContent = 'Loading the icons…'; return; }
-  const words = mdiQuery.toLowerCase().split(/\s+/).filter(Boolean);
-  const hits = words.length ? set.list.filter((i) => words.every((w) => i[0].includes(w) || (i[2] || '').includes(w)))
-    : POPULAR[pickerSet].filter((n) => set.paths.has(n)).map((n) => [n, set.paths.get(n)]);
+  const grid = $('mdiGrid'), count = $('mdiCount');
+  if (!iconSetsReady()) { grid.innerHTML = '<span class="mdi-empty">Loading the icons…</span>'; count.textContent = ' '; return; }
+  iconPool ||= Object.entries(ICON_SETS).flatMap(([set, v]) => v.list.map((i) => ({ set, name: i[0], d: i[1], alias: i[2] || '' })));
+  const query = mdiQuery.trim().toLowerCase(), words = query.split(/\s+/).filter(Boolean);
+  let hits;
+  if (words.length) {
+    hits = iconPool.filter((ic) => words.every((w) => ic.name.includes(w) || ic.alias.includes(w)))
+      .map((ic) => [iconRank(ic, words, query), ic]).sort((a, b) => a[0] - b[0] || (a[1].set === b[1].set ? a[1].name.length - b[1].name.length : a[1].set === 'mdi' ? -1 : 1)).map((x) => x[1]);
+  } else {
+    hits = POPULAR.flatMap(([set, names]) => names.map((n) => iconPool.find((ic) => ic.set === set && ic.name === n)).filter(Boolean));
+  }
   const shown = hits.slice(0, 240);
-  grid.innerHTML = shown.map((i) => `<button type="button" class="mdi-cell" data-icon="${esc(i[0])}" title="${esc(i[0])}" aria-label="${esc(i[0])}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${esc(i[1])}"/></svg></button>`).join('');
-  $('mdiCount').textContent = !words.length ? `${plural(set.list.length, 'icon')}: search to find more`
+  // Before anything is typed: what fits the label's name, then the popular ones.
+  const labelName = $('labelName').value;
+  const suggested = words.length ? [] : suggestIcons(labelName);
+  const rest = shown.filter((ic) => !suggested.includes(ic));
+  grid.innerHTML = shown.length
+    ? (suggested.length ? `<span class="mdi-section">Suggested for “${esc(labelName.trim())}”</span>${suggested.map(iconCell).join('')}<span class="mdi-section">Popular</span>` : '') + rest.map(iconCell).join('')
+    : '<span class="mdi-empty">No icon matches</span>';
+  count.textContent = !words.length ? `${plural(iconPool.length, 'icon')}: search to find more`
     : hits.length > shown.length ? `Showing ${shown.length} of ${hits.length}: narrow it down` : plural(hits.length, 'icon');
 }
 $('mdiSearch').addEventListener('input', (e) => { mdiQuery = e.target.value; renderMdiPicker(); });
-$('mdiSets').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-icon-set]');
-  if (!b) return;
-  pickerSet = b.dataset.iconSet;
-  loadIconSet(pickerSet);
-  renderMdiPicker();
-});
 $('mdiGrid').addEventListener('click', (e) => {
   const b = e.target.closest('[data-icon]');
   if (!b || !labelEdit) return;
-  labelEdit.icon = { kind: pickerSet, name: b.dataset.icon };
+  labelEdit.icon = { kind: b.dataset.set, name: b.dataset.icon };
   syncLabelEditor();
   closeModal('mdiModal');
 });
 
+// A label editor, the same wherever labels are edited: the labels as chips you can remove,
+// and an input whose suggestions show the labels as they look (icon, color, how many items).
+// `onChange(labels)` is called with the editable labels after every change.
+function mountLabelEditor(root, { labels = [], fixed = [], onChange = () => {} }) {
+  const st = { labels: [...labels], active: -1 };
+  root.innerHTML = `<div class="group-edit"><div class="group-chips" data-le-chips></div></div>
+    <div class="group-edit"><div class="group-add"><input class="input" data-le-input maxlength="32" placeholder="Add a label" role="combobox" aria-expanded="false" autocomplete="off" spellcheck="false" aria-label="Add a label"><button type="button" class="btn sm" data-le-add>Add</button>
+      <div class="label-suggest" data-le-suggest role="listbox" hidden></div></div></div>`;
+  const q = (sel) => root.querySelector(sel);
+  const input = q('[data-le-input]'), box = q('[data-le-suggest]');
+  const changed = () => onChange([...st.labels]);
+  function chips() {
+    q('[data-le-chips]').innerHTML = fixed.map((l) => { const k = lblColorAttr(l); return `<span class="chip label${k.cls}"${k.style} title="Set by the node's startup flags: change it there">${lblIconHtml(l)}${esc(l)}${icon('lock', 'sm')}</span>`; }).join(' ')
+      + st.labels.map((l) => { const k = lblColorAttr(l); return `<span class="chip label${k.cls}"${k.style}>${lblIconHtml(l)}${esc(l)}<button type="button" class="chip-x" data-le-remove="${esc(l)}" aria-label="Remove ${esc(l)}">${icon('x', 'sm')}</button></span>`; }).join(' ')
+      || '<span class="hint">No labels yet</span>';
+  }
+  function rows() {
+    const text = input.value.trim().toLowerCase(), usage = lblUsage();
+    const known = [...usage.keys()].filter((l) => !st.labels.includes(l) && !fixed.includes(l) && l.includes(text))
+      .sort((a, b) => (b.startsWith(text) - a.startsWith(text)) || lblTotal(usage.get(b)) - lblTotal(usage.get(a)) || a.localeCompare(b));
+    const out = known.map((name) => ({ name, meta: lblTotal(usage.get(name)) ? plural(lblTotal(usage.get(name)), 'item') : 'unused' }));
+    if (text && !usage.has(text) && !st.labels.includes(text) && !fixed.includes(text) && /^[a-z0-9._:/-]{1,32}$/.test(text)) out.push({ name: text, make: true, meta: 'new label' });
+    return out;
+  }
+  function suggest() {
+    const list = document.activeElement === input ? rows() : [];
+    box.hidden = !list.length;
+    input.setAttribute('aria-expanded', String(!!list.length));
+    if (list.length) {   // fixed under the input: the dialog around it must not cut it off
+      const r = input.getBoundingClientRect();
+      Object.assign(box.style, { position: 'fixed', left: `${r.left}px`, top: `${r.bottom + 6}px`, width: `${Math.max(280, r.width)}px`, maxHeight: `${Math.max(120, Math.min(260, innerHeight - r.bottom - 16))}px` });
+    }
+    st.active = Math.min(st.active, list.length - 1);
+    box.innerHTML = list.map((r, k) => `<button type="button" class="suggest-row${k === st.active ? ' active' : ''}" role="option" data-le-pick="${esc(r.name)}">${r.make ? `<span class="make">Create</span> ${lblChip(r.name)}` : lblChip(r.name)}<span class="meta">${esc(r.meta)}</span></button>`).join('');
+  }
+  function add(names) {
+    let did = false;
+    for (const w of names.map((x) => x.trim().toLowerCase()).filter(Boolean)) if (!st.labels.includes(w) && !fixed.includes(w)) { st.labels.push(w); did = true; }
+    st.labels.sort();
+    input.value = '';
+    st.active = -1;
+    chips(); suggest();
+    if (did) changed();
+  }
+  q('[data-le-chips]').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-le-remove]');
+    if (!b) return;
+    st.labels = st.labels.filter((l) => l !== b.dataset.leRemove);
+    chips(); suggest(); changed();
+  });
+  q('[data-le-add]').addEventListener('click', () => { add(input.value.split(/[\s,]+/)); input.focus(); });
+  input.addEventListener('input', () => { st.active = -1; suggest(); });
+  input.addEventListener('focus', suggest);
+  input.addEventListener('blur', () => setTimeout(suggest, 120));
+  box.addEventListener('mousedown', (e) => {
+    const b = e.target.closest('[data-le-pick]');
+    if (!b) return;
+    e.preventDefault();
+    add([b.dataset.lePick]);
+    input.focus();
+  });
+  input.addEventListener('keydown', (e) => {
+    const list = rows(), open = !box.hidden;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!list.length) return;
+      e.preventDefault();
+      st.active = (st.active + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+      suggest();
+      box.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (open && st.active >= 0 && list[st.active]) add([list[st.active].name]); else add(input.value.split(/[\s,]+/));
+    } else if (e.key === 'Escape' && open) {
+      e.preventDefault(); e.stopPropagation();
+      st.active = -1;
+      box.hidden = true;
+    }
+  });
+  chips();
+  return {
+    // What is typed but not added yet counts too.
+    labels() { const typed = input.value.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean); return [...new Set([...st.labels, ...typed])].sort(); },
+    focus() { input.focus(); },
+  };
+}
+
 // Put labels on one item: a node, profile, session or recording.
-let itemLabels = null;   // { kind, node, key, display, fixed, labels }
+let itemLabels = null;   // { kind, node, key, display, editor }
 function openItemLabels(kind, item) {
   const display = { node: () => item.name, profile: () => item.display, session: () => sessName(item), recording: () => item.title || item.id.slice(0, 8) }[kind]();
   let labels = item.labels || [], fixed = [];
   if (kind === 'node') {
-    labels = item.labels?.length ? item.labels : item.groups || [];
-    const added = item.settings?.labels || [];
-    fixed = labels.filter((l) => !added.includes(l));
-    labels = labels.filter((l) => added.includes(l));
+    const all = item.labels?.length ? item.labels : item.groups || [], added = item.settings?.labels || [];
+    fixed = all.filter((l) => !added.includes(l));
+    labels = all.filter((l) => added.includes(l));
   }
-  itemLabels = { kind, node: kind === 'node' ? item.name : item.node_name, key: { node: () => item.name, profile: () => item.key, session: () => item.id, recording: () => item.id }[kind](), display, fixed, labels: [...labels] };
+  itemLabels = { kind, node: kind === 'node' ? item.name : item.node_name, key: { node: () => item.name, profile: () => item.key, session: () => item.id, recording: () => item.id }[kind](), display };
+  itemLabels.editor = mountLabelEditor($('itemLabelsEditor'), { labels, fixed });
   $('itemLabelsTitle').textContent = `Labels of ${display}`;
   $('itemLabelsIntro').textContent = kind === 'node' ? 'Placement can target a node label. Locked ones come from the node\'s startup flags.'
     : kind === 'session' ? 'Labels of this session only: it keeps them until it ends.' : `Short tags that group ${kind}s. Letters, digits and - _ . : /`;
-  $('itemLabelsInput').value = '';
-  syncItemLabels();
   openModal('itemLabelsModal');
-  setTimeout(() => $('itemLabelsInput').focus(), 40);
+  setTimeout(() => itemLabels.editor.focus(), 40);
 }
-function syncItemLabels() {
-  if (!itemLabels) return;
-  $('itemLabelsChips').innerHTML = itemLabels.fixed.map((l) => `<span class="chip label" title="Set by the node's startup flags: change it there">${icon('lock', 'sm')}${esc(l)}</span>`).join(' ')
-    + itemLabels.labels.map((l) => `<span class="chip label">${lblIconHtml(l)}${esc(l)}<button type="button" class="chip-x" data-item-label-remove="${esc(l)}" aria-label="Remove ${esc(l)}">${icon('x', 'sm')}</button></span>`).join(' ')
-    || '<span class="hint">No labels yet</span>';
-  const known = [...lblUsage().keys()].filter((l) => !itemLabels.labels.includes(l) && !itemLabels.fixed.includes(l)).sort();
-  $('labelSuggestions').innerHTML = known.map((l) => `<option value="${esc(l)}"></option>`).join('');
+async function saveItemLabels(c, labels) {
+  const r = await act('Saving the labels', () => request('PUT', api(c.node, `/item-labels/${c.kind}/${enc(c.key)}`), { labels }),
+    labels.length ? `${c.display}: ${labels.join(', ')}` : `${c.display} has no labels`);
+  if (r !== undefined) refreshData();
+  return r;
 }
-function addItemLabel() {
-  const inp = $('itemLabelsInput');
-  for (const w of inp.value.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean)) if (!itemLabels.labels.includes(w)) itemLabels.labels.push(w);
-  itemLabels.labels.sort();
-  inp.value = '';
-  syncItemLabels();
-}
-$('itemLabelsAdd').addEventListener('click', addItemLabel);
-$('itemLabelsInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addItemLabel(); } });
-$('itemLabelsChips').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-item-label-remove]');
-  if (!b || !itemLabels) return;
-  itemLabels.labels = itemLabels.labels.filter((l) => l !== b.dataset.itemLabelRemove);
-  syncItemLabels();
-});
 $('itemLabelsForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  if ($('itemLabelsInput').value.trim()) addItemLabel();
   const c = itemLabels;
   if (!c) return;
-  const r = await act('Saving the labels', () => request('PUT', api(c.node, `/item-labels/${c.kind}/${enc(c.key)}`), { labels: c.labels }),
-    c.labels.length ? `${c.display}: ${c.labels.join(', ')}` : `${c.display} has no labels`);
-  if (r !== undefined) { closeModal('itemLabelsModal'); refreshData(); }
+  if (await saveItemLabels(c, c.editor.labels()) !== undefined) closeModal('itemLabelsModal');
 });
 
 /* ================================================================ render */
@@ -5106,22 +5217,29 @@ function renderEngines() {
 let settingsCtx = null;
 function openSettings(kind, key) {
   settingsCtx = { kind, key };
-  $('settingsBody').innerHTML = '';
+  $('settingsBody').innerHTML = ''; $('settingsBody')._html = null;
   openModal('settingsModal');
   renderSettings();
 }
 // Groups from the node's startup flags are fixed; the ones added here live in its settings.
 function groupsEditor(n) {
-  const labels = n.labels?.length ? n.labels : n.groups || [];
   return `<div class="node-setting group-edit"><span>${icon('tag', 'sm')}Labels</span>
-    <div class="group-chips">${lblChips(labels)}<button type="button" class="btn sm" data-edit-labels="${esc(n.name)}">${labels.length ? 'Edit' : 'Add'}…</button></div>
+    <div data-node-labels="${esc(n.name)}"></div>
     <span class="hint">Placement can target a label. Locked ones come from the startup flags.</span></div>`;
 }
-$('settingsBody').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-edit-labels]');
-  const n = b && nodes.find((x) => x.name === b.dataset.editLabels);
-  if (n) openItemLabels('node', n);
-});
+// The node settings' label editors: the same as in the Labels dialog, saving at once.
+function mountNodeLabelEditors() {
+  for (const root of $('settingsBody').querySelectorAll('[data-node-labels]')) {
+    const n = nodes.find((x) => x.name === root.dataset.nodeLabels);
+    if (!n || root.dataset.mounted) continue;
+    const all = n.labels?.length ? n.labels : n.groups || [], added = n.settings?.labels || [];
+    root.dataset.mounted = '1';
+    mountLabelEditor(root, {
+      labels: all.filter((l) => added.includes(l)), fixed: all.filter((l) => !added.includes(l)),
+      onChange: (labels) => saveItemLabels({ kind: 'node', node: n.name, key: n.name, display: n.name }, labels),
+    });
+  }
+}
 // Also on every overview while it is open.
 function renderSettings() {
   if (!settingsCtx || !$('settingsModal').open) return;
@@ -5174,7 +5292,9 @@ function renderSettings() {
     </div>`;
   }
   $('settingsTitle').textContent = title;
-  if (body.innerHTML !== html) body.innerHTML = html;
+  // The label editors are built into it, so compare with what was set, not with the DOM.
+  if (body._html !== html) { body.innerHTML = html; body._html = html; }
+  mountNodeLabelEditors();
 }
 for (const list of ['nodesList', 'enginesList']) {
   $(list).addEventListener('click', (e) => {
