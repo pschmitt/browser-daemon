@@ -75,10 +75,26 @@ async def test_ephemeral_session_survives_coordinator_restart_and_cleans_up(tmp_
         raise AssertionError("daemon did not start")
 
     proc = await start()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        proxy_port = sock.getsockname()[1]
+    proxy_base = f"http://127.0.0.1:{proxy_port}"
+    proxy = await asyncio.create_subprocess_exec(
+        os.environ["BD_TEST_BINARY"], "run", "--bind", f"127.0.0.1:{proxy_port}",
+        "--profile-dir", str(tmp_path / "proxy" / "profiles"),
+        "--recordings-dir", str(tmp_path / "proxy" / "recordings"), "--peer", base,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
     try:
         async with aiohttp.ClientSession() as client:
+            for _ in range(100):
+                try:
+                    async with client.get(f"{proxy_base}/api/mesh/node"):
+                        break
+                except aiohttp.ClientError:
+                    await asyncio.sleep(0.1)
             async with client.post(
-                f"{base}/api/ephemeral/sessions", json={"persistent": True}
+                f"{proxy_base}/api/ephemeral/sessions", json={"persistent": True}
             ) as response:
                 assert response.status == 200
                 result = await response.json()
@@ -105,6 +121,8 @@ async def test_ephemeral_session_survives_coordinator_restart_and_cleans_up(tmp_
             await asyncio.sleep(0.1)
         assert marker.exists(), "failed provisioning must also invoke teardown"
     finally:
+        proxy.terminate()
+        await proxy.wait()
         proc.terminate()
         await proc.wait()
         await node.close()

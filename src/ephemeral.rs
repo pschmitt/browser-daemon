@@ -138,13 +138,45 @@ pub(crate) async fn create(
             "Saved profiles cannot be placed on ephemeral nodes",
         ));
     }
-    let Some(up) = state.ephemeral_up.clone() else {
-        return Err(api_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Ephemeral nodes are not configured",
-        ));
-    };
     req.persistent = false;
+    let Some(up) = state.ephemeral_up.clone() else {
+        let overview = fetch_mesh_overview(&state).await;
+        let peer = overview
+            .peers
+            .iter()
+            .filter(|peer| peer.status == "online" && peer.ephemeral_provider)
+            .min_by(|a, b| a.name.cmp(&b.name))
+            .ok_or_else(|| {
+                api_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "No ephemeral node provider is online",
+                )
+            })?;
+        let response = state
+            .peer_request(state.peer_client.post(format!(
+                "{}/api/ephemeral/sessions",
+                peer.url.trim_end_matches('/')
+            )))
+            .timeout(Duration::from_secs(1650))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|_| api_error(StatusCode::BAD_GATEWAY, "Ephemeral provider request failed"))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(api_error(
+                status,
+                "Ephemeral provider could not create a session",
+            ));
+        }
+        let result = response.json().await.map_err(|_| {
+            api_error(
+                StatusCode::BAD_GATEWAY,
+                "Invalid ephemeral provider response",
+            )
+        })?;
+        return Ok(Json(result));
+    };
     // Keep provisioning alive if the HTTP caller disconnects; the unused-session
     // timeout will destroy the resulting node.
     let task = tokio::spawn(async move {

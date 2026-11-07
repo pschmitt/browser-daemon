@@ -82,6 +82,8 @@ allows reconnection; then the session closes and the coordinator runs the down
 command. Failed teardown is retried and leases are recovered after coordinator
 restart. A node that is unreachable cannot be confirmed closed, so the
 coordinator keeps retrying; the provider's maximum lifetime is the backstop.
+Requests sent to another mesh node are forwarded to an online provider; nodes
+advertise the capability as `ephemeral_provider` in mesh inventory.
 
 The commands run as the daemon's service user under its systemd restrictions.
 An rworker adapter can use a dedicated browser-worker image; see the rworker

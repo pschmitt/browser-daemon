@@ -7,6 +7,9 @@ pub struct NodeInfo {
     pub name: String,
     #[serde(default)]
     pub groups: Vec<String>,
+    /// This node can provision dedicated ephemeral nodes.
+    #[serde(default)]
+    pub ephemeral_provider: bool,
     pub url: String,
     pub version: String,
     /// Git commit it was built from (absent in builds without one).
@@ -127,6 +130,7 @@ pub(crate) async fn api_mesh_node(
     }
 
     Ok(Json(NodeInfo {
+        ephemeral_provider: state.ephemeral_up.is_some() && state.ephemeral_down.is_some(),
         name: state.node_name.clone(),
         groups: state.effective_groups(),
         url: state.public_url.clone(),
@@ -225,6 +229,7 @@ pub(crate) async fn refresh_mesh_proxies(state: &AppState) {
 pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> PeerReport {
     let unreachable = |latency_ms: Option<u64>, error: String| PeerReport {
         state: PeerState {
+            ephemeral_provider: false,
             name: name.clone(),
             groups: Vec::new(),
             url: url.clone(),
@@ -285,6 +290,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
     let (peer, name, max_storage_bytes) = match info {
         Some(info) => (
             PeerState {
+                ephemeral_provider: info.ephemeral_provider,
                 name: info.name.clone(),
                 groups: info.groups,
                 url: url.clone(),
@@ -309,6 +315,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         // Answered, but not as a node: counted online with what is known.
         None => (
             PeerState {
+                ephemeral_provider: false,
                 name: name.clone(),
                 groups: Vec::new(),
                 url: url.clone(),
@@ -398,6 +405,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
         local_supported_engines.push(BrowserEngine::Firefox);
     }
     let local_node = NodeInfo {
+        ephemeral_provider: state.ephemeral_up.is_some() && state.ephemeral_down.is_some(),
         name: state.node_name.clone(),
         groups: state.effective_groups(),
         url: state.public_url.clone(),

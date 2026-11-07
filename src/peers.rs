@@ -7,6 +7,8 @@ pub struct PeerState {
     pub name: String,
     #[serde(default)]
     pub groups: Vec<String>,
+    #[serde(default)]
+    pub ephemeral_provider: bool,
     pub url: String,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
