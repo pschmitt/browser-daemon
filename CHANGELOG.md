@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-07
+
 ### Added
 
 * Labels on nodes, profiles, sessions and recordings, replacing profile-only
