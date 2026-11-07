@@ -214,6 +214,7 @@ pub struct AppState {
     pub node_name: String,
     /// Groups from the startup flags: immutable. Runtime ones live in `settings`.
     pub node_groups: Vec<String>,
+    pub ephemeral_node: bool,
     pub ephemeral_up: Option<PathBuf>,
     pub ephemeral_down: Option<PathBuf>,
     pub public_url: String,

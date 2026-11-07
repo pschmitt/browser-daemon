@@ -197,6 +197,10 @@ pub struct Args {
     #[arg(long = "node-group")]
     pub node_groups: Vec<String>,
 
+    /// Dedicated disposable node: accept one non-persistent session only.
+    #[arg(long)]
+    pub ephemeral_node: bool,
+
     /// Executable that creates an ephemeral node and prints its JSON descriptor.
     #[arg(long, requires = "ephemeral_down")]
     pub ephemeral_up: Option<PathBuf>,
@@ -840,6 +844,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .build()?,
         node_name,
         node_groups: args.node_groups,
+        ephemeral_node: args.ephemeral_node,
         ephemeral_up: args.ephemeral_up,
         ephemeral_down: args.ephemeral_down,
         public_url,

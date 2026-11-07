@@ -123,6 +123,7 @@ async def test_last_client_grace_period_allows_reconnect(tmp_path):
         "--profile-dir", str(tmp_path / "profiles"),
         "--recordings-dir", str(tmp_path / "recordings"),
         "--chromium", shutil.which("chromium"), "--display-mode", "per-session",
+        "--ephemeral-node",
         "--xvfb", shutil.which("Xvfb"),
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
@@ -134,9 +135,12 @@ async def test_last_client_grace_period_allows_reconnect(tmp_path):
                         break
                 except aiohttp.ClientError:
                     await asyncio.sleep(0.1)
-            async with client.post(f"{base}/api/sessions", json={"persistent": False}) as response:
+            async with client.post(f"{base}/api/sessions", json={"persistent": True}) as response:
                 assert response.status == 201
                 session = await response.json()
+                assert session["persistent"] is False
+            async with client.post(f"{base}/api/sessions", json={}) as response:
+                assert response.status == 409
             url = f"ws://127.0.0.1:{port}/chromium?session_id={session['id']}"
             ws = await client.ws_connect(url)
             await ws.close()

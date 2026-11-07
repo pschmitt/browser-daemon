@@ -141,6 +141,36 @@ impl AppState {
         default_tabs: bool,
         open: Vec<String>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
+        if self.ephemeral_node {
+            fs::create_dir_all(self.config.state_dir())
+                .await
+                .map_err(|_| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Could not reserve ephemeral node",
+                    )
+                })?;
+            let path = self.config.state_dir().join("ephemeral-claimed");
+            if let Err(error) = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .await
+            {
+                return Err(if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    (
+                        StatusCode::CONFLICT,
+                        "This ephemeral node has already hosted a session",
+                    )
+                } else {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Could not reserve ephemeral node",
+                    )
+                });
+            }
+        }
+        let persistent = persistent && !self.ephemeral_node;
         if engine == BrowserEngine::Firefox && self.config.firefox_bin.is_none() {
             return Err((
                 StatusCode::BAD_REQUEST,
