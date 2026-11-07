@@ -288,6 +288,13 @@ button.stat:hover, .stat.nav:hover { border-color: var(--line-strong); backgroun
 .views button:hover { color: var(--fg); }
 .views button.on { color: var(--fg); }
 .views button.on::after { content: ""; position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+.subviews { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 14px; }
+.subviews[hidden] { display: none; }
+.subviews button { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.subviews button:hover { color: var(--fg); }
+.subviews button.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.subviews .count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--hover); font-size: 11px; display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+.subviews button.on .count { background: color-mix(in oklab, var(--accent) 18%, transparent); }
 .views .count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--hover); font-size: 11.5px; display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
 .views button.on .count { background: var(--accent-soft); color: var(--accent); }
 .view-actions { display: flex; align-items: center; gap: 8px; flex: none; }
@@ -1211,11 +1218,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   <div class="toolbar">
     <nav class="views" role="tablist">
       <button data-act="view" data-view="sessions" role="tab"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="count" id="countSessions">0</span></button>
-      <button data-act="view" data-view="profiles" role="tab"><svg class="i sm"><use href="#i-folder"/></svg>Profiles <span class="count" id="countProfiles">0</span></button>
       <button data-act="view" data-view="recordings" role="tab"><svg class="i sm"><use href="#i-film"/></svg>Recordings <span class="count" id="countRecordings">0</span></button>
-      <button data-act="view" data-view="engines" role="tab"><svg class="i sm"><use href="#i-globe"/></svg>Engines <span class="count" id="countEngines">0</span></button>
       <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes <span class="count" id="countNodes">0</span></button>
-      <button data-act="view" data-view="labels" role="tab"><svg class="i sm"><use href="#i-tag"/></svg>Labels <span class="count" id="countLabels">0</span></button>
+      <button data-act="view" data-view="settings" role="tab"><svg class="i sm"><use href="#i-gear"/></svg>Settings</button>
     </nav>
     <button class="node-filter" id="nodeFilterChip" data-act="filter" data-node="all" title="Filtered to one node: click to show all nodes" hidden>
       <span class="dot"></span>Filter: <b id="nodeFilterName"></b><svg class="i sm"><use href="#i-x"/></svg>
@@ -1223,6 +1228,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
     <div class="label-filter" id="labelFilter" hidden></div>
     <div class="view-actions" id="viewActions"></div>
   </div>
+
+  <nav class="subviews" id="subViews" role="tablist" aria-label="Settings" hidden>
+    <button data-act="view" data-view="profiles" role="tab"><svg class="i sm"><use href="#i-folder"/></svg>Profiles <span class="count" id="countProfiles">0</span></button>
+    <button data-act="view" data-view="engines" role="tab"><svg class="i sm"><use href="#i-globe"/></svg>Engines <span class="count" id="countEngines">0</span></button>
+    <button data-act="view" data-view="labels" role="tab"><svg class="i sm"><use href="#i-tag"/></svg>Labels <span class="count" id="countLabels">0</span></button>
+  </nav>
 
   <section class="view" id="view-sessions">
     <div class="sess-tools" id="sessTools" hidden>
@@ -3406,17 +3417,27 @@ function syncTabHint() {
 }
 document.querySelector('.views').addEventListener('scroll', syncTabHint, { passive: true });
 addEventListener('resize', syncTabHint);
+// Profiles, engines and labels live under Settings (a second row of tabs).
+const SETTINGS_VIEWS = ['profiles', 'engines', 'labels'];
+let lastSettings = 'profiles';
+try { lastSettings = localStorage.getItem('dash.settings') || 'profiles'; } catch { /* storage unavailable */ }
+const isView = (v) => VIEWS.includes(v) || v === 'settings';
 function setView(v) {
   if (handoffPicker) v = 'sessions';
+  if (v === 'settings') v = SETTINGS_VIEWS.includes(lastSettings) ? lastSettings : 'profiles';
   view = v;
+  const group = SETTINGS_VIEWS.includes(v) ? 'settings' : v;
+  if (group === 'settings') { lastSettings = v; try { localStorage.setItem('dash.settings', v); } catch { /* storage unavailable */ } }
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
   for (const name of VIEWS) $('view-' + name).hidden = name !== v;
   $('recSearchWrap').hidden = v !== 'recordings';
   if (ov) renderLabelFilter();
-  document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
-  document.querySelectorAll('.views button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === v)));
-  document.querySelector(`.views button[data-view="${v}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === group));
+  document.querySelectorAll('.views button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === group)));
+  $('subViews').hidden = group !== 'settings';
+  document.querySelectorAll('#subViews button').forEach((b) => { b.classList.toggle('on', b.dataset.view === v); b.setAttribute('aria-selected', String(b.dataset.view === v)); });
+  document.querySelector(`.views button[data-view="${group}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   syncTabHint();
   renderViewActions();
 }
@@ -7374,11 +7395,11 @@ const addNodeLink = () => { if (!['#nodes/add', '#nodes/add/connect'].includes(l
 let initialView = (location.hash || '').slice(1);
 try { initialView = initialView || localStorage.getItem('dash.view') || 'sessions'; } catch { initialView = initialView || 'sessions'; }
 if (handoffPicker) setView('sessions');
-else if (!addNodeLink()) setView(VIEWS.includes(initialView) ? initialView : 'sessions');
+else if (!addNodeLink()) setView(isView(initialView) ? initialView : 'sessions');
 addEventListener('hashchange', () => {
   if (addNodeLink()) return;
   const v = location.hash.slice(1);
-  if (VIEWS.includes(v)) setView(v);
+  if (isView(v)) setView(v);
   const link = recordingLink(location.hash);
   const r = link && (ov?.recordings || []).find(x => x.id === link.id);
   if (r && activePlayerModalId !== r.id) { setView('recordings'); openPlayerModal(r.id, r.node_name, link); }

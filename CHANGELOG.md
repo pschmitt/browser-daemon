@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The dashboard has four tabs: Sessions, Recordings, Nodes and Settings. Profiles,
+  Engines and Labels moved under Settings (a second row of tabs); `#profiles`,
+  `#engines` and `#labels` still open them.
+
 ## [0.14.0] - 2026-11-07
 
 ### Added
