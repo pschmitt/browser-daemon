@@ -8,40 +8,56 @@
 <title>Shared browser</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <style>
+/* Same tokens as the dashboard and the live view. This page stays standalone
+   (no common.css), so the values are copied; keep them in sync. Dark is the
+   default, the system theme and data-theme override it. */
 :root {
-  color-scheme: light;
-  --bg: #f4f5f9; --raised: #ffffff; --fg: #181a22; --muted: #646a7a; --line: #dfe2ea;
-  --accent: #5b6cff; --live: #e5484d; --ok: #2f9e6a;
+  color-scheme: dark;
+  --bg: #0b0d12; --fg: #e8eaf2; --muted: #98a0b8; --accent: #7c6cf0; --accent-btn: #6556e0;
+  --surface: #11141c; --raised: #161a24; --line: #232836; --line-strong: #30364a;
+  --bad: #f43f5e; --ok: #10b981; --public: #f472b6;
+  --r: 12px; --r-lg: 14px;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --bg: #0f1015; --raised: #181a22; --fg: #eceef4; --muted: #9298a8; --line: #2a2d38;
-    --accent: #8290ff; --live: #ff6369; --ok: #4cc38a;
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg: #f4f5fa; --fg: #141725; --muted: #646a82; --accent: #5b4bd6; --accent-btn: #5b4bd6;
+    --surface: #ffffff; --raised: #ffffff; --line: #e3e6ef; --line-strong: #d3d7e4;
+    --bad: #d4213f; --ok: #047857; --public: #be185d;
   }
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #0f1015; --raised: #181a22; --fg: #eceef4; --muted: #9298a8; --line: #2a2d38;
-  --accent: #8290ff; --live: #ff6369; --ok: #4cc38a;
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f5fa; --fg: #141725; --muted: #646a82; --accent: #5b4bd6; --accent-btn: #5b4bd6;
+  --surface: #ffffff; --raised: #ffffff; --line: #e3e6ef; --line-strong: #d3d7e4;
+  --bad: #d4213f; --ok: #047857; --public: #be185d;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; min-height: 100dvh; }
-header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--raised); border-bottom: 1px solid var(--line); }
-.fav { width: 28px; height: 28px; flex: none; border-radius: 6px; display: grid; place-items: center; background: var(--bg); overflow: hidden; font-weight: 700; color: var(--muted); }
-.fav img { width: 20px; height: 20px; }
+button, input, select { font-family: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+header { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.fav { width: 36px; height: 36px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--raised); border: 1px solid var(--line); overflow: hidden; font-weight: 700; color: var(--muted); }
+.fav img { width: 22px; height: 22px; }
 .what { flex: 1; min-width: 0; }
-.what b { display: block; font-size: 14.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.what span { display: block; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badge { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid var(--line); color: var(--muted); }
-.badge.live { color: var(--live); border-color: color-mix(in srgb, var(--live) 45%, transparent); }
-.badge.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--live); animation: pulse 1.6s ease-in-out infinite; }
+.what b { display: block; font-size: 14.5px; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.what span { display: block; font: 12px/1.3 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; border: 1px solid var(--line-strong); color: var(--muted); }
+.badge.live { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+.badge.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); animation: pulse 1.6s ease-in-out infinite; }
 .badge.ended { color: var(--muted); }
 .badge.ended::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.badge.live.control { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.badge.live.control::before { background: var(--accent); }
 @keyframes pulse { 50% { opacity: .25; } }
+/* The sound toggle sits in the header: 44px target, icon only on phones. */
+.sound { flex: none; height: 44px; min-width: 44px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: 600 13px var(--sans); cursor: pointer; }
+.sound[hidden] { display: none; }
+.sound svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.sound.needs { border-color: var(--accent); color: var(--accent); }
 main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .stage { position: relative; flex: 1; min-height: 240px; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; }
 .stage canvas, .stage img { display: block; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
@@ -57,49 +73,95 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .big-play { position: absolute; width: 68px; height: 68px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .55); display: grid; place-items: center; cursor: pointer; transition: opacity .2s; }
 .big-play svg { width: 28px; height: 28px; fill: #fff; margin-left: 4px; }
 .big-play[hidden] { display: none; }
-.controls { padding: 6px 12px 10px; background: #111217; color: #fff; }
+/* Player: timeline on its own row, buttons below. Light and dark follow the tokens. */
+.controls { --track: color-mix(in srgb, var(--fg) 20%, transparent); padding: 4px 12px 8px; background: var(--surface); border-top: 1px solid var(--line); color: var(--fg); }
 .controls[hidden] { display: none; }
-.timeline { position: relative; height: 26px; }
-.stillness-bar { position: absolute; left: 0; right: 0; top: 2px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .08); pointer-events: none; overflow: hidden; transition: height .15s ease; }
+.tl { display: flex; align-items: center; gap: 12px; }
+.time { font: 600 12.5px var(--mono); color: var(--muted); white-space: nowrap; min-width: 4ch; }
+#timeTotal { text-align: right; }
+.timeline { position: relative; height: 44px; flex: 1; min-width: 0; }
+.stillness-bar { position: absolute; left: 0; right: 0; top: 12px; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--fg) 8%, transparent); pointer-events: none; overflow: hidden; transition: height .15s ease; }
 #staticSpans { position: absolute; inset: 0; pointer-events: none; }
-.static-span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 1px; background: rgba(255, 255, 255, .45); }
-.track { position: absolute; left: 0; right: 0; top: 11px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .22); overflow: hidden; pointer-events: none; transition: height .15s ease, top .15s ease; }
+.static-span { position: absolute; top: 0; bottom: 0; min-width: 2px; border-radius: 1px; background: color-mix(in srgb, var(--fg) 45%, transparent); }
+.track { position: absolute; left: 0; right: 0; top: 19px; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; pointer-events: none; transition: height .15s ease, top .15s ease; }
 .buffered { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; overflow: hidden; pointer-events: none; }
-.buffered > span { display: block; height: 100%; width: 0; background: rgba(255, 255, 255, .15); }
+.buffered > span { display: block; height: 100%; width: 0; background: color-mix(in srgb, var(--fg) 18%, transparent); }
 .track-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: var(--accent); border-radius: 3px; }
-.scrub { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 26px; margin: 0; accent-color: var(--accent); background: transparent; cursor: pointer; z-index: 2; -webkit-appearance: none; appearance: none; }
+/* The range input is the 44px touch target; its own track is transparent. */
+.scrub { position: absolute; left: 0; right: 0; top: 0; width: 100%; height: 44px; margin: 0; accent-color: var(--accent); background: transparent; cursor: pointer; z-index: 2; -webkit-appearance: none; appearance: none; touch-action: pan-y; }
 .scrub::-webkit-slider-runnable-track { background: transparent; height: 100%; border: none; }
 .scrub::-moz-range-track { background: transparent; height: 100%; border: none; }
-.scrub::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .6); cursor: pointer; margin-top: 6px; transition: transform .12s ease; }
-.scrub:hover::-webkit-slider-thumb, .scrub:active::-webkit-slider-thumb { transform: scale(1.2); }
-.scrub::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .6); cursor: pointer; transition: transform .12s ease; }
-.scrub:hover::-moz-range-thumb, .scrub:active::-moz-range-thumb { transform: scale(1.2); }
-.timeline:hover .track { height: 7px; top: 10px; }
+.scrub::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); cursor: pointer; margin-top: 12px; transition: transform .12s ease; }
+.scrub:hover::-webkit-slider-thumb, .scrub:active::-webkit-slider-thumb { transform: scale(1.15); }
+.scrub::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); cursor: pointer; transition: transform .12s ease; }
+.scrub:hover::-moz-range-thumb, .scrub:active::-moz-range-thumb { transform: scale(1.15); }
+.timeline:hover .track { height: 8px; top: 18px; }
 .timeline:hover .stillness-bar { height: 4px; }
-.row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.row { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .row .grow { flex: 1; }
-.btn { height: 34px; min-width: 34px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: 700 12.5px var(--sans); cursor: pointer; }
-.btn:hover { background: rgba(255, 255, 255, .12); }
+.btn { height: 44px; min-width: 44px; padding: 0 10px; border: 0; border-radius: var(--r); background: transparent; color: var(--fg); display: inline-flex; align-items: center; justify-content: center; gap: 6px; font: 700 12.5px var(--sans); cursor: pointer; }
+.btn:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); }
 .btn:disabled { opacity: .35; cursor: not-allowed; }
-.btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn[hidden], .volume[hidden] { display: none; }
+.btn svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .btn.play svg { fill: currentColor; stroke: none; }
-.time { font: 600 12.5px var(--mono); margin-left: 6px; white-space: nowrap; }
-.volume { width: 84px; accent-color: var(--accent); }
-.badge.control { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.stage img { touch-action: none; }
+.volume { width: 84px; height: 44px; margin: 0 4px; accent-color: var(--accent); }
+.stage.live { touch-action: none; }
 .stage.controllable img { cursor: pointer; }
-.typebar { display: flex; gap: 6px; padding: 8px 12px; background: var(--raised); border-top: 1px solid var(--line); flex-wrap: wrap; }
+/* Forms of the live view: navigation above the picture, typing below. 44px controls. */
+.typebar { display: flex; gap: 6px; padding: 8px 12px; background: var(--surface); border-top: 1px solid var(--line); flex-wrap: wrap; }
 .typebar[hidden] { display: none; }
-.typebar input { flex: 1; min-width: 140px; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: 14px var(--sans); }
-.typebar button { height: 36px; min-width: 40px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); font: 600 13px var(--sans); cursor: pointer; }
-.typebar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.typebar input, .typebar select { flex: 1 1 200px; min-width: 0; height: 44px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); font: 14px var(--sans); }
+.typebar button { height: 44px; min-width: 44px; padding: 0 14px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); font: 600 13px var(--sans); cursor: pointer; }
+.typebar button:disabled { opacity: .4; cursor: not-allowed; }
+.typebar button.primary { background: var(--accent-btn); border-color: var(--accent-btn); color: #fff; }
+.typebar button.danger { color: var(--bad); }
+.navbar { display: grid; grid-template-columns: minmax(120px, 24%) 1fr auto auto auto; align-items: center; }
+.navbar select { grid-column: auto; }
+.navbar #address { min-width: 0; }
 .click-dot { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 2px solid var(--accent); pointer-events: none; animation: ping .5s ease-out forwards; }
 @keyframes ping { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
-footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; border-top: 1px solid var(--line); background: var(--raised); }
+footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; border-top: 1px solid var(--line); background: var(--surface); }
 .stage.full { position: fixed; inset: 0; z-index: 10; }
+/* In-page replacement for confirm() and prompt(): a bottom sheet on phones, a dialog on wide screens. */
+.sheet-wrap { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, .55); }
+.sheet-wrap[hidden] { display: none; }
+.sheet { width: 100%; max-width: 440px; padding: 18px 16px calc(16px + env(safe-area-inset-bottom)); background: var(--surface); color: var(--fg); border: 1px solid var(--line-strong); border-bottom: 0; border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: 0 -8px 30px rgba(0, 0, 0, .35); animation: rise .18s ease-out; }
+.sheet h2 { margin: 0 0 6px; font-size: 16px; }
+.sheet p { margin: 0 0 14px; color: var(--muted); }
+.sheet input { width: 100%; height: 44px; margin: 0 0 14px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); font: 13px var(--mono); }
+.sheet-actions { display: flex; gap: 8px; }
+.sheet-actions button { flex: 1; height: 44px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); font: 700 14px var(--sans); cursor: pointer; }
+.sheet-actions button[hidden] { display: none; }
+.sheet-actions .primary { background: var(--accent-btn); border-color: var(--accent-btn); color: #fff; }
+.sheet-actions .danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+@keyframes rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.toast { position: fixed; left: 50%; bottom: calc(64px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 40; max-width: calc(100% - 32px); padding: 10px 16px; border-radius: var(--r); background: var(--raised); color: var(--fg); border: 1px solid var(--line-strong); box-shadow: 0 6px 20px rgba(0, 0, 0, .35); font-weight: 600; }
+.toast[hidden] { display: none; }
+@media (min-width: 601px) {
+  .sheet-wrap { align-items: center; }
+  .sheet { border-bottom: 1px solid var(--line-strong); border-radius: var(--r-lg); animation: none; }
+}
 @media (max-width: 600px) {
-  header { padding: 8px 12px; }
+  header { padding: 0 12px; gap: 10px; }
+  .sound .lbl { display: none; }
+  .sound.needs .lbl { display: inline; }
+  .sound.needs { padding: 0 10px; }
   .volume { display: none; }
+  .btn .lbl { display: none; }
+  .controls { padding: 2px 8px 6px; }
+  .tl { gap: 8px; }
+  /* Tabs and the + / close buttons on one row, address and Go on the next. */
+  .navbar { grid-template-columns: 1fr auto auto; }
+  .navbar #tabPicker { grid-column: 1; grid-row: 1; }
+  .navbar #openTab { grid-column: 2; grid-row: 1; }
+  .navbar #closeTab { grid-column: 3; grid-row: 1; }
+  .navbar #address { grid-column: 1 / 3; grid-row: 2; }
+  .navbar .primary { grid-column: 3; grid-row: 2; }
+  /* Typing field and Send on one row, the four keys share the next. */
+  .typebar input#typeText { flex: 1 1 calc(100% - 94px); }
+  .typebar button.primary { flex: 0 0 88px; }
+  .typebar button[data-key] { flex: 1 1 0; padding: 0 6px; }
 }
 </style>
 </head>
@@ -107,16 +169,16 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
 <header>
   <div class="fav" id="fav">·</div>
   <div class="what"><b id="title">Loading…</b><span id="site"></span></div>
-  <button type="button" id="liveSound" hidden>Sound on</button>
+  <button type="button" class="sound" id="liveSound" hidden><svg viewBox="0 0 24 24" id="soundIcon"></svg><span class="lbl" id="soundLbl">Sound on</span></button>
   <span class="badge" id="badge" hidden></span>
 </header>
 <main>
-  <form class="typebar" id="navigation" hidden autocomplete="off">
-    <select id="tabPicker" aria-label="Shared tab" style="max-width:30%;min-width:100px"></select>
-    <input id="address" type="text" aria-label="Page URL" placeholder="https://…" spellcheck="false">
+  <form class="typebar navbar" id="navigation" hidden autocomplete="off">
+    <select id="tabPicker" aria-label="Shared tab"></select>
+    <input id="address" type="text" aria-label="Page URL" placeholder="https://…" spellcheck="false" autocapitalize="off" inputmode="url">
     <button type="submit" class="primary">Go</button>
-    <button type="button" id="openTab" title="Open a new tab">+</button>
-    <button type="button" id="closeTab" title="Close this tab">Close tab</button>
+    <button type="button" id="openTab" title="Open a new tab" aria-label="Open a new tab">+</button>
+    <button type="button" id="closeTab" class="danger" title="Close this tab">Close tab</button>
   </form>
   <div class="stage" id="stage">
     <canvas id="canvas" hidden></canvas>
@@ -132,29 +194,32 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
   <form class="typebar" id="typebar" hidden autocomplete="off">
     <input id="typeText" placeholder="Type into the page…" aria-label="Text to type into the page" spellcheck="false">
     <button type="submit" class="primary">Send</button>
-    <button type="button" data-key="Enter" title="Enter">⏎</button>
-    <button type="button" data-key="Backspace" title="Backspace">⌫</button>
+    <button type="button" data-key="Enter" title="Enter" aria-label="Enter">⏎</button>
+    <button type="button" data-key="Backspace" title="Backspace" aria-label="Backspace">⌫</button>
     <button type="button" data-key="Tab" title="Tab">Tab</button>
     <button type="button" data-key="Escape" title="Escape">Esc</button>
   </form>
   <div class="controls" id="controls" hidden>
-    <div class="timeline">
-      <div class="stillness-bar" id="stillnessBar" title="Still periods (no movement)"><div id="staticSpans"></div></div>
-      <div class="track">
-        <div class="buffered"><span id="buffered"></span></div>
-        <div class="track-fill" id="trackFill"></div>
+    <div class="tl">
+      <span class="time" id="time">0:00</span>
+      <div class="timeline">
+        <div class="stillness-bar" id="stillnessBar" title="Still periods (no movement)"><div id="staticSpans"></div></div>
+        <div class="track">
+          <div class="buffered"><span id="buffered"></span></div>
+          <div class="track-fill" id="trackFill"></div>
+        </div>
+        <input class="scrub" id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Position">
       </div>
-      <input class="scrub" id="scrub" type="range" min="0" max="1000" step="1" value="0" aria-label="Position">
+      <span class="time" id="timeTotal">0:00</span>
     </div>
     <div class="row">
       <button class="btn play" id="playBtn" type="button" aria-label="Play"></button>
       <button class="btn" id="backBtn" type="button" aria-label="Back 5 seconds" title="Back 5 s (←)"><svg viewBox="0 0 24 24"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg></button>
       <button class="btn" id="fwdBtn" type="button" aria-label="Forward 5 seconds" title="Forward 5 s (→)"><svg viewBox="0 0 24 24"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg></button>
-      <span class="time" id="time">0:00 / 0:00</span>
       <span class="grow"></span>
       <button class="btn" id="muteBtn" type="button" aria-label="Mute" title="Mute (m)" hidden></button>
       <input class="volume" id="volume" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume" hidden>
-      <button class="btn" id="timeLinkBtn" type="button" title="Copy link at current time">Copy time link</button>
+      <button class="btn" id="timeLinkBtn" type="button" aria-label="Copy link at current time" title="Copy link at current time"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg><span class="lbl">Copy time link</span></button>
       <button class="btn" id="modeBtn" type="button" title="Concise caps still periods at 5 seconds; Raw keeps original timing">Concise</button>
       <button class="btn" id="speedBtn" type="button" title="Playback speed">1×</button>
       <button class="btn" id="fullBtn" type="button" aria-label="Fullscreen" title="Fullscreen (f)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
@@ -165,6 +230,18 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
   <span id="footNote">Shared publicly from a remote browser.</span>
   <span id="expiry"></span>
 </footer>
+<div class="sheet-wrap" id="sheetWrap" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle"></h2>
+    <p id="sheetText"></p>
+    <input id="sheetField" readonly hidden aria-label="Link">
+    <div class="sheet-actions">
+      <button type="button" id="sheetCancel">Cancel</button>
+      <button type="button" id="sheetOk" class="primary">OK</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -219,6 +296,55 @@ function setFav(src, letter) {
     fav.textContent = letter || "·";
   }
 }
+// In-page replacement for confirm() and prompt(): resolves true when the
+// primary button is pressed, false on cancel, Escape or a tap on the backdrop.
+function sheet({ title, text = "", ok = "OK", cancel = "Cancel", danger = false, field = null }) {
+  const wrap = $("sheetWrap"), okBtn = $("sheetOk"), cancelBtn = $("sheetCancel"), input = $("sheetField");
+  const before = document.activeElement;
+  $("sheetTitle").textContent = title;
+  $("sheetText").textContent = text;
+  $("sheetText").hidden = !text;
+  input.hidden = field === null;
+  input.value = field ?? "";
+  okBtn.textContent = ok;
+  okBtn.className = danger ? "danger" : "primary";
+  cancelBtn.textContent = cancel || "";
+  cancelBtn.hidden = !cancel;
+  wrap.hidden = false;
+  (field === null ? okBtn : input).focus();
+  if (field !== null) input.select();
+  return new Promise((resolve) => {
+    const close = (value) => {
+      wrap.hidden = true;
+      wrap.onclick = okBtn.onclick = cancelBtn.onclick = null;
+      document.removeEventListener("keydown", onKey, true);
+      if (before?.focus) before.focus();
+      resolve(value);
+    };
+    // Captured, so the player and live-view shortcuts never see these keys.
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); close(false); }
+      else if (e.key === "Tab") {
+        const items = [...wrap.querySelectorAll("input:not([hidden]), button:not([hidden])")];
+        const at = items.indexOf(document.activeElement);
+        e.preventDefault();
+        items[(at + (e.shiftKey ? items.length - 1 : 1)) % items.length].focus();
+      } else e.stopImmediatePropagation();
+    };
+    document.addEventListener("keydown", onKey, true);
+    okBtn.onclick = () => close(true);
+    cancelBtn.onclick = () => close(false);
+    wrap.onclick = (e) => { if (e.target === wrap) close(false); };
+  });
+}
+let toastTimer = 0;
+function toast(text) {
+  const el = $("toast");
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 1800);
+}
 function showExpiry(expiresAt) {
   $("expiry").textContent = expiresAt ? `Link expires ${fmtDate(expiresAt)}` : "";
 }
@@ -263,9 +389,11 @@ async function recording(info) {
     url.hash = new URLSearchParams({ t: (clock / 1000).toFixed(3), mode: raw ? 'raw' : 'concise' }).toString();
     try {
       await navigator.clipboard.writeText(url.toString());
-      $('timeLinkBtn').textContent = 'Copied';
-      setTimeout(() => { $('timeLinkBtn').textContent = 'Copy time link'; }, 1800);
-    } catch { window.prompt('Copy link at current time', url.toString()); }
+      toast('Link copied');
+    } catch {
+      // Clipboard blocked (plain http, permissions): show the link to copy by hand.
+      sheet({ title: 'Copy link at current time', text: 'Select the link and copy it.', field: url.toString(), ok: 'Done', cancel: null });
+    }
   };
   let conciseTimeline = null;
   function getConciseTimeline() {
@@ -406,7 +534,8 @@ async function recording(info) {
   }
 
   function updateUi() {
-    $("time").textContent = `${fmtTime(viewTime(clock))} / ${total ? fmtTime(viewTime(total)) : loaded ? fmtTime(0) : '–:–'}`;
+    $("time").textContent = fmtTime(viewTime(clock));
+    $("timeTotal").textContent = total ? fmtTime(viewTime(total)) : loaded ? fmtTime(0) : '–:–';
     const vClock = viewTime(clock);
     const vTotal = Math.max(1, viewTime(total));
     const pct = total ? (vClock / vTotal) * 100 : 0;
@@ -602,6 +731,7 @@ async function session(info) {
   document.title = `${name} (live)`;
   $("title").textContent = name;
   $("badge").hidden = false;
+  $("stage").classList.add("live");
   showExpiry(info.expires_at);
   overlay("Connecting…", "", { spin: true });
 
@@ -634,18 +764,57 @@ async function session(info) {
     const delta = e.deltaY * (e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 100 : 1);
     magnify(e.clientX, e.clientY, zoom.scale * Math.exp(-delta * .01));
   }, {capture: true, passive: false});
-  img.addEventListener("pointerdown", e => {
-    if (control || e.button !== 0) return;
-    e.preventDefault(); img.setPointerCapture(e.pointerId);
-    pan = {id: e.pointerId, x: e.clientX, y: e.clientY, from: {...zoom}};
-    img.style.cursor = "grabbing";
+  // Pointer gestures live on the stage, so a pinch may start on the black bars.
+  // One pointer pans in watch mode (in control mode it clicks and scrolls, see
+  // the touch handlers below); two touch pointers pinch and pan in both modes
+  // and never send input. `gestureAt` keeps the click the browser may still
+  // synthesise after a pinch or a double-tap from reaching the page.
+  const stage = $("stage"), pointers = new Map();
+  let pinch = null, gestureAt = 0, lastTap = null;
+  const spread = () => { const [a, b] = [...pointers.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; };
+  stage.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, at: performance.now(), multi: false });
+    if (pointers.size === 2) {
+      e.preventDefault();
+      for (const p of pointers.values()) p.multi = true;
+      pan = null;
+      const m = spread();
+      pinch = { d: m.d, x: m.x, y: m.y, from: {...zoom} };
+      gestureAt = performance.now();
+      stage.setPointerCapture(e.pointerId);
+    } else if (pointers.size === 1 && !control) {
+      e.preventDefault(); stage.setPointerCapture(e.pointerId);
+      pan = {id: e.pointerId, x: e.clientX, y: e.clientY, from: {...zoom}};
+      img.style.cursor = "grabbing";
+    }
   });
-  img.addEventListener("pointermove", e => {
-    if (!pan || pan.id !== e.pointerId) return;
-    magnify(pan.x, pan.y, pan.from.scale, pan.from, {x: e.clientX, y: e.clientY});
+  stage.addEventListener("pointermove", e => {
+    const p = pointers.get(e.pointerId);
+    if (p) { p.x = e.clientX; p.y = e.clientY; }
+    if (pinch && pointers.size === 2) {
+      const m = spread();
+      magnify(pinch.x, pinch.y, pinch.from.scale * m.d / pinch.d, pinch.from, {x: m.x, y: m.y});
+      gestureAt = performance.now();
+    } else if (pan && pan.id === e.pointerId) {
+      magnify(pan.x, pan.y, pan.from.scale, pan.from, {x: e.clientX, y: e.clientY});
+    }
   });
-  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) img.addEventListener(type, e => {
+  for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) stage.addEventListener(type, e => {
+    const p = pointers.get(e.pointerId);
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
     if (pan?.id === e.pointerId) { pan = null; img.style.cursor = control ? "pointer" : "grab"; }
+    if (type !== "pointerup" || !p || p.multi || e.pointerType === "mouse") return;
+    // Double-tap resets the zoom. Only while zoomed in, so a double-tap at 1x
+    // still reaches the page as two clicks in control mode.
+    const now = performance.now();
+    if (Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > 10 || now - p.at > 300) { lastTap = null; return; }
+    if (lastTap && now - lastTap.at < 350 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40 && zoom.scale > 1) {
+      const r = stage.getBoundingClientRect();
+      magnify(r.left + r.width / 2, r.top + r.height / 2, 1);
+      gestureAt = now; lastTap = null;
+    } else lastTap = { at: now, x: e.clientX, y: e.clientY };
   });
   addEventListener("resize", () => {
     const r = $("stage").getBoundingClientRect();
@@ -701,7 +870,10 @@ async function session(info) {
   };
   $("navigation").onsubmit = e => { e.preventDefault(); send({type: 'navigate', url: navigationURL()}); };
   $("openTab").onclick = () => send({type: 'open', url: 'about:blank'});
-  $("closeTab").onclick = () => { if (selectedTab && confirm('Close this tab in the shared browser?')) send({type: 'close', tab: selectedTab}); };
+  $("closeTab").onclick = async () => {
+    const tab = selectedTab;
+    if (tab && await sheet({ title: 'Close this tab?', text: 'It will be closed in the shared browser.', ok: 'Close tab', danger: true })) send({type: 'close', tab});
+  };
   await refreshTabs();
   setInterval(refreshTabs, 3000);
   let audioEnabled = true, audioStopped = false, audioContext = null, audioElement = null;
@@ -709,6 +881,16 @@ async function session(info) {
   const audioClocks = new Map();
   const sound = $("liveSound");
   sound.hidden = !info.audio;
+  // The label doubles as the state ("Enable sound" = autoplay was blocked). It
+  // is hidden on phones, so the icon and aria-label carry it there.
+  function setSound(label) {
+    sound.dataset.label = label;
+    $("soundLbl").textContent = label;
+    sound.setAttribute("aria-label", label);
+    sound.classList.toggle("needs", label === "Enable sound");
+    $("soundIcon").innerHTML = (label === "Sound off" ? ICONS.muted : ICONS.sound).replace(/^<svg[^>]*>|<\/svg>$/g, "");
+  }
+  setSound("Sound on");
   function stopLiveAudio() {
     audioElement?.pause();
     if (audioElement) { audioElement.removeAttribute('src'); audioElement.load(); audioElement.remove(); audioElement = null; }
@@ -719,18 +901,18 @@ async function session(info) {
     if (!audioEnabled || !info.audio || audioStopped) return;
     if (info.extension) {
       audioContext ||= new AudioContext();
-      void audioContext.resume().then(() => { sound.textContent = audioContext?.state === 'running' ? 'Sound on' : 'Enable sound'; }).catch(() => {});
+      void audioContext.resume().then(() => { setSound(audioContext?.state === 'running' ? 'Sound on' : 'Enable sound'); }).catch(() => {});
     } else {
       if (!audioElement) {
         audioElement = document.createElement('audio'); audioElement.src = `${base}/audio`;
         audioElement.preload = 'none'; document.body.append(audioElement);
       }
-      void audioElement.play().then(() => { sound.textContent = 'Sound on'; }, () => { sound.textContent = 'Enable sound'; });
+      void audioElement.play().then(() => { setSound('Sound on'); }, () => { setSound('Enable sound'); });
     }
   }
   sound.onclick = () => {
-    if (sound.textContent === 'Enable sound') { resumeLiveAudio(); return; }
-    audioEnabled = !audioEnabled; sound.textContent = audioEnabled ? 'Sound on' : 'Sound off';
+    if (sound.dataset.label === 'Enable sound') { resumeLiveAudio(); return; }
+    audioEnabled = !audioEnabled; setSound(audioEnabled ? 'Sound on' : 'Sound off');
     sound.setAttribute('aria-pressed', String(audioEnabled));
     if (audioEnabled) resumeLiveAudio(); else stopLiveAudio();
   };
@@ -778,7 +960,7 @@ async function session(info) {
     return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
   };
   img.addEventListener("click", (e) => {
-    if (!control) return;
+    if (!control || performance.now() - gestureAt < 500) return;
     const p = where(e);
     const dot = document.createElement("span");
     dot.className = "click-dot";
@@ -804,7 +986,7 @@ async function session(info) {
   }, { passive: false });
   // Touch: a drag scrolls, a tap clicks (the click event).
   let touch = null;
-  img.addEventListener("touchstart", (e) => { if (control && e.touches.length === 1) touch = { x: e.touches[0].clientX, y: e.touches[0].clientY, start: where(e.touches[0]) }; }, { passive: true });
+  img.addEventListener("touchstart", (e) => { touch = control && e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, start: where(e.touches[0]) } : null; }, { passive: true });
   img.addEventListener("touchmove", (e) => { if (control && touch) e.preventDefault(); }, { passive: false });
   img.addEventListener("touchend", (e) => {
     if (!control || !touch) return;

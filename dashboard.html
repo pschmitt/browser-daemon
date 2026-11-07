@@ -1104,6 +1104,220 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 #handoffPicker h1.error { color: var(--bad); }
 #handoffPicker p { color: var(--muted); margin: 12px 0 24px; max-width: 65ch; line-height: 1.6; }
 #handoffPicker h2 { font-size: 17px; margin: 0; }
+
+/* ================================================================ app shell (phone first)
+   Four sections in a bar at the bottom with the New button in its middle; on wider
+   screens the bar is a rail on the left. Every target is 44px or more. */
+:root { --nav-h: 68px; --rail-w: 92px; --tap: 44px; }
+header.top { gap: 10px; min-height: 60px; }
+.sec-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.sec-title h1 { margin: 0; font-size: 22px; font-weight: 750; letter-spacing: -.02em; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sec-sub { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); min-width: 0; }
+.sec-sub > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#secSub.warn { color: var(--warn); }
+#secSub.bad { color: var(--bad); }
+.top-actions { gap: 4px; margin-left: 0; }
+.top-actions .btn.icon, .view-actions .btn.icon { width: var(--tap); height: var(--tap); border-radius: 12px; }
+.top-actions .btn.icon .i, .view-actions .btn.icon .i { width: 20px; height: 20px; }
+.brand span { display: none; }
+.new-top { display: none !important; }
+
+.appnav { position: fixed; z-index: 25; display: flex; background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.appnav button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; background: none;
+  color: var(--muted); font-size: 11px; font-weight: 650; min-height: 56px; padding: 0; }
+.appnav button .i { width: 22px; height: 22px; padding: 4px 18px; box-sizing: content-box; border-radius: 14px; transition: background .15s, color .15s; }
+.appnav button.on { color: var(--fg); }
+.appnav button.on .i { background: var(--accent-soft); color: var(--accent); }
+.appnav button:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; border-radius: 14px; }
+.appnav .count { position: absolute; top: 4px; left: calc(50% + 10px); min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--hover);
+  color: var(--muted); font-size: 10.5px; font-weight: 700; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.appnav button.on .count { background: var(--accent); color: #fff; }
+.appnav #countNodes.warn { background: var(--warn); color: #000; }
+.appnav .count:is(:empty, [data-zero]) { display: none; }
+.nav-new span { width: 56px; height: 56px; border-radius: 18px; display: grid; place-items: center; background: var(--accent-btn); color: #fff;
+  box-shadow: 0 8px 22px color-mix(in oklab, var(--accent-btn) 45%, transparent); transition: transform .1s; }
+.nav-new:active span { transform: scale(.95); }
+.nav-new .i { width: 26px !important; height: 26px !important; padding: 0 !important; background: none !important; color: #fff !important; }
+
+@media (max-width: 760px) {
+  .appnav { left: 0; right: 0; bottom: 0; height: calc(var(--nav-h) + env(safe-area-inset-bottom)); padding: 0 max(4px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(4px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line); align-items: center; }
+  .appnav button { flex: 1; }
+  .appnav button[data-sec="sessions"] { order: 1; } .appnav button[data-sec="profiles"] { order: 2; }
+  .appnav .nav-new { order: 3; } .appnav button[data-sec="recordings"] { order: 4; } .appnav button[data-sec="mesh"] { order: 5; }
+  .nav-new span { margin-top: -18px; }
+  main { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 28px) !important; }
+  .toasts { bottom: calc(var(--nav-h) + 12px + env(safe-area-inset-bottom)); right: 12px; width: calc(100vw - 24px); }
+  header.top { padding-top: calc(8px + env(safe-area-inset-top)); padding-bottom: 8px; flex-wrap: nowrap !important; }
+  .brand { display: none; }
+}
+@media (min-width: 761px) {
+  .appnav { left: 0; top: 0; bottom: 0; width: calc(var(--rail-w) + env(safe-area-inset-left)); padding: calc(14px + env(safe-area-inset-top)) 0 14px env(safe-area-inset-left);
+    flex-direction: column; align-items: stretch; gap: 6px; border-right: 1px solid var(--line); }
+  .appnav .nav-new { margin-bottom: 14px; }
+  header.top, main, .selbar { margin-left: calc(var(--rail-w) + env(safe-area-inset-left)); }
+  header.top { padding-left: 24px; }
+  .brand img { width: 30px; height: 30px; }
+}
+
+/* Under the title: Mesh's own tabs, then the filters. */
+.subviews { gap: 6px; margin: 0 0 14px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.subviews button { height: 40px; padding: 0 16px; font-size: 13.5px; }
+.filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
+.filters:not(:has(> :not([hidden]))) { display: none; }
+.node-filter { height: 36px; margin-left: 0; padding: 0 10px 0 13px; font-size: 13px; }
+.label-filter .btn { height: 36px; }
+.label-filter button.chip.label { height: 32px; padding: 0 12px; font-size: 12.5px; }
+.rec-search { height: var(--tap); border-radius: 12px; }
+.sess-tools .btn { height: var(--tap); border-radius: 12px; }
+.empty .btn { height: var(--tap); }
+
+/* Session cards: the picture, then who and what with one large button. */
+.scard .scard-head { padding: 12px 12px 12px; gap: 10px; }
+.card-go { height: var(--tap); padding: 0 14px; border-radius: 12px; flex: none; font-size: 13.5px; }
+.scard { cursor: pointer; }
+.scard .scard-sub { flex-wrap: wrap; white-space: normal; row-gap: 2px; }
+.scard-who { padding: 0 12px 12px 54px; margin-top: -6px; }
+.scard-agent { min-height: 28px; }
+.hb, .hero-top .chip.node { height: 26px; padding: 0 10px; font-size: 12px; }
+
+/* Rows: tap the row for its sheet; one round button for the main action. */
+.row { min-height: 64px; cursor: pointer; }
+.round-go { width: var(--tap); height: var(--tap); border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--hover); color: var(--fg); flex: none; }
+.round-go .i { width: 18px; height: 18px; }
+.round-go.on { background: var(--accent-btn); color: #fff; }
+.round-go:hover { filter: brightness(1.08); }
+.profiles .list-head, .profiles .row { grid-template-columns: minmax(0, 2.2fr) 110px 90px 120px 56px; }
+.row .main .t > b { flex-wrap: wrap; row-gap: 4px; }
+.row .main .t > b > .name { white-space: normal; overflow-wrap: anywhere; }
+.recordings .list-head > :first-child, .recordings .c-sel { display: none; }
+.recordings .list-head, .recordings .row { grid-template-columns: 44px minmax(0, 2.4fr) 110px 130px 80px 80px 44px; }
+.play-btn { width: var(--tap); height: var(--tap); }
+.sel-mark { display: none; width: var(--tap); height: var(--tap); border-radius: 50%; place-items: center; border: 2px solid var(--line-strong); color: transparent; }
+body.selecting .recordings .play-btn { display: none; }
+body.selecting .recordings .sel-mark { display: grid; }
+.recordings .row.selected .sel-mark { background: var(--accent-btn); border-color: var(--accent-btn); color: #fff; }
+.row-more .i { width: 18px; height: 18px; }
+.chev-r { transform: rotate(-90deg); }
+@media (max-width: 980px) {
+  .recordings .list-head, .recordings .row { grid-template-columns: 44px minmax(0, 1fr) 110px 80px 44px; }
+}
+@media (max-width: 760px) {
+  .profiles .row { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; }
+  .profiles .row .mobile-meta { padding-left: 45px; }
+  .recordings .row { grid-template-columns: 44px minmax(0, 1fr) 24px; padding: 10px 8px 10px 12px; column-gap: 12px; }
+  .recordings .row .acts .row-more { width: 24px; height: var(--tap); }
+  .recordings .row .mobile-meta { grid-column: 2 / 4; }
+  .list { border-radius: 16px; }
+}
+
+/* Selected recordings: their actions where the navigation was. */
+.selbar { position: fixed; z-index: 26; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 4px;
+  padding: 8px max(10px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  background: var(--raised); border-top: 1px solid var(--line-strong); box-shadow: 0 -8px 24px rgba(0, 0, 0, .25); }
+.selbar[hidden] { display: none; }
+body.selecting .appnav { visibility: hidden; }
+.selbar-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.selbar-head .muted { flex: 1; text-align: center; }
+.selbar-head .btn { height: 40px; }
+.selbar-acts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.selbar-acts button { height: 56px; border: 0; border-radius: 14px; background: var(--hover); color: var(--fg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 11.5px; font-weight: 650; }
+.selbar-acts button .i { width: 20px; height: 20px; }
+.selbar-acts button.danger { color: var(--bad); }
+.selbar-acts button:disabled { opacity: .4; }
+@media (min-width: 761px) { .selbar { left: 50%; right: auto; bottom: 18px; width: min(560px, calc(100vw - var(--rail-w) - 40px)); transform: translateX(calc(-50% + var(--rail-w) / 2)); margin-left: 0; border: 1px solid var(--line-strong); border-radius: 18px; padding-bottom: 8px; } }
+@media (max-width: 760px) { body.selecting main { padding-bottom: calc(150px + env(safe-area-inset-bottom)) !important; } }
+
+/* ------------------------------------------------------------ object sheets */
+.osheet .sheet.obj { max-width: 560px; }
+.obj .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line-strong); margin: 8px auto 2px; flex: none; }
+.obj-body { overflow-y: auto; overscroll-behavior: contain; padding: 6px 16px calc(18px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; }
+.obj-body > * { flex: none; }
+.obj-head { display: flex; gap: 14px; align-items: flex-start; padding: 6px 0 2px; }
+.obj-pic { width: 64px; height: 64px; flex: none; border-radius: 14px; overflow: hidden; display: grid; place-items: center; background: var(--hover); }
+.obj-pic img { width: 100%; height: 100%; object-fit: cover; }
+.obj-pic img.obj-shot { object-position: top center; }
+.obj-pic .avatar, .obj-pic .engine-badge { width: 64px; height: 64px; border-radius: 14px; font-size: 20px; }
+.obj-pic .engine-badge .i { width: 30px; height: 30px; }
+.obj-pic .site-fav.lg, .obj-pic .site-fav.lg img, .obj-pic .site-fav.lg .fav-letter { width: 32px; height: 32px; font-size: 16px; }
+.obj-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.obj-id h2 { margin: 0; font-size: 18px; font-weight: 750; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.obj-sub { font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px; line-height: 1.6; }
+.obj-sub .run { color: var(--ok); font-weight: 650; }
+.obj-facts { display: flex; flex-wrap: wrap; gap: 5px; }
+.obj-primary { display: flex; gap: 8px; }
+.btn.big { height: 50px; border-radius: 14px; font-size: 15px; flex: 1; gap: 9px; }
+.btn.big:not(.primary) { flex: none; padding: 0 18px; }
+.btn.big .i { width: 18px; height: 18px; }
+.obj-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.obj-tile { min-height: 66px; border: 0; border-radius: 14px; background: var(--hover); color: var(--fg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  font-size: 12px; font-weight: 650; padding: 6px 4px; text-align: center; }
+.obj-tile .i { width: 22px; height: 22px; }
+.obj-tile.on { background: var(--accent-soft); color: var(--accent); }
+.obj-tile.on.danger { background: var(--bad-soft); color: var(--bad); }
+.obj-tile:hover { filter: brightness(1.06); }
+.obj-tile span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.obj-group { display: flex; flex-direction: column; border-radius: 14px; background: var(--hover); overflow: hidden; }
+.obj-row { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 14px; border: 0; background: none; color: var(--fg); text-align: left; font: inherit; text-decoration: none; width: 100%; }
+.obj-row + .obj-row { border-top: 1px solid color-mix(in oklab, var(--line-strong) 70%, transparent); }
+.obj-row:hover, .obj-row:focus-visible { background: color-mix(in oklab, var(--fg) 6%, transparent); outline: none; }
+.obj-row:disabled { opacity: .5; }
+.obj-row > .i { width: 20px; height: 20px; color: var(--muted); flex: none; }
+.obj-row .lead { display: inline-flex; width: 20px; justify-content: center; flex: none; }
+.obj-row .lead .i, .obj-row .lead svg, .obj-row .lead img { width: 20px; height: 20px; }
+.obj-row .tick { width: 20px; display: inline-flex; justify-content: center; color: var(--accent); flex: none; }
+.obj-row .tick .i { width: 18px; height: 18px; }
+.obj-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.obj-txt b { font-weight: 550; font-size: 14.5px; overflow-wrap: anywhere; }
+.obj-txt small { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.obj-row .meta { color: var(--muted); font-size: 13px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.obj-row .chev-r { color: var(--faint); width: 16px; height: 16px; flex: none; }
+.obj-row.danger, .obj-row.danger > .i { color: var(--bad); font-weight: 650; }
+.obj-row.on { background: color-mix(in oklab, var(--accent) 8%, transparent); }
+.obj-label { font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 6px 4px -4px; }
+.obj-gap { height: 2px; }
+.obj-nav { display: flex; align-items: center; gap: 6px; min-height: 44px; }
+.obj-nav h2 { margin: 0; font-size: 16px; flex: 1; min-width: 0; }
+.obj-nav .btn.icon { width: var(--tap); height: var(--tap); margin-left: -10px; }
+.obj-nav .back { transform: rotate(90deg); width: 20px; height: 20px; }
+@media (max-width: 760px) {
+  .osheet .sheet.obj { max-height: min(88vh, var(--vvh, 100vh)); padding-bottom: 0; }
+}
+@media (min-width: 761px) and (max-width: 1099px) { .obj .grab { display: none; } }
+/* Wide screens: a panel on the right instead of a sheet from below. */
+@media (min-width: 1100px) {
+  dialog.modal.osheet { justify-content: flex-end; align-items: stretch; padding: 12px; background: rgba(5, 7, 12, .35); }
+  .osheet .sheet.obj { max-width: 420px; max-height: none; height: 100%; border-radius: 18px; animation: slide-in .18s ease-out; }
+  .obj .grab { display: none; }
+  .obj-body { padding-top: 16px; }
+}
+@keyframes slide-in { from { transform: translateX(24px); opacity: .5; } to { transform: none; opacity: 1; } }
+/* Touch: the old small controls grow. */
+@media (pointer: coarse), (max-width: 760px) {
+  .x-btn { width: var(--tap); height: var(--tap); border-radius: 12px; }
+  .btn { height: 40px; }
+  .btn.sm { height: 38px; }
+  .btn.icon { width: 40px; }
+  .btn.icon.sm { width: 38px; }
+  .toast-close { width: 36px; height: 36px; }
+  .te-btn { width: 40px; height: 40px; }
+  .te-grip { width: 32px; height: 40px; }
+  .te-url { height: 40px; }
+  .input { height: 44px; font-size: 16px; }
+  select.input { font-size: 15px; }
+  .switch .track { width: 44px; height: 26px; }
+  .switch .track::after { width: 20px; height: 20px; }
+  .switch input:checked + .track::after { transform: translateX(18px); }
+  .seg button { height: 42px; }
+  .sheet-foot .btn { height: 44px; padding: 0 18px; }
+  .kv .kv-copy { width: 36px; height: 36px; }
+  .merge-list .mv .btn { width: 40px; height: 40px; }
+  .chip .chip-x { padding: 6px; margin: -6px -8px -6px -2px; }
+}
+[data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
+[data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
+[data-handoff-picker] main { padding-bottom: 40px !important; }
 </style>
 </head>
 <body>
@@ -1184,11 +1398,25 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 
 <header class="top">
   <a class="brand" href="/" title="Browser Daemon"><img src="/icon-192.png" alt=""><span>Browser Daemon</span></a>
+  <div class="sec-title">
+    <h1 id="secTitle">Sessions</h1>
+    <div class="sec-sub"><span class="live-dot" id="liveDot" title="Live updates"></span><span id="secSub"></span></div>
+  </div>
   <div class="top-actions">
-    <button class="btn primary" id="newSessionAction" data-act="new-session" title="Launch a new browser session"><svg class="i"><use href="#i-plus"/></svg><span class="label">New session</span></button>
+    <div class="view-actions" id="viewActions"></div>
+    <button class="btn primary new-top" id="newSessionAction" data-act="new-session" title="Launch a new browser session"><svg class="i"><use href="#i-plus"/></svg><span class="label">New session</span></button>
     <button class="btn icon ghost" data-act="app-menu" title="More" aria-label="More"><svg class="i"><use href="#i-more"/></svg></button>
   </div>
 </header>
+
+<!-- Phones: a bar at the bottom with the big New button in the middle; wider screens: a rail on the left. -->
+<nav class="appnav" id="appNav" aria-label="Sections">
+  <button class="nav-new" data-act="new-session" title="New session" aria-label="New session"><span><svg class="i"><use href="#i-plus"/></svg></span></button>
+  <button data-act="view" data-view="sessions" data-sec="sessions"><svg class="i"><use href="#i-layers"/></svg><span class="nl">Sessions</span><span class="count" id="countSessions">0</span></button>
+  <button data-act="view" data-view="profiles" data-sec="profiles"><svg class="i"><use href="#i-folder"/></svg><span class="nl">Profiles</span><span class="count" id="countProfiles">0</span></button>
+  <button data-act="view" data-view="recordings" data-sec="recordings"><svg class="i"><use href="#i-film"/></svg><span class="nl">Recordings</span><span class="count" id="countRecordings">0</span></button>
+  <button data-act="view" data-view="mesh" data-sec="mesh"><svg class="i"><use href="#i-server"/></svg><span class="nl">Mesh</span><span class="count" id="countNodes">0</span></button>
+</nav>
 
 <main>
   <section id="handoffPicker" aria-labelledby="handoffPickerTitle">
@@ -1198,42 +1426,19 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   </section>
   <div class="offline-banner" id="offlineBanner" role="status" hidden></div>
   <div class="public-banner" id="publicBanner" role="status" hidden></div>
-  <section class="stats">
-    <div class="stat nav" role="button" tabindex="0" data-act="view" data-view="sessions" title="Show sessions">
-      <div class="stat-label"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="live-dot" id="liveDot" title="Live updates"></span></div>
-      <div class="stat-value" id="statSessions">0<small>/ 0</small></div>
-      <div class="stat-sub" id="statSessionsSub"></div>
-      <div class="meter"><span id="statSessionsBar"></span></div>
-    </div>
-    <div class="stat nav" data-view="recordings">
-      <button class="stat-hit" data-act="view" data-view="recordings" title="Show recordings" aria-label="Show recordings"></button>
-      <div class="stat-label"><svg class="i sm"><use href="#i-db"/></svg>Recordings</div>
-      <button class="btn ghost icon sm stat-action" data-act="vacuum" title="Prune recordings: apply the retention policy now" aria-label="Prune recordings"><svg class="i sm"><use href="#i-trash"/></svg></button>
-      <div class="stat-value" id="statStorage">0 B</div>
-      <div class="stat-sub" id="statStorageSub">of 0 B</div>
-      <div class="meter"><span id="statStorageBar"></span></div>
-    </div>
-  </section>
 
-  <div class="toolbar">
-    <nav class="views" role="tablist">
-      <button data-act="view" data-view="sessions" role="tab"><svg class="i sm"><use href="#i-layers"/></svg>Sessions <span class="count" id="countSessions">0</span></button>
-      <button data-act="view" data-view="recordings" role="tab"><svg class="i sm"><use href="#i-film"/></svg>Recordings <span class="count" id="countRecordings">0</span></button>
-      <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes <span class="count" id="countNodes">0</span></button>
-      <button data-act="view" data-view="settings" role="tab"><svg class="i sm"><use href="#i-gear"/></svg>Settings</button>
-    </nav>
-    <button class="node-filter" id="nodeFilterChip" data-act="filter" data-node="all" title="Filtered to one node: click to show all nodes" hidden>
-      <span class="dot"></span>Filter: <b id="nodeFilterName"></b><svg class="i sm"><use href="#i-x"/></svg>
-    </button>
-    <div class="label-filter" id="labelFilter" hidden></div>
-    <div class="view-actions" id="viewActions"></div>
-  </div>
-
-  <nav class="subviews" id="subViews" role="tablist" aria-label="Settings" hidden>
-    <button data-act="view" data-view="profiles" role="tab"><svg class="i sm"><use href="#i-folder"/></svg>Profiles <span class="count" id="countProfiles">0</span></button>
+  <nav class="subviews" id="subViews" role="tablist" aria-label="Mesh" hidden>
+    <button data-act="view" data-view="nodes" role="tab"><svg class="i sm"><use href="#i-server"/></svg>Nodes</button>
     <button data-act="view" data-view="engines" role="tab"><svg class="i sm"><use href="#i-globe"/></svg>Engines <span class="count" id="countEngines">0</span></button>
     <button data-act="view" data-view="labels" role="tab"><svg class="i sm"><use href="#i-tag"/></svg>Labels <span class="count" id="countLabels">0</span></button>
   </nav>
+
+  <div class="filters" id="filterRow">
+    <button class="node-filter" id="nodeFilterChip" data-act="filter" data-node="all" title="Filtered to one node: tap to show all nodes" hidden>
+      <span class="dot"></span><b id="nodeFilterName"></b><svg class="i sm"><use href="#i-x"/></svg>
+    </button>
+    <div class="label-filter" id="labelFilter" hidden></div>
+  </div>
 
   <section class="view" id="view-sessions">
     <div class="sess-tools" id="sessTools" hidden>
@@ -1253,6 +1458,12 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
 </main>
 
 <div class="menu" id="menu" role="menu" popover="manual"></div>
+<div class="selbar" id="selBar" hidden></div>
+<!-- Menus on touch screens, and every session, profile, recording and node: a sheet
+     from the bottom (a panel on the right on wide screens) with large rows. -->
+<dialog class="modal osheet" id="objSheet" aria-label="Actions">
+  <div class="sheet obj" id="objCard"><div class="grab" aria-hidden="true"></div><div class="obj-body" id="objBody"></div></div>
+</dialog>
 <div class="toasts" id="toastContainer" popover="manual" role="status" aria-live="polite"></div>
 
 <!-- New session -->
@@ -2117,7 +2328,13 @@ addEventListener('popstate', () => {
   modalPopping = true;   // closing it below must not go back once more
   if (open.id === 'playerModal') closePlayerModal();
   else { closeModal(open.id); if (open.id === 'askModal') askResolve?.(null); }
-  setTimeout(() => { modalPopping = false; }, 0);
+  setTimeout(() => {
+    modalPopping = false;
+    // Back landed on the entry of a dialog closed meanwhile under another one (a menu
+    // sheet closes once its choice opened a dialog): skip it too.
+    const st = history.state?.modal;
+    if (st && !$(st)?.open) { modalPopping = true; history.back(); }
+  }, 0);
 });
 // Escape closes the top dialog natively (a 'cancel' event). The player turns that into its own
 // close (fullscreen first); the confirm dialog answers "no".
@@ -2216,7 +2433,12 @@ function syncThemeColor() {
   });
 }
 syncThemeColor();
+// Touch screens and narrow windows get menus as sheets with large rows; a mouse on
+// a wide screen keeps the small popover. A menu opened from inside a sheet (a
+// submenu, like a profile's proxy) becomes the sheet's next level.
+const sheetQuery = matchMedia('(max-width: 760px), (pointer: coarse)');
 function openMenu(anchor, items, { align = 'right' } = {}) {
+  if (sheetQuery.matches || $('objSheet').open) { pushSheetLevel(items.filter(Boolean)); return; }
   const menu = $('menu');
   menuItems = items.filter(Boolean);
   const anyTick = menuItems.some((it) => it.on !== undefined);
@@ -2262,6 +2484,303 @@ const syncPressed = (b) => { if (b.matches?.('.seg button')) b.setAttribute('ari
 document.querySelectorAll('.seg button').forEach(syncPressed);
 new MutationObserver((changes) => changes.forEach(({ target }) => syncPressed(target)))
   .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+
+
+/* ================================================================ sheets */
+// One sheet at a time, with levels: [0] is the object (or the menu), a submenu
+// pushes a level with a Back button. An object sheet is rebuilt from the live data on
+// every update (so its REC state, names and counts stay true) and closes itself
+// when its object is gone; its actions keep it open, so a dialog they open stacks on
+// top and returns to it. A plain menu closes once a choice is made.
+let sheet = null;   // { build, levels: [{ items, title }], key }
+function openObject(key, build) {
+  const spec = build();
+  if (!spec) return;
+  closeMenu();
+  sheet = { key, build, levels: [{ ...spec }] };
+  renderSheet();
+  openModal('objSheet');
+}
+function pushSheetLevel(items) {
+  const first = items[0];
+  const title = first && typeof first === 'object' && first.label && !first.run ? first.label : '';
+  const level = { items: title ? items.slice(1) : items, title };
+  if (!sheet || !$('objSheet').open) { sheet = { key: null, build: null, levels: [level] }; renderSheet(); openModal('objSheet'); return; }
+  sheet.levels.push(level);
+  renderSheet();
+}
+function closeSheet() {
+  if ($('objSheet').open) closeModal('objSheet');
+  sheet = null;
+}
+// Closing pops the sheet's history entry asynchronously. What changes the address or
+// opens a dialog waits for that: its own entry would be the one popped, and the hash of
+// the entry Back lands on would switch the view back.
+async function afterSheet(fn) {
+  closeSheet();
+  await new Promise((r) => setTimeout(r, 0));
+  if (modalPopping) {
+    await new Promise((r) => {
+      const t = setTimeout(r, 500);
+      addEventListener('popstate', () => { clearTimeout(t); setTimeout(r, 0); }, { once: true });
+    });
+  }
+  fn?.();
+}
+function refreshSheet() {
+  if (!sheet?.build || !$('objSheet').open) return;
+  const spec = sheet.build();
+  if (!spec) { closeSheet(); return; }
+  sheet.levels[0] = { ...spec };
+  if (sheet.levels.length === 1) renderSheet();
+}
+function sheetRow(it, i) {
+  if (it === '-') return '<div class="obj-gap"></div>';
+  if (it.label && !it.run && !it.href) return `<div class="obj-label">${esc(it.label)}</div>`;
+  const inner = (it.on !== undefined ? `<span class="tick">${it.on ? icon('check') : ''}</span>` : '')
+    + (it.lead ? `<span class="lead">${it.lead}</span>` : it.icon ? icon(it.icon) : '')
+    + `<span class="obj-txt"><b>${esc(it.label)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>`
+    + (it.meta ? `<span class="meta">${esc(it.meta)}</span>` : '')
+    + (it.more ? icon('chev', 'sm chev-r') : '');
+  const cls = `obj-row${it.danger ? ' danger' : ''}${it.on ? ' on' : ''}`;
+  return it.href ? `<a class="${cls}" href="${esc(it.href)}"${it.attrs || ''}>${inner}</a>` : `<button class="${cls}" data-si="${i}"${it.disabled ? ' disabled' : ''}>${inner}</button>`;
+}
+function renderSheet() {
+  if (!sheet) return;
+  const lvl = sheet.levels[sheet.levels.length - 1];
+  const items = (lvl.items || []).filter(Boolean);
+  lvl._items = items;
+  const tiles = items.map((it, i) => [it, i]).filter(([it]) => it && it.tile);
+  const rows = items.map((it, i) => (it && it.tile ? null : it));
+  let html = '';
+  if (sheet.levels.length > 1) {
+    html += `<div class="obj-nav"><button class="btn ghost icon" data-sheet-back aria-label="Back">${icon('chev', 'back')}</button><h2>${esc(lvl.title || '')}</h2></div>`;
+  } else if (lvl.head) {
+    html += `<div class="obj-head">${lvl.head}</div>`;
+  } else if (lvl.title) {
+    html += `<div class="obj-nav"><h2>${esc(lvl.title)}</h2></div>`;
+  }
+  if (lvl.notice) html += lvl.notice;
+  if (lvl.primary) html += `<div class="obj-primary">${lvl.primary}</div>`;
+  if (tiles.length) html += `<div class="obj-tiles">${tiles.map(([it, i]) => `<button class="obj-tile${it.danger ? ' danger' : ''}${it.on ? ' on' : ''}" data-si="${i}"${it.disabled ? ' disabled' : ''}>${it.lead || icon(it.icon || 'info-c')}<span>${esc(it.label)}</span></button>`).join('')}</div>`;
+  // Rows keep their index into items (tiles were taken out of the run).
+  let body = '', group = '';
+  const flush = () => { if (group) body += `<div class="obj-group">${group}</div>`; group = ''; };
+  rows.forEach((it, i) => {
+    if (!it) return;
+    if (it === '-' || (it.label && !it.run && !it.href)) { flush(); body += sheetRow(it, i); return; }
+    group += sheetRow(it, i);
+  });
+  flush();
+  html += body;
+  const box = $('objBody');
+  if (box.innerHTML !== html) {
+    const top = box.scrollTop;
+    box.innerHTML = html;
+    box.scrollTop = top;
+  }
+  $('objSheet').setAttribute('aria-label', lvl.title || 'Actions');
+  // Uptimes in the head tick like the cards'.
+  box.querySelectorAll('[data-up][data-start]').forEach((el) => { el.textContent = cardAge(Math.max(0, Math.floor(Date.now() / 1000 - +el.dataset.start))); });
+}
+$('objBody').addEventListener('click', (e) => {
+  if (e.target.closest('[data-sheet-back]')) { sheet.levels.pop(); renderSheet(); return; }
+  const b = e.target.closest('[data-si]');
+  if (!b || !sheet) return;
+  const lvl = sheet.levels[sheet.levels.length - 1];
+  const it = lvl._items[+b.dataset.si];
+  if (!it?.run) return;
+  const depth = sheet.levels.length;
+  if (!sheet.build) {
+    // A plain menu. A toggle (keep) re-opens itself: it replaces its level. A submenu
+    // (more) pushes one. Any other choice closes the sheet first.
+    if (it.keep) { it.run(); if (sheet && sheet.levels.length > depth) sheet.levels.splice(depth - 1, 1); renderSheet(); return; }
+    if (it.more) { it.run(); return; }
+    afterSheet(it.run);
+    return;
+  }
+  it.run();
+  // A choice in a submenu was made: back to where it came from, showing the new value.
+  if (sheet && sheet.levels.length === depth && depth > 1) { sheet.levels.pop(); refreshSheet(); renderSheet(); }
+});
+$('objSheet').addEventListener('close', () => { sheet = null; });
+
+
+/* ================================================================ object sheets */
+// What used to be each object's ⋯ menu, as a sheet: who and what it is on top, the
+// main action as a large button, frequent actions as tiles, the rest as rows that
+// show their current value.
+const sheetHead = (pic, title, sub, extra = '') => `<div class="obj-pic">${pic}</div><div class="obj-id"><h2>${title}</h2><div class="obj-sub">${sub}</div>${extra}</div>`;
+function sessionSheetSpec(s) {
+  const key = keyOf.session(s);
+  const engine = s.engine === 'firefox' ? 'firefox' : 'chromium';
+  const shot = shots.get(key), pic = profIcon(profileOfSession(s));
+  const thumb = shot ? `<img class="obj-shot" src="${esc(shot)}" alt="">` : pic ? `<img src="${esc(pic)}" alt="">` : `<span class="engine-badge ${engine}">${icon(engine)}</span>`;
+  const href = esc(handoffUrl(s.node_name, s._extension ? {} : { session: s.id }));
+  if (s._extension) {
+    const control = s._extension.tabs.some(t => t.control);
+    return {
+      head: sheetHead(thumb, esc(sessName(s)), `Real browser · ${nodeChip(s.node_name)} · ${plural(s.tabs_count || s._extension.tabs.length, 'shared tab')}`),
+      primary: `<a class="btn primary big" href="${href}">${icon('takeover')}${control ? 'Take over' : 'View'}</a>`,
+      items: [
+        s._extension.public_share && { tile: true, icon: 'share', label: 'Share', run: () => openShare('session', s) },
+        { icon: control ? 'takeover' : 'eye', label: control ? 'Control allowed' : 'View only', sub: 'Sharing and control are set in the browser extension' },
+        { icon: 'server', label: 'Node details', more: true, run: () => afterSheet(() => { filter = s.node_name; setView('nodes'); render(); }) },
+        '-',
+        { icon: 'power', label: s._extension.remembered ? 'Forget browser…' : 'Disconnect browser…', danger: true, run: () => revokeExtension(s._extension) },
+      ],
+    };
+  }
+  const agents = (s.clients || []).filter((c) => c.agent), integrations = (s.clients || []).filter((c) => c.integration);
+  const others = (s.clients || []).filter((c) => !c.agent && !c.integration);
+  const idle = idleState(s);
+  const settingsMeta = [s.idle_timeout_seconds ? `stops idle ${idleLabel(s.idle_timeout_seconds)}` : 'never idles out', s.proxy ? proxyName(s.node_name, s.proxy) : ''].filter(Boolean).join(' · ');
+  const facts = [
+    !s.persistent && 'Ephemeral', s.adblock && 'Blocks ads', s.proxy && `Via ${proxyName(s.node_name, s.proxy)}`, idle?.text,
+  ].filter(Boolean);
+  const sh = s.share;
+  return {
+    head: sheetHead(thumb, `${esc(sessName(s))}`, `${esc(s.profile || 'Throwaway')} · ${nodeChip(s.node_name)} · ${engine === 'firefox' ? 'Firefox' : 'Chromium'} · up <span data-up data-start="${sessionStart(s)}"></span>`,
+      `${facts.length ? `<div class="obj-facts">${facts.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}${s.labels?.length ? `<div class="obj-facts">${lblChips(s.labels)}</div>` : ''}`),
+    primary: `<a class="btn primary big" href="${href}"${drivenAttr(s)}>${icon('takeover')}Take over</a>`,
+    items: [
+      s.is_recording
+        ? { tile: true, on: true, danger: !s.recording_paused, icon: s.recording_paused ? 'pause' : 'rec', label: s.recording_paused ? 'Paused' : 'Recording', run: () => openRecordModal(s) }
+        : { tile: true, icon: 'rec', label: 'Record', run: () => (s.audio ? openRecordModal(s) : toggleRecording(s)) },
+      { tile: true, icon: sh ? 'globe' : 'share', on: !!sh, label: sh ? (sh.watching ? `Public · ${sh.watching}` : 'Public') : 'Share', run: () => openShare('session', s) },
+      { tile: true, icon: 'note', label: s.notes ? `Notes ${s.notes.count}` : 'Notes', run: () => openNotes('session', s) },
+      { tile: true, icon: 'download', label: 'Downloads', run: () => showDownloads(s) },
+      (agents.length || integrations.length || others.length || s.client_count) && { label: 'Connected' },
+      ...agents.map((c) => ({ lead: agentIcon(c), label: agentLabel(c), sub: [c.topic, c.machine].filter(Boolean).join(' · ') || 'Agent', more: true, run: () => showClientDetails(s) })),
+      ...integrations.map((c) => ({ icon: /home\s*assistant/i.test(c.integration) ? 'homeassistant' : 'plug', label: c.integration, sub: 'Integration', more: true, run: () => showClientDetails(s) })),
+      others.length ? { icon: 'users', label: plural(others.length, 'automation client'), more: true, run: () => showClientDetails(s) }
+        : (!(s.clients || []).length && s.client_count ? { icon: 'users', label: plural(s.client_count, 'automation client') } : null),
+      { label: 'Session' },
+      { icon: 'tabs', label: 'Tabs and details', meta: plural(pagesOf(s).length, 'tab'), more: true, run: () => showSessionDetails(s) },
+      { icon: 'gear', label: 'Settings', meta: settingsMeta, more: true, run: () => openSessionSettings(s) },
+      { icon: 'edit', label: 'Rename', run: () => renameSession(s) },
+      { icon: 'tag', label: 'Labels', meta: s.labels?.join(', ') || '', more: true, run: () => openItemLabels('session', s) },
+      !s.profile && { icon: 'saved', label: 'Save as profile', sub: 'Keep its logins, cookies and storage', run: () => saveSessionAsProfile(s) },
+      '-',
+      { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
+    ],
+  };
+}
+const openSessionSheet = (key) => openObject(key, () => { const s = byKey.sessions.get(key); return s ? sessionSheetSpec(s) : null; });
+
+function profileSheetSpec(p) {
+  const key = keyOf.profile(p);
+  const color = nodeColor(p.display);
+  const pic = profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`;
+  const others = nodes.filter((n) => n.name !== p.node_name && n.status === 'online');
+  const engine = p.engine === 'firefox' ? 'Firefox' : 'Chromium';
+  const next = p.session ? ' (from the next launch)' : '';
+  const status = p.session ? `<span class="run">● Running</span> · up <span data-up data-start="${sessionStart(p.session)}"></span>` : 'Not running';
+  return {
+    head: sheetHead(pic, esc(p.display), `${status} · ${nodeChip(p.node_name)} · ${engine} · ${formatBytes(p.size_bytes)}`, p.labels?.length ? `<div class="obj-facts">${lblChips(p.labels)}</div>` : ''),
+    primary: p.session
+      ? `<a class="btn primary big" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)}>${icon('takeover')}Take over</a>`
+      : `<button class="btn primary big" data-act="launch-profile" data-key="${esc(key)}">${icon('play', 'fill')}Launch</button>${p.tabs?.length ? `<button class="btn big" data-act="launch-profile-bare" data-key="${esc(key)}">Without tabs</button>` : ''}`,
+    items: [
+      { label: p.session ? 'Every launch (from the next one)' : 'Every launch' },
+      nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', more: true, run: () => openMenu(null, [
+        { label: `Default proxy${next}` },
+        { label: 'Direct', on: !p.proxy, run: () => setProfileProxy(p, 'none') },
+        ...nodeProxies(p.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: p.proxy === x.id, run: () => setProfileProxy(p, x.id) })),
+      ]) },
+      { icon: p.color_scheme === 'light' ? 'sun' : 'moon', label: 'Appearance', meta: schemeName(p.color_scheme), more: true, run: () => openMenu(null, [
+        { label: `Appearance${next}` },
+        ...['dark', 'light'].map((v) => ({ label: schemeName(v), on: (p.color_scheme || 'dark') === v, run: () => setProfileScheme(p, v) })),
+      ]) },
+      { icon: 'rec', label: 'Recording', meta: recordingSummary(p).replace(/^./, (c) => c.toUpperCase()), more: true, run: () => openMenu(null, [
+        { label: `Record its sessions${next}` },
+        ...[[undefined, "Node's default"], [true, 'Always'], [false, 'Never']].map(([v, label]) => ({ label, on: p.record === v, run: () => setProfileRecording(p, { record: v ?? null }) })),
+        { label: 'Sound in its recordings' },
+        ...[[undefined, "Node's default"], [true, 'With sound'], [false, 'Without sound']].map(([v, label]) => ({ label, on: p.record_audio === v, run: () => setProfileRecording(p, { record_audio: v ?? null }) })),
+      ]) },
+      { icon: 'home', label: 'Default tabs', meta: p.tabs?.length ? `${p.tabs.length}` : 'blank', more: true, run: () => setProfileTabs(p) },
+      { label: 'Profile' },
+      { icon: 'note', label: 'Notes', meta: p.notes ? String(p.notes.count) : '', more: true, run: () => openNotes('profile', p) },
+      { icon: 'tag', label: 'Labels', meta: p.labels?.join(', ') || '', more: true, run: () => openItemLabels('profile', p) },
+      { icon: 'image', label: p.icon_rev ? 'Change picture' : 'Set picture', run: () => pickProfileIcon(p) },
+      p.icon_rev && { icon: 'trash', label: 'Remove picture', run: () => act('Removing the picture', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}/icon`)), 'Picture removed') },
+      !p.session && { icon: 'edit', label: 'Rename', run: () => renameProfile(p) },
+      { icon: 'copy', label: 'Duplicate', run: () => cloneProfile(p) },
+      !p.session && others.length && { icon: 'transfer', label: 'Move to another node', more: true, run: () => openTransfer(p) },
+      { icon: 'archive', label: 'Backups and data', more: true, run: () => openBackups(p) },
+      { icon: 'info-c', label: 'Details', more: true, run: () => showProfileDetails(p) },
+      '-',
+      { icon: 'trash', label: 'Delete profile', danger: true, run: () => deleteProfile(p) },
+    ],
+  };
+}
+const openProfileSheet = (key) => openObject(key, () => { const p = byKey.profiles.get(key); return p ? profileSheetSpec(p) : null; });
+
+function recordingSheetSpec(r) {
+  const key = keyOf.recording(r);
+  const url = r.final_url || r.initial_url || '';
+  const flags = [isLive(r) && 'Live', r.status === 'interrupted' && 'Cut short', r.keep && 'Kept', r.audio && 'With sound', r.merged_from?.length && `Merged from ${r.merged_from.length}`, cachedRecordingsSet.has(r.id) && 'Saved in this browser'].filter(Boolean);
+  return {
+    head: sheetHead(`<span class="site-fav lg">${favicon(url, recFavicon(r), r.favicon_url)}</span>`, esc(recordingTitle(r)),
+      `${esc(shortUrl(url) || plural(r.frame_count, 'frame'))} · ${nodeChip(r.node_name)} · ${esc(relTime(r.started_at_secs))} · ${esc(formatUptime(r.duration_seconds))} · ${esc(formatBytes(r.size_bytes))}`,
+      `${flags.length ? `<div class="obj-facts">${flags.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}${r.labels?.length ? `<div class="obj-facts">${lblChips(r.labels)}</div>` : ''}`),
+    primary: `<button class="btn primary big" data-act="play" data-key="${esc(key)}">${icon('play', 'fill')}Play</button>`,
+    items: [
+      { tile: true, icon: 'pin', on: !!r.keep, label: r.keep ? 'Kept' : 'Keep', run: () => setRecordingKeep([r], !r.keep) },
+      { tile: true, icon: r.share ? 'globe' : 'share', on: !!r.share, label: r.share ? 'Public' : 'Share', run: () => openShare('recording', r) },
+      { tile: true, icon: 'note', label: r.notes ? `Notes ${r.notes.count}` : 'Notes', run: () => openNotes('recording', r) },
+      { tile: true, icon: 'check', label: 'Select', run: () => { selectedRecordings.add(key); selectMode = true; closeSheet(); renderRecordings(); } },
+      { label: 'Save' },
+      { icon: 'download', label: 'Save as WebM, concise', sub: r.audio ? 'Still periods shortened, with sound' : 'Still periods shortened', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: true }) },
+      { icon: 'download', label: 'Save as WebM, raw', sub: r.audio ? 'Original timing, with sound' : 'Original timing', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: false }) },
+      r.audio && { icon: 'speaker', label: 'Save the sound', sub: 'WebM audio', run: () => saveRecordingAudio(r) },
+      !Object.keys(authHeaders()).length && { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
+      { label: 'Recording' },
+      { icon: 'tag', label: 'Labels', meta: r.labels?.join(', ') || '', more: true, run: () => openItemLabels('recording', r) },
+      { icon: 'info-c', label: 'Details', more: true, run: () => showRecordingDetails(r) },
+      r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
+      cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
+      '-',
+      { icon: 'trash', label: 'Delete recording', danger: true, run: () => deleteRecording(r.id, r.node_name) },
+    ],
+  };
+}
+const openRecordingSheet = (key) => openObject(key, () => { const r = byKey.recordings.get(key); return r ? recordingSheetSpec(r) : null; });
+
+// Tapping a card or a row opens its sheet; its own buttons and links keep their job.
+document.addEventListener('click', (e) => {
+  if (e.defaultPrevented || e.target.closest('a, button, input, select, label, [data-act], dialog')) return;
+  const card = e.target.closest('#sessionGrid .scard:not(.stale)');
+  if (card) { openSessionSheet(card.dataset.key); return; }
+  const prow = e.target.closest('#view-profiles .row');
+  if (prow) { openProfileSheet(prow.dataset.key); return; }
+  const rrow = e.target.closest('#view-recordings .row');
+  if (rrow) {
+    if (document.body.classList.contains('selecting')) { toggleRecordingSelected(rrow.dataset.key); return; }
+    openRecordingSheet(rrow.dataset.key);
+  }
+});
+function toggleRecordingSelected(key) {
+  if (selectedRecordings.has(key)) selectedRecordings.delete(key); else selectedRecordings.add(key);
+  renderRecordings();
+}
+// A long press on a recording starts selecting, as in a phone's photo gallery.
+let pressTimer = null, pressKey = null;
+document.addEventListener('pointerdown', (e) => {
+  const row = e.target.closest('#view-recordings .row');
+  if (!row || e.target.closest('button, a, input') || e.pointerType === 'mouse') return;
+  pressKey = row.dataset.key;
+  pressTimer = setTimeout(() => {
+    pressTimer = null;
+    selectMode = true; selectedRecordings.add(pressKey);
+    navigator.vibrate?.(15);
+    renderRecordings();
+    addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); }, { capture: true, once: true });
+  }, 480);
+});
+for (const t of ['pointerup', 'pointercancel', 'pointermove']) {
+  document.addEventListener(t, (e) => { if (pressTimer && (t !== 'pointermove' || Math.abs(e.movementX) + Math.abs(e.movementY) > 6)) { clearTimeout(pressTimer); pressTimer = null; } });
+}
 
 /* ================================================================ keyed rendering */
 // Only items whose markup changed are replaced, so scroll positions, focus and
@@ -2512,7 +3031,7 @@ function openLabelFilter(el) {
   const names = [...new Set([...usage.keys(), ...labelFilter])].sort();
   const items = names.map((name) => ({
     label: name, lead: lblIconHtml(name, 'sm', true), meta: tab ? String(usage.get(name)?.[tab] || 0) : '', on: labelFilter.has(name),
-    run: () => { labelFilter.has(name) ? labelFilter.delete(name) : labelFilter.add(name); saveLabelFilter(); render(); openLabelFilter(el); },
+    keep: true, run: () => { labelFilter.has(name) ? labelFilter.delete(name) : labelFilter.add(name); saveLabelFilter(); render(); openLabelFilter(el); },
   }));
   if (!items.length) items.push({ label: 'No labels yet: put one on something from its menu' });
   if (labelFilter.size) items.push('-', { icon: 'x', label: 'Clear the filter', run: () => { labelFilter.clear(); saveLabelFilter(); render(); } });
@@ -2917,6 +3436,7 @@ function render() {
   renderNodes();
   renderEngines();
   renderLabels();
+  refreshSheet();
 }
 
 // The node filter lives on the Nodes tab; this shows when one is active (and
@@ -2937,34 +3457,48 @@ function renderHeader() {
   $('countNodes').title = `${ov.online_nodes + extensionBrowserNodes.filter(n => n.online !== false).length + ephemeral.filter(n => n.status === 'online' || n.status === 'ready').length}/${ov.total_nodes + extensionBrowserNodes.length + ephemeral.length} online`;
 }
 
+// What the stat cards used to say, as one line under each section's title.
+const secStats = {};
 function renderStats() {
   const ext = extensionNodeOf(filter);
   const sel = filter === 'all' ? null : nodes.find((n) => n.name === filter) || (ext && {name: filter, status: ext.online === false ? 'offline' : 'online', active_sessions: ext.tabs.length ? 1 : 0, max_sessions: 0});
   const active = sel ? sel.active_sessions : ov.total_sessions;
   const cap = sel ? (ext ? 1 : sel.max_sessions) : ov.total_capacity + extensionBrowserNodes.filter(n => n.online !== false).length;
   const shared = extensionSessions().filter(inFilter).length;
-  $('statSessions').innerHTML = ext ? String(shared) : `${active + shared}<small>${cap ? ` / ${cap}` : ''}</small>`;
-  const pct = cap ? Math.min(100, ((ext ? shared : active + shared) / cap) * 100) : 0;
-  $('statSessionsSub').textContent = (cap ? `${Math.round(pct)}% of capacity` : '') + (sharedBrowserTabCount() ? ` · ${plural(sharedBrowserTabCount(), 'shared tab')}` : '');
-  $('statSessionsBar').style.width = pct + '%';
-  $('statSessionsBar').style.background = pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)';
+  const running = ext ? shared : active + shared;
+  const pct = cap ? Math.min(100, (running / cap) * 100) : 0;
+  secStats.sessions = { text: [`${running} running`, cap && `${running} of ${cap} slots`, sharedBrowserTabCount() && plural(sharedBrowserTabCount(), 'shared tab')].filter(Boolean).join(' · '), level: pct > 85 ? 'bad' : pct > 65 ? 'warn' : '' };
 
   const profs = ov.profiles.filter(inFilter);
+  const profNodes = new Set(profs.map((p) => p.node_name)).size;
+  secStats.profiles = { text: `${plural(profs.length, 'profile')}${profNodes > 1 ? ` on ${profNodes} nodes` : ''}` };
 
   const used = sel ? sel.storage_used_bytes || 0 : ov.total_storage_bytes || 0;
   const max = sel ? sel.max_storage_bytes || (sel.isLocal ? ov.local_node.max_storage_bytes : 0) : ov.max_storage_bytes || 0;
-  $('statStorage').textContent = formatBytes(used);
   const recCount = visibleRecordings().length;
-  $('statStorageSub').textContent = `${recCount} saved` + (max ? ` · ${formatBytes(max)} quota` : '');
   const sp = max ? Math.min(100, (used / max) * 100) : 0;
-  $('statStorageBar').style.width = sp + '%';
-  $('statStorageBar').style.background = sp > 85 ? 'var(--bad)' : sp > 65 ? 'var(--warn)' : 'var(--accent)';
+  secStats.recordings = { text: `${recCount} saved · ${formatBytes(used)}${max ? ` of ${formatBytes(max)}` : ''}`, level: sp > 85 ? 'bad' : sp > 65 ? 'warn' : '' };
+
+  const ephemeral = ephemeralNodes();
+  const online = ov.online_nodes + extensionBrowserNodes.filter(n => n.online !== false).length + ephemeral.filter(n => n.status === 'online' || n.status === 'ready').length;
+  const total = ov.total_nodes + extensionBrowserNodes.length + ephemeral.length;
+  secStats.mesh = { text: `${online} of ${plural(total, 'node')} online`, level: online < total ? 'warn' : '' };
+  renderSecTitle();
 
   $('countSessions').textContent = dashboardSessions().filter(inFilter).length;
   $('countProfiles').textContent = profs.length;
   $('countRecordings').textContent = visibleRecordings().length;
   $('countNodes').textContent = nodes.length + extensionBrowserNodes.length + ephemeralNodes().length;
   $('countEngines').textContent = availableEngines().length;
+}
+const SEC_TITLES = { sessions: 'Sessions', profiles: 'Profiles', recordings: 'Recordings', mesh: 'Mesh' };
+const secOf = (v) => (MESH_VIEWS.includes(v) ? 'mesh' : v);
+function renderSecTitle() {
+  const sec = secOf(view);
+  $('secTitle').textContent = selectedRecordings.size && view === 'recordings' ? `${selectedRecordings.size} selected` : SEC_TITLES[sec] || '';
+  const st = secStats[sec];
+  $('secSub').textContent = st?.text || '';
+  $('secSub').className = st?.level || '';
 }
 
 function emptyState(ico, title, text, button = '') {
@@ -3193,10 +3727,6 @@ function sessionCard(s) {
     !clients.length && n && ind('', icon('users', 'sm'), String(n), `${n} automation client${n === 1 ? '' : 's'} attached`),
   ].filter(Boolean).join('');
 
-  // Its tabs, as icons: each opens that tab.
-  const strip = pages.slice(0, 6).map((p) => `<a class="tab-ico" href="${esc(handoffUrl(s.node_name, { page: p.id }))}" title="${esc(`${tabTitle(p)}\n${p.url}${p.owner ? `\nOwner: ${clientInfo(p.owner)}` : ''}`)}" aria-label="${esc(`Take over the tab ${tabTitle(p)}${p.owner ? `, owner ${p.owner.integration || agentLabel(p.owner) || p.owner.kind}` : ''}`)}"${drivenAttr(s, p.owner)}>${favicon(p.url)}${p.audible ? '<span class="tab-ico-sound" aria-hidden="true"></span>' : ''}${p.owner ? '<span class="tab-ico-owner" aria-hidden="true"></span>' : ''}</a>`).join('')
-    + (pages.length > 6 ? `<span class="tab-ico more" title="${pages.length - 6} more tabs">+${pages.length - 6}</span>` : '');
-
   return `
   <article class="scard${lead ? ' driven' : ''}${sh ? ' public' : ''}" data-key="${key}">
     ${hero}
@@ -3207,13 +3737,9 @@ function sessionCard(s) {
         <div class="scard-sub">${meta}${inds ? `<span class="scard-inds">${inds}</span>` : ''}</div>
         ${s.labels?.length ? `<div class="scard-labels">${lblChips(s.labels)}</div>` : ''}
       </div>
-      <button class="btn icon sm ghost" data-act="session-menu" data-key="${key}" aria-label="Session actions" title="Session actions">${icon('more')}</button>
+      <a class="btn primary card-go" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}${s._extension && !s._extension.tabs.some(t => t.control) ? 'View' : 'Take over'}</a>
     </div>
     ${agentRow || integRow ? `<div class="scard-who">${agentRow}${integRow}</div>` : ''}
-    <div class="scard-foot">
-      <div class="tab-strip">${strip}</div>
-      <a class="btn primary sm" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}${s._extension && !s._extension.tabs.some(t => t.control) ? 'View' : 'Take over'}</a>
-    </div>
   </article>`;
 }
 
@@ -3239,8 +3765,8 @@ function profileRow(p) {
   const color = nodeColor(p.display);
   const status = p.session ? `<span style="color:var(--ok)">● Running</span> · ${formatUptime(p.session.uptime_seconds)}` : 'Not running';
   const primary = p.session
-    ? `<a class="btn sm primary" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)}>${icon('takeover', 'sm')}Take over</a>`
-    : `<button class="btn sm" data-act="launch-profile" data-key="${key}">${icon('play', 'sm fill')}Launch</button>`;
+    ? `<a class="round-go on" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)} title="Take over" aria-label="Take over ${esc(p.display)}">${icon('takeover')}</a>`
+    : `<button class="round-go" data-act="launch-profile" data-key="${key}" title="Launch" aria-label="Launch ${esc(p.display)}">${icon('play', 'fill')}</button>`;
   return `
   <div class="row" role="row" data-key="${key}">
     <div role="cell" class="main">${profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`}
@@ -3248,7 +3774,7 @@ function profileRow(p) {
     <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
     <div role="cell" class="num c-size">${formatBytes(p.size_bytes)}</div>
     <div role="cell" class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
-    <div role="cell" class="acts">${primary}<button class="btn icon sm ghost" data-act="profile-menu" data-key="${key}" aria-label="Profile actions">${icon('more')}</button></div>
+    <div role="cell" class="acts">${primary}</div>
     <div class="mobile-meta" role="cell">${nodeChip(p.node_name)}<span>${formatBytes(p.size_bytes)}</span><span>·</span><span>${relTime(p.modified_at_secs)}</span></div>
   </div>`;
 }
@@ -3311,45 +3837,63 @@ function offlineNodeTargets() {
     ...extensionBrowserNodes.filter((n) => n.online === false).map((node) => ({ kind: 'browser', node })),
   ];
 }
+// The few actions of a section that earn a place next to its title. Pruning and
+// other rare or destructive actions are in the ⋯ menu (sectionMenuItems).
 function renderViewActions(recordings = listedRecordings()) {
   const actions = $('viewActions');
-  actions.classList.toggle('recording-actions', view === 'recordings');
-  if (view === 'nodes') {
-    const offlineCount = offlineNodeTargets().length;
-    const html = `<button class="btn sm" data-act="add-node" title="Pair a browser or join another daemon">${icon('plus', 'sm')}<span class="lbl">Add node</span></button>
-      ${offlineCount ? `<button class="btn sm danger-ghost" data-act="remove-offline-nodes" aria-label="Remove ${offlineCount} offline nodes" title="Remove all ${offlineCount} offline or unreachable nodes">${icon('trash', 'sm')}<span class="lbl">Prune nodes</span></button>` : ''}`;
-    if (actions.innerHTML !== html) actions.innerHTML = html;
-    return;
-  }
-  if (view === 'labels') {
-    const html = `<button class="btn sm" data-act="new-label" title="New label">${icon('plus', 'sm')}<span class="lbl">New label</span></button>`;
-    if (actions.innerHTML !== html) actions.innerHTML = html;
-    return;
-  }
-  if (view === 'profiles') {
-    const html = `<button class="btn sm" data-act="new-profile" title="New profile">${icon('plus', 'sm')}<span class="lbl">New profile</span></button>`;
-    if (actions.innerHTML !== html) actions.innerHTML = html;
-    return;
-  }
+  const btn = (act, ico, label) => `<button class="btn icon ghost" data-act="${act}" title="${esc(label)}" aria-label="${esc(label)}">${icon(ico)}</button>`;
+  const html = view === 'nodes' ? btn('add-node', 'plus', 'Add node: pair a browser or join a daemon')
+    : view === 'labels' ? btn('new-label', 'plus', 'New label')
+    : view === 'profiles' ? btn('new-profile', 'plus', 'New profile')
+    : view === 'recordings' && visibleRecordings().length ? btn('select-mode', 'check', 'Select recordings')
+    : '';
+  if (actions.innerHTML !== html) actions.innerHTML = html;
+  renderSelBar(recordings);
+}
+// Selected recordings: their actions in a bar at the bottom, where the navigation was.
+let selectMode = false;
+function renderSelBar(recordings = listedRecordings()) {
+  const bar = $('selBar');
+  const selected = recordings.filter((r) => selectedRecordings.has(keyOf.recording(r)));
+  const on = view === 'recordings' && (selectMode || selectedRecordings.size > 0);
+  document.body.classList.toggle('selecting', on);
+  bar.hidden = !on;
+  renderSecTitle();
+  if (!on) return;
+  const keys = recordings.map(keyOf.recording);
+  const allSelected = keys.length > 0 && selected.length === keys.length;
+  const hidden = selectedRecordings.size - selected.length;
+  const cached = selected.some((r) => cachedRecordingsSet.has(r.id));
+  const b = (act, ico, label, cls = '', dis = false) => `<button class="${cls}" data-act="${act}" ${dis ? 'disabled' : ''}>${icon(ico)}<span>${esc(label)}</span></button>`;
+  const html = `<div class="selbar-head"><button class="btn ghost sm" data-act="clear-recording-selection">${icon('x', 'sm')}Done</button><span class="muted">${selected.length ? `${selected.length} selected${hidden > 0 ? `, ${hidden} hidden by the search` : ''}` : 'Tap recordings to select them'}</span><button class="btn ghost sm" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'}>${allSelected ? 'Deselect all' : 'Select all'}</button></div>
+    <div class="selbar-acts">${b('merge-selected-recordings', 'layers', 'Merge', '', selected.length < 2)}${b('keep-selected-recordings', 'pin', selected.length && selected.every((r) => r.keep) ? 'Unkeep' : 'Keep', '', !selected.length)}${b('uncache-selected-recordings', 'saved', 'Uncache', '', !cached)}${b('delete-selected-recordings', 'trash', selected.length ? `Delete ${selected.length}` : 'Delete', 'danger', !selected.length)}</div>`;
+  if (bar.innerHTML !== html) bar.innerHTML = html;
+}
+// The ⋯ menu: what the section offers, then the app's own entries.
+function sectionMenuItems() {
   if (view === 'sessions') {
     const n = ov ? ov.sessions.filter(inFilter).length : 0;
-    const html = n ? `<button class="btn sm danger-ghost keep" data-act="stop-all" title="Stop every session${filter === 'all' ? '' : ` on ${esc(filter)}`}">${icon('trash', 'sm')}<span class="lbl">Prune sessions</span></button>` : '';
-    if (actions.innerHTML !== html) actions.innerHTML = html;
-    return;
+    return [
+      { icon: 'bot', label: agentsOnly ? 'Show all sessions' : 'Only sessions agents drive', on: agentsOnly, run: () => { agentsOnly = !agentsOnly; renderSessions(); } },
+      n && { icon: 'trash', label: `Prune sessions${filter === 'all' ? '' : ` on ${nodeLabel(filter)}`}…`, danger: true, run: () => stopAllSessions() },
+    ];
   }
-  if (view !== 'recordings') { if (actions.innerHTML) actions.innerHTML = ''; return; }
-
-  const keys = recordings.map(keyOf.recording);
-  const selected = recordings.filter((r) => selectedRecordings.has(keyOf.recording(r)));
-  const hidden = selectedRecordings.size - selected.length;
-  const visibleSelected = selected;
-  const allSelected = keys.length > 0 && visibleSelected.length === keys.length;
-  const selectedCached = selected.some((r) => cachedRecordingsSet.has(r.id));
-  const html = `${selected.length ? `<span class="muted" aria-live="polite">${selected.length} selected${hidden > 0 ? ` (${hidden} more hidden by the search)` : ''}</span>` : ''}
-    ${selected.length ? '' : `<button class="btn sm" data-act="vacuum" title="Apply the retention policy now: removes old recordings that are not kept">${icon('trash', 'sm')}<span class="lbl">Prune recordings</span></button>`}
-    <button class="btn sm sel-all" data-act="select-all-recordings" ${recordings.length ? '' : 'disabled'} title="${allSelected ? 'Deselect visible recordings' : 'Select visible recordings'}">${icon(allSelected ? 'x' : 'check', 'sm')}<span class="lbl">${allSelected ? 'Deselect all' : 'Select all'}</span></button>
-    ${selected.length ? `${selectedCached ? `<button class="btn sm" data-act="uncache-selected-recordings" title="Remove selected recordings from this browser cache">${icon('saved', 'sm')}<span class="lbl">Remove cached</span></button>` : ''}<button class="btn sm" data-act="keep-selected-recordings" title="Mark the selected recordings to be kept: the cleanup never removes them">${icon('pin', 'sm')}<span class="lbl">${selected.every((r) => r.keep) ? 'Stop keeping' : 'Keep'}</span></button>${selected.length > 1 ? `<button class="btn sm" data-act="merge-selected-recordings" title="Merge the selected recordings into one, in an order you pick">${icon('layers', 'sm')}<span class="lbl">Merge ${selected.length}</span></button>` : ''}<button class="btn sm" data-act="clear-recording-selection" title="Clear selection">${icon('x', 'sm')}<span class="lbl">Clear</span></button><button class="btn sm danger" data-act="delete-selected-recordings">${icon('trash', 'sm')}<span class="lbl">Delete ${selected.length}</span></button>` : ''}`;
-  if (actions.innerHTML !== html) actions.innerHTML = html;
+  if (view === 'profiles') return [{ icon: 'plus', label: 'New profile…', run: () => openNewProfile() }];
+  if (view === 'recordings') {
+    return [
+      visibleRecordings().length && { icon: 'check', label: 'Select recordings', run: () => { selectMode = true; renderViewActions(); } },
+      { icon: 'trash', label: 'Prune recordings…', meta: 'retention policy', run: () => vacuum() },
+    ];
+  }
+  if (view === 'nodes') {
+    const offline = offlineNodeTargets().length;
+    return [
+      { icon: 'plus', label: 'Add node…', run: () => { showAddTab('browser'); openModal('addNodeModal'); } },
+      offline && { icon: 'trash', label: `Remove ${plural(offline, 'offline node')}…`, danger: true, run: () => removeOfflineNodes() },
+    ];
+  }
+  if (view === 'labels') return [{ icon: 'plus', label: 'New label…', run: () => openLabelEditor() }];
+  return [];
 }
 
 async function removeOfflineNodes() {
@@ -3398,48 +3942,43 @@ function recordingRow(r) {
   const cached = cachedRecordingsSet.has(r.id) ? `<span class="cached" title="Saved in this browser: plays without the server">${icon('saved', 'sm')}</span>` : '';
   return `
   <div class="row ${selected ? 'selected' : ''}" role="row" data-key="${key}">
-    <div role="cell"><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
-    <div role="cell"><button class="play-btn" data-act="play" data-key="${key}" title="Play">${icon('play', 'fill')}</button></div>
+    <div role="cell" class="c-sel"><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
+    <div role="cell" class="c-play"><button class="play-btn" data-act="play" data-key="${key}" title="Play" aria-label="Play ${esc(title)}">${icon('play', 'fill')}</button><span class="sel-mark" aria-hidden="true">${icon('check')}</span></div>
     <div role="cell" class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
       <div class="t"><b><span class="name">${esc(title)}</span>${lblChips(r.labels)}${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept" title="Kept: the cleanup never removes it">${icon('pin', 'sm')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}${noteBadge('recording', key, r.notes)}</b><span>${esc(sub)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(r.node_name)}</div>
     <div role="cell" class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
     <div role="cell" class="num c-dur">${formatUptime(r.duration_seconds)}</div>
     <div role="cell" class="num c-size">${formatBytes(r.size_bytes)}</div>
-    <div role="cell" class="acts"><button class="btn icon sm ghost" data-act="recording-menu" data-key="${key}" aria-label="Recording actions">${icon('more')}</button></div>
+    <div role="cell" class="acts"><button class="btn icon ghost row-more" data-act="recording-menu" data-key="${key}" aria-label="More about ${esc(title)}">${icon('chev', 'chev-r')}</button></div>
     <div class="mobile-meta" role="cell">${nodeChip(r.node_name)}<span title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</span><span>·</span><span>${formatUptime(r.duration_seconds)}</span><span>·</span><span>${formatBytes(r.size_bytes)}</span></div>
   </div>`;
 }
 
-function syncTabHint() {
-  const nav = document.querySelector('.views');
-  nav.classList.toggle('more-right', nav.scrollWidth - nav.clientWidth - nav.scrollLeft > 4);
-}
-document.querySelector('.views').addEventListener('scroll', syncTabHint, { passive: true });
-addEventListener('resize', syncTabHint);
-// Profiles, engines and labels live under Settings (a second row of tabs).
-const SETTINGS_VIEWS = ['profiles', 'engines', 'labels'];
-let lastSettings = 'profiles';
-try { lastSettings = localStorage.getItem('dash.settings') || 'profiles'; } catch { /* storage unavailable */ }
-const isView = (v) => VIEWS.includes(v) || v === 'settings';
+// Nodes, engines and labels live under Mesh (a row of tabs under the title).
+const MESH_VIEWS = ['nodes', 'engines', 'labels'];
+let lastMesh = 'nodes';
+try { lastMesh = localStorage.getItem('dash.mesh') || 'nodes'; } catch { /* storage unavailable */ }
+const isView = (v) => VIEWS.includes(v) || v === 'mesh' || v === 'settings';
 function setView(v) {
   if (handoffPicker) v = 'sessions';
-  if (v === 'settings') v = SETTINGS_VIEWS.includes(lastSettings) ? lastSettings : 'profiles';
+  // #settings is the old name of the group that held profiles, engines and labels.
+  if (v === 'mesh' || v === 'settings') v = MESH_VIEWS.includes(lastMesh) ? lastMesh : 'nodes';
   view = v;
-  const group = SETTINGS_VIEWS.includes(v) ? 'settings' : v;
-  if (group === 'settings') { lastSettings = v; try { localStorage.setItem('dash.settings', v); } catch { /* storage unavailable */ } }
+  const group = secOf(v);
+  if (group === 'mesh') { lastMesh = v; try { localStorage.setItem('dash.mesh', v); } catch { /* storage unavailable */ } }
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
-  if (location.hash !== '#' + v) history.replaceState(null, '', '#' + v);
+  if (location.hash !== '#' + v) history.replaceState(history.state, '', '#' + v);
   for (const name of VIEWS) $('view-' + name).hidden = name !== v;
   $('recSearchWrap').hidden = v !== 'recordings';
+  document.body.dataset.view = v;
   if (ov) renderLabelFilter();
-  document.querySelectorAll('.views button, .stat.nav').forEach((b) => b.classList.toggle('on', b.dataset.view === group));
-  document.querySelectorAll('.views button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.view === group)));
-  $('subViews').hidden = group !== 'settings';
+  document.querySelectorAll('#appNav [data-sec]').forEach((b) => { b.classList.toggle('on', b.dataset.sec === group); b.setAttribute('aria-current', b.dataset.sec === group ? 'page' : 'false'); });
+  $('subViews').hidden = group !== 'mesh';
   document.querySelectorAll('#subViews button').forEach((b) => { b.classList.toggle('on', b.dataset.view === v); b.setAttribute('aria-selected', String(b.dataset.view === v)); });
-  document.querySelector(`.views button[data-view="${group}"]`)?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-  syncTabHint();
+  renderSecTitle();
   renderViewActions();
+  if (!modalStack.length) scrollTo({ top: 0 });
 }
 
 /* ================================================================ actions */
@@ -3460,7 +3999,8 @@ const ACT = {
     }
     renderRecordings();
   },
-  'clear-recording-selection': () => { selectedRecordings.clear(); renderRecordings(); },
+  'clear-recording-selection': () => { selectedRecordings.clear(); selectMode = false; renderRecordings(); },
+  'select-mode': () => { selectMode = !selectMode; if (!selectMode) selectedRecordings.clear(); renderRecordings(); },
   'delete-selected-recordings': () => deleteSelectedRecordings(),
   'keep-selected-recordings': () => {
     const selected = selectedListed();
@@ -3468,10 +4008,7 @@ const ACT = {
   },
   'uncache-selected-recordings': () => uncacheSelectedRecordings(),
   'merge-selected-recordings': () => openMergeModal(selectedListed()),
-  'view': (el) => {
-    setView(el.dataset.view);
-    if (el.closest('.stat')) document.querySelector('.toolbar').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  },
+  'view': (el) => setView(el.dataset.view),
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
   'new-profile': () => openNewProfile(),
@@ -3494,9 +4031,10 @@ const ACT = {
   'copy-details': (el) => copyText($('detailsJson').textContent, el),
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
   'app-menu': (el) => openMenu(el, [
+    ...(() => { const items = sectionMenuItems().filter(Boolean); return items.length ? [...items, '-'] : []; })(),
     { icon: 'globe', label: 'Public links…', meta: `${publicItems().length || ''}`, run: openPublicLinks },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
-    { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], run: () => openMenu(el, [
+    { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], more: true, run: () => openMenu(el, [
       { label: 'Theme' },
       ...Object.entries(THEMES).map(([id, name]) => ({ label: name, on: id === theme(), run: () => setTheme(id) })),
     ]) },
@@ -3511,41 +4049,7 @@ const ACT = {
     const s = byKey.sessions.get(el.dataset.key);
     if (s) showClientDetails(s);
   },
-  // In the order of the live view's session menu: recording, then getting into the
-  // session, its browser, the session itself, and stopping it.
-  'session-menu': (el) => {
-    const s = byKey.sessions.get(el.dataset.key); if (!s) return;
-    if (s._extension) {
-      openMenu(el, [
-        {label: sessName(s)},
-        {icon: 'takeover', label: s._extension.tabs.some(t => t.control) ? 'Take over' : 'View', run: () => { location.href = handoffUrl(s.node_name); }},
-        ...(s._extension.public_share ? [{icon: 'share', label: 'Share…', run: () => openShare('session', s)}] : []),
-        {icon: 'server', label: 'Node details', run: () => { filter = s.node_name; setView('nodes'); render(); }},
-        '-',
-        {icon: 'power', label: s._extension.remembered ? 'Forget browser…' : 'Disconnect browser…', danger: true, run: () => revokeExtension(s._extension)},
-      ]); return;
-    }
-    openMenu(el, [
-      { label: sessName(s) },
-      s.is_recording
-        ? { icon: s.recording_paused ? 'pause' : 'rec', label: s.recording_paused ? 'Recording paused…' : 'Recording…', meta: s.recording_audio ? 'with sound' : '', run: () => openRecordModal(s) }
-        : { icon: 'rec', label: s.audio ? 'Start recording…' : 'Start recording', run: () => (s.audio ? openRecordModal(s) : toggleRecording(s)) },
-      '-',
-      { icon: 'takeover', label: 'Take over', run: () => takeOver(s.node_name, { session: s.id }, s) },
-      { label: 'Browser' },
-      { icon: 'download', label: 'Downloads…', run: () => showDownloads(s) },
-      { icon: 'share', label: s.share ? 'Public link…' : 'Share…', run: () => openShare('session', s) },
-      !s.profile && { icon: 'saved', label: 'Save as profile…', run: () => saveSessionAsProfile(s) },
-      { label: 'Session' },
-      { icon: 'edit', label: 'Rename…', run: () => renameSession(s) },
-      { icon: 'gear', label: 'Settings…', run: () => openSessionSettings(s) },
-      { icon: 'tag', label: 'Labels…', meta: s.labels?.length ? s.labels.join(', ') : '', run: () => openItemLabels('session', s) },
-      { icon: 'note', label: 'Notes…', meta: s.notes ? String(s.notes.count) : '', run: () => openNotes('session', s) },
-      { icon: 'info-c', label: 'Details', run: () => showSessionDetails(s) },
-      '-',
-      { icon: 'power', label: 'Stop session', danger: true, run: () => stopSession(s) },
-    ]);
-  },
+  'session-menu': (el) => openSessionSheet(el.dataset.key),
   'notes-session': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) openNotes('session', s); },
   'notes-profile': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) openNotes('profile', p); },
   'notes-recording': (el) => { const r = byKey.recordings.get(el.dataset.key); if (r) openNotes('recording', r); },
@@ -3564,63 +4068,10 @@ const ACT = {
   'public-links': () => openPublicLinks(),
   'new-tab': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) newTab(s); },
   'launch-profile': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) launchProfile(p); },
-  'profile-menu': (el) => {
-    const p = byKey.profiles.get(el.dataset.key); if (!p) return;
-    const others = nodes.filter((n) => n.name !== p.node_name && n.status === 'online');
-    openMenu(el, [
-      p.session
-        ? { icon: 'takeover', label: 'Take over', run: () => takeOver(p.node_name, { session: p.session.id }, p.session) }
-        : { icon: 'play', label: `Launch in ${p.engine === 'firefox' ? 'Firefox' : 'Chromium'}`, run: () => launchProfile(p) },
-      !p.session && p.tabs?.length && { icon: 'play', label: 'Launch without the default tabs', run: () => launchProfile(p, { tabs: false }) },
-      { icon: 'info-c', label: 'Details', run: () => showProfileDetails(p) },
-      { icon: 'note', label: 'Notes…', meta: p.notes ? String(p.notes.count) : '', run: () => openNotes('profile', p) },
-      !p.session && { icon: 'edit', label: 'Rename…', run: () => renameProfile(p) },
-      { icon: 'tag', label: 'Labels…', meta: p.labels?.length ? p.labels.join(', ') : '', run: () => openItemLabels('profile', p) },
-      { icon: 'image', label: 'Set picture…', run: () => pickProfileIcon(p) },
-      p.icon_rev && { icon: 'trash', label: 'Remove picture', run: () => act('Removing the picture', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}/icon`)), 'Picture removed') },
-      nodeProxies(p.node_name).length && { icon: 'route', label: 'Proxy', meta: p.proxy ? proxyName(p.node_name, p.proxy) : 'Direct', run: () => openMenu(el, [
-        { label: p.session ? 'Default proxy (from the next launch)' : 'Default proxy' },
-        { label: 'Direct', on: !p.proxy, run: () => setProfileProxy(p, 'none') },
-        ...nodeProxies(p.node_name).map((x) => ({ label: x.name, meta: `${x.host}:${x.port}`, on: p.proxy === x.id, run: () => setProfileProxy(p, x.id) })),
-      ]) },
-      { icon: p.color_scheme === 'light' ? 'sun' : 'moon', label: 'Appearance', meta: schemeName(p.color_scheme), run: () => openMenu(el, [
-        { label: p.session ? 'Appearance (from the next launch)' : 'Appearance' },
-        ...['dark', 'light'].map((v) => ({ label: schemeName(v), on: (p.color_scheme || 'dark') === v, run: () => setProfileScheme(p, v) })),
-      ]) },
-      { icon: 'rec', label: 'Recording', meta: recordingSummary(p).replace(/^./, (c) => c.toUpperCase()), run: () => openMenu(el, [
-        { label: p.session ? 'Record its sessions (from the next launch)' : 'Record its sessions' },
-        ...[[undefined, "Node's default"], [true, 'Always'], [false, 'Never']].map(([v, label]) => ({ label, on: p.record === v, run: () => setProfileRecording(p, { record: v ?? null }) })),
-        { label: 'Sound in its recordings' },
-        ...[[undefined, "Node's default"], [true, 'With sound'], [false, 'Without sound']].map(([v, label]) => ({ label, on: p.record_audio === v, run: () => setProfileRecording(p, { record_audio: v ?? null }) })),
-      ]) },
-      { icon: 'home', label: 'Default tabs…', meta: p.tabs?.length ? `${p.tabs.length}` : 'blank', run: () => setProfileTabs(p) },
-      { icon: 'copy', label: 'Duplicate…', run: () => cloneProfile(p) },
-      !p.session && others.length && { icon: 'transfer', label: 'Move to another node…', run: () => openTransfer(p) },
-      { icon: 'archive', label: 'Backups & data…', run: () => openBackups(p) },
-      '-',
-      { icon: 'trash', label: 'Delete', danger: true, run: () => deleteProfile(p) },
-    ]);
-  },
+  'launch-profile-bare': (el) => { const p = byKey.profiles.get(el.dataset.key); if (p) launchProfile(p, { tabs: false }); },
+  'profile-menu': (el) => openProfileSheet(el.dataset.key),
   'play': (el) => { const r = byKey.recordings.get(el.dataset.key); if (r) openPlayerModal(r.id, r.node_name); },
-  'recording-menu': (el) => {
-    const r = byKey.recordings.get(el.dataset.key); if (!r) return;
-    openMenu(el, [
-      { icon: 'play', label: 'Play', run: () => openPlayerModal(r.id, r.node_name) },
-      { icon: 'pin', label: r.keep ? 'Stop keeping' : 'Keep (never clean up)', run: () => setRecordingKeep([r], !r.keep) },
-      { icon: 'tag', label: 'Labels…', meta: r.labels?.length ? r.labels.join(', ') : '', run: () => openItemLabels('recording', r) },
-      { icon: 'note', label: 'Notes…', meta: r.notes ? String(r.notes.count) : '', run: () => openNotes('recording', r) },
-      { icon: 'share', label: r.share ? 'Public link…' : 'Share…', run: () => openShare('recording', r) },
-      r.share && { icon: 'unlink', label: 'Stop sharing', run: () => stopSharing(r) },
-      { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
-      { icon: 'download', label: r.audio ? 'Save as WebM (concise, with sound)' : 'Save as WebM (concise)', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: true }) },
-      { icon: 'download', label: r.audio ? 'Save as WebM (raw, with sound)' : 'Save as WebM (raw)', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: false }) },
-      r.audio && { icon: 'speaker', label: 'Save the sound (WebM audio)', run: () => saveRecordingAudio(r) },
-      !Object.keys(authHeaders()).length && { icon: 'copy', label: 'Copy frames URL', run: () => copyText(location.origin + api(r.node_name, `/recordings/${enc(r.id)}/frames`)) },
-      cachedRecordingsSet.has(r.id) && { icon: 'saved', label: 'Remove from browser cache', run: () => { deleteCachedRecording(r.id); cachedRecordingsSet.delete(r.id); render(); } },
-      '-',
-      { icon: 'trash', label: 'Delete', danger: true, run: () => deleteRecording(r.id, r.node_name) },
-    ]);
-  },
+  'recording-menu': (el) => openRecordingSheet(el.dataset.key),
 };
 document.addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-act]')) { e.preventDefault(); e.target.click(); }
