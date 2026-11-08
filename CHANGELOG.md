@@ -15,6 +15,7 @@
 
 * A star button next to the recordings search shows only the favorites
   (remembered in the browser).
+* Sessions get a **+** next to the ⋯ menu, like the other sections.
 * Pinch to zoom in the recording player: two fingers zoom (up to 6×) and pan the
   picture only, not the page or the controls; one finger pans while zoomed; a double
   tap or the zoom pill goes back. Ctrl+wheel and a trackpad pinch zoom at the pointer.

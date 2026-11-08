@@ -4473,7 +4473,8 @@ function offlineNodeTargets() {
 function renderViewActions(recordings = listedRecordings()) {
   const actions = $('viewActions');
   const btn = (act, ico, label) => `<button class="btn icon ghost" data-act="${act}" title="${esc(label)}" aria-label="${esc(label)}">${icon(ico)}</button>`;
-  const html = view === 'nodes' ? btn('add-node', 'plus', 'Add node: pair a browser or join a daemon')
+  const html = view === 'sessions' ? btn('new-session', 'plus', 'New session')
+    : view === 'nodes' ? btn('add-node', 'plus', 'Add node: pair a browser or join a daemon')
     : view === 'labels' ? btn('new-label', 'plus', 'New label')
     : view === 'profiles' ? btn('new-profile', 'plus', 'New profile')
     : view === 'recordings' && visibleRecordings().length ? btn('select-mode', 'select', 'Select recordings')
