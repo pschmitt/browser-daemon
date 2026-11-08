@@ -25,6 +25,10 @@
 
 ### Fixed
 
+* Firefox: clicks in the live view land where you click on a zoomed page
+  (Ctrl++ or a site's remembered zoom). The capture shows the page at its zoom,
+  and input now maps back to the page's own coordinates; before, they landed off
+  by the zoom factor, missing buttons such as OpsGenie's modal close.
 * Firefox without the companion: a click whose press and release land a few
   pixels apart (normal through the live view's scaled picture) is a click again,
   not a tiny drag that clicked nothing. Like a browser, the click goes to the

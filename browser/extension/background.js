@@ -1452,7 +1452,8 @@ const fillLogin = (c, urls) => {
 
 async function execute(command) {
   const grant = await grantFor(command);
-  const {tab, action, params} = command;
+  const {tab, action} = command;
+  let {params} = command;
   if (action === 'suggest') return addressSuggestions(params.query);
   if (action === 'publicAudio') {
     if (!command.public_grant || !sharing.audio) throw new Error('Audio sharing is disabled.');
@@ -1486,6 +1487,11 @@ async function execute(command) {
     }
     await grantFor(command);
     return execute({...command, action: actual, params: values});
+  }
+  // Firefox draws a zoomed page (Ctrl++, a site's remembered zoom) into the
+  // capture at its zoom, so a view's points are that many times the page's own.
+  if (!chromium && ['click', 'move', 'pointerMove', 'scroll'].includes(action) && !params.selector) {
+    params = await unzoomPoint(tab, params);
   }
   if (!chromium && nativeReady && ['screenshot', 'snapshot', 'click', 'move', 'type', 'key', 'scroll', 'evaluate'].includes(action)) {
     return nativeRequest({tab, action, params});
@@ -1902,6 +1908,16 @@ const REMOTE_SELECTION_EXPR = `(() => {
   return window.getSelection()?.toString() || "";
 })()`;
 // A press, its drag path and the release become one trusted pointer action.
+async function unzoomPoint(tab, params) {
+  let zoom = 1;
+  try { zoom = await api.tabs.getZoom?.(tab) ?? 1; } catch { zoom = 1; }
+  if (!Number.isFinite(zoom) || zoom <= 0 || Math.abs(zoom - 1) < 0.001) return params;
+  const at = p => ({...p, x: p.x / zoom, y: p.y / zoom});
+  const out = {...params};
+  if (Number.isFinite(params.x) && Number.isFinite(params.y)) Object.assign(out, at(params));
+  if (Array.isArray(params.path)) out.path = params.path.map(p => Number.isFinite(p?.x) && Number.isFinite(p?.y) ? at(p) : p);
+  return out;
+}
 const pointers = new Map();
 async function pointer(tab, params, run) {
   const button = ['left', 'middle', 'right'].indexOf(params.button);

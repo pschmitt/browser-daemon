@@ -375,6 +375,16 @@ test('Firefox hover uses pointer input rather than the tab-move action', async (
   assert.ok(h.calls.some(call => call[0] === 'script' && call[1].args?.[0] === 'pointerMove'));
   assert.ok(!socket.sent.find(message => message.type === 'cdp_result' && message.id === 1)?.error);
 });
+test('Firefox maps a zoomed page\'s view points to the page', async () => {
+  const h = harness(true); const socket = await h.pair();
+  h.api.tabs.getZoom = async () => 1.25;
+  await h.message({type: 'share', tabs: [1], control: true});
+  socket.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Input.dispatchMouseEvent', params: {type: 'mouseMoved', x: 125, y: 250}});
+  await h.flush();
+  const move = h.calls.find(call => call[0] === 'script' && call[1].args?.[0] === 'pointerMove');
+  assert.ok(move);
+  assert.deepEqual([move[1].args[1].x, move[1].args[1].y], [100, 200]);
+});
 test('revoking control while Firefox routes input prevents the edit', async () => {
   const h = harness(true); const socket = await h.pair();
   await h.message({type: 'share', tabs: [1], control: true});
