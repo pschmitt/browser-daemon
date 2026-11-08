@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.7] - 2026-11-08
+
 ### Added
 
 * Dashboard: **Ctrl+K** (Cmd+K) opens a search over everything: actions (New
