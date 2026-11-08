@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.6] - 2026-11-08
+
 ### Changed
 
 * Live view: while connecting, the mascot sprints over hurdles (it jumps as each
