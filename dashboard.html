@@ -637,6 +637,8 @@ dialog.modal::backdrop { background: transparent; }
 .seg button .dot { color: var(--node, var(--muted)); }
 .seg button.off { opacity: .5; }
 #newSessionForm .hint:empty { display: none; }
+/* Nothing in the dialog shrinks to fit: it scrolls. */
+#newSessionForm .sheet-body > *, .sheet-body > .field > * { flex-shrink: 0; }
 /* The profile field: the choice, opening the list. */
 .pick { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 8px 14px 8px 10px; text-align: left; color: var(--fg); background: var(--bg);
   border: 1px solid var(--line-strong); border-radius: 14px; font: inherit; cursor: pointer; }
@@ -1298,6 +1300,8 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
 .obj-row + .obj-row { border-top: 1px solid color-mix(in oklab, var(--line-strong) 70%, transparent); }
 .obj-row:hover, .obj-row:focus-visible { background: color-mix(in oklab, var(--fg) 6%, transparent); outline: none; }
 .obj-row:disabled { opacity: .5; }
+.obj-row.static { cursor: default; }
+.obj-row.static:hover { background: none; }
 .obj-row > .i { width: 20px; height: 20px; color: var(--muted); flex: none; }
 .obj-row .lead { display: inline-flex; width: 20px; justify-content: center; flex: none; }
 .obj-row .lead .i, .obj-row .lead svg, .obj-row .lead img { width: 20px; height: 20px; }
@@ -1361,6 +1365,56 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
   .player-top .btn.icon, .player-top .x-btn { width: var(--tap); height: var(--tap); }
   .node-ctl .btn { height: var(--tap); }
 }
+/* ------------------------------------------------------------ nodes */
+.ngroup { margin-bottom: 22px; }
+.ngroup h3 { display: flex; align-items: center; gap: 8px; margin: 0 2px 2px; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.ngroup h3 .count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--hover); font-size: 11px; display: inline-grid; place-items: center; letter-spacing: 0; }
+.ngroup > .hint { margin: 0 2px 10px; }
+.nrow { display: flex; align-items: center; gap: 12px; min-height: 66px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background .12s; }
+.nrow:last-child { border-bottom: 0; }
+.nrow:hover { background: color-mix(in oklab, var(--hover) 60%, transparent); }
+.nrow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.nrow.off { opacity: .6; }
+.nrow .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.nrow .t > b { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 650; font-size: 14.5px; }
+.nrow .t > b .name { overflow-wrap: anywhere; }
+.nsub { display: flex; flex-wrap: wrap; align-items: center; column-gap: 6px; row-gap: 2px; font-size: 12.5px; color: var(--muted); }
+.nf { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.nf:not(:last-child)::after { content: '·'; color: var(--faint); }
+.nf b { color: var(--fg); font-weight: 650; }
+.nf .bad, .nsub .bad { color: var(--bad); font-weight: 650; }
+.nf .warn { color: var(--warn); font-weight: 650; }
+.nmeter { display: inline-block; width: 34px; height: 4px; border-radius: 2px; background: var(--hover); overflow: hidden; }
+.nmeter > span { display: block; height: 100%; }
+.navatar { position: relative; width: 42px; height: 42px; flex: none; border-radius: 12px; display: grid; place-items: center; color: var(--node); background: color-mix(in oklab, var(--node) 16%, transparent); }
+.navatar > .i { width: 22px; height: 22px; }
+.nstate { position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; border-radius: 50%; border: 2.5px solid var(--surface); background: var(--faint); }
+.nstate.ok { background: var(--ok); }
+.nstate.warn { background: var(--warn); }
+.nstate.bad { background: var(--bad); }
+.obj-pic .navatar { width: 64px; height: 64px; border-radius: 14px; }
+.obj-pic .navatar > .i { width: 30px; height: 30px; }
+.obj-pic:has(.navatar) { overflow: visible; background: none; }
+.obj-pic .nstate { border-color: var(--raised); width: 15px; height: 15px; }
+.obj-head .hint.warn { color: var(--warn); }
+.obj-head .hint { margin: 4px 0 0; }
+.obj-sub .bad { color: var(--bad); font-weight: 650; }
+.nrow.node-new { box-shadow: inset 3px 0 0 var(--node); animation: node-new-pulse 1.6s ease-in-out 3; }
+/* Fancy selects: the native one stays in the DOM, the button stands in for it. */
+select.fancy-native { display: none !important; }
+.pick.pick-sm { min-height: 48px; padding: 6px 12px 6px 12px; gap: 10px; border-radius: 12px; }
+.pick.pick-sm > .i:first-child { width: 18px; height: 18px; color: var(--muted); flex: none; }
+.pick.pick-sm .pc-name { font-weight: 550; font-size: 14px; }
+.pick.pick-sm:disabled { opacity: .5; cursor: default; }
+.share-row .pick.pick-sm, .node-setting .pick.pick-sm { width: auto; min-width: 170px; max-width: 60%; }
+.settings-list .node-setting .pick.pick-sm { max-width: none; width: 100%; }
+.seg.seg-native { display: none !important; }
+.pick .seg-lead { display: inline-flex; width: 20px; justify-content: center; flex: none; color: var(--node, var(--muted)); }
+.pick .seg-lead .i, .pick .seg-lead svg { width: 18px; height: 18px; }
+.pick .seg-lead .dot { width: 10px; height: 10px; color: var(--node, var(--muted)); }
+.menu .lead .seg-lead, .obj-row .lead .seg-lead { display: inline-flex; color: var(--node, var(--muted)); }
+.menu .lead .seg-lead .dot, .obj-row .lead .seg-lead .dot { width: 10px; height: 10px; color: var(--node, var(--muted)); }
+#sizePresets + .pick { margin-top: 8px; }
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }
@@ -1588,17 +1642,17 @@ dialog.modal:focus, .osheet .sheet:focus, .osheet :focus:not(:focus-visible), .o
           <label class="switch managed-only" id="sessionPublicField"><input type="checkbox" id="sessionPublic"><span class="track"></span><svg class="i opt-ico"><use href="#i-globe"/></svg><span class="txt"><b>Public link</b><span>Anyone with the link can watch for an hour</span></span></label>
           <label class="switch managed-only"><input type="checkbox" id="sessionRecord"><span class="track"></span><svg class="i opt-ico"><use href="#i-rec"/></svg><span class="txt"><b>Record</b><span>Save a replayable screencast</span></span></label>
           <div class="field managed-only"><span class="field-label"><svg class="i opt-ico"><use href="#i-handoff"/></svg>Screen</span><div class="seg" id="sessionScreen">
-            <button type="button" data-screen="window" class="on" title="The size below">Window</button>
-            <button type="button" data-screen="native" title="Live views give the page their own screen's size and pixel density">Native</button>
-            <button type="button" data-screen="phone" title="A phone: 412×915, touch input, the mobile site">Phone</button>
+            <button type="button" data-screen="window" class="on" data-icon="tabs" data-meta="a fixed size">Window</button>
+            <button type="button" data-screen="native" data-icon="fullscreen" data-meta="the viewer's screen">Native</button>
+            <button type="button" data-screen="phone" data-icon="handoff" data-meta="412×915, touch, mobile site">Phone</button>
           </div><span class="hint" id="sessionScreenHint"></span>
-          <div class="seg small" id="sizePresets">
-            <button type="button" data-w="1920" data-h="1080" class="on">1080p</button>
-            <button type="button" data-w="1440" data-h="900">Laptop</button>
-            <button type="button" data-w="1280" data-h="720">720p</button>
-            <button type="button" data-w="820" data-h="1180">iPad</button>
-            <button type="button" data-w="3840" data-h="2160">4K</button>
-            <button type="button" data-custom>Custom</button>
+          <div class="seg small" id="sizePresets" aria-label="Size">
+            <button type="button" data-w="1920" data-h="1080" data-icon="fullscreen" data-meta="1920×1080" class="on">1080p</button>
+            <button type="button" data-w="1440" data-h="900" data-icon="fullscreen" data-meta="1440×900">Laptop</button>
+            <button type="button" data-w="1280" data-h="720" data-icon="fullscreen" data-meta="1280×720">720p</button>
+            <button type="button" data-w="820" data-h="1180" data-icon="handoff" data-meta="820×1180">iPad</button>
+            <button type="button" data-w="3840" data-h="2160" data-icon="fullscreen" data-meta="3840×2160">4K</button>
+            <button type="button" data-custom data-icon="edit" data-meta="width and height">Custom</button>
           </div>
           <div class="row2" id="sessionSizeFields" hidden>
             <div class="field"><label for="sessionWidth">Width</label><input class="input" type="number" id="sessionWidth" value="1920" min="320" max="3840"></div>
@@ -2580,16 +2634,21 @@ function refreshSheet() {
   sheet.levels[0] = { ...spec };
   if (sheet.levels.length === 1) renderSheet();
 }
+// A section label has neither an action nor an icon; a row with an icon but no
+// action only shows a value.
+const isSheetLabel = (it) => it && it !== '-' && it.label && !it.run && !it.href && !it.icon && !it.lead;
 function sheetRow(it, i) {
   if (it === '-') return '<div class="obj-gap"></div>';
-  if (it.label && !it.run && !it.href) return `<div class="obj-label">${esc(it.label)}</div>`;
+  if (isSheetLabel(it)) return `<div class="obj-label">${esc(it.label)}</div>`;
   const inner = (it.on !== undefined ? `<span class="tick">${it.on ? icon('check') : ''}</span>` : '')
     + (it.lead ? `<span class="lead">${it.lead}</span>` : it.icon ? icon(it.icon) : '')
     + `<span class="obj-txt"><b>${esc(it.label)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>`
     + (it.meta ? `<span class="meta">${esc(it.meta)}</span>` : '')
     + (it.more ? icon('chev', 'sm chev-r') : '');
   const cls = `obj-row${it.danger ? ' danger' : ''}${it.on ? ' on' : ''}`;
-  return it.href ? `<a class="${cls}" href="${esc(it.href)}"${it.attrs || ''}>${inner}</a>` : `<button class="${cls}" data-si="${i}"${it.disabled ? ' disabled' : ''}>${inner}</button>`;
+  if (it.href) return `<a class="${cls}" href="${esc(it.href)}"${it.attrs || ''}>${inner}</a>`;
+  if (!it.run) return `<div class="${cls} static">${inner}</div>`;
+  return `<button class="${cls}" data-si="${i}"${it.disabled ? ' disabled' : ''}>${inner}</button>`;
 }
 function renderSheet() {
   if (!sheet) return;
@@ -2614,7 +2673,7 @@ function renderSheet() {
   const flush = () => { if (group) body += `<div class="obj-group">${group}</div>`; group = ''; };
   rows.forEach((it, i) => {
     if (!it) return;
-    if (it === '-' || (it.label && !it.run && !it.href)) { flush(); body += sheetRow(it, i); return; }
+    if (it === '-' || isSheetLabel(it)) { flush(); body += sheetRow(it, i); return; }
     group += sheetRow(it, i);
   });
   flush();
@@ -2674,7 +2733,7 @@ function sessionSheetSpec(s) {
         s._extension.public_share && { tile: true, icon: 'share', label: 'Share', run: () => openShare('session', s) },
         { icon: 'tabs', label: 'Shared tabs', meta: plural(pagesOf(s).length, 'tab'), more: true, run: () => showSessionDetails(s) },
         { icon: control ? 'takeover' : 'eye', label: control ? 'Control allowed' : 'View only', sub: 'Sharing and control are set in the browser extension' },
-        { icon: 'server', label: 'Node details', more: true, run: () => afterSheet(() => { filter = s.node_name; setView('nodes'); render(); }) },
+        { icon: 'server', label: 'Browser details', more: true, run: () => openNodeSheet('browser', s.node_name) },
         '-',
         { icon: 'power', label: s._extension.remembered ? 'Forget browser…' : 'Disconnect browser…', danger: true, run: () => revokeExtension(s._extension) },
       ],
@@ -2835,6 +2894,147 @@ document.addEventListener('pointerdown', (e) => {
 for (const t of ['pointerup', 'pointercancel', 'pointermove']) {
   document.addEventListener(t, (e) => { if (pressTimer && (t !== 'pointermove' || Math.abs(e.movementX) + Math.abs(e.movementY) > 6)) { clearTimeout(pressTimer); pressTimer = null; } });
 }
+
+
+/* ================================================================ fancy selects
+   Every <select class="input"> gets a button showing its choice with an icon, which
+   opens the options as a menu (a sheet on phones) with icons and details. The select
+   stays the source of truth: code reads and sets it as before, and a choice sets it
+   and fires its change event. */
+const NATIVE_VALUE = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+const NATIVE_INDEX = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex');
+function selectOptionIcon(sel, opt) {
+  if (opt.dataset.profileKey) return pickAvatar(byKey.profiles.get(opt.dataset.profileKey), 'mini');
+  if (opt.dataset.icon) return icon(opt.dataset.icon);
+  const id = sel.id || sel.dataset.key || (sel.dataset.nodeProxy !== undefined ? 'proxy' : '');
+  const v = opt.value, text = opt.textContent;
+  if (sel.id === 'profileClone') return v ? icon('copy') : icon('plus');
+  if (/scheme|color_scheme/i.test(id)) return icon(v === 'light' || (!v && /light/i.test(text)) ? 'sun' : 'moon');
+  if (/prox/i.test(id)) return icon(v === 'none' || /^direct/i.test(text) || /\(direct\)/i.test(text) ? 'globe' : 'route');
+  if (/idle/i.test(id)) return icon(v === '0' ? 'power' : 'clock');
+  if (/ttl|expir/i.test(id)) return icon(v === '' || v === '0' || /never/i.test(text) ? 'history' : 'clock');
+  if (/adblock/i.test(id)) return icon('shield');
+  return sel.dataset.icon ? icon(sel.dataset.icon) : '';
+}
+// "Name (detail)" and "Name · detail" become a label and a detail.
+function selectOptionParts(opt) {
+  const text = opt.textContent.trim();
+  if (opt.dataset.meta) return [text, opt.dataset.meta];
+  const dot = text.split(/\s+·\s+/);
+  if (dot.length > 1) return [dot[0], dot.slice(1).join(' · ')];
+  const m = text.match(/^(.+?)\s+\(([^()]+)\)$/);
+  return m ? [m[1], m[2]] : [text, ''];
+}
+function syncFancySelect(sel) {
+  const btn = sel._fancy;
+  if (!btn) return;
+  const opt = sel.options[NATIVE_INDEX.get.call(sel)];
+  const [label, meta] = opt ? selectOptionParts(opt) : ['', ''];
+  const html = `${opt ? selectOptionIcon(sel, opt) : ''}<span class="pc-txt"><span class="pc-name">${esc(label)}</span>${meta ? `<span class="pc-meta">${esc(meta)}</span>` : ''}</span>${icon('chev', 'pick-chev')}`;
+  if (btn._html !== html) { btn.innerHTML = html; btn._html = html; }
+  btn.disabled = sel.disabled;
+  btn.hidden = sel.hidden;
+}
+function enhanceSelect(sel) {
+  if (sel._fancy || sel.hasAttribute('hidden') || sel.multiple) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pick pick-sm';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  const label = sel.getAttribute('aria-label') || (sel.id && document.querySelector(`label[for="${sel.id}"]`)?.textContent.trim()) || '';
+  if (label) btn.setAttribute('aria-label', label);
+  sel._fancy = btn;
+  sel.classList.add('fancy-native');
+  sel.after(btn);
+  // Code sets .value and .selectedIndex directly: the button follows.
+  Object.defineProperty(sel, 'value', { configurable: true, get() { return NATIVE_VALUE.get.call(this); }, set(v) { NATIVE_VALUE.set.call(this, v); syncFancySelect(this); } });
+  Object.defineProperty(sel, 'selectedIndex', { configurable: true, get() { return NATIVE_INDEX.get.call(this); }, set(v) { NATIVE_INDEX.set.call(this, v); syncFancySelect(this); } });
+  new MutationObserver(() => syncFancySelect(sel)).observe(sel, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'selected', 'label'] });
+  sel.addEventListener('change', () => syncFancySelect(sel));
+  btn.addEventListener('click', () => {
+    const cur = NATIVE_INDEX.get.call(sel);
+    const items = [];
+    const title = btn.getAttribute('aria-label');
+    if (title) items.push({ label: title });
+    for (const child of sel.children) {
+      const opts = child.tagName === 'OPTGROUP' ? (items.push({ label: child.label }), [...child.children]) : [child];
+      for (const opt of opts) {
+        if (opt.hidden) continue;
+        const [l, meta] = selectOptionParts(opt);
+        const lead = selectOptionIcon(sel, opt);
+        items.push({ ...(lead ? { lead } : { icon: 'chev' }), label: l, meta, on: opt.index === cur, disabled: opt.disabled, run: () => {
+          if (opt.disabled) return;
+          NATIVE_INDEX.set.call(sel, opt.index);
+          syncFancySelect(sel);
+          sel.dispatchEvent(new Event('input', { bubbles: true }));
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+        } });
+      }
+    }
+    openMenu(btn, items, { align: 'left' });
+  });
+  syncFancySelect(sel);
+}
+const enhanceSelects = (root = document) => root.querySelectorAll('select.input').forEach(enhanceSelect);
+enhanceSelects();
+// Selects rendered later (the settings sheet, the engines) get the same.
+new MutationObserver((changes) => {
+  for (const c of changes) for (const n of c.addedNodes) {
+    if (n.nodeType !== 1) continue;
+    if (n.matches?.('select.input')) enhanceSelect(n); else if (n.querySelector?.('select.input')) enhanceSelects(n);
+  }
+}).observe(document.body, { childList: true, subtree: true });
+
+
+/* A row of choice buttons (node pills, engine, screen, size) as a dropdown in the
+   same style: the buttons stay (hidden) and keep their handlers; the dropdown shows
+   the one that is on and clicks the one picked. */
+function segLead(b) {
+  const style = b.getAttribute('style') || '';
+  if (b.dataset.icon) return `<span class="seg-lead">${icon(b.dataset.icon)}</span>`;
+  const mark = b.querySelector('svg, .dot');
+  return mark ? `<span class="seg-lead" style="${esc(style)}">${mark.outerHTML}</span>` : '';
+}
+function segParts(b) {
+  const clone = b.cloneNode(true);
+  const extra = [...clone.querySelectorAll('.muted, .chip')].map((x) => { const t = x.textContent.replace(/^[\s·]+/, '').trim(); x.remove(); return t; }).filter(Boolean);
+  if (b.dataset.meta) extra.unshift(b.dataset.meta);
+  if (b.classList.contains('off')) extra.push('offline');
+  return [clone.textContent.replace(/\s+/g, ' ').trim(), extra.join(' · ')];
+}
+function syncSegDropdown(seg) {
+  const btn = seg._fancy;
+  const on = seg.querySelector('button.on:not([hidden])');
+  const [label, meta] = on ? segParts(on) : ['Choose', ''];
+  const html = `${on ? segLead(on) : ''}<span class="pc-txt"><span class="pc-name">${esc(label)}</span>${meta ? `<span class="pc-meta">${esc(meta)}</span>` : ''}</span>${icon('chev', 'pick-chev')}`;
+  if (btn._html !== html) { btn.innerHTML = html; btn._html = html; }
+  btn.hidden = seg.hidden || !seg.querySelector('button:not([hidden])');
+}
+function segDropdown(seg) {
+  if (seg._fancy) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pick pick-sm';
+  btn.setAttribute('aria-haspopup', 'listbox');
+  const title = seg.getAttribute('aria-label') || seg.closest('.field')?.querySelector('.field-label, label')?.textContent.trim() || '';
+  if (title) btn.setAttribute('aria-label', title);
+  seg._fancy = btn;
+  seg.classList.add('seg-native');
+  seg.after(btn);
+  new MutationObserver(() => syncSegDropdown(seg)).observe(seg, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden', 'disabled'] });
+  btn.addEventListener('click', () => {
+    const items = title ? [{ label: title }] : [];
+    for (const b of seg.querySelectorAll('button')) {
+      if (b.hidden) continue;
+      const [label, meta] = segParts(b);
+      const lead = segLead(b);
+      items.push({ ...(lead ? { lead } : { icon: 'chev' }), label, meta, on: b.classList.contains('on'), disabled: b.disabled, run: () => { if (!b.disabled) b.click(); } });
+    }
+    openMenu(btn, items, { align: 'left' });
+  });
+  syncSegDropdown(seg);
+}
+['sessionNodes', 'sessionEngines', 'sessionScreen', 'sizePresets', 'profileNodes', 'transferNodes'].forEach((id) => segDropdown($(id)));
 
 /* ================================================================ keyed rendering */
 // Only items whose markup changed are replaced, so scroll positions, focus and
@@ -4116,7 +4316,7 @@ const ACT = {
     openMenu(el, [
       { label: nodeLabel(node) },
       { icon: 'server', label: filter === node ? 'Show all nodes' : `Only ${nodeLabel(node)}`, run: () => { filter = filter === node ? 'all' : node; render(); } },
-      { icon: 'info-c', label: 'Node details', run: () => setView('nodes') },
+      { icon: 'info-c', label: 'Node details', more: true, run: () => openNodeSheet(extensionNodeOf(node) ? 'browser' : 'node', node) },
     ], { align: 'left' });
   },
   'share-session': (el) => { const s = byKey.sessions.get(el.dataset.key); if (s) openShare('session', s); },
@@ -5217,7 +5417,7 @@ function fillProxyOptions() {
 }
 function fillCloneOptions() {
   const own = [...byKey.profiles.values()].filter((p) => p.node_name === profileNode);
-  $('profileClone').innerHTML = '<option value="">An empty profile</option>' + own.map((p) => `<option value="${esc(p.key)}">Copy of ${esc(p.display)} (${formatBytes(p.size_bytes)})</option>`).join('');
+  $('profileClone').innerHTML = '<option value="">An empty profile</option>' + own.map((p) => `<option value="${esc(p.key)}" data-profile-key="${esc(keyOf.profile(p))}" data-meta="${esc(formatBytes(p.size_bytes))}">Copy of ${esc(p.display)}</option>`).join('');
 }
 let profileTabsEd = null;
 $('newProfileForm').addEventListener('submit', async (e) => {
@@ -5638,93 +5838,194 @@ $('transferForm').addEventListener('submit', async (e) => {
 // A node's default proxy: for sessions that pick none and whose profile has none.
 const nodeDefaultProxy = (node) => nodes.find((n) => n.name === node)?.settings?.default_proxy || null;
 const ephemeralNodes = () => nodes.flatMap((provider) => (provider.ephemeral_nodes || []).map((node) => ({ ...node, provider: provider.name })));
-function ephemeralNodeCard(n) {
-  const online = n.status === 'online' || n.status === 'ready';
-  const url = n.session_id ? `${nodeBase(n.provider)}/handoff/?ephemeral=${enc(n.lease_id)}&session=${enc(n.session_id)}` : '';
-  const age = n.created_at ? cardAge(Math.max(0, Date.now() / 1000 - n.created_at)) : '';
-  return `<div class="node-card" style="--node:${nodeColor(n.name)}">
-    <div class="node-head"><div class="avatar">${icon('server')}</div>
-      <div class="t"><b>${esc(n.name)} <span class="chip accent">ephemeral</span> <span class="chip ${online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad'}">${esc(n.status)}</span></b>
-        <span>Ephemeral node · via ${esc(n.provider)}</span></div>
-      <div class="node-ctl">${online && url ? `<a class="btn sm" href="${esc(url)}">${icon('takeover', 'sm')}Take over</a>` : ''}
-        ${n.status === 'ready' ? `<button class="btn sm" data-ephemeral-launch="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">${icon('plus', 'sm')}New session</button>` : ''}
-        ${n.session_id ? `<button class="btn sm" data-ephemeral-stop="${esc(n.lease_id)}" data-provider="${esc(n.provider)}" data-session="${esc(n.session_id)}">Stop</button>` : n.status === 'ready' ? `<button class="btn sm" data-ephemeral-remove="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">Remove</button>` : ''}</div>
-    </div><div class="node-stats"><div class="node-stat"><b>${n.session_id ? '1/1' : '0/1'}</b><span>sessions</span></div>${age ? `<div class="node-stat"><b>${esc(age)}</b><span>uptime</span></div>` : ''}${n.expires_at ? `<div class="node-stat"><b>${esc(untilShort(n.expires_at))}</b><span>remaining</span></div>` : ''}</div>
-  </div>`;
-}
-function renderNodes() {
-  if (!ov) return;
-  // Not while a setting is being changed: re-rendering would close its picker.
-  if ($('nodesList').contains(document.activeElement) && document.activeElement.matches('select, input')) return;
-  // Nodes that run another build than the rest (the most common one; the local node on a tie).
+// Time left until a Unix time, short: 45m, 7h, 3d.
+const untilShort = (at) => {
+  const m = Math.max(0, Math.round((at - Date.now() / 1000) / 60));
+  return m < 60 ? `${m}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+};
+// Which build each node runs, and the ones that differ from the most common one
+// (the local node's on a tie).
+function nodeBuilds() {
   const buildOf = (n) => `${n.version || ''} · ${(n.revision || '').slice(0, 7)}`;
   const known = nodes.filter((n) => n.status === 'online' && (n.version || n.revision));
   const tally = new Map();
   for (const n of known) tally.set(buildOf(n), (tally.get(buildOf(n)) || 0) + 1);
   const top = Math.max(0, ...tally.values());
   const localBuild = known.find((n) => n.isLocal);
-  const mainBuild = localBuild && tally.get(buildOf(localBuild)) === top ? buildOf(localBuild)
-    : [...tally].find(([, c]) => c === top)?.[0];
-  const odd = new Set(tally.size > 1 ? known.filter((n) => buildOf(n) !== mainBuild).map((n) => n.name) : []);
+  const main = localBuild && tally.get(buildOf(localBuild)) === top ? buildOf(localBuild) : [...tally].find(([, c]) => c === top)?.[0];
+  const odd = new Set(tally.size > 1 ? known.filter((n) => buildOf(n) !== main).map((n) => n.name) : []);
+  return { main, odd };
+}
+/* The Nodes view: three kinds in three groups (daemons, ephemeral nodes, browsers
+   through the extension), each a list of rows: who it is and its state, one line of
+   facts, and its one main action. A tap opens its sheet with the rest. */
+const shortHost = (url) => (url || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
+const nodeAvatar = (ico, color, state) => `<div class="navatar" style="--node:${color}">${ico}<i class="nstate ${state}" aria-hidden="true"></i></div>`;
+function nodeRow({ kind, key, ico, color, state, name, chips = '', sub, action = '', off = false, fresh = false }) {
+  return `<div class="nrow${off ? ' off' : ''}${fresh ? ' node-new' : ''}" role="button" tabindex="0" data-nkind="${kind}" data-nkey="${esc(key)}" style="--node:${color}" aria-label="${esc(`${name}: details and actions`)}">
+    ${nodeAvatar(ico, color, state)}
+    <div class="t"><b><span class="name">${esc(name)}</span>${chips}</b><span class="nsub">${sub}</span></div>
+    ${action}
+  </div>`;
+}
+const compactLabels = (labels) => {
+  const list = labels || [];
+  return list.slice(0, 2).map(lblChip).join('') + (list.length > 2 ? `<span class="chip">+${list.length - 2}</span>` : '');
+};
+const facts = (...parts) => parts.filter(Boolean).map((x) => `<span class="nf">${x}</span>`).join('');
+function daemonRow(n, odd) {
+  const online = n.status === 'online';
+  const pct = n.max_sessions ? Math.min(100, (n.active_sessions / n.max_sessions) * 100) : 0;
+  const meter = n.max_sessions ? `<i class="nmeter"><span style="width:${pct}%;background:${pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)'}"></span></i>` : '';
+  const sub = online
+    ? facts(`<b>${esc(n.active_sessions)}/${esc(n.max_sessions)}</b>sessions ${meter}`, `<b>${esc(n.profiles_count)}</b> profiles`, `<b>${formatBytes(n.storage_used_bytes || 0)}</b> recordings`, n.isLocal ? 'this node' : n.latency_ms ? `${esc(n.latency_ms)} ms` : '')
+    : facts(`<span class="bad">unreachable</span>`, esc(shortHost(n.url)));
+  return nodeRow({
+    kind: 'node', key: n.name, ico: icon('server'), color: nodeColor(n.name), state: online ? 'ok' : 'bad', name: n.name, off: !online,
+    chips: (n.isLocal ? '<span class="chip accent">local</span>' : '') + compactLabels(n.labels?.length ? n.labels : n.groups)
+      + (odd.has(n.name) ? `<span class="chip warn" title="Runs another version than the other nodes">${icon('alert', 'sm')}v${esc(n.version)}</span>` : ''),
+    sub,
+    action: online ? `<button class="round-go" data-node-launch="${esc(n.name)}" title="New session on ${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus')}</button>` : '',
+  });
+}
+const ephemeralUrl = (n) => (n.session_id ? `${nodeBase(n.provider)}/handoff/?ephemeral=${enc(n.lease_id)}&session=${enc(n.session_id)}` : '');
+function ephemeralRow(n) {
+  const online = n.status === 'online' || n.status === 'ready';
+  const state = n.session_id ? 'session running' : n.status === 'ready' ? 'ready for a session' : n.status;
+  return nodeRow({
+    kind: 'ephemeral', key: n.lease_id, ico: icon('clock'), color: nodeColor(n.name), state: online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad', name: n.name, off: !online,
+    sub: facts(esc(state), `via ${esc(n.provider)}`, n.expires_at ? `<b>${esc(untilShort(n.expires_at))}</b> left` : ''),
+    action: online && n.session_id ? `<a class="round-go on" href="${esc(ephemeralUrl(n))}" title="Take over" aria-label="Take over ${esc(n.name)}">${icon('takeover')}</a>`
+      : n.status === 'ready' ? `<button class="round-go" data-ephemeral-launch="${esc(n.lease_id)}" data-provider="${esc(n.provider)}" title="New session" aria-label="New session on ${esc(n.name)}">${icon('plus')}</button>` : '',
+  });
+}
+function browserRow(n) {
+  const key = extensionNodeKey(n), online = n.online !== false;
+  const controls = n.tabs.filter((t) => t.control).length;
+  const engine = n.browser === 'firefox' ? 'Firefox' : 'Chromium';
+  const days = !online && n.forget_at ? Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400)) : null;
+  const sub = online
+    ? facts(engine, n.tabs.length ? `<b>${n.tabs.length}</b> shared tab${n.tabs.length === 1 ? '' : 's'}${controls ? controls === n.tabs.length ? ', with control' : `, ${controls} with control` : ', view only'}` : 'nothing shared', `via ${esc(n.daemon || localName())}`)
+    : facts(engine, 'offline', days !== null ? `<span class="warn">forgotten ${days ? `in ${days}d` : 'today'}</span>` : '');
+  return nodeRow({
+    kind: 'browser', key, ico: icon(n.browser === 'firefox' ? 'firefox' : 'chromium'), color: nodeColor(key), state: online ? 'ok' : 'off', name: n.name, off: !online, fresh: freshExtensionNodes.has(key),
+    chips: (n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : '')
+      + (online && n.browser === 'firefox' && !n.native_control ? `<span class="chip warn" title="The Firefox companion is disconnected: some clicks, selections and keys may not work">${icon('alert', 'sm')}companion</span>` : '')
+      + (online && !n.version ? `<span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update</span>` : '')
+      + (n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''),
+    sub,
+    action: online && (n.tabs.length || n.can_open) ? `<a class="round-go on" href="${esc(handoffUrl(key))}" title="${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}" aria-label="Take over ${esc(n.name)}">${icon(controls || n.can_open ? 'takeover' : 'eye')}</a>` : '',
+  });
+}
+function renderNodes() {
+  if (!ov) return;
+  const { main, odd } = nodeBuilds();
   const mismatch = odd.size
-    ? `<div class="node-warn" role="alert">${icon('alert', 'sm')}<span>${[...odd].map(esc).join(', ')} ${odd.size === 1 ? 'runs' : 'run'} another version than the other nodes (${esc(mainBuild)}). Mixed versions can behave differently: update them together.</span></div>` : '';
-  const html = mismatch + nodes.filter(inLabels).map((n) => {
-    const online = n.status === 'online';
-    const rev = n.revision ? ` · ${n.revision.slice(0, 7)}` : '';
-    const stat = (value, label, cls = '', pct = null) => `<div class="node-stat ${cls}${pct === null ? '' : ' has-meter'}"><b>${value}</b><span>${label}</span>${pct === null ? '' : `<i class="meter" role="presentation"><span style="width:${pct}%;background:${pct > 85 ? 'var(--bad)' : pct > 65 ? 'var(--warn)' : 'var(--accent)'}"></span></i>`}</div>`;
-    return `<div class="node-card" style="--node:${nodeColor(n.name)}">
-      <div class="node-head">
-        <div class="avatar">${icon('server')}</div>
-        <div class="t"><b>${esc(n.name)} ${n.isLocal ? '<span class="chip accent">local</span>' : ''} ${groupChips(n)} ${online ? `<span class="chip ok">online${n.latency_ms ? ` · ${esc(n.latency_ms)} ms` : ''}</span>` : `<span class="chip bad" title="${esc(n.error || '')}">unreachable</span>`}</b>
-          <span>${/^https?:\/\//.test(n.url) ? `<a class="node-url" href="${esc(n.url)}" target="_blank" rel="noopener" title="Open ${esc(n.url)}">${esc(n.url.replace(/^https?:\/\//, ''))}</a>` : esc(n.url)}${n.version ? (odd.has(n.name)
-            ? ` · <span class="chip warn" title="${esc(`Another version than the other nodes (${mainBuild})`)}">${icon('alert', 'sm')}v${esc(n.version)}${esc(rev)}</span>`
-            : ` · v${esc(n.version)}${esc(rev)}`) : ''}</span>
-        </div>
-        <div class="node-ctl">
-          ${online ? `<button class="btn sm" data-node-launch="${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus', 'sm')}New session</button>` : ''}
-          <button class="btn sm" data-settings="node" data-key="${esc(n.name)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}Settings</button>
-        </div>
-      </div>
-      ${online ? `<div class="node-stats">
-        ${stat(`${esc(n.active_sessions)}<small class="muted">/${esc(n.max_sessions)}</small>`, 'sessions', '', n.max_sessions ? Math.min(100, (n.active_sessions / n.max_sessions) * 100) : null)}
-        ${stat(esc(n.profiles_count), 'profiles')}
-        ${stat(formatBytes(n.storage_used_bytes || 0), 'recordings')}
-        ${n.uptime_seconds ? stat(cardAge(n.uptime_seconds), 'uptime') : ''}
-        ${n.supported_engines?.length ? stat(n.supported_engines.map((e) => icon(e, 'sm')).join(' '), plural(n.supported_engines.length, 'engine').replace(/^\d+ /, '')) : ''}
-      </div>` : ''}
-    </div>`;
-  }).join('') + ephemeralNodes().map(ephemeralNodeCard).join('') + extensionBrowserNodes.map(extensionNodeCard).join('');
+    ? `<div class="node-warn" role="alert">${icon('alert', 'sm')}<span>${[...odd].map(esc).join(', ')} ${odd.size === 1 ? 'runs' : 'run'} another version than the other nodes (${esc(main)}). Mixed versions can behave differently: update them together.</span></div>` : '';
+  // Online first; offline ones at the end of their group.
+  const byState = (online) => (a, b) => online(b) - online(a);
+  const daemons = nodes.filter(inLabels).sort(byState((n) => n.status === 'online'));
+  const ephemeral = ephemeralNodes();
+  const browsers = [...extensionBrowserNodes].sort(byState((n) => n.online !== false));
+  const group = (title, hint, rows) => rows.length ? `<section class="ngroup"><h3>${title}<span class="count">${rows.length}</span></h3><p class="hint">${hint}</p><div class="list nlist">${rows.join('')}</div></section>` : '';
+  const html = mismatch
+    + group('Daemons', 'Run the browsers of sessions and keep profiles and recordings.', daemons.map((n) => daemonRow(n, odd)))
+    + group('Ephemeral nodes', 'A node of its own for one throwaway session, removed after it.', ephemeral.map(ephemeralRow))
+    + group('Browsers', 'Your own browsers, through the extension: their shared tabs.', browsers.map(browserRow));
   if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
   renderSettings();
 }
-// Time left until a Unix time, short: 45m, 7h, 3d.
-const untilShort = (at) => {
-  const m = Math.max(0, Math.round((at - Date.now() / 1000) / 60));
-  return m < 60 ? `${m}m` : m < 2880 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
-};
-function extensionNodeCard(n) {
-  const key = extensionNodeKey(n), online = n.online !== false;
-  const controls = n.tabs.filter(t => t.control).length;
-  const stat = (value, label, cls = '') => `<div class="node-stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
-  const days = !online && n.forget_at ? Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400)) : null;
-  return `<div class="node-card${freshExtensionNodes.has(key) ? ' node-new' : ''}" style="--node:${nodeColor(key)}">
-    <div class="node-head"><div class="avatar">${icon(n.browser === 'firefox' ? 'firefox' : 'chromium')}</div>
-      <div class="t"><b>${esc(n.name)} ${n.id === thisBrowserNode ? '<span class="chip accent" title="The browser you are using right now">this browser</span>' : ''}<span class="chip ${online ? 'ok' : 'bad'}">${online ? 'online' : 'offline'}</span>${addonBadge()}${online && n.browser === 'firefox' && !n.native_control ? `<span class="node-warning-icon" role="img" tabindex="0" title="Firefox companion is disconnected. Some clicks, text selection, right-clicks and keyboard input may not work reliably. Enable the companion in the browser extension for trusted input." aria-label="Firefox companion is disconnected; some remote input may not work reliably">${icon('alert')}</span>` : ''}${n.recording ? `<span class="chip bad">${n.recording_paused ? 'REC paused' : 'REC'}</span>` : ''}</b>
-        <span>${esc(n.browser === 'firefox' ? 'Firefox' : 'Chromium')} · via ${esc(n.daemon || localName())}${n.version ? ` · extension v${esc(n.version)}` : online ? ` · <span class="chip warn" title="This extension predates live views: restart the browser to update it">${icon('alert', 'sm')}update extension</span>` : ''}</span>
-      </div>
-      <div class="node-ctl">
-        ${online && (n.tabs.length || n.can_open) ? `<a class="btn sm" href="${esc(handoffUrl(key))}">${icon('takeover', 'sm')}${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}</a>` : ''}
-        <button class="btn sm" data-settings="browser" data-key="${esc(key)}" title="Settings of ${esc(n.name)}" aria-label="Settings of ${esc(n.name)}">${icon('gear', 'sm')}Settings</button>
-      </div>
-    </div>
-    <div class="node-stats">
-      ${stat(esc(n.tabs.length), `shared tab${n.tabs.length === 1 ? '' : 's'}`)}
-      ${stat(controls ? esc(controls) : 'View', controls ? 'with control' : 'only')}
-      ${days !== null ? stat(days ? `${days}d` : 'today', 'until forgotten', 'warn') : stat(n.remembered ? 'Off' : n.expires_at ? untilShort(n.expires_at) : 'None', n.remembered ? 'key expiry' : 'key expires in')}
-    </div>
-    ${!n.tabs.length ? `<p class="node-note">${online ? 'Switch tabs on in the browser extension to share them here.' : 'This browser reconnects when it starts; its tabs stay private until shared again.'}</p>` : ''}
-  </div>`;
+$('nodesList').addEventListener('click', (e) => {
+  if (e.defaultPrevented || e.target.closest('a, button')) return;
+  const row = e.target.closest('.nrow');
+  if (row) openNodeSheet(row.dataset.nkind, row.dataset.nkey);
+});
+$('nodesList').addEventListener('keydown', (e) => {
+  const row = e.target.closest?.('.nrow');
+  if (!row || e.target !== row || (e.key !== 'Enter' && e.key !== ' ')) return;
+  e.preventDefault();
+  openNodeSheet(row.dataset.nkind, row.dataset.nkey);
+});
+// A node's sheet: everything the card used to show, and what can be done with it.
+function openNodeSheet(kind, key) {
+  openObject(`${kind}|${key}`, () => {
+    if (kind === 'node') { const n = nodes.find((x) => x.name === key); return n ? daemonSheetSpec(n) : null; }
+    if (kind === 'ephemeral') { const n = ephemeralNodes().find((x) => x.lease_id === key); return n ? ephemeralSheetSpec(n) : null; }
+    const n = extensionNodeOf(key);
+    return n ? browserSheetSpec(n) : null;
+  });
 }
+const showOnly = (node, v) => afterSheet(() => { filter = node; setView(v); render(); });
+function daemonSheetSpec(n) {
+  const online = n.status === 'online';
+  const { odd, main } = nodeBuilds();
+  const labels = n.labels?.length ? n.labels : n.groups || [];
+  return {
+    head: sheetHead(nodeAvatar(icon('server'), nodeColor(n.name), online ? 'ok' : 'bad'), esc(n.name),
+      subLine(online ? '<span class="run">● online</span>' : '<span class="bad">unreachable</span>', n.isLocal ? 'this node' : online && n.latency_ms ? `${esc(n.latency_ms)} ms` : '', online && n.uptime_seconds ? `up ${esc(cardAge(n.uptime_seconds))}` : ''),
+      `${labels.length ? `<div class="obj-facts">${lblChips(labels)}</div>` : ''}${!online && n.error ? `<p class="hint">${esc(n.error)}</p>` : ''}${odd.has(n.name) ? `<p class="hint warn">Runs another version than the other nodes (${esc(main)}).</p>` : ''}`),
+    primary: online ? `<button class="btn primary big" data-sheet-node-launch="${esc(n.name)}">${icon('plus')}New session here</button>` : '',
+    items: [
+      online && { tile: true, icon: 'layers', label: `${n.active_sessions}/${n.max_sessions}`, run: () => showOnly(n.name, 'sessions') },
+      online && { tile: true, icon: 'folder', label: plural(n.profiles_count || 0, 'profile'), run: () => showOnly(n.name, 'profiles') },
+      online && { tile: true, icon: 'film', label: formatBytes(n.storage_used_bytes || 0), run: () => showOnly(n.name, 'recordings') },
+      online && { tile: true, icon: 'filter', on: filter === n.name, label: filter === n.name ? 'Showing only' : 'Only this', run: () => { filter = filter === n.name ? 'all' : n.name; render(); } },
+      { label: 'Node' },
+      /^https?:\/\//.test(n.url) ? { icon: 'link', label: 'Address', meta: shortHost(n.url), href: n.url, attrs: ' target="_blank" rel="noopener"' } : { icon: 'link', label: 'Address', meta: n.url || '' },
+      n.version && { icon: 'info-c', label: 'Version', meta: `v${n.version}${n.revision ? ` · ${n.revision.slice(0, 7)}` : ''}` },
+      n.supported_engines?.length && { icon: 'globe', label: 'Engines', meta: n.supported_engines.map(engineLabel).join(', ') },
+      { icon: 'gear', label: 'Settings', sub: 'Default proxy, labels' + (n.isLocal ? '' : ', remove from the mesh'), more: true, run: () => openSettings('node', n.name) },
+    ],
+  };
+}
+function ephemeralSheetSpec(n) {
+  const online = n.status === 'online' || n.status === 'ready';
+  return {
+    head: sheetHead(nodeAvatar(icon('clock'), nodeColor(n.name), online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad'), esc(n.name),
+      subLine('Ephemeral node', `via ${esc(n.provider)}`, esc(n.session_id ? 'session running' : n.status))),
+    primary: online && n.session_id ? `<a class="btn primary big" href="${esc(ephemeralUrl(n))}">${icon('takeover')}Take over</a>`
+      : n.status === 'ready' ? `<button class="btn primary big" data-ephemeral-launch="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">${icon('plus')}New session</button>` : '',
+    items: [
+      { label: 'Node' },
+      n.created_at && { icon: 'clock', label: 'Up for', meta: cardAge(Math.max(0, Math.floor(Date.now() / 1000 - n.created_at))) },
+      n.expires_at && { icon: 'history', label: 'Removed in', meta: untilShort(n.expires_at) },
+      { icon: 'server', label: 'Provider', meta: n.provider },
+      '-',
+      n.session_id
+        ? { icon: 'power', label: 'Stop the session', danger: true, run: () => act('Stopping session', () => request('DELETE', api(n.provider, `/ephemeral/${enc(n.lease_id)}/proxy/api/sessions/${enc(n.session_id)}`)), 'Session stopped') }
+        : n.status === 'ready' && { icon: 'trash', label: 'Remove the node', danger: true, run: () => act('Removing the ephemeral node', () => request('DELETE', api(n.provider, `/ephemeral/${enc(n.lease_id)}`)), 'Removal started') },
+    ],
+  };
+}
+function browserSheetSpec(n) {
+  const key = extensionNodeKey(n), online = n.online !== false;
+  const controls = n.tabs.filter((t) => t.control).length;
+  const engine = n.browser === 'firefox' ? 'Firefox' : 'Chromium';
+  const session = dashboardSessions().find((s) => s._extension && extensionNodeKey(s._extension) === key);
+  const days = !online && n.forget_at ? Math.max(0, Math.ceil((n.forget_at - Date.now() / 1000) / 86400)) : null;
+  return {
+    head: sheetHead(nodeAvatar(icon(n.browser === 'firefox' ? 'firefox' : 'chromium'), nodeColor(key), online ? 'ok' : 'off'), esc(n.name),
+      subLine(online ? '<span class="run">● online</span>' : 'offline', engine, `via ${esc(n.daemon || localName())}`),
+      `${online && n.browser === 'firefox' && !n.native_control ? '<p class="hint warn">The Firefox companion is disconnected: some clicks, selections and keys may not work. Enable the companion in the extension.</p>' : ''}${!online ? `<p class="hint">It reconnects when it starts; its tabs stay private until shared again.${days !== null ? ` Forgotten ${days ? `in ${days} day${days === 1 ? '' : 's'}` : 'today'} unless it does.` : ''}</p>` : ''}`),
+    primary: online && (n.tabs.length || n.can_open) ? `<a class="btn primary big" href="${esc(handoffUrl(key))}">${icon(controls || n.can_open ? 'takeover' : 'eye')}${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}</a>` : '',
+    items: [
+      { label: 'Sharing' },
+      { icon: 'tabs', label: 'Shared tabs', meta: String(n.tabs.length), more: !!session, run: session ? () => showSessionDetails(session) : undefined, sub: n.tabs.length ? '' : 'Switch tabs on in the browser extension to share them here' },
+      { icon: controls ? 'takeover' : 'eye', label: 'Control', meta: controls ? `${controls} with control` : 'view only' },
+      { icon: 'lock', label: 'Key', meta: n.remembered ? 'kept until forgotten' : n.expires_at ? `expires in ${untilShort(n.expires_at)}` : 'no expiry' },
+      { icon: 'addon', label: 'Extension', meta: n.version ? `v${n.version}` : 'update needed' },
+      { icon: 'gear', label: 'Settings', more: true, run: () => openSettings('browser', key) },
+      '-',
+      { icon: 'power', label: n.remembered ? 'Forget this browser' : 'Disconnect this browser', danger: true, run: () => revokeExtension(n) },
+    ],
+  };
+}
+$('objBody').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-sheet-node-launch]');
+  if (b) afterSheet(() => openNewSession({ node: b.dataset.sheetNodeLaunch }));
+  const l = e.target.closest('[data-ephemeral-launch]');
+  if (l) afterSheet(() => openNewSession({ ephemeral: { lease_id: l.dataset.ephemeralLaunch, provider: l.dataset.provider } }));
+});
 // Defaults per browser engine, the same on every node: shown as the local node has
 // them. A change is a draft until it is applied (to every online node, after a
 // confirmation); a node that differs is named.

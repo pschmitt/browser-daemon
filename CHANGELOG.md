@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The Nodes view groups daemons, ephemeral nodes and browsers (through the
+  extension), each a list of rows: an avatar with a status dot, the name, its
+  labels and one line of facts, and one button (new session, or take over).
+  Offline ones come last, dimmed. A row opens a sheet with the address, version,
+  engines, settings and the rest; a version differing from the other nodes is
+  flagged on the row.
+* Every dropdown and every row of choice buttons in the dashboard (node, engine,
+  screen, size, proxy, appearance, idle stop, lifetimes, profile copies, link
+  expiry, node and engine settings) is a dropdown in the style of the profile
+  picker: an icon, a label and a detail, opening a menu (a sheet on phones).
+
 ## [0.15.1] - 2026-11-08
 
 ### Fixed
