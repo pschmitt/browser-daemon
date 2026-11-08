@@ -8,11 +8,11 @@ with session audio (`services.browser-daemon.audio.enable`), a recording takes t
 
 ## Merging
 
-select two or more recordings of a node in the dashboard and **Merge**: pick their order (drag or arrows) and whether the originals go once merged. They become one recording, one after the other, sound included. `browser-daemon recording merge ID... [--delete]`, `POST /api/recordings/merge {"ids": [...], "delete": false}`. The merge is kept if any source was, and its age counts from the merge; the originals stay if their sound could not be carried over. A recording being exported or merged is not removed by the cleanup or a delete (409). The Recordings tab's search field finds recordings by title, address, profile, node or date.
+select two or more recordings of a node in the dashboard and **Merge**: pick their order (drag or arrows) and whether the originals go once merged. They become one recording, one after the other, sound included. `browser-daemon recording merge ID... [--delete]`, `POST /api/recordings/merge {"ids": [...], "delete": false}`. The merge is a favorite if any source was, and its age counts from the merge; the originals stay if their sound could not be carried over. A recording being exported or merged is not removed by the cleanup or a delete (409). The Recordings tab's search field finds recordings by title, address, profile, node or date.
 
-## Keeping recordings
+## Favorite recordings
 
-the cleanup (age, count and storage limits) removes old recordings. Mark one as kept and it is never removed: the pin in the dashboard (recording menu, or select several), `K` in the TUI, `browser-daemon recording keep ID...` (`unkeep` undoes it), `POST /api/recordings/<id>/keep {"keep": true}`. Kept (and still running) recordings do not count against the count and storage limits. Nothing is kept unless you ask; deleting a kept recording by hand still works (after a warning). Recordings, backups, history and profile directories are readable by the daemon's user only; `meta.json` is replaced atomically and rebuilt from `frames.jsonl` if a crash leaves it unreadable.
+the cleanup (age, count and storage limits) removes old recordings. Star one as a favorite and it is never removed: the star in the dashboard (recording menu, or select several), `K` in the TUI, `browser-daemon recording favorite ID...` (`unfavorite` undoes it; `keep` and `unkeep` still work), `POST /api/recordings/<id>/keep {"keep": true}` (the API keeps the old name). The star button next to the search shows only the favorites. Favorite (and still running) recordings do not count against the count and storage limits. No recording is a favorite unless you ask; deleting a favorite by hand still works (after a warning). Recordings, backups, history and profile directories are readable by the daemon's user only; `meta.json` is replaced atomically and rebuilt from `frames.jsonl` if a crash leaves it unreadable.
 
 ## Playback timing
 

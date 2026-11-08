@@ -7,9 +7,14 @@
 * The recording player follows the app's design and theme: its bars use the
   app's surfaces, controls are 44px with a round play button, the timeline is
   easier to grab, and phones get two rows of controls.
+* Kept recordings are now **favorites**, marked with a star instead of a pin, in
+  the dashboard, the TUI (`K`) and the CLI (`recording favorite|unfavorite`, alias
+  `fav`; `keep` and `unkeep` still work). The API field stays `keep`.
 
 ### Added
 
+* A star button next to the recordings search shows only the favorites
+  (remembered in the browser).
 * Pinch to zoom in the recording player: two fingers zoom (up to 6×) and pan the
   picture only, not the page or the controls; one finger pans while zoomed; a double
   tap or the zoom pill goes back. Ctrl+wheel and a trackpad pinch zoom at the pointer.

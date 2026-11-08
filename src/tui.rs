@@ -2820,9 +2820,9 @@ fn recording_menu(r: &MeshRecording) -> Action {
             item("Play in the browser", Action::Open(play_url(r))),
             item(
                 if r.recording.keep {
-                    "Stop keeping (the cleanup may remove it)"
+                    "Unfavorite (the cleanup may remove it)"
                 } else {
-                    "Keep (the cleanup never removes it)"
+                    "Favorite (the cleanup never removes it)"
                 },
                 keep_recording(r),
             ),
@@ -2834,15 +2834,15 @@ fn recording_menu(r: &MeshRecording) -> Action {
     }
 }
 
-/// Keep a recording (the cleanup never removes it), or stop keeping it.
+/// Favorite a recording (the cleanup never removes it), or unfavorite it.
 fn keep_recording(r: &MeshRecording) -> Action {
     let keep = !r.recording.keep;
     Action::Api(
         Call::new(
             if keep {
-                "Keeping the recording"
+                "Adding to favorites"
             } else {
-                "No longer keeping the recording"
+                "Removing from favorites"
             },
             Method::POST,
             &r.node_name,
@@ -2875,7 +2875,7 @@ fn delete_recording(r: &MeshRecording) -> Action {
             "Delete recording {}?{}",
             r.recording.title.as_deref().unwrap_or("(untitled)"),
             if r.recording.keep {
-                " It is marked to be kept."
+                " It is a favorite."
             } else {
                 ""
             }
