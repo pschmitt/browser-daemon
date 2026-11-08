@@ -1509,6 +1509,10 @@ select.fancy-native { display: none !important; }
 .btn.big { height: 50px; }
 .x-btn { width: var(--tap); height: var(--tap); border-radius: 12px; }
 .sheet-foot .btn { min-width: 96px; }
+/* The rail's last entry: Settings of this browser (phones: in the ⋯ menu). */
+.appnav .nav-settings { margin-top: auto; }
+@media (max-width: 760px) { .appnav .nav-settings { display: none; } }
+.obj-pic img[src="/icon-192.png"] { object-fit: contain; padding: 6px; }
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }
@@ -1611,6 +1615,7 @@ select.fancy-native { display: none !important; }
   <button data-act="view" data-view="profiles" data-sec="profiles"><svg class="i"><use href="#i-folder"/></svg><span class="nl">Profiles</span><span class="count" id="countProfiles">0</span></button>
   <button data-act="view" data-view="recordings" data-sec="recordings"><svg class="i"><use href="#i-film"/></svg><span class="nl">Recordings</span><span class="count" id="countRecordings">0</span></button>
   <button data-act="view" data-view="mesh" data-sec="mesh"><svg class="i"><use href="#i-server"/></svg><span class="nl">Mesh</span><span class="count" id="countNodes">0</span></button>
+  <button class="nav-settings" data-act="settings" title="Settings of this browser"><svg class="i"><use href="#i-gear"/></svg><span class="nl">Settings</span></button>
 </nav>
 
 <main>
@@ -1640,7 +1645,7 @@ select.fancy-native { display: none !important; }
       <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="sessSearch" placeholder="Filter sessions: name, agent, topic, address…" autocomplete="off" spellcheck="false" aria-label="Filter sessions"></label>
       <button class="btn" id="agentsOnlyBtn" data-act="agents-only" aria-pressed="false" title="Only the sessions an agent or Playwright is driving"><svg class="i sm"><use href="#i-bot"/></svg>Agents only</button>
     </div>
-    <div class="session-grid" id="sessionGrid" data-cards="tidy"></div>
+    <div class="session-grid" id="sessionGrid" data-cards="overlay"></div>
   </section>
   <div class="sess-tools" id="profTools" hidden><label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="profSearch" placeholder="Search profiles: name, node, label, proxy…" autocomplete="off" spellcheck="false" aria-label="Search profiles"></label></div>
   <section class="view profiles" id="view-profiles" hidden></section>
@@ -3138,6 +3143,55 @@ function segDropdown(seg) {
 }
 ['sessionNodes', 'sessionEngines', 'sessionScreen', 'sizePresets', 'profileNodes', 'transferNodes'].forEach((id) => segDropdown($(id)));
 
+
+/* ================================================================ settings of this browser
+   What this browser remembers for the dashboard and the live view (localStorage, the
+   same origin for both pages), plus the app's own entries. Node and engine defaults
+   are under Mesh. */
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* storage unavailable */ } };
+const LIVE_SCREENS = { '': 'Automatic', window: 'Window', native: 'Native', phone: 'Phone' };
+const LIVE_PICTURES = { video: 'Video (H.264)', jpeg: 'Images (JPEG)' };
+function appSettingsSpec() {
+  const screen = lsGet('handoff.layout') || '';
+  const picture = lsGet('handoff.stream') || 'video';
+  const quality = lsGet('bd-jpeg-quality');
+  const touches = lsGet('handoff.touches');
+  const sound = lsGet('handoff.audio') !== '0';
+  const engine = Object.keys(SEARCH_ENGINES).find((k) => SEARCH_ENGINES[k] === searchEngine() || k === searchEngine()) || lsGet(SEARCH_KEY) || 'duckduckgo';
+  const choose = (title, options, current, set) => () => openMenu(null, [
+    { label: title },
+    ...Object.entries(options).map(([v, label]) => ({ label, on: v === current, run: () => { set(v); refreshSheet(); } })),
+  ]);
+  const version = ov?.local_node?.version;
+  return {
+    head: sheetHead(`<img src="/icon-192.png" alt="">`, 'Settings', subLine('This browser', version ? `Browser Daemon v${esc(version)}` : '')),
+    items: [
+      { label: 'Dashboard' },
+      { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], more: true, run: choose('Theme', THEMES, theme(), setTheme) },
+      { icon: 'layers', label: 'Session cards', meta: CARD_STYLES[cardStyle], more: true, run: choose('Session cards', CARD_STYLES, cardStyle, setCardStyle) },
+      { icon: 'search', label: 'Search engine', sub: 'For words typed into an address bar', meta: SEARCH_ENGINES[engine]?.name || engine, more: true,
+        run: choose('Search engine', Object.fromEntries(Object.entries(SEARCH_ENGINES).map(([k, v]) => [k, v.name])), engine, (v) => lsSet(SEARCH_KEY, v)) },
+      { label: 'Live view' },
+      { icon: 'handoff', label: 'Screen', sub: 'Automatic: Phone on phones, else Window', meta: LIVE_SCREENS[screen], more: true, run: choose('Screen', LIVE_SCREENS, screen, (v) => lsSet('handoff.layout', v || null)) },
+      { icon: 'image', label: 'Picture', meta: LIVE_PICTURES[picture] || picture, more: true, run: choose('Picture', LIVE_PICTURES, picture, (v) => lsSet('handoff.stream', v)) },
+      { icon: 'image', label: 'Image quality', meta: quality ? `${quality}` : 'Automatic', more: true,
+        run: choose('Image quality', { '': 'Automatic (65, 80 in Native)', 40: '40, fastest', 65: '65', 80: '80', 95: '95, sharpest' }, quality || '', (v) => lsSet('bd-jpeg-quality', v || null)) },
+      { icon: 'eye', label: 'Show touches and clicks', meta: touches === '1' ? 'On' : touches === '0' ? 'Off' : 'Engine default', more: true,
+        run: choose('Show touches and clicks', { '': 'Engine default', 1: 'On', 0: 'Off' }, touches || '', (v) => lsSet('handoff.touches', v || null)) },
+      { icon: 'speaker', label: 'Sound', meta: sound ? 'On' : 'Off', run: () => { lsSet('handoff.audio', sound ? '0' : '1'); refreshSheet(); } },
+      { label: 'Mesh' },
+      { icon: 'globe', label: 'Engine defaults', sub: 'Ad blocking, appearance and touches for new sessions', more: true, run: () => afterSheet(() => setView('engines')) },
+      { icon: 'tag', label: 'Labels', more: true, run: () => afterSheet(() => setView('labels')) },
+      { label: 'App' },
+      { icon: 'globe', label: 'Public links', meta: `${publicItems().length || 'none'}`, more: true, run: openPublicLinks },
+      !isStandalone && { icon: 'install', label: 'Install app', run: triggerPwaInstall },
+      { icon: 'info-c', label: 'About, API and connections', more: true, run: () => { renderAbout(); renderConnect(); openModal('aboutModal'); } },
+    ],
+  };
+}
+const openAppSettings = () => openObject('app-settings', appSettingsSpec);
+
 /* ================================================================ keyed rendering */
 // Only items whose markup changed are replaced, so scroll positions, focus and
 // hover state survive the live updates.
@@ -3902,9 +3956,9 @@ function staleCard(s) {
 let sessQuery = '', agentsOnly = false;
 // Session card layout, to try them out: tidy (picture, then name and one line of
 // facts), overlay (everything on the picture), tile (a small picture beside it).
-const CARD_STYLES = { tidy: 'Picture, then details', overlay: 'Details on the picture', tile: 'Compact tiles' };
-let cardStyle = 'tidy';
-try { cardStyle = CARD_STYLES[localStorage.getItem('dash.cards')] ? localStorage.getItem('dash.cards') : 'tidy'; } catch { /* storage unavailable */ }
+const CARD_STYLES = { overlay: 'Details on the picture', tidy: 'Picture, then details', tile: 'Compact tiles' };
+let cardStyle = 'overlay';
+try { cardStyle = CARD_STYLES[localStorage.getItem('dash.cards')] ? localStorage.getItem('dash.cards') : 'overlay'; } catch { /* storage unavailable */ }
 function setCardStyle(v) {
   cardStyle = v;
   try { localStorage.setItem('dash.cards', v); } catch { /* storage unavailable */ }
@@ -4433,6 +4487,7 @@ const ACT = {
   'view': (el) => setView(el.dataset.view),
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
+  'settings': () => openAppSettings(),
   'new-profile': () => openNewProfile(),
   'new-label': () => openLabelEditor(),
   'edit-label': (el) => openLabelEditor(el.dataset.key),
@@ -4454,22 +4509,9 @@ const ACT = {
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
   'app-menu': (el) => openMenu(el, [
     ...(() => { const items = sectionMenuItems().filter(Boolean); return items.length ? [...items, '-'] : []; })(),
+    { icon: 'gear', label: 'Settings…', run: () => afterSheet(openAppSettings) },
     { icon: 'globe', label: 'Public links…', meta: `${publicItems().length || ''}`, run: openPublicLinks },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
-    view === 'sessions' && { icon: 'layers', label: 'Card style', meta: CARD_STYLES[cardStyle], more: true, run: () => openMenu(el, [
-      { label: 'Card style' },
-      ...Object.entries(CARD_STYLES).map(([id, name]) => ({ label: name, on: id === cardStyle, run: () => setCardStyle(id) })),
-    ]) },
-    { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], more: true, run: () => openMenu(el, [
-      { label: 'Theme' },
-      ...Object.entries(THEMES).map(([id, name]) => ({ label: name, on: id === theme(), run: () => setTheme(id) })),
-    ]) },
-    !isStandalone && { icon: 'install', label: 'Install app', run: triggerPwaInstall },
-    { icon: 'info-c', label: 'About', run: () => {
-      renderAbout();
-      renderConnect();
-      openModal('aboutModal');
-    } },
   ]),
   'session-clients': (el) => {
     const s = byKey.sessions.get(el.dataset.key);

@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+* A Settings sheet for this browser (the rail's last entry; on phones in the ⋯
+  menu): theme, session card layout, the search engine, the live view's defaults
+  (screen mode, picture, image quality, touches, sound), links to the engine
+  defaults and labels, public links, installing the app and About. The ⋯ menu
+  keeps the section's actions, Settings, Public links and Refresh.
+
+### Changed
+
+* Session cards show their details on the picture by default; the other two
+  layouts stay available in Settings.
+
 ## [0.15.2] - 2026-11-08
 
 ### Fixed
