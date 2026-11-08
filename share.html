@@ -153,7 +153,7 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
   .tl { gap: 8px; }
   /* Tabs and the + / close buttons on one row, address and Go on the next. */
   .navbar { grid-template-columns: 1fr auto auto; }
-  .navbar #tabPicker { grid-column: 1; grid-row: 1; }
+  .navbar #tabPicker, .navbar .fd-btn { grid-column: 1; grid-row: 1; }
   .navbar #openTab { grid-column: 2; grid-row: 1; }
   .navbar #closeTab { grid-column: 3; grid-row: 1; }
   .navbar #address { grid-column: 1 / 3; grid-row: 2; }
@@ -163,6 +163,39 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
   .typebar button.primary { flex: 0 0 88px; }
   .typebar button[data-key] { flex: 1 1 0; padding: 0 6px; }
 }
+/* Fancy selects: the native one stays in the DOM (hidden), a button stands in for it. */
+select.fancy-native { display: none !important; }
+.fd-btn { display: flex; align-items: center; gap: 10px; min-width: 0; height: 44px; padding: 0 12px; border-radius: var(--r); border: 1px solid var(--line-strong); background: var(--raised); color: var(--fg); font: 14px var(--sans); text-align: left; cursor: pointer; }
+.fd-btn:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong)); }
+.fd-btn:focus-visible, .fd-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fd-btn:disabled { opacity: .5; cursor: default; }
+.fd-ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; color: var(--muted); }
+.fd-fav { display: inline-grid; place-items: center; width: 18px; height: 18px; flex: none; }
+.fd-fav img { width: 16px; height: 16px; border-radius: 3px; }
+.fd-txt { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.25; }
+.fd-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.fd-meta { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-chev { width: 16px; height: 16px; }
+.typebar button.fd-btn { flex: 1 1 200px; padding: 0 12px; font: 14px var(--sans); }
+.navbar .fd-btn { grid-column: auto; }
+.fd-layer { position: fixed; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; color: inherit; }
+.fd-layer.fd-phone { background: rgba(0, 0, 0, .5); animation: fdFade .15s ease-out; }
+.fd-menu { position: fixed; box-sizing: border-box; min-width: 180px; max-width: min(420px, calc(100vw - 16px)); overflow-y: auto; overscroll-behavior: contain; padding: 6px;
+  background: var(--surface); color: var(--fg); border: 1px solid var(--line-strong); border-radius: var(--r-lg); box-shadow: 0 12px 34px rgba(0, 0, 0, .4); font: 500 15px var(--sans); }
+.fd-title { padding: 6px 12px 4px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.fd-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 4px 12px; border: 0; border-radius: 10px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.fd-item:hover, .fd-item:focus-visible { background: var(--raised); }
+.fd-item .fd-ic { width: 20px; height: 20px; }
+.fd-item .fd-meta { font-size: 13px; }
+.fd-item .fd-check { margin-left: auto; color: var(--accent); visibility: hidden; }
+.fd-item[aria-selected="true"] .fd-check { visibility: visible; }
+.fd-item[aria-selected="true"] .fd-name { font-weight: 650; }
+.fd-item:disabled { opacity: .45; cursor: default; }
+.fd-phone .fd-menu { left: 0; right: 0; bottom: 0; top: auto; max-width: none; max-height: 75dvh; padding: 26px 14px calc(14px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 22px 22px 0 0; box-shadow: 0 -10px 40px rgba(0, 0, 0, .45); animation: fdUp .22s ease-out; }
+.fd-phone .fd-menu::before { content: ""; position: absolute; left: 50%; top: 10px; width: 40px; height: 5px; margin-left: -20px; border-radius: 3px; background: var(--line-strong); }
+.fd-phone .fd-item { min-height: 52px; border-radius: 12px; }
+@keyframes fdFade { from { opacity: 0; } }
+@keyframes fdUp { from { transform: translateY(28px); opacity: 0; } }
 </style>
 </head>
 <body>
@@ -242,6 +275,194 @@ footer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); color: var(-
   </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script>
+/* Fancy selects: every <select> here stays in the DOM (hidden) as the source of truth, a
+   button shows its choice with an icon, a label and a detail, and opens the options as a
+   menu (a bottom sheet on phones). A choice sets the select and fires input and change.
+   Programmatic changes (.value, .selectedIndex, rebuilt options, disabled) update the button.
+   The list is a popover in the top layer, inside the dialog the select is in, if any. */
+(() => {
+  "use strict";
+  const NATIVE_VALUE = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
+  const NATIVE_INDEX = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "selectedIndex");
+  const PATHS = {
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+    globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    route: '<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H15a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h6.5"/>',
+    video: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4-2.5z"/>',
+    image: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15l3-3 3 3 2-2 2 2"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    chev: '<path d="M6 9l6 6 6-6"/>',
+  };
+  const ic = (name, cls = "") => `<svg class="fd-ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${PATHS[name]}</svg>`;
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // A site's icon; the globe when it is missing or does not load.
+  const fav = (src) => `<span class="fd-fav"><img src="${esc(src)}" alt="" class="fd-img"></span>`;
+  const hydrate = (root) => root.querySelectorAll("img.fd-img").forEach((img) => {
+    img.addEventListener("error", () => { img.parentElement.innerHTML = ic("globe"); }, { once: true });
+  });
+  // The icon of a tab: its favicon if the tab has one, else the globe.
+  function lead(sel, opt) {
+    return opt.dataset.favicon ? fav(opt.dataset.favicon) : ic("globe");
+  }
+  // "Label (detail)" and "Label · detail" become a label and a detail.
+  function parts(opt) {
+    const text = opt.textContent.trim();
+    if (opt.dataset.meta) return [text, opt.dataset.meta];
+    const dot = text.split(/\s+·\s+/);
+    if (dot.length > 1) return [dot[0], dot.slice(1).join(" · ")];
+    const m = text.match(/^(.+?)\s+\(([^()]+)\)$/);
+    return m ? [m[1], m[2]] : [text, ""];
+  }
+  function sync(sel) {
+    const btn = sel._fancy;
+    if (!btn) return;
+    const opt = sel.options[NATIVE_INDEX.get.call(sel)];
+    const [label, meta] = opt ? parts(opt) : ["", ""];
+    const html = `${opt ? lead(sel, opt) : ""}<span class="fd-txt"><span class="fd-name">${esc(label)}</span>${meta ? `<span class="fd-meta">${esc(meta)}</span>` : ""}</span>${ic("chev", "fd-chev")}`;
+    if (btn._html !== html) { btn.innerHTML = html; btn._html = html; hydrate(btn); }
+    btn.disabled = sel.disabled;
+    btn.hidden = sel.hidden;
+    if (open && open.sel === sel && (sel.disabled || btn.hidden || !btn.isConnected)) closeMenu(false);
+  }
+
+  const phoneMQ = matchMedia("(max-width: 640px), (pointer: coarse)");
+  let open = null;
+  const swallowed = new Set();
+  function closeMenu(refocus = true) {
+    if (!open) return;
+    const { layer, btn } = open;
+    open = null;
+    btn.setAttribute("aria-expanded", "false");
+    try { layer.hidePopover?.(); } catch { /* not shown */ }
+    layer.remove();
+    removeEventListener("resize", closeOnMove);
+    removeEventListener("scroll", closeOnMove, true);
+    if (refocus) btn.focus({ preventScroll: true });
+  }
+  const closeOnMove = (e) => { if (open && !open.layer.contains(e.target) && !phoneMQ.matches) closeMenu(false); };
+  function place(btn, menu) {
+    const r = btn.getBoundingClientRect(), vw = innerWidth, vh = innerHeight;
+    menu.style.minWidth = Math.max(180, r.width) + "px";
+    const mw = menu.offsetWidth;
+    let left = r.left;
+    if (left + mw > vw - 8) left = Math.max(8, r.right - mw);
+    menu.style.left = left + "px";
+    const natural = menu.scrollHeight + 2;
+    const below = vh - r.bottom - 14, above = r.top - 14;
+    if (natural > below && above > below) {
+      menu.style.maxHeight = above + "px";
+      menu.style.bottom = vh - r.top + 6 + "px";
+    } else {
+      menu.style.maxHeight = below + "px";
+      menu.style.top = r.bottom + 6 + "px";
+    }
+  }
+  function openMenu(sel, btn) {
+    closeMenu(false);
+    const cur = NATIVE_INDEX.get.call(sel);
+    const phone = phoneMQ.matches;
+    const layer = document.createElement("div");
+    layer.className = "fd-layer" + (phone ? " fd-phone" : "");
+    layer.setAttribute("popover", "manual");
+    const menu = document.createElement("div");
+    menu.className = "fd-menu";
+    menu.setAttribute("role", "listbox");
+    const title = btn.getAttribute("aria-label");
+    if (title) { menu.setAttribute("aria-label", title); menu.insertAdjacentHTML("beforeend", `<div class="fd-title">${esc(title)}</div>`); }
+    for (const child of sel.children) {
+      const opts = child.tagName === "OPTGROUP" ? [...child.children] : [child];
+      if (child.tagName === "OPTGROUP") menu.insertAdjacentHTML("beforeend", `<div class="fd-title">${esc(child.label)}</div>`);
+      for (const opt of opts) {
+        if (opt.hidden) continue;
+        const [l, meta] = parts(opt);
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "fd-item";
+        item.setAttribute("role", "option");
+        item.setAttribute("aria-selected", String(opt.index === cur));
+        item.disabled = opt.disabled;
+        item.innerHTML = `${lead(sel, opt)}<span class="fd-txt"><span class="fd-name">${esc(l)}</span>${meta ? `<span class="fd-meta">${esc(meta)}</span>` : ""}</span>${ic("check", "fd-check")}`;
+        item.addEventListener("click", () => {
+          closeMenu();
+          NATIVE_INDEX.set.call(sel, opt.index);
+          sync(sel);
+          sel.dispatchEvent(new Event("input", { bubbles: true }));
+          sel.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        menu.append(item);
+      }
+    }
+    hydrate(menu);
+    layer.append(menu);
+    // Nothing under the list sees the press: a tap outside only closes it (and, in the
+    // session sheet, does not close the sheet).
+    for (const t of ["pointerdown", "mousedown", "touchstart", "pointerup", "mouseup", "touchend", "contextmenu"]) layer.addEventListener(t, (e) => e.stopPropagation());
+    layer.addEventListener("click", (e) => { e.stopPropagation(); if (e.target === layer) closeMenu(); });
+    (btn.closest("dialog[open]") || document.body).append(layer);
+    if (layer.showPopover) layer.showPopover(); else layer.style.zIndex = "2000";
+    if (!phone) place(btn, menu);
+    open = { layer, menu, btn, sel };
+    btn.setAttribute("aria-expanded", "true");
+    addEventListener("resize", closeOnMove);
+    addEventListener("scroll", closeOnMove, true);
+    (menu.querySelector('[aria-selected="true"]:not(:disabled)') || menu.querySelector(".fd-item:not(:disabled)"))?.focus({ preventScroll: true });
+    menu.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  }
+  // Keys go to the list alone while it is open, and Escape closes only the list. This runs
+  // first (capture, on the window) so neither the dialog, the session sheet nor the page
+  // behind sees the key.
+  addEventListener("keydown", (e) => {
+    if (!open) return;
+    e.stopImmediatePropagation();
+    swallowed.add(e.code);
+    const items = [...open.menu.querySelectorAll(".fd-item:not(:disabled)")];
+    const i = items.indexOf(document.activeElement);
+    const go = (n) => { e.preventDefault(); items[(n + items.length) % items.length]?.focus(); };
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(); }
+    else if (e.key === "ArrowDown") go(i + 1);
+    else if (e.key === "ArrowUp") go(i < 0 ? -1 : i - 1);
+    else if (e.key === "Home") go(0);
+    else if (e.key === "End") go(-1);
+    else if (e.key === "Tab") { e.preventDefault(); closeMenu(); }
+    else if ((e.key === "Enter" || e.key === " ") && i >= 0) { e.preventDefault(); items[i].click(); }
+  }, true);
+  addEventListener("keyup", (e) => {
+    if (!swallowed.delete(e.code)) return;
+    e.stopImmediatePropagation();
+  }, true);
+  addEventListener("popstate", () => closeMenu(false));
+
+  function enhance(sel) {
+    if (sel._fancy || sel.multiple) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fd-btn";
+    btn.setAttribute("aria-haspopup", "listbox");
+    btn.setAttribute("aria-expanded", "false");
+    const label = sel.getAttribute("aria-label");
+    if (label) btn.setAttribute("aria-label", label);
+    sel._fancy = btn;
+    sel.classList.add("fancy-native");
+    sel.after(btn);
+    Object.defineProperty(sel, "value", { configurable: true, get() { return NATIVE_VALUE.get.call(this); }, set(v) { NATIVE_VALUE.set.call(this, v); sync(this); } });
+    Object.defineProperty(sel, "selectedIndex", { configurable: true, get() { return NATIVE_INDEX.get.call(this); }, set(v) { NATIVE_INDEX.set.call(this, v); sync(this); } });
+    new MutationObserver(() => sync(sel)).observe(sel, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["disabled", "hidden", "selected", "label", "data-meta", "data-favicon"] });
+    sel.addEventListener("change", () => sync(sel));
+    btn.addEventListener("click", () => { if (open && open.sel === sel) closeMenu(); else openMenu(sel, btn); });
+    // A label around the select (a settings row) opens the list from anywhere in it.
+    sel.closest("label")?.addEventListener("click", (e) => {
+      if (e.target.closest(".fd-btn")) return;
+      e.preventDefault();
+      if (!btn.disabled) btn.click();
+    });
+    sync(sel);
+  }
+  document.querySelectorAll("select").forEach(enhance);
+})();
+</script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -854,7 +1075,10 @@ async function session(info) {
       const picker = $("tabPicker");
       picker.replaceChildren(...tabs.map(t => {
         const option = document.createElement('option'); option.value = t.id;
-        option.textContent = (t.title || t.url || 'New tab') + (t.control === false ? ' · View only' : ''); return option;
+        option.textContent = t.title || t.url || 'New tab';
+        option.dataset.meta = [hostOf(t.url), t.control === false ? 'View only' : ''].filter(Boolean).join(' · ');
+        if (typeof t.favicon === 'string' && /^(data:image\/|https?:)/.test(t.favicon)) option.dataset.favicon = t.favicon;
+        return option;
       }));
       picker.value = selectedTab || '';
       const current = tabs.find(t => t.id === selectedTab);
