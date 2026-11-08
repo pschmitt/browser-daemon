@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-11-08
+
 ### Changed
 
 * The recording player follows the app's design and theme: its bars use the
