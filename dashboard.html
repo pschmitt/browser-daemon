@@ -9197,6 +9197,30 @@ window.addEventListener('keydown', (e) => {
   if ($('paletteModal').open) closeModal('paletteModal'); else openPalette();
 }, true);
 
+// Two fingers swiped down open the search (the installed app has no keyboard to press Ctrl+K on).
+// Both fingers must travel down together, mostly straight; the player keeps two fingers for zoom and pan.
+(() => {
+  let g = null;
+  const mid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2, d: Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) });
+  document.addEventListener('touchstart', (e) => {
+    g = null;
+    if (e.touches.length !== 2 || modalStack.length || handoffPicker || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+    g = { ...mid(e.touches), fired: false };
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
+    if (!g || e.touches.length !== 2) { g = null; return; }
+    const m = mid(e.touches), dy = m.y - g.y, dx = Math.abs(m.x - g.x);
+    if (Math.abs(m.d - g.d) > g.d * 0.35 || dy < -30 || dx > 60 + Math.max(0, dy) * 0.6) { g = null; return; }   // a pinch, an upward or a sideways swipe
+    if (dy > 24 && e.cancelable) e.preventDefault();   // ours now: do not scroll the page
+    if (dy > 80 && !g.fired) {
+      g.fired = true;
+      navigator.vibrate?.(8);
+      openPalette();
+    }
+  }, { passive: false });
+  document.addEventListener('touchend', () => { g = null; }, { passive: true });
+})();
+
 // #nodes/add: the browser-pairing sheet (the extension's "Pair" button opens it).
 const addNodeLink = () => { if (!['#nodes/add', '#nodes/add/connect'].includes(location.hash)) return false; setView('nodes'); showAddTab('browser'); openModal('addNodeModal'); return true; };
 let initialView = (location.hash || '').slice(1);

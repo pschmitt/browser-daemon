@@ -278,6 +278,7 @@ const BD_SHORTCUTS = [
   { where: "Search", scopes: ["*dash"], keys: [["↑"], ["↓"], ["Ctrl", "N"], ["Ctrl", "P"]], desc: "Move through the results" },
   { where: "Search", scopes: ["*dash"], keys: [["Enter"]], desc: "Open the selected result" },
   { where: "Search", scopes: ["*dash"], keys: [["Tab"], ["Shift", "Tab"]], desc: "Narrow the results to the next or previous kind" },
+  { where: "Search", scopes: ["*dash"], keys: [["2 fingers", "swipe down"]], desc: "Open the search on a touch screen" },
   { where: "Dashboard", scopes: ["*dash"], keys: [["Alt", "N"]], desc: "New session (opens the dialog)" },
   { where: "Dashboard", scopes: ["*dash"], keys: [["Double-click"]], desc: "On the New button: start a session right away, with the defaults and no start page" },
   { where: "Dashboard", scopes: ["*dash"], keys: [["?"]], desc: "Show the shortcuts of the current view" },
