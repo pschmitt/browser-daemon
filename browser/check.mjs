@@ -344,6 +344,21 @@ test('a live view follows focus only when the owner enables it', async () => {
   assert.ok(s.sent.find(c => c.type === 'cdp_result' && c.id === 3).result);
   assert.equal(h.calls.filter(c => c[0] === 'update').length, before);
 });
+test('Firefox brings a shared background tab to its window\'s size before capturing', async () => {
+  const h = harness(true); const s = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: true});
+  Object.assign(h.tabs.get(1), {active: false, width: 800, height: 1200});
+  const front = {id: 77, windowId: h.tabs.get(1).windowId, active: true, width: 1700, height: 1200};
+  h.api.tabs.query = async q => q.active ? [front] : [...h.tabs.values()];
+  const warmed = [];
+  h.api.tabs.warmup = async id => { warmed.push(id); Object.assign(h.tabs.get(1), {width: 1700}); };
+  s.receive({type: 'cdp', channel: 'view', tab: 1, id: 1, method: 'Page.startScreencast', params: {}});
+  await h.flush(); await h.flush(); await h.flush();
+  assert.deepEqual(warmed, [1]);
+  const frame = s.sent.find(c => c.type === 'cdp_event' && c.method === 'Page.screencastFrame');
+  assert.equal(frame.params.metadata.deviceWidth, 1700);
+  assert.ok(!h.calls.some(c => c[0] === 'update' && c[2]?.active));
+});
 test('Firefox emulates the live view: pushed frames, flow control and input', async () => {
   const h = harness(true); const s = await h.pair();
   await h.message({type: 'share', tabs: [1], control: true});

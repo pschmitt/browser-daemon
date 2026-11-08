@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Firefox: a shared tab behind another tab of its window follows the window's
+  size again. Firefox resizes only the tab in front, so after the window was made
+  smaller and larger the live view stayed small until the tab was clicked; the
+  extension now warms that tab up to its window's size (or, with nobody at that
+  window, shows it for a moment) before capturing.
+
 ## [0.15.5] - 2026-11-08
 
 ### Changed

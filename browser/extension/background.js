@@ -2022,6 +2022,40 @@ function touchCast(tab) {
   const channel = [...casts].find(([, cast]) => cast.tab === tab)?.[0];
   if (channel) worker.timer = setTimeout(() => void pump(channel), 60);
 }
+// Firefox resizes only the selected tab of a window: a shared tab behind another one
+// keeps the size the window had when it was last in front (a window made smaller and
+// larger again leaves it small), and the view shows that. Such a tab is brought to its
+// window's size: tabs.warmup first (nothing visible), then, if that did not do it and
+// nobody is at that window, selected for a moment and the selection given back. Once
+// per size, checked at most every two seconds.
+const sizeSync = new Map();
+async function resyncBackgroundSize(t) {
+  const state = sizeSync.get(t.id) || {checked: 0, tried: ''};
+  sizeSync.set(t.id, state);
+  if (Date.now() - state.checked < 2000) return false;
+  state.checked = Date.now();
+  const [front] = await api.tabs.query({windowId: t.windowId, active: true}).catch(() => []);
+  const sized = tab => Number.isFinite(tab?.width) && Number.isFinite(tab?.height);
+  if (!front || front.id === t.id || !sized(front) || !sized(t) ||
+      (Math.abs(front.width - t.width) <= 2 && Math.abs(front.height - t.height) <= 2)) { state.tried = ''; return false; }
+  const want = `${front.width}x${front.height}`;
+  if (state.tried === want) return false;
+  state.tried = want;
+  try { await api.tabs.warmup?.(t.id); } catch { /* not there, or the tab cannot warm up */ }
+  const fits = async () => {
+    const after = await api.tabs.get(t.id).catch(() => null);
+    return !after || (Math.abs(front.width - after.width) <= 2 && Math.abs(front.height - after.height) <= 2);
+  };
+  if (await fits()) return true;
+  await new Promise(resolve => setTimeout(resolve, 150));
+  if (await fits()) return true;
+  const win = await api.windows?.get(t.windowId).catch(() => null);
+  if (!win || win.focused) return false;
+  await api.tabs.update(t.id, {active: true}).catch(() => {});
+  await new Promise(resolve => setTimeout(resolve, 120));
+  await api.tabs.update(front.id, {active: true}).catch(() => {});
+  return true;
+}
 async function pump(channel) {
   const cast = casts.get(channel);
   if (!cast) return;
@@ -2033,8 +2067,9 @@ async function pump(channel) {
     const viewers = [...casts].filter(([, item]) => item.tab === tab && item.inflight < 2);
     const grant = shared.get(tab);
     if (viewers.length && grant && !grant.paused) {
-      const t = await api.tabs.get(tab);
+      let t = await api.tabs.get(tab);
       if (!safeTab(t)) throw new Error('Tab is paused');
+      if (!chromium && !t.active && await resyncBackgroundSize(t)) t = await api.tabs.get(tab);
       const frame = await capture(tab, Math.max(...viewers.map(([, item]) => item.quality || 65)));
       const current = await api.tabs.get(tab);
       // Discard captures spanning navigation, revocation or worker replacement.
