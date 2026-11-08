@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-11-08
+
 ### Fixed
 
 * Setting a file on an input through CDP (Playwright's `setInputFiles`, the MCP's
