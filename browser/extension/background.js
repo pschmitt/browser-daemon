@@ -1908,9 +1908,19 @@ const REMOTE_SELECTION_EXPR = `(() => {
   return window.getSelection()?.toString() || "";
 })()`;
 // A press, its drag path and the release become one trusted pointer action.
+// The factor between a view's points (the tab's width, as Page.getLayoutMetrics
+// tells the view) and the page's CSS pixels, measured: zoom steps, a site's own
+// zoom and display scaling all end up in it. tabs.getZoom only as a fallback.
 async function unzoomPoint(tab, params) {
   let zoom = 1;
-  try { zoom = await api.tabs.getZoom?.(tab) ?? 1; } catch { zoom = 1; }
+  try {
+    const t = await api.tabs.get(tab);
+    const [frame] = await api.scripting.executeScript({target: {tabId: tab}, func: () => innerWidth});
+    zoom = t.width / frame?.result;
+  } catch { zoom = NaN; }
+  if (!Number.isFinite(zoom) || zoom <= 0) {
+    try { zoom = await api.tabs.getZoom?.(tab) ?? 1; } catch { zoom = 1; }
+  }
   if (!Number.isFinite(zoom) || zoom <= 0 || Math.abs(zoom - 1) < 0.001) return params;
   const at = p => ({...p, x: p.x / zoom, y: p.y / zoom});
   const out = {...params};
