@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Live view: while connecting, the mascot sprints over hurdles (it jumps as each
+  one reaches it); when something went wrong, a sad mascot (tears, droopy arms)
+  replaces the warning sign. Still with reduced motion.
+
 ### Fixed
 
 * Firefox: a shared tab behind another tab of its window follows the window's
