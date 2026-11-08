@@ -506,13 +506,15 @@ pub enum RecordingCmd {
     },
     /// Show one recording's details.
     Show { recording: String },
-    /// Keep recordings: the cleanup (age, count and storage limits) never removes them.
-    /// Nothing is kept unless asked.
+    /// Mark recordings as favorites: the cleanup (age, count and storage limits) never
+    /// removes them. No recording is a favorite unless asked.
+    #[command(name = "favorite", visible_alias = "fav", alias = "keep")]
     Keep {
         #[arg(required = true)]
         recordings: Vec<String>,
     },
-    /// Stop keeping recordings: the cleanup may remove them again.
+    /// Remove recordings from the favorites: the cleanup may remove them again.
+    #[command(name = "unfavorite", visible_alias = "unfav", alias = "unkeep")]
     Unkeep {
         #[arg(required = true)]
         recordings: Vec<String>,

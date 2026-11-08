@@ -1139,7 +1139,9 @@ function pageAction(action, params, expectedOrigin, documentToken) {
       y: finite(params.y) ? params.y : rect.top + rect.height / 2};
     const path = Array.isArray(params.path) ? params.path.filter(p => finite(p?.x) && finite(p?.y)).slice(0, 128) : [];
     const end = path.at(-1) || start;
-    const dragged = Math.hypot(end.x - start.x, end.y - start.y) > 2;
+    // A drag selects text; a press and release a few pixels apart is still a click
+    // (a live view's picture is scaled, so one pixel there is several here).
+    const dragged = Math.hypot(end.x - start.x, end.y - start.y) > 6;
     const clickCount = Number.isInteger(params.clickCount) ? Math.max(1, Math.min(3, params.clickCount)) : 1;
     const modifiers = params.modifiers || 0;
     const selectWord = () => {
@@ -1182,13 +1184,21 @@ function pageAction(action, params, expectedOrigin, documentToken) {
     event('pointerover', start, 0);
     event('mouseover', start, 0);
     event('pointerdown', start, mask, 1);
-    event('mousedown', start, mask, 1);
+    const pressed = event('mousedown', start, mask, 1);
     for (const point of path) {
       event('pointermove', point, mask);
       event('mousemove', point, mask, 0);
     }
-    target = event('pointerup', end, 0);
-    target = event('mouseup', end, 0);
+    event('pointerup', end, 0);
+    const released = event('mouseup', end, 0);
+    // Like a browser: the click goes to the nearest element that both the press
+    // and the release were on (through shadow roots), however far apart they were.
+    const parentOf = node => node.parentNode instanceof ShadowRoot ? node.parentNode.host : node.parentElement;
+    const ancestors = new Set();
+    for (let node = pressed; node; node = parentOf(node)) ancestors.add(node);
+    let common = released;
+    while (common && !ancestors.has(common)) common = parentOf(common);
+    target = common || released;
     if (button === 0 && dragged) {
       // Synthetic mouse events cannot ask Firefox to select text. Create the
       // equivalent DOM selection at the drag endpoints for normal page text.
@@ -1211,8 +1221,8 @@ function pageAction(action, params, expectedOrigin, documentToken) {
         else { selection.collapse(first.node, first.offset); selection.extend(last.node, last.offset); }
       }
     }
-    if (button === 0 && !dragged) {
-      for (let count = 1; count <= clickCount; count++) {
+    if (button === 0) {
+      for (let count = 1; count <= (dragged ? 1 : clickCount); count++) {
         if (count > 1) {
           event('pointerdown', end, mask, 1);
           event('mousedown', end, mask, count);
@@ -1230,7 +1240,7 @@ function pageAction(action, params, expectedOrigin, documentToken) {
           clientX: end.x, clientY: end.y, button: 0, buttons: 0,
         }));
       }
-      if (clickCount >= 2) selectWord();
+      if (clickCount >= 2 && !dragged) selectWord();
     } else if (button === 1 && !dragged) target.dispatchEvent(new MouseEvent('auxclick', {
       bubbles: true, cancelable: true, composed: true, view: window, detail: clickCount,
       clientX: end.x, clientY: end.y, button: 1, buttons: 0,
@@ -1442,7 +1452,8 @@ const fillLogin = (c, urls) => {
 
 async function execute(command) {
   const grant = await grantFor(command);
-  const {tab, action, params} = command;
+  const {tab, action} = command;
+  let {params} = command;
   if (action === 'suggest') return addressSuggestions(params.query);
   if (action === 'publicAudio') {
     if (!command.public_grant || !sharing.audio) throw new Error('Audio sharing is disabled.');
@@ -1476,6 +1487,11 @@ async function execute(command) {
     }
     await grantFor(command);
     return execute({...command, action: actual, params: values});
+  }
+  // Firefox draws a zoomed page (Ctrl++, a site's remembered zoom) into the
+  // capture at its zoom, so a view's points are that many times the page's own.
+  if (!chromium && ['click', 'move', 'pointerMove', 'scroll'].includes(action) && !params.selector) {
+    params = await unzoomPoint(tab, params);
   }
   if (!chromium && nativeReady && ['screenshot', 'snapshot', 'click', 'move', 'type', 'key', 'scroll', 'evaluate'].includes(action)) {
     return nativeRequest({tab, action, params});
@@ -1892,6 +1908,26 @@ const REMOTE_SELECTION_EXPR = `(() => {
   return window.getSelection()?.toString() || "";
 })()`;
 // A press, its drag path and the release become one trusted pointer action.
+// The factor between a view's points (the tab's width, as Page.getLayoutMetrics
+// tells the view) and the page's CSS pixels, measured: zoom steps, a site's own
+// zoom and display scaling all end up in it. tabs.getZoom only as a fallback.
+async function unzoomPoint(tab, params) {
+  let zoom = 1;
+  try {
+    const t = await api.tabs.get(tab);
+    const [frame] = await api.scripting.executeScript({target: {tabId: tab}, func: () => innerWidth});
+    zoom = t.width / frame?.result;
+  } catch { zoom = NaN; }
+  if (!Number.isFinite(zoom) || zoom <= 0) {
+    try { zoom = await api.tabs.getZoom?.(tab) ?? 1; } catch { zoom = 1; }
+  }
+  if (!Number.isFinite(zoom) || zoom <= 0 || Math.abs(zoom - 1) < 0.001) return params;
+  const at = p => ({...p, x: p.x / zoom, y: p.y / zoom});
+  const out = {...params};
+  if (Number.isFinite(params.x) && Number.isFinite(params.y)) Object.assign(out, at(params));
+  if (Array.isArray(params.path)) out.path = params.path.map(p => Number.isFinite(p?.x) && Number.isFinite(p?.y) ? at(p) : p);
+  return out;
+}
 const pointers = new Map();
 async function pointer(tab, params, run) {
   const button = ['left', 'middle', 'right'].indexOf(params.button);

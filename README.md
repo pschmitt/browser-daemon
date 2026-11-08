@@ -105,7 +105,7 @@ live view.
 | [Live view](docs/live-view.md) | Handoff, downloads, vault logins |
 | [rbw vault](docs/rbw.md) | Secret agent, logins and passkeys from rbw, styling |
 | [Live-view extensions](docs/extensions.md) | The vault's UI as a sandboxed bundle, its manifest and messages |
-| [Recordings](docs/recordings.md) | Sound, merging, keeping |
+| [Recordings](docs/recordings.md) | Sound, merging, favorites |
 | [Profiles](docs/profiles.md) | What a profile keeps, transfers, proxies, notes |
 | [Public links](docs/sharing.md) | Sharing sessions and recordings |
 | [Access control](docs/access-control.md) | Cluster secret, tokens, Host and Origin checks |

@@ -282,7 +282,7 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
                     Cell::from(if m.status == "recording" {
                         "● rec"
                     } else if m.keep {
-                        "★ kept"
+                        "★"
                     } else {
                         ""
                     })
@@ -737,7 +737,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             "⏎ take over  s stop  p proxy  R record  t tab  e rename  N new  X stop all  m menu"
         }
         Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
-        Tab::Recordings => "⏎ play (mpv)  o browser  K keep  E export  d delete  v vacuum  m menu",
+        Tab::Recordings => {
+            "⏎ play (mpv)  o browser  K favorite  E export  d delete  v vacuum  m menu"
+        }
         Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
         Tab::Engines => "a ad blocker  c appearance  t touches  m menu  (defaults of new sessions)",
     };
@@ -808,7 +810,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ),
         (
             "  K",
-            "keep it (the cleanup never removes it) / stop keeping it",
+            "favorite it (the cleanup never removes it) / unfavorite it",
         ),
         ("  E / v", "export its frames / apply the retention limits"),
         ("  d", "delete it"),

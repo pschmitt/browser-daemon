@@ -7,7 +7,7 @@ browser-daemon run [OPTIONS]              the daemon (see `run --help`)
 browser-daemon session list|show|new|delete (stop)|stop-all|rename|proxy|idle-timeout|record|tabs|open|close-tab|save-as-profile|url|downloads|download
 browser-daemon profile list|show|new|set|clone|delete (rm)|clear|backup|export|import|transfer
 browser-daemon profile backup list|create|restore|rm PROFILE
-browser-daemon recording list|show|keep|unkeep|delete (rm)|merge|export|vacuum
+browser-daemon recording list|show|favorite|unfavorite|delete (rm)|merge|export|vacuum
 browser-daemon node list|show|set|add|remove (rm)
 browser-daemon completions bash|zsh|fish   shell completions (the package installs them)
 browser-daemon mcp                        MCP server for AI agents (see below)
@@ -15,7 +15,7 @@ browser-daemon tui                        terminal UI (see above)
 browser-daemon secret-agent               serve the live views' vault (passkeys, logins) from rbw (docs/rbw.md)
 ```
 
-Sessions, profiles and recordings are named by id or, for sessions and profiles, by name. An exact id wins over an exact name, which wins over the start of an id (at least 4 characters); `--node` narrows a name that exists on several nodes. Commands with several targets (`session stop`, `recording rm|keep|unkeep`) try each one and report the ones that failed. Commands that destroy data (`profile rm|clear`, `profile backup restore|rm`, `profile import --overwrite`, `profile transfer --move|--overwrite`, `recording rm`, `session stop-all`) ask first, or take `-y`. Exports (`profile export`, `recording export`) stream into a temporary file that replaces the target when complete, and refuse to overwrite an existing file without `--force`.
+Sessions, profiles and recordings are named by id or, for sessions and profiles, by name. An exact id wins over an exact name, which wins over the start of an id (at least 4 characters); `--node` narrows a name that exists on several nodes. Commands with several targets (`session stop`, `recording rm|favorite|unfavorite`) try each one and report the ones that failed. Commands that destroy data (`profile rm|clear`, `profile backup restore|rm`, `profile import --overwrite`, `profile transfer --move|--overwrite`, `recording rm`, `session stop-all`) ask first, or take `-y`. Exports (`profile export`, `recording export`) stream into a temporary file that replaces the target when complete, and refuse to overwrite an existing file without `--force`.
 
 Exit status: 0 success, 1 failure, 2 bad command line, 3 not found, 4 node unreachable, 5 cancelled (or not confirmed), 6 unauthorized.
 

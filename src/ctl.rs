@@ -1736,7 +1736,7 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                         x.frame_count.to_string(),
                         bytes(x.size_bytes),
                         x.status.clone(),
-                        if x.keep { "kept" } else { "" }.to_string(),
+                        if x.keep { "★" } else { "" }.to_string(),
                         x.title
                             .clone()
                             .or_else(|| x.final_url.clone())
@@ -1746,7 +1746,7 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                 .collect();
             table(
                 &[
-                    "ID", "NODE", "STARTED", "LENGTH", "FRAMES", "SIZE", "STATUS", "KEEP", "TITLE",
+                    "ID", "NODE", "STARTED", "LENGTH", "FRAMES", "SIZE", "STATUS", "FAV", "TITLE",
                 ],
                 &rows,
             );
@@ -1802,7 +1802,7 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                     targets.len(),
                     if targets.len() == 1 { "" } else { "s" },
                     if kept > 0 {
-                        format!(" ({kept} marked to be kept)")
+                        format!(" ({kept} of them favorites)")
                     } else {
                         String::new()
                     }
@@ -1843,7 +1843,7 @@ pub async fn recording(args: RecordingArgs) -> R<()> {
                         "Merge {} recordings and delete them{}?",
                         targets.len(),
                         if kept > 0 {
-                            format!(" ({kept} marked to be kept)")
+                            format!(" ({kept} of them favorites)")
                         } else {
                             String::new()
                         }
@@ -2115,14 +2115,18 @@ async fn keep_recordings(c: &Client, recordings: &[String], keep: bool) -> R<()>
                 json!({ "id": r.recording.id, "node": r.node_name, "keep": keep }),
                 format!(
                     "{} {}",
-                    if keep { "keeping" } else { "not keeping" },
+                    if keep {
+                        "favorite"
+                    } else {
+                        "no longer a favorite"
+                    },
                     short(r.recording.id)
                 ),
             ),
             Err(e) => tally.fail(key, e.as_ref()),
         }
     }
-    tally.finish(if keep { "kept" } else { "released" })
+    tally.finish(if keep { "starred" } else { "unstarred" })
 }
 
 // --------------------------------------------------------------------- nodes

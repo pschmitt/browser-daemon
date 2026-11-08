@@ -7,15 +7,32 @@
 * The recording player follows the app's design and theme: its bars use the
   app's surfaces, controls are 44px with a round play button, the timeline is
   easier to grab, and phones get two rows of controls.
+* Kept recordings are now **favorites**, marked with a star instead of a pin, in
+  the dashboard, the TUI (`K`) and the CLI (`recording favorite|unfavorite`, alias
+  `fav`; `keep` and `unkeep` still work). The API field stays `keep`.
 
 ### Added
 
+* A star button next to the recordings search shows only the favorites
+  (remembered in the browser).
+* Sessions get a **+** next to the ⋯ menu, like the other sections.
 * Pinch to zoom in the recording player: two fingers zoom (up to 6×) and pan the
   picture only, not the page or the controls; one finger pans while zoomed; a double
   tap or the zoom pill goes back. Ctrl+wheel and a trackpad pinch zoom at the pointer.
 * One **New** for everything: a session, a profile, a browser, a daemon, an
   ephemeral node or a label. On wide screens it is an entry of the rail, under the
   app's icon at the top; on phones the large button in the bottom bar opens it.
+
+### Fixed
+
+* Firefox: clicks in the live view land where you click on a zoomed page
+  (Ctrl++, a site's remembered zoom or display scaling). The capture shows the page at its zoom,
+  and input now maps back to the page's own coordinates; before, they landed off
+  by the zoom factor, missing buttons such as OpsGenie's modal close.
+* Firefox without the companion: a click whose press and release land a few
+  pixels apart (normal through the live view's scaled picture) is a click again,
+  not a tiny drag that clicked nothing. Like a browser, the click goes to the
+  element both were on; text is selected only by a real drag.
 
 ## [0.15.3] - 2026-11-08
 
