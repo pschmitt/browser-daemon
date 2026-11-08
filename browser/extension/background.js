@@ -1139,7 +1139,9 @@ function pageAction(action, params, expectedOrigin, documentToken) {
       y: finite(params.y) ? params.y : rect.top + rect.height / 2};
     const path = Array.isArray(params.path) ? params.path.filter(p => finite(p?.x) && finite(p?.y)).slice(0, 128) : [];
     const end = path.at(-1) || start;
-    const dragged = Math.hypot(end.x - start.x, end.y - start.y) > 2;
+    // A drag selects text; a press and release a few pixels apart is still a click
+    // (a live view's picture is scaled, so one pixel there is several here).
+    const dragged = Math.hypot(end.x - start.x, end.y - start.y) > 6;
     const clickCount = Number.isInteger(params.clickCount) ? Math.max(1, Math.min(3, params.clickCount)) : 1;
     const modifiers = params.modifiers || 0;
     const selectWord = () => {
@@ -1182,13 +1184,21 @@ function pageAction(action, params, expectedOrigin, documentToken) {
     event('pointerover', start, 0);
     event('mouseover', start, 0);
     event('pointerdown', start, mask, 1);
-    event('mousedown', start, mask, 1);
+    const pressed = event('mousedown', start, mask, 1);
     for (const point of path) {
       event('pointermove', point, mask);
       event('mousemove', point, mask, 0);
     }
-    target = event('pointerup', end, 0);
-    target = event('mouseup', end, 0);
+    event('pointerup', end, 0);
+    const released = event('mouseup', end, 0);
+    // Like a browser: the click goes to the nearest element that both the press
+    // and the release were on (through shadow roots), however far apart they were.
+    const parentOf = node => node.parentNode instanceof ShadowRoot ? node.parentNode.host : node.parentElement;
+    const ancestors = new Set();
+    for (let node = pressed; node; node = parentOf(node)) ancestors.add(node);
+    let common = released;
+    while (common && !ancestors.has(common)) common = parentOf(common);
+    target = common || released;
     if (button === 0 && dragged) {
       // Synthetic mouse events cannot ask Firefox to select text. Create the
       // equivalent DOM selection at the drag endpoints for normal page text.
@@ -1211,8 +1221,8 @@ function pageAction(action, params, expectedOrigin, documentToken) {
         else { selection.collapse(first.node, first.offset); selection.extend(last.node, last.offset); }
       }
     }
-    if (button === 0 && !dragged) {
-      for (let count = 1; count <= clickCount; count++) {
+    if (button === 0) {
+      for (let count = 1; count <= (dragged ? 1 : clickCount); count++) {
         if (count > 1) {
           event('pointerdown', end, mask, 1);
           event('mousedown', end, mask, count);
@@ -1230,7 +1240,7 @@ function pageAction(action, params, expectedOrigin, documentToken) {
           clientX: end.x, clientY: end.y, button: 0, buttons: 0,
         }));
       }
-      if (clickCount >= 2) selectWord();
+      if (clickCount >= 2 && !dragged) selectWord();
     } else if (button === 1 && !dragged) target.dispatchEvent(new MouseEvent('auxclick', {
       bubbles: true, cancelable: true, composed: true, view: window, detail: clickCount,
       clientX: end.x, clientY: end.y, button: 1, buttons: 0,

@@ -23,6 +23,13 @@
   ephemeral node or a label. On wide screens it is an entry of the rail, under the
   app's icon at the top; on phones the large button in the bottom bar opens it.
 
+### Fixed
+
+* Firefox without the companion: a click whose press and release land a few
+  pixels apart (normal through the live view's scaled picture) is a click again,
+  not a tiny drag that clicked nothing. Like a browser, the click goes to the
+  element both were on; text is selected only by a real drag.
+
 ## [0.15.3] - 2026-11-08
 
 ### Added
