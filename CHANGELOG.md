@@ -8,6 +8,9 @@
   countdown has its own line, the waits grow from 2.5 s to 30 s), and the tab
   strip, navigation, address bar and toolbars are grayed out and inert until it
   connects. The session chip stays usable.
+* Live view, connecting: the mascot dances (it floats with reduced motion), a
+  progress bar follows the steps (finding the tab, attaching, setting up the
+  page, …), and the step with its time is on a line of its own.
 
 ### Added
 

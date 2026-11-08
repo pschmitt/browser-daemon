@@ -458,10 +458,28 @@
   #overlay.show { display: flex; }
   #overlay p { margin: 0; color: var(--muted); max-width: 28ch; }
   /* Steady while it retries: the icon, the message and the buttons keep their place. */
-  #overlay .ov-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: none; }
+  #overlay .ov-icon { min-width: 32px; height: 32px; display: grid; place-items: center; flex: none; }
+  #ovProgress { width: min(240px, 60vw); height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  #ovProgress > i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width .25s ease-out; }
   #overlay .ov-icon .spin { margin: 0; }
   #overlay .ov-icon svg { width: 30px; height: 30px; color: var(--bad, #ef4444); }
-  #overlay #msg { min-height: calc(3 * 1.45em); line-height: 1.45; display: flex; align-items: center; justify-content: center; }
+  #overlay #msg { line-height: 1.45; display: flex; align-items: center; justify-content: center; }
+  #overlay.bad #msg { min-height: calc(3 * 1.45em); }
+  /* Connecting: the mascot dances (bounces, wiggles, squashes), its shadow breathing below. */
+  #ovGhost { position: relative; width: 84px; height: 96px; display: grid; justify-items: center; align-content: end; }
+  #ovGhost[hidden] { display: none; }
+  #ovGhost img { width: 72px; height: 72px; transform-origin: 50% 85%; animation: ghost-dance 1.1s ease-in-out infinite; }
+  #ovGhost span { width: 44px; height: 8px; margin-top: 4px; border-radius: 50%; background: color-mix(in oklab, var(--fg) 22%, transparent); animation: ghost-shadow 1.1s ease-in-out infinite; }
+  @keyframes ghost-dance {
+    0%, 100% { transform: translateY(0) rotate(-9deg) scale(1.04, .96); }
+    25% { transform: translateY(-16px) rotate(0) scale(.95, 1.06); }
+    50% { transform: translateY(0) rotate(9deg) scale(1.04, .96); }
+    75% { transform: translateY(-16px) rotate(0) scale(.95, 1.06); } }
+  @keyframes ghost-shadow { 0%, 50%, 100% { transform: scaleX(1); opacity: .9; } 25%, 75% { transform: scaleX(.6); opacity: .45; } }
+  @keyframes ghost-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    #ovGhost img { animation: ghost-float 3s ease-in-out infinite; }
+    #ovGhost span { animation: none; } }
   #overlay #msgSub { min-height: 1.4em; line-height: 1.4; margin: -6px 0 0; font-size: 13px; opacity: .8; font-variant-numeric: tabular-nums; }
   /* No connection: the controls that need the browser are grayed out and inert. */
   body.offline :is(#tabStrip, #back, #fwd, #reload, #urlBar, #notePill, #pubPill, #kbbtn, #extSlot, #sessBtn, #toolbar, #keys) {
@@ -845,7 +863,8 @@
   <button id="pkOffer" type="button" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></svg><span id="pkOfferText"></span></button>
   <div id="switching" hidden><div class="spin"></div><span id="switchingText">Loading tab…</span></div>
   <div id="overlay">
-    <div class="ov-icon"><div class="spin" id="spin"></div><svg id="ovWarn" hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.5"/></svg></div>
+    <div id="ovGhost" hidden aria-hidden="true"><img src="/icon-192.png" alt=""><span></span></div>
+    <div class="ov-icon"><div id="ovProgress" role="progressbar" aria-label="Connecting" aria-valuemin="0" aria-valuemax="100" hidden><i></i></div><div class="spin" id="spin"></div><svg id="ovWarn" hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.5"/></svg></div>
     <p id="msg">Connecting to the browser…</p>
     <p id="msgSub" aria-live="polite"></p>
     <div style="display:flex;gap:10px;margin-top:6px;">
@@ -2074,17 +2093,31 @@ let refitting = false, manualKb = false, mirror = "", composing = false, resyncT
 
 // While connecting, the overlay names the step it waits on and the time so far, so a
 // slow connect shows where it hangs (browser starting, attaching, page answering).
-let connectT0 = 0, connectStepText = "", connectTicker = 0;
+let connectT0 = 0, connectStepText = "", connectTicker = 0, stepT0 = 0;
+// The steps in their order, for the progress bar (a step's share fills as it waits).
+const CONNECT_STEPS = ["waiting for the session's first tab", "finding the tab", "attaching", "setting up the page", "reading the session", "fitting the screen"];
 function connectStep(text) {
   connectStepText = text;
   connectT0 ||= performance.now();
+  stepT0 = performance.now();
   renderConnectStep();
   clearInterval(connectTicker);
   connectTicker = setInterval(renderConnectStep, 200);
 }
 function renderConnectStep() {
-  if (!E.overlay.classList.contains("show") || E.dot.className !== "wait" || !connectStepText) return;
-  E.msg.textContent = `Connecting to the browser… · ${connectStepText} · ${((performance.now() - connectT0) / 1000).toFixed(1)} s`;
+  const bar = $("ovProgress");
+  if (!E.overlay.classList.contains("show") || E.dot.className !== "wait" || !connectStepText) { bar.hidden = true; return; }
+  const now = performance.now();
+  const i = Math.max(0, CONNECT_STEPS.findIndex((step) => connectStepText.startsWith(step)));
+  // Up to the step's start, then towards (never quite to) the next one.
+  const from = i / CONNECT_STEPS.length, to = (i + 1) / CONNECT_STEPS.length;
+  const done = from + (to - from) * 0.9 * (1 - Math.exp(-(now - stepT0) / 1500));
+  bar.hidden = false;
+  E.spin.hidden = true;
+  bar.firstElementChild.style.width = `${(done * 100).toFixed(1)}%`;
+  bar.setAttribute("aria-valuenow", String(Math.round(done * 100)));
+  if (E.msg.textContent !== "Connecting to the browser…") E.msg.textContent = "Connecting to the browser…";
+  $("msgSub").textContent = `${connectStepText[0].toUpperCase()}${connectStepText.slice(1)} · ${((now - connectT0) / 1000).toFixed(1)} s`;
 }
 
 const OFFLINE_CONTROLS = ["tabStrip", "back", "fwd", "reload", "urlBar", "notePill", "pubPill", "kbbtn", "extSlot", "sessBtn", "toolbar", "keys"];
@@ -2098,7 +2131,11 @@ function setState(kind, text) {
   document.body.classList.toggle("offline", kind === "bad");
   for (const id of OFFLINE_CONTROLS) document.getElementById(id)?.toggleAttribute("inert", kind === "bad");
   if (kind === "bad" && document.activeElement?.closest?.("[inert]")) document.activeElement.blur();
-  E.spin.hidden = kind === "bad";
+  // The dancing mascot is the connecting sign, the warning the error's.
+  E.overlay.classList.toggle("bad", kind === "bad");
+  $("ovGhost").hidden = kind !== "wait";
+  E.spin.hidden = true;
+  if (kind !== "wait") $("ovProgress").hidden = true;
   $("ovWarn").toggleAttribute("hidden", kind !== "bad");   // an SVG has no .hidden
   if (kind !== "bad") $("msgSub").textContent = "";
   E.retry.hidden = kind !== "bad";
