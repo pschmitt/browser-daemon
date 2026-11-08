@@ -1351,7 +1351,38 @@ function pageAction(action, params, expectedOrigin, documentToken) {
       }
     } finally { e.dispatchEvent(new KeyboardEvent('keyup', init)); }
   } else throw new Error('Unsupported page action.');
+  if (['click', 'key', 'type'].includes(action)) focusRing();
   return {ok: true};
+
+  // A Firefox window in the background draws no focus outline and no caret, so a
+  // view could not tell where focus is. Our own ring, once per document: it follows
+  // the focused element and hides while the window itself has focus (the page's
+  // own styles show then). Closed shadow root, no pointer events, on top.
+  function focusRing() {
+    if (globalThis.__bdFocusRing) return globalThis.__bdFocusRing.update();
+    const host = document.createElement('bd-focus-ring');
+    const root = host.attachShadow({mode: 'closed'});
+    const ring = document.createElement('div');
+    ring.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;display:none;box-sizing:border-box;' +
+      'border:2px solid #3b82f6;border-radius:4px;box-shadow:0 0 0 3px rgba(59,130,246,.35);transition:all .08s ease-out';
+    root.append(ring);
+    host.style.cssText = 'all:initial;position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;z-index:2147483647';
+    let frame = 0;
+    const place = () => {
+      frame = 0;
+      if (!host.isConnected) document.documentElement.append(host);
+      const el = active();
+      const rect = el && el !== document.body && el !== document.documentElement && !document.hasFocus() ? el.getBoundingClientRect() : null;
+      if (!rect || (!rect.width && !rect.height)) { ring.style.display = 'none'; return; }
+      Object.assign(ring.style, {display: 'block', left: `${rect.left - 3}px`, top: `${rect.top - 3}px`,
+        width: `${rect.width + 6}px`, height: `${rect.height + 6}px`});
+    };
+    const update = () => { if (!frame) frame = requestAnimationFrame(place); };
+    for (const type of ['focusin', 'focusout', 'scroll', 'input']) addEventListener(type, update, true);
+    for (const type of ['resize', 'focus', 'blur']) addEventListener(type, update);
+    globalThis.__bdFocusRing = {update};
+    place();
+  }
 }
 
 // The vault login fill of src/autofill.rs (FILL with GUARD), run in the tab's

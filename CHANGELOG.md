@@ -11,6 +11,9 @@
 
 ### Added
 
+* Firefox without the companion: a focus ring shows which field or button has
+  focus after a click or Tab. A Firefox window in the background draws none, so
+  the extension draws its own; it hides while that window itself has focus.
 * Live view: **Alt+L** focuses the address bar (like Ctrl+L in a browser, which
   can go to the page).
 
