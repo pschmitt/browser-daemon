@@ -1501,6 +1501,14 @@ select.fancy-native { display: none !important; }
   .cs-tile .scard-hero { width: 104px; }
   [data-cards="overlay"].session-grid { grid-template-columns: 1fr; }
 }
+/* Buttons: one height everywhere (44px; small ones 36px), on every screen. */
+.btn { height: var(--tap); padding: 0 16px; border-radius: 12px; font-size: 14px; }
+.btn.sm { height: 36px; padding: 0 12px; border-radius: 10px; font-size: 13px; }
+.btn.icon { width: var(--tap); padding: 0; }
+.btn.icon.sm { width: 36px; }
+.btn.big { height: 50px; }
+.x-btn { width: var(--tap); height: var(--tap); border-radius: 12px; }
+.sheet-foot .btn { min-width: 96px; }
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }

@@ -687,6 +687,16 @@
     .file-ask, .dl-tray { bottom: calc(76px + env(safe-area-inset-bottom)); }
     #sharedInputMode { bottom: calc(76px + env(safe-area-inset-bottom)) !important; }
   }
+
+  /* Buttons: one height everywhere (44px), like the dashboard's. */
+  .ask-actions button, #shareDialog .sh-actions button, #shareDialog .sh-link button, .sm-rec button, .sm-rec button.sm-rec-pill { height: 44px; border-radius: 12px; font-size: 14px; }
+  .sm-rec button { width: 44px; }
+  .sm-rec button.sm-rec-pill { width: auto; border-radius: 999px; }
+  #settingsDialog .settings-close, .btn-close { width: 44px; height: 44px; border-radius: 12px; border: 0; background: var(--btn); color: var(--muted); }
+  .btn-close:hover, #settingsDialog .settings-close:hover { color: var(--fg); }
+  .sm-seg button { height: 40px; font-size: 13.5px; }
+  .thm-actions .sm-item { height: 40px; font-size: 13.5px; }
+  .fd-btn { min-height: 44px; }
 </style>
 </head>
 <body>
