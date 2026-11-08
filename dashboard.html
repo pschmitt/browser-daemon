@@ -3686,6 +3686,35 @@ const inLabels = (x) => !labelFilter.size || [...labelFilter].every((l) => (x.la
 const LABEL_TABS = { sessions: 'sessions', profiles: 'profiles', recordings: 'recordings', nodes: 'nodes' };
 function renderLabelFilter() {
   const box = $('labelFilter');
+  // The settings of this browser, one row each (what appSettingsSpec lists), with the
+  // current value as the line below and the choices as keywords: "dark" finds Theme.
+  const SETTING_KW = {
+    Theme: [Object.values(THEMES), 'appearance mode colour color'], 'Session cards': [Object.values(CARD_STYLES), 'layout view style'],
+    'Search engine': [Object.values(SEARCH_ENGINES).map((e) => e.name), 'address bar'], Screen: [Object.values(LIVE_SCREENS), 'live view layout'],
+    Picture: [Object.values(LIVE_PICTURES), 'stream video jpeg'], 'Image quality': ['jpeg compression'], 'Show touches and clicks': ['pointer taps'],
+    Sound: ['audio mute volume'], 'Engine defaults': ['adblock ad blocking appearance'], 'Install app': ['pwa home screen'],
+    'About, API and connections': ['version help docs api connect revision'],
+  };
+  // Menus open as a level of the settings sheet; these two open a page or a dialog of their own.
+  const SETTING_DIRECT = new Set(['Engine defaults', 'About, API and connections', 'Install app', 'Sound']);
+  try {
+    let section = '';
+    for (const x of appSettingsSpec().items) {
+      if (!x) continue;
+      if (!x.run) { section = x.label; continue; }
+      if (['Labels', 'Public links'].includes(x.label)) continue;   // already a page and an action
+      const about = x.label === 'About, API and connections';
+      add('setting', {
+        icon: x.icon, title: about ? 'About' : x.label, sub: [x.meta, about ? 'API and connections' : x.sub].filter(Boolean).join(' · '),
+        kw: (SETTING_KW[x.label] || []).flat().join(' '), extra: [['section', section]],
+        run: () => {
+          if (!SETTING_DIRECT.has(x.label)) openAppSettings();
+          x.run();
+          if (!x.more) showToast(`${x.label}: ${appSettingsSpec().items.find((i) => i?.label === x.label)?.meta || 'changed'}`, 'success');
+        },
+      });
+    }
+  } catch { /* settings need data that has not loaded yet */ }
   const usage = ov ? lblUsage() : new Map();
   const show = LABEL_TABS[view] && (usage.size || labelFilter.size);
   // The Labels button sits next to the section's search field when it has one.
@@ -8748,6 +8777,7 @@ const PAL_TYPES = {
   recording: { label: 'Recording', plural: 'Recordings', hue: 336, cap: 5, emptyCap: 3 },
   node: { label: 'Node', plural: 'Nodes', hue: 205, cap: 5, emptyCap: 3 },
   label: { label: 'Label', plural: 'Labels', hue: 175, cap: 5, emptyCap: 3 },
+  setting: { label: 'Setting', plural: 'Settings', hue: 15, cap: 5, emptyCap: 0 },
   page: { label: 'Page', plural: 'Pages', hue: 225, cap: 5, emptyCap: 0 },
 };
 const pal = { items: [], q: '', scope: 'all', active: 0, flat: [], words: [] };
@@ -8810,6 +8840,35 @@ function paletteItems() {
       extra: [],
     });
   }
+  // The settings of this browser, one row each (what appSettingsSpec lists), with the
+  // current value as the line below and the choices as keywords: "dark" finds Theme.
+  const SETTING_KW = {
+    Theme: [Object.values(THEMES), 'appearance mode colour color'], 'Session cards': [Object.values(CARD_STYLES), 'layout view style'],
+    'Search engine': [Object.values(SEARCH_ENGINES).map((e) => e.name), 'address bar'], Screen: [Object.values(LIVE_SCREENS), 'live view layout'],
+    Picture: [Object.values(LIVE_PICTURES), 'stream video jpeg'], 'Image quality': ['jpeg compression'], 'Show touches and clicks': ['pointer taps'],
+    Sound: ['audio mute volume'], 'Engine defaults': ['adblock ad blocking appearance'], 'Install app': ['pwa home screen'],
+    'About, API and connections': ['version help docs api connect revision'],
+  };
+  // Menus open as a level of the settings sheet; these two open a page or a dialog of their own.
+  const SETTING_DIRECT = new Set(['Engine defaults', 'About, API and connections', 'Install app', 'Sound']);
+  try {
+    let section = '';
+    for (const x of appSettingsSpec().items) {
+      if (!x) continue;
+      if (!x.run) { section = x.label; continue; }
+      if (['Labels', 'Public links'].includes(x.label)) continue;   // already a page and an action
+      const about = x.label === 'About, API and connections';
+      add('setting', {
+        icon: x.icon, title: about ? 'About' : x.label, sub: [x.meta, about ? 'API and connections' : x.sub].filter(Boolean).join(' · '),
+        kw: (SETTING_KW[x.label] || []).flat().join(' '), extra: [['section', section]],
+        run: () => {
+          if (!SETTING_DIRECT.has(x.label)) openAppSettings();
+          x.run();
+          if (!x.more) showToast(`${x.label}: ${appSettingsSpec().items.find((i) => i?.label === x.label)?.meta || 'changed'}`, 'success');
+        },
+      });
+    }
+  } catch { /* settings need data that has not loaded yet */ }
   const usage = ov ? lblUsage() : new Map();
   for (const name of Object.keys(ov?.labels?.defs || {})) {
     const u = usage.get(name) || { nodes: 0, profiles: 0, sessions: 0, recordings: 0 };
