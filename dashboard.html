@@ -4828,6 +4828,7 @@ function setView(v) {
 }
 
 /* ================================================================ actions */
+let createTimer = 0;
 const ACT = {
   // The node's button toggles; the chip passes 'all'.
   'stop-all': () => stopAllSessions(),
@@ -4868,7 +4869,12 @@ const ACT = {
   'palette': () => openPalette(),
   'settings': () => openAppSettings(),
   // One New for everything that can be created; each opens its own dialog.
-  'create': (el) => openMenu(el, [
+  // A double click starts a session at once (quickSession), so the menu of a single click waits
+  // a moment to see whether a second click follows. The keyboard (detail 0) opens it at once.
+  'create': (el, e) => {
+    clearTimeout(createTimer);
+    if (e?.detail > 1) return;
+    const open = () => openMenu(el, [
     { label: 'New' },
     { icon: 'layers', label: 'Session', meta: 'a browser to use now', run: () => openNewSession() },
     { icon: 'folder', label: 'Profile', meta: 'logins and cookies to keep', run: () => openNewProfile() },
@@ -4876,7 +4882,9 @@ const ACT = {
     { icon: 'server', label: 'Daemon', meta: 'join another node', run: () => { showAddTab('daemon'); openModal('addNodeModal'); } },
     hasEphemeralProvider() && { icon: 'clock', label: 'Ephemeral node', meta: 'a node for one session', run: () => { showAddTab('ephemeral'); openModal('addNodeModal'); } },
     { icon: 'tag', label: 'Label', meta: 'to group things', run: () => openLabelEditor() },
-  ], { side: 'right' }),
+    ], { side: 'right' });
+    if (e?.detail) createTimer = setTimeout(open, 250); else open();
+  },
   'new-profile': () => openNewProfile(),
   'new-label': () => openLabelEditor(),
   'edit-label': (el) => openLabelEditor(el.dataset.key),
@@ -8863,7 +8871,7 @@ function quickSession() {
   openNewSession();
   $('newSessionForm').requestSubmit();
 }
-document.addEventListener('dblclick', (e) => { if (e.target.closest('.nav-new')) { e.preventDefault(); quickSession(); } });
+document.addEventListener('dblclick', (e) => { if (e.target.closest('.nav-new')) { e.preventDefault(); clearTimeout(createTimer); quickSession(); } });
 document.addEventListener('keydown', (e) => {
   if (handoffPicker || e.isComposing) return;
   if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === 'KeyN' && !e.repeat) {
