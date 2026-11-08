@@ -14,6 +14,8 @@
 
 ### Added
 
+* The mascot in the rail or header always opens the list of sessions (it used to
+  reload the page, which reopened the last view).
 * Firefox without the companion: a focus ring shows which field or button has
   focus after a click or Tab. A Firefox window in the background draws none, so
   the extension draws its own; it hides while that window itself has focus.

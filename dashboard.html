@@ -1656,7 +1656,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 </svg>
 
 <header class="top">
-  <a class="brand" href="/" title="Browser Daemon"><img src="/icon-192.png" alt=""><span>Browser Daemon</span></a>
+  <a class="brand" href="/#sessions" data-act="home" title="Browser Daemon: sessions"><img src="/icon-192.png" alt=""><span>Browser Daemon</span></a>
   <div class="sec-title">
     <h1 id="secTitle">Sessions</h1>
     <div class="sec-sub"><span class="live-dot" id="liveDot" title="Live updates"></span><span id="secSub"></span></div>
@@ -1670,7 +1670,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 
 <!-- Phones: a bar at the bottom with the big New button in the middle; wider screens: a rail on the left. -->
 <nav class="appnav" id="appNav" aria-label="Sections">
-  <a class="nav-logo" href="/" title="Browser Daemon" aria-label="Browser Daemon"><img src="/icon-192.png" alt=""></a>
+  <a class="nav-logo" href="/#sessions" data-act="home" title="Browser Daemon: sessions" aria-label="Browser Daemon: sessions"><img src="/icon-192.png" alt=""></a>
   <button class="nav-new" data-act="create" title="New: a session, a profile, a node…" aria-label="New" aria-haspopup="menu"><span><svg class="i"><use href="#i-plus"/></svg></span><span class="nl">New</span></button>
   <button data-act="view" data-view="sessions" data-sec="sessions"><svg class="i"><use href="#i-layers"/></svg><span class="nl">Sessions</span><span class="count" id="countSessions">0</span></button>
   <button data-act="view" data-view="profiles" data-sec="profiles"><svg class="i"><use href="#i-folder"/></svg><span class="nl">Profiles</span><span class="count" id="countProfiles">0</span></button>
@@ -4646,6 +4646,13 @@ const ACT = {
   'uncache-selected-recordings': () => uncacheSelectedRecordings(),
   'merge-selected-recordings': () => openMergeModal(selectedListed()),
   'view': (el) => setView(el.dataset.view),
+  // The mascot (rail, header): always the list of sessions, over whatever sheet is open.
+  // With a modifier it opens in a new tab like any link.
+  'home': (el, e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey) { window.open(el.href, '_blank', 'noopener'); return; }
+    if ($('objSheet').open) afterSheet(() => setView('sessions'));
+    else setView('sessions');
+  },
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
   'settings': () => openAppSettings(),
