@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Added
+
+* Dashboard: **Ctrl+K** (Cmd+K) opens a search over everything: actions (New
+  session is preselected), the settings of this browser, sessions, profiles,
+  recordings, nodes, labels, pages and the shortcuts themselves. Every row has a
+  badge for its kind and the node it lives on, the matching words are marked, and
+  a match in something the row does not show (a tab's URL, an agent, notes) is
+  spelled out. Tab narrows to one kind. Whatever you type can be opened in a new
+  session. On a phone, swipe up from the bottom bar.
+* Dashboard: right-click (or long press, Shift+F10) on a session, profile,
+  recording, node or label opens its actions as a menu; Shift+right-click keeps
+  the browser's menu.
+* A keyboard shortcuts cheat-sheet in the dashboard (`?`, or the overflow menu;
+  it opens on the current view) and the live view (Alt+H, or its menu).
+* Dashboard: Alt+N opens the New session dialog; a double click on New starts a
+  session at once, with the defaults and no start page.
+* Live view: Alt+Q / Alt+W stop the session (after a confirmation), Alt+D goes
+  back to the list of sessions.
+
+### Changed
+
+* Dashboard: the session count in the navigation leaves out real browsers
+  (extension nodes); the mascot is back in the header on phones; menus use the
+  window's height and stay on screen.
+* Extension popup: "Connect a different browser" is now "Switch server", with an
+  icon, and "Re-pair" is "Pair again".
+
 ## [0.15.6] - 2026-11-08
 
 ### Changed
