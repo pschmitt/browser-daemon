@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-11-08
+
 ### Changed
 
 * Live view, no connection: the message stays put while it retries (the retry
