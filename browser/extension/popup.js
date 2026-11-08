@@ -277,7 +277,7 @@ async function refresh() {
     $('newConnection').open = !hasRemembered;
     setupRemembered = hasRemembered;
   }
-  $('newConnectionTitle').textContent = hasRemembered ? 'Connect a different browser' : 'Connect this browser';
+  $('newConnectionTitle').textContent = hasRemembered ? 'Switch server' : 'Connect this browser';
   if (state.rememberedBrowser) {
     const host = new URL(state.rememberedBrowser.server).host;
     $('rememberedStatus').textContent = state.connecting
