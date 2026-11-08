@@ -9086,12 +9086,13 @@ function palCompute() {
     return { type, total: rows.length, rows: rows.slice(0, cap), best: rows[0].score };
   }).filter((g) => g.rows.length);
   ordered.sort((a, b) => (words.length ? b.best - a.best : 0) || types.indexOf(a.type) - types.indexOf(b.type));
-  // What was typed can always be opened in a new session: last, so a real match comes first.
+  // What was typed can always be opened in a new session: first in the list, but the selection
+  // starts on the best real match, so Enter after a command or a name does what it says.
   const typed = pal.q.trim();
   if (typed && (pal.scope === 'all' || pal.scope === 'action')) {
     const node = filter !== 'all' && extensionNodeOf(filter)?.online !== false ? filter : localName();
     const search = toTarget(typed).startsWith(searchEngine().url);
-    ordered.push({ type: 'launch', t: PAL_LAUNCH, total: 1, best: -Infinity, rows: [{ it: {
+    ordered.unshift({ type: 'launch', t: PAL_LAUNCH, total: 1, best: -Infinity, rows: [{ it: {
       type: 'launch', icon: 'plus', title: `${search ? 'Search' : 'Open'} “${typed}” in a new session`, node, f: [],
       sub: search ? `A new browser starts and searches ${searchEngine().name} for it` : 'A new browser starts on this address',
       run: () => quickSession(typed),
@@ -9100,7 +9101,7 @@ function palCompute() {
   pal.groups = ordered;
   pal.flat = ordered.flatMap((g) => g.rows.map((r) => r.it));
   pal.counts = counts;
-  pal.active = 0;
+  pal.active = ordered[0]?.type === 'launch' && pal.flat.length > 1 ? 1 : 0;
 }
 
 function palRender() {
@@ -9119,7 +9120,7 @@ function palRender() {
       const via = rest.length ? it.f.filter((f) => f.label && rest.some((w) => f.low.includes(w))).slice(0, 2) : [];
       const tint = it.tint ? ` style="--h:${t.hue};--c:${esc(it.tint)}"` : ` style="--h:${t.hue}"`;
       const idx = i++;
-      return `<div class="pm-row" role="option" id="pm-o-${idx}" data-i="${idx}" aria-selected="${idx === 0}" style="--h:${t.hue}">
+      return `<div class="pm-row" role="option" id="pm-o-${idx}" data-i="${idx}" aria-selected="${idx === pal.active}" style="--h:${t.hue}">
         <span class="pm-ico"${tint}>${icon(it.icon)}</span>
         <span class="pm-main"><span class="pm-title">${palHl(it.title, words)}</span>
           ${it.sub ? `<span class="pm-sub">${palHl(it.sub, words)}</span>` : ''}
@@ -9131,7 +9132,7 @@ function palRender() {
   }).join('');
   $('palList').innerHTML = html || `<div class="pm-empty"><b>Nothing matches “${esc(pal.q.trim())}”</b>${pal.scope === 'all' ? 'Try fewer words, or a part of a name, URL or id.' : `No ${PAL_TYPES[pal.scope].plural.toLowerCase()} match. Try the “All” filter.`}</div>`;
   $('palList').scrollTop = 0;
-  $('palInput').setAttribute('aria-activedescendant', pal.flat.length ? 'pm-o-0' : '');
+  $('palInput').setAttribute('aria-activedescendant', pal.flat.length ? `pm-o-${pal.active}` : '');
 }
 function palSetActive(i, scroll = true) {
   if (!pal.flat.length) return;
