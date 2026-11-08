@@ -1427,14 +1427,70 @@ select.fancy-native { display: none !important; }
 /* The Labels button next to a search field: as tall as it. */
 .label-btn { height: var(--tap); border-radius: 12px; flex: none; }
 .label-btn .count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; display: inline-grid; place-items: center; }
-#recTools .rec-search { margin: 0; }
-#recTools { margin-bottom: 12px; }
+#recTools .rec-search, #profTools .rec-search, #nodeTools .rec-search { margin: 0; }
+#recTools, #profTools, #nodeTools { margin-bottom: 12px; }
 /* Phones: the search field gets the room, its buttons are icons. */
 @media (max-width: 760px) {
   .sess-tools .label-btn, .sess-tools #agentsOnlyBtn { width: var(--tap); padding: 0; position: relative; }
   .sess-tools .label-btn .lbl, .sess-tools #agentsOnlyBtn .lbl { display: none; }
   .sess-tools .label-btn .count { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; font-size: 10.5px; background: var(--accent); color: #fff; }
   .sess-tools .label-btn .i, .sess-tools #agentsOnlyBtn .i { width: 18px; height: 18px; }
+}
+/* ------------------------------------------------------------ session cards: hover, layouts */
+.scard { transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+.scard .scard-hero .shot img { transition: transform .35s ease; }
+@media (hover: hover) {
+  .scard:not(.stale):hover { transform: translateY(-3px); border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); box-shadow: 0 14px 34px -12px color-mix(in oklab, var(--accent) 45%, transparent), 0 4px 12px rgba(0, 0, 0, .25); }
+  .scard:not(.stale):hover .scard-hero .shot img { transform: scale(1.035); }
+  .scard:not(.stale):hover .card-go, .scard:not(.stale):hover .card-go-round { box-shadow: 0 6px 18px -4px color-mix(in oklab, var(--accent-btn) 70%, transparent); }
+}
+.scard:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .scard, .scard .shot img { transition: none; } .scard:hover { transform: none !important; } }
+/* The line of facts: one line on every card, faded out where it runs long. */
+.scard-facts-line { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow: hidden; min-height: 26px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.scard-facts-line > * { flex: none; }
+.fchip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 12px; font-size: 12px; font-weight: 650; background: var(--hover); color: var(--muted); cursor: pointer; white-space: nowrap; }
+.fchip .i, .fchip svg { width: 14px; height: 14px; }
+.fchip.accent { background: var(--accent-soft); color: var(--accent); }
+.fchip.ok { background: var(--ok-soft); color: var(--ok); }
+.scard-facts-line .chip.label { height: 24px; padding: 0 9px; font-size: 12px; }
+.scard-facts-line .ind { height: 24px; }
+.scard .scard-sub { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Tidy: picture, then name with the main button, then the line of facts. */
+.cs-tidy .scard-head { padding: 12px 12px 6px; }
+.cs-tidy .scard-facts-line { padding: 0 12px 12px 54px; }
+/* Overlay: the picture is the card, the details sit on its lower part. */
+[data-cards="overlay"].session-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.cs-overlay { position: relative; aspect-ratio: 4 / 3.1; border-width: 1px; }
+.cs-overlay .scard-hero { position: absolute; inset: 0; aspect-ratio: auto; border: 0; }
+.cs-overlay .hero-foot { display: none; }
+.cs-overlay .scard-hero::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 62%; background: linear-gradient(to top, rgba(8, 10, 16, .97) 40%, rgba(8, 10, 16, .7) 70%, transparent); pointer-events: none; }
+.cs-overlay .ov-body { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: flex-end; gap: 10px; padding: 12px; color: #fff; pointer-events: none; }
+.cs-overlay .ov-body > * { pointer-events: auto; }
+.cs-overlay .ov-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.cs-overlay .scard-title { color: #fff; font-size: 16px; }
+.cs-overlay .scard-sub { color: rgba(255, 255, 255, .75); }
+.cs-overlay .scard-sub .sep { color: rgba(255, 255, 255, .45); }
+.cs-overlay .fchip, .cs-overlay .scard-facts-line .chip.label, .cs-overlay .ind { background: rgba(255, 255, 255, .14); color: #fff; }
+.cs-overlay .fchip.accent { background: color-mix(in oklab, var(--accent) 45%, rgba(0,0,0,.4)); }
+.cs-overlay .scard-facts-line:empty { display: none; }
+.cs-overlay .card-go-round { width: 52px; height: 52px; flex: none; }
+.cs-overlay .engine-badge { align-self: flex-end; background: rgba(255, 255, 255, .14); }
+/* Tile: a small picture beside the name, one line each; dense. */
+[data-cards="tile"].session-grid { grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 10px; }
+.cs-tile { flex-direction: row; align-items: center; gap: 12px; padding: 10px; }
+.cs-tile .scard-hero { width: 132px; flex: none; aspect-ratio: 16 / 11; border-radius: 10px; border: 1px solid var(--line); }
+.cs-tile .hero-foot, .cs-tile .hero-top .chip.node { display: none; }
+.cs-tile .hero-top { top: 5px; left: 5px; right: 5px; }
+.cs-tile .hb { height: 20px; padding: 0 6px; font-size: 10.5px; }
+.cs-tile .tile-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.cs-tile .scard-facts-line:empty { display: none; }
+.cs-tile .card-go-round { flex: none; }
+@media (max-width: 760px) {
+  [data-cards="tile"].session-grid { grid-template-columns: 1fr; }
+  .cs-tile .scard-hero { width: 104px; }
+  [data-cards="overlay"].session-grid { grid-template-columns: 1fr; }
 }
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
@@ -1563,12 +1619,13 @@ select.fancy-native { display: none !important; }
   </div>
 
   <section class="view" id="view-sessions">
-    <div class="sess-tools" id="sessTools" hidden>
+    <div class="sess-tools" id="sessTools">
       <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="sessSearch" placeholder="Filter sessions: name, agent, topic, address…" autocomplete="off" spellcheck="false" aria-label="Filter sessions"></label>
       <button class="btn" id="agentsOnlyBtn" data-act="agents-only" aria-pressed="false" title="Only the sessions an agent or Playwright is driving"><svg class="i sm"><use href="#i-bot"/></svg>Agents only</button>
     </div>
-    <div class="session-grid" id="sessionGrid"></div>
+    <div class="session-grid" id="sessionGrid" data-cards="tidy"></div>
   </section>
+  <div class="sess-tools" id="profTools" hidden><label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="profSearch" placeholder="Search profiles: name, node, label, proxy…" autocomplete="off" spellcheck="false" aria-label="Search profiles"></label></div>
   <section class="view profiles" id="view-profiles" hidden></section>
   <div class="sess-tools" id="recTools" hidden>
   <label class="rec-search" id="recSearchWrap"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="recSearch" placeholder="Search recordings: title, address, profile, node, date…" autocomplete="off" spellcheck="false" aria-label="Search recordings"></label>
@@ -1576,6 +1633,7 @@ select.fancy-native { display: none !important; }
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view labels" id="view-labels" hidden></section>
+  <div class="sess-tools" id="nodeTools" hidden><label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="nodeSearch" placeholder="Search nodes: name, label, address…" autocomplete="off" spellcheck="false" aria-label="Search nodes"></label></div>
   <section class="view nodes" id="view-nodes" hidden>
     <div id="nodesList" class="nodes-list"></div>
   </section>
@@ -2565,7 +2623,8 @@ function openMenu(anchor, items, { align = 'right' } = {}) {
   if ((sheetOpen && topModal() === $('objSheet')) || (sheetQuery.matches && !sheetOpen)) { pushSheetLevel(items.filter(Boolean)); return; }
   const menu = $('menu');
   menuItems = items.filter(Boolean);
-  const anyTick = menuItems.some((it) => it.on !== undefined);
+  // A check column only when some row is checked (an unchecked toggle needs none).
+  const anyTick = menuItems.some((it) => it && it.on === true);
   menu.innerHTML = menuItems.map((it, i) => it === '-' ? '<hr>'
     : it.label && !it.run ? `<div class="menu-label">${esc(it.label)}</div>`
     : `<button role="menuitem" data-mi="${i}" class="${it.danger ? 'danger' : ''}${it.on ? ' on' : ''}" ${it.style ? `style="${it.style}"` : ''}>`
@@ -2661,10 +2720,11 @@ function refreshSheet() {
 // A section label has neither an action nor an icon; a row with an icon but no
 // action only shows a value.
 const isSheetLabel = (it) => it && it !== '-' && it.label && !it.run && !it.href && !it.icon && !it.lead;
+let sheetTicks = false;
 function sheetRow(it, i) {
   if (it === '-') return '<div class="obj-gap"></div>';
   if (isSheetLabel(it)) return `<div class="obj-label">${esc(it.label)}</div>`;
-  const inner = (it.on !== undefined ? `<span class="tick">${it.on ? icon('check') : ''}</span>` : '')
+  const inner = (sheetTicks && it.on !== undefined ? `<span class="tick">${it.on ? icon('check') : ''}</span>` : '')
     + (it.lead ? `<span class="lead">${it.lead}</span>` : it.icon ? icon(it.icon) : '')
     + `<span class="obj-txt"><b>${esc(it.label)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>`
     + (it.meta ? `<span class="meta">${esc(it.meta)}</span>` : '')
@@ -2679,6 +2739,7 @@ function renderSheet() {
   const lvl = sheet.levels[sheet.levels.length - 1];
   const items = (lvl.items || []).filter(Boolean);
   lvl._items = items;
+  sheetTicks = items.some((it) => it && it.on === true && !it.tile);
   const tiles = items.map((it, i) => [it, i]).filter(([it]) => it && it.tile);
   const rows = items.map((it, i) => (it && it.tile ? null : it));
   let html = '';
@@ -3308,7 +3369,7 @@ function renderLabelFilter() {
     btn.setAttribute('aria-haspopup', 'menu');
     btn.title = 'Show only what has these labels';
   }
-  const host = view === 'sessions' && !$('sessTools').hidden ? $('sessTools') : view === 'recordings' ? $('recTools') : $('filterRow');
+  const host = { sessions: $('sessTools'), recordings: $('recTools'), profiles: $('profTools'), nodes: $('nodeTools') }[view] || $('filterRow');
   if (btn.parentElement !== host) host.insertBefore(btn, host === $('filterRow') ? box : host.querySelector('#agentsOnlyBtn'));
   btn.hidden = !show;
   const label = `${icon('tag', 'sm')}<span class="lbl">Labels</span>${labelFilter.size ? `<span class="count">${labelFilter.size}</span>` : ''}`;
@@ -3822,7 +3883,19 @@ function staleCard(s) {
   </article>`;
 }
 let sessQuery = '', agentsOnly = false;
+// Session card layout, to try them out: tidy (picture, then name and one line of
+// facts), overlay (everything on the picture), tile (a small picture beside it).
+const CARD_STYLES = { tidy: 'Picture, then details', overlay: 'Details on the picture', tile: 'Compact tiles' };
+let cardStyle = 'tidy';
+try { cardStyle = CARD_STYLES[localStorage.getItem('dash.cards')] ? localStorage.getItem('dash.cards') : 'tidy'; } catch { /* storage unavailable */ }
+function setCardStyle(v) {
+  cardStyle = v;
+  try { localStorage.setItem('dash.cards', v); } catch { /* storage unavailable */ }
+  $('sessionGrid').dataset.cards = v;
+  render();
+}
 $('sessSearch').addEventListener('input', (e) => { sessQuery = e.target.value; renderSessions(); });
+$('sessionGrid').dataset.cards = cardStyle;
 const sessHaystack = (s) => [sessName(s), s.profile, nodeLabel(s.node_name), s.engine, s.id,
   ...(s.clients || []).flatMap((c) => [c.agent_name, c.topic, c.conversation, c.cwd, c.machine, c.from]),
   ...pagesOf(s).flatMap((t) => [t.title, t.url]), s.notes?.last].filter(Boolean).join(' ').toLowerCase();
@@ -3835,7 +3908,6 @@ function renderSessions() {
   const words = sessQuery.toLowerCase().split(/\s+/).filter(Boolean);
   const list = all.filter((s) => (!agentsOnly || driverOf(s) || playwrightOf(s)) && words.every((w) => sessHaystack(s).includes(w))).sort(newestFirst);
   const stale = words.length || agentsOnly ? [] : staleSessions().filter(inFilter);
-  $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery && !labelFilter.size;
   renderLabelFilter();
   $('agentsOnlyBtn').setAttribute('aria-pressed', String(agentsOnly));
   $('agentsOnlyBtn').innerHTML = `${icon('bot', 'sm')}<span class="lbl">Agents only</span>`;
@@ -4020,26 +4092,62 @@ function sessionCard(s) {
     !clients.length && n && ind('', icon('users', 'sm'), String(n), `${n} automation client${n === 1 ? '' : 's'} attached`),
   ].filter(Boolean).join('');
 
+  // The same pieces in three layouts to choose from (Card style in the ⋯ menu).
+  const avatar = sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`;
+  const view = s._extension && !s._extension.tabs.some(t => t.control);
+  const goHref = esc(handoffUrl(s.node_name, { session: s.id }));
+  const go = `<a class="btn primary card-go" href="${goHref}"${drv}>${icon(view ? 'eye' : 'takeover', 'sm')}${view ? 'View' : 'Take over'}</a>`;
+  const goRound = `<a class="round-go on card-go-round" href="${goHref}"${drv} title="${view ? 'View' : 'Take over'}" aria-label="${esc(`${view ? 'View' : 'Take over'} ${sessName(s)}`)}">${icon(view ? 'eye' : 'takeover')}</a>`;
+  const title = `<div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span>${s._extension ? addonBadge() : ''}</div>`;
+  // One line of facts on every card (so cards line up): who drives it, its labels,
+  // then the small indicators. It never wraps.
+  const who = lead ? `<span class="fchip accent" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(`An agent drives this session:\n\n${agents.map(clientInfo).join('\n\n')}`)}">${agentIcon(lead)}${esc(agentLabel(lead))}${agents.length > 1 ? ` +${agents.length - 1}` : ''}</span>`
+    : integrations.length ? `<span class="fchip ok" role="button" tabindex="0" data-act="session-clients" data-key="${key}" title="${esc(`An integration is connected:\n\n${integrations.map(clientInfo).join('\n\n')}`)}">${icon(/home\s*assistant/i.test(integrations[0].integration) ? 'homeassistant' : 'plug', 'sm')}${esc(integrations[0].integration)}</span>` : '';
+  const factLine = `<div class="scard-facts-line">${who}${(s.labels || []).map(lblChip).join('')}${inds}</div>`;
+  const cls = `scard${lead ? ' driven' : ''}${sh ? ' public' : ''}`;
+  const attrs = `data-key="${key}" tabindex="0" aria-label="${esc(`${sessName(s)}: details and actions`)}"`;
+  if (cardStyle === 'overlay') {
+    return `
+  <article class="${cls} cs-overlay" ${attrs}>
+    ${hero}
+    <div class="ov-body">
+      <div class="ov-t">${title}<div class="scard-sub">${meta}</div>${factLine}</div>
+      ${goRound}
+    </div>
+  </article>`;
+  }
+  if (cardStyle === 'tile') {
+    return `
+  <article class="${cls} cs-tile" ${attrs}>
+    ${hero}
+    <div class="tile-t">${title}<div class="scard-sub">${meta}</div>${factLine}</div>
+    ${goRound}
+  </article>`;
+  }
   return `
-  <article class="scard${lead ? ' driven' : ''}${sh ? ' public' : ''}" data-key="${key}" tabindex="0" aria-label="${esc(`${sessName(s)}: details and actions`)}">
+  <article class="${cls} cs-tidy" ${attrs}>
     ${hero}
     <div class="scard-head">
-      ${sessPic ? `<div class="engine-badge pic" title="${esc(`${s.profile} (${engine === 'firefox' ? 'Firefox' : 'Chromium'})`)}"><img src="${esc(sessPic)}" alt=""></div>` : `<div class="engine-badge ${engine}" title="${engine === 'firefox' ? 'Firefox (WebDriver BiDi)' : 'Chromium (CDP)'}">${icon(engine)}</div>`}
-      <div style="min-width:0;flex:1">
-        <div class="scard-title"><span class="ellipsis">${esc(sessName(s))}</span>${s._extension ? addonBadge() : ''}</div>
-        <div class="scard-sub">${meta}${inds ? `<span class="scard-inds">${inds}</span>` : ''}</div>
-        ${s.labels?.length ? `<div class="scard-labels">${lblChips(s.labels)}</div>` : ''}
-      </div>
-      <a class="btn primary card-go" href="${esc(handoffUrl(s.node_name, { session: s.id }))}"${drv}>${icon('takeover', 'sm')}${s._extension && !s._extension.tabs.some(t => t.control) ? 'View' : 'Take over'}</a>
+      ${avatar}
+      <div style="min-width:0;flex:1">${title}<div class="scard-sub">${meta}</div></div>
+      ${go}
     </div>
-    ${agentRow || integRow ? `<div class="scard-who">${agentRow}${integRow}</div>` : ''}
+    ${factLine}
   </article>`;
 }
 
+let profQuery = '';
+$('profSearch').addEventListener('input', (e) => { profQuery = e.target.value; renderProfiles(); });
+const profHaystack = (p) => [p.display, p.node_name, nodeLabel(p.node_name), p.engine, p.proxy && proxyName(p.node_name, p.proxy), ...(p.labels || []), p.notes?.last].filter(Boolean).join(' ').toLowerCase();
 function renderProfiles() {
   const sec = $('view-profiles');
-  const list = [...byKey.profiles.values()].filter(inFilter)
+  const words = profQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = [...byKey.profiles.values()].filter(inFilter).filter((p) => words.every((w) => profHaystack(p).includes(w)))
     .sort((a, b) => (!!b.session - !!a.session) || a.display.localeCompare(b.display) || a.node_name.localeCompare(b.node_name));
+  if (!list.length && words.length) {
+    setStatic(sec, emptyState('search', 'No profile matches', `Nothing matches “${esc(profQuery.trim())}”.`));
+    return;
+  }
   if (!list.length) {
     setStatic(sec, emptyState('folder', `No profiles${onNode()}`,
       'Profiles keep cookies and logins between sessions. Create one, or launch a session with a profile name.',
@@ -4266,6 +4374,8 @@ function setView(v) {
   if (location.hash !== '#' + v) history.replaceState(history.state, '', '#' + v);
   for (const name of VIEWS) $('view-' + name).hidden = name !== v;
   $('recTools').hidden = v !== 'recordings';
+  $('profTools').hidden = v !== 'profiles';
+  $('nodeTools').hidden = v !== 'nodes';
   document.body.dataset.view = v;
   if (ov) renderLabelFilter();
   document.querySelectorAll('#appNav [data-sec]').forEach((b) => { b.classList.toggle('on', b.dataset.sec === group); b.setAttribute('aria-current', b.dataset.sec === group ? 'page' : 'false'); });
@@ -4329,6 +4439,10 @@ const ACT = {
     ...(() => { const items = sectionMenuItems().filter(Boolean); return items.length ? [...items, '-'] : []; })(),
     { icon: 'globe', label: 'Public links…', meta: `${publicItems().length || ''}`, run: openPublicLinks },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
+    view === 'sessions' && { icon: 'layers', label: 'Card style', meta: CARD_STYLES[cardStyle], more: true, run: () => openMenu(el, [
+      { label: 'Card style' },
+      ...Object.entries(CARD_STYLES).map(([id, name]) => ({ label: name, on: id === cardStyle, run: () => setCardStyle(id) })),
+    ]) },
     { icon: theme() === 'light' ? 'sun' : 'moon', label: 'Theme', meta: THEMES[theme()], more: true, run: () => openMenu(el, [
       { label: 'Theme' },
       ...Object.entries(THEMES).map(([id, name]) => ({ label: name, on: id === theme(), run: () => setTheme(id) })),
@@ -5956,6 +6070,8 @@ function browserRow(n) {
     action: online && (n.tabs.length || n.can_open) ? `<a class="round-go on" href="${esc(handoffUrl(key))}" title="${controls || (!n.tabs.length && n.can_open) ? 'Take over' : 'View'}" aria-label="Take over ${esc(n.name)}">${icon(controls || n.can_open ? 'takeover' : 'eye')}</a>` : '',
   });
 }
+let nodeQuery = '';
+$('nodeSearch').addEventListener('input', (e) => { nodeQuery = e.target.value; renderNodes(); });
 function renderNodes() {
   if (!ov) return;
   const { main, odd } = nodeBuilds();
@@ -5963,9 +6079,18 @@ function renderNodes() {
     ? `<div class="node-warn" role="alert">${icon('alert', 'sm')}<span>${[...odd].map(esc).join(', ')} ${odd.size === 1 ? 'runs' : 'run'} another version than the other nodes (${esc(main)}). Mixed versions can behave differently: update them together.</span></div>` : '';
   // Online first; offline ones at the end of their group.
   const byState = (online) => (a, b) => online(b) - online(a);
-  const daemons = nodes.filter(inLabels).sort(byState((n) => n.status === 'online'));
-  const ephemeral = ephemeralNodes();
-  const browsers = [...extensionBrowserNodes].sort(byState((n) => n.online !== false));
+  // The label filter and the search apply to every kind (ephemeral nodes and browsers have no labels).
+  const words = nodeQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (...fields) => words.every((w) => fields.flat().filter(Boolean).join(' ').toLowerCase().includes(w));
+  const daemons = nodes.filter(inLabels).filter((n) => hit(n.name, n.url, n.version, n.labels || n.groups || [], n.isLocal && 'local', n.status === 'online' ? 'online' : 'offline unreachable')).sort(byState((n) => n.status === 'online'));
+  const ephemeral = ephemeralNodes().filter(inLabels).filter((n) => hit(n.name, n.provider, 'ephemeral', n.status));
+  const browsers = [...extensionBrowserNodes].filter(inLabels).filter((n) => hit(n.name, n.browser, n.daemon, 'browser extension', n.online === false ? 'offline' : 'online')).sort(byState((n) => n.online !== false));
+  if (!daemons.length && !ephemeral.length && !browsers.length && (words.length || labelFilter.size)) {
+    const html = emptyState('search', 'No node matches', 'Nothing matches the search or the labels.');
+    if ($('nodesList').innerHTML !== html) $('nodesList').innerHTML = html;
+    renderSettings();
+    return;
+  }
   const group = (title, hint, rows) => rows.length ? `<section class="ngroup"><h3>${title}<span class="count">${rows.length}</span></h3><p class="hint">${hint}</p><div class="list nlist">${rows.join('')}</div></section>` : '';
   const html = mismatch
     + group('Daemons', 'Run the browsers of sessions and keep profiles and recordings.', daemons.map((n) => daemonRow(n, odd)))

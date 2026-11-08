@@ -17,6 +17,14 @@
 * Menus share one style: 15px rows, 44px tall, 20px icons. The Labels filter sits
   next to the search field (an icon on phones); selecting recordings has its own
   icon.
+* Session cards lift and glow on hover, and keep one line of facts (who drives
+  it, labels, indicators) so cards line up. Three layouts can be tried under
+  **Card style** in the ⋯ menu: picture then details, details on the picture,
+  and compact tiles.
+* Profiles and Nodes have a search field like Sessions and Recordings (always
+  shown now), with the Labels button beside it; the label filter applies to
+  ephemeral nodes and browsers too, which have no labels.
+* A menu only reserves a column for check marks when one of its rows is checked.
 
 ## [0.15.1] - 2026-11-08
 
