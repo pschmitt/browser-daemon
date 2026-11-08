@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-11-08
+
 ### Added
 
 * A Settings sheet for this browser (the rail's last entry; on phones in the ⋯
