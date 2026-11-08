@@ -44,3 +44,21 @@
 .zoom-overlay img { width: min(82vmin, 560px); height: min(82vmin, 560px); background: #fff; padding: 18px; border-radius: 18px; box-sizing: border-box; }
 .zoom-overlay span { color: rgba(255, 255, 255, .7); font: 13px system-ui, sans-serif; }
 @keyframes zoom-in { from { opacity: 0; transform: scale(.96); } }
+/* The shortcuts cheat-sheet (bdShortcutsPanel in common.js), in both pages. */
+.kb-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.kb-seg { display: inline-flex; border: 1px solid color-mix(in oklab, var(--fg) 18%, transparent); border-radius: 10px; overflow: hidden; }
+.kb-seg button { border: 0; background: transparent; color: var(--muted); font: 600 12.5px system-ui, sans-serif; padding: 7px 12px; }
+.kb-seg button.on { background: color-mix(in oklab, var(--accent) 20%, transparent); color: var(--fg); }
+.kb-filter { flex: 1; min-width: 140px; height: 34px; padding: 0 11px; border-radius: 10px; border: 1px solid color-mix(in oklab, var(--fg) 18%, transparent);
+  background: transparent; color: var(--fg); font: 13px system-ui, sans-serif; outline: none; }
+.kb-filter:focus { border-color: var(--accent); }
+.kb-group h3 { margin: 14px 0 4px; font: 700 11px system-ui, sans-serif; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.kb-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 7px 0; border-bottom: 1px solid color-mix(in oklab, var(--fg) 9%, transparent); font-size: 13.5px; }
+.kb-desc { min-width: 0; overflow-wrap: anywhere; }
+.kb-keys { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px 6px; flex: none; max-width: 52%; }
+.kb-keys i { font-style: normal; font-size: 11px; color: var(--muted); }
+.kb-chord { display: inline-flex; gap: 3px; }
+.kb-row kbd { font: 600 11.5px ui-monospace, "SF Mono", Menlo, monospace; padding: 2px 7px; border-radius: 6px; white-space: nowrap;
+  border: 1px solid color-mix(in oklab, var(--fg) 22%, transparent); border-bottom-width: 2px; background: color-mix(in oklab, var(--fg) 6%, transparent); color: var(--fg); }
+.kb-none { color: var(--muted); font-size: 13px; padding: 18px 0; text-align: center; }
+@media (max-width: 520px) { .kb-row { flex-direction: column; align-items: flex-start; gap: 5px; } .kb-keys { justify-content: flex-start; max-width: none; } }

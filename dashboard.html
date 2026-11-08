@@ -1712,6 +1712,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
   <symbol id="i-install" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/></symbol>
   <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
   <symbol id="i-filter" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
   <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9z"/><circle cx="8" cy="8" r="1.6"/></symbol>
   <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></symbol>
@@ -1822,6 +1823,13 @@ dialog.modal.player { touch-action: pan-x pan-y; }
     <div class="pm-scopes" id="palScopes" role="toolbar" aria-label="Narrow to one kind"></div>
     <div class="pm-list" id="palList" role="listbox" aria-label="Results"></div>
     <div class="pm-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>Tab</kbd> next kind</span><span class="sp"><kbd>Ctrl</kbd><kbd>K</kbd> toggle</span></div>
+  </div>
+</dialog>
+
+<dialog class="modal" id="shortcutsModal" aria-labelledby="shortcutsTitle">
+  <div class="sheet wide">
+    <div class="sheet-head"><h2 id="shortcutsTitle">Keyboard shortcuts</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-body" id="shortcutsBody"></div>
   </div>
 </dialog>
 
@@ -3784,35 +3792,6 @@ const inLabels = (x) => !labelFilter.size || [...labelFilter].every((l) => (x.la
 const LABEL_TABS = { sessions: 'sessions', profiles: 'profiles', recordings: 'recordings', nodes: 'nodes' };
 function renderLabelFilter() {
   const box = $('labelFilter');
-  // The settings of this browser, one row each (what appSettingsSpec lists), with the
-  // current value as the line below and the choices as keywords: "dark" finds Theme.
-  const SETTING_KW = {
-    Theme: [Object.values(THEMES), 'appearance mode colour color'], 'Session cards': [Object.values(CARD_STYLES), 'layout view style'],
-    'Search engine': [Object.values(SEARCH_ENGINES).map((e) => e.name), 'address bar'], Screen: [Object.values(LIVE_SCREENS), 'live view layout'],
-    Picture: [Object.values(LIVE_PICTURES), 'stream video jpeg'], 'Image quality': ['jpeg compression'], 'Show touches and clicks': ['pointer taps'],
-    Sound: ['audio mute volume'], 'Engine defaults': ['adblock ad blocking appearance'], 'Install app': ['pwa home screen'],
-    'About, API and connections': ['version help docs api connect revision'],
-  };
-  // Menus open as a level of the settings sheet; these two open a page or a dialog of their own.
-  const SETTING_DIRECT = new Set(['Engine defaults', 'About, API and connections', 'Install app', 'Sound']);
-  try {
-    let section = '';
-    for (const x of appSettingsSpec().items) {
-      if (!x) continue;
-      if (!x.run) { section = x.label; continue; }
-      if (['Labels', 'Public links'].includes(x.label)) continue;   // already a page and an action
-      const about = x.label === 'About, API and connections';
-      add('setting', {
-        icon: x.icon, title: about ? 'About' : x.label, sub: [x.meta, about ? 'API and connections' : x.sub].filter(Boolean).join(' · '),
-        kw: (SETTING_KW[x.label] || []).flat().join(' '), extra: [['section', section]],
-        run: () => {
-          if (!SETTING_DIRECT.has(x.label)) openAppSettings();
-          x.run();
-          if (!x.more) showToast(`${x.label}: ${appSettingsSpec().items.find((i) => i?.label === x.label)?.meta || 'changed'}`, 'success');
-        },
-      });
-    }
-  } catch { /* settings need data that has not loaded yet */ }
   const usage = ov ? lblUsage() : new Map();
   const show = LABEL_TABS[view] && (usage.size || labelFilter.size);
   // The Labels button sits next to the section's search field when it has one.
@@ -4919,6 +4898,7 @@ const ACT = {
   'copy-kv': (el) => copyText(el.parentElement.querySelector('dd').textContent.trim(), el),
   'app-menu': (el) => openMenu(el, [
     ...(() => { const items = sectionMenuItems().filter(Boolean); return items.length ? [...items, '-'] : []; })(),
+    { icon: 'keyboard', label: 'Keyboard shortcuts', meta: shortcutScope().label, run: () => afterSheet(() => openShortcuts()) },
     { icon: 'gear', label: 'Settings…', run: () => afterSheet(openAppSettings) },
     { icon: 'globe', label: 'Public links…', meta: `${publicItems().length || ''}`, run: openPublicLinks },
     { icon: 'refresh', label: 'Refresh', run: () => refreshData(true) },
@@ -8654,6 +8634,7 @@ function openPlayerMenu(el) {
     { label: `Recording ${String(id || '').slice(0, 8)}` },
     { icon: 'copy', label: 'Copy link at current time', run: copyPlayerTimeLink },
     r && { icon: 'info-c', label: 'Details', run: () => showRecordingDetails(r) },
+    { icon: 'keyboard', label: 'Keyboard shortcuts', meta: '?', run: () => openShortcuts() },
     url && url !== 'about:blank' && { icon: 'copy', label: 'Copy page URL', run: () => copyText(url) },
     { icon: 'download', label: r?.audio ? 'Save as WebM (concise, with sound)' : 'Save as WebM (concise)', run: () => exportWebMFromRecording(id, node, { concise: true }) },
     { icon: 'download', label: r?.audio ? 'Save as WebM (raw, with sound)' : 'Save as WebM (raw)', run: () => exportWebMFromRecording(id, node, { concise: false }) },
@@ -8863,6 +8844,41 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+/* ================================================================ keyboard shortcuts, new session keys */
+// The cheat-sheet (assets/common.js has the list). It opens on the current view: the
+// player's keys while the player is open, else the keys of the view you are on.
+function shortcutScope() {
+  const player = $('playerModal').classList.contains('open');
+  const v = player ? 'player' : view;
+  return { scopes: ['*dash', v], label: player ? 'Recording player' : v.charAt(0).toUpperCase() + v.slice(1) };
+}
+function openShortcuts({ all = false, filter = '' } = {}) {
+  const input = bdShortcutsPanel($('shortcutsBody'), { ...shortcutScope(), all, filter });
+  openModal('shortcutsModal');
+  input.blur();
+}
+// A session right away: the dialog's defaults, submitted. No start page.
+function quickSession() {
+  closeMenu();
+  openNewSession();
+  $('newSessionForm').requestSubmit();
+}
+document.addEventListener('dblclick', (e) => { if (e.target.closest('.nav-new')) { e.preventDefault(); quickSession(); } });
+document.addEventListener('keydown', (e) => {
+  if (handoffPicker || e.isComposing) return;
+  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === 'KeyN' && !e.repeat) {
+    e.preventDefault();
+    if (!$('newSessionModal').open) openNewSession();
+    return;
+  }
+  // "?" when no field has the keys: the shortcuts of this view.
+  if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.target.closest?.('input, textarea, select, [contenteditable]')
+      && (!modalStack.length || $('shortcutsModal').open || topModal() === $('playerModal'))) {
+    e.preventDefault();
+    if ($('shortcutsModal').open) closeModal('shortcutsModal'); else openShortcuts();
+  }
+});
+
 /* ================================================================ command palette (Ctrl+K) */
 // One search over everything the dashboard shows: actions, pages and the things
 // themselves. Each row says what it is (badge), where it lives (node) and what
@@ -8876,6 +8892,7 @@ const PAL_TYPES = {
   node: { label: 'Node', plural: 'Nodes', hue: 205, cap: 5, emptyCap: 3 },
   label: { label: 'Label', plural: 'Labels', hue: 175, cap: 5, emptyCap: 3 },
   setting: { label: 'Setting', plural: 'Settings', hue: 15, cap: 5, emptyCap: 0 },
+  shortcut: { label: 'Shortcut', plural: 'Shortcuts', hue: 90, cap: 5, emptyCap: 0 },
   page: { label: 'Page', plural: 'Pages', hue: 225, cap: 5, emptyCap: 0 },
 };
 const pal = { items: [], q: '', scope: 'all', active: 0, flat: [], words: [] };
@@ -8890,6 +8907,7 @@ function paletteItems() {
     { icon: 'server', title: 'Add a daemon', sub: 'Join another node to the mesh', kw: 'node peer connect', run: () => { showAddTab('daemon'); openModal('addNodeModal'); } },
     hasEphemeralProvider() && { icon: 'clock', title: 'New ephemeral node', sub: 'A node for one session', kw: 'add temporary', run: () => { showAddTab('ephemeral'); openModal('addNodeModal'); } },
     { icon: 'tag', title: 'New label', sub: 'To group things', kw: 'create tag', run: () => openLabelEditor() },
+    { icon: 'keyboard', title: 'Keyboard shortcuts', sub: 'The keys of this view, and of the others', kw: 'keys hotkeys bindings cheat sheet help', run: () => openShortcuts() },
     { icon: 'gear', title: 'Settings', sub: 'Settings of this browser', kw: 'preferences options theme', run: () => openAppSettings() },
     { icon: 'link', title: 'Public links', sub: 'Everything shared with a link', kw: 'share shared', run: () => openPublicLinks() },
     { icon: 'refresh', title: 'Refresh', sub: 'Fetch the latest data', kw: 'reload update', run: () => refreshData(true) },
@@ -8937,6 +8955,9 @@ function paletteItems() {
       sub: ['browser', n.browser && engineLabel(n.browser), n.online === false && 'offline'].filter(Boolean).join(' · '),
       extra: [],
     });
+  }
+  for (const sc of BD_SHORTCUTS) {
+    add('shortcut', { icon: 'keyboard', title: sc.desc, sub: `${bdKeysText(sc)} · ${sc.where}`, kw: sc.keys.map((c) => c.join(' ')).join(' '), run: () => openShortcuts({ all: true, filter: sc.desc }) });
   }
   // The settings of this browser, one row each (what appSettingsSpec lists), with the
   // current value as the line below and the choices as keywords: "dark" finds Theme.

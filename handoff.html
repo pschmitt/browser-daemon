@@ -159,11 +159,12 @@
     background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
   #sessMenu[hidden], #profMenu[hidden] { display: none; }
   #settingsDialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 24px)); max-height: min(80vh, 720px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bar); color: var(--fg); box-shadow: 0 16px 60px #0008; }
-  #settingsDialog::backdrop { background: #0008; backdrop-filter: blur(3px); }
-  #settingsDialog h2 { margin: 0 0 10px; font: 700 17px system-ui, sans-serif; }
-  #settingsDialog form { position: sticky; top: 0; float: right; margin: -4px -4px 0 0; }
-  #settingsDialog .settings-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: var(--btn); color: var(--fg); }
+  #settingsDialog, #shortcutsDialog::backdrop { background: #0008; backdrop-filter: blur(3px); }
+  #settingsDialog, #shortcutsDialog h2 { margin: 0 0 10px; font: 700 17px system-ui, sans-serif; }
+  #settingsDialog, #shortcutsDialog form { position: sticky; top: 0; float: right; margin: -4px -4px 0 0; }
+  #settingsDialog .settings-close, #shortcutsDialog .settings-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: var(--btn); color: var(--fg); }
   #settingsDialog .sm-item { min-height: 44px; }
+  #shortcutsDialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(660px, calc(100vw - 24px)); max-height: min(84vh, 760px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bar); color: var(--fg); box-shadow: 0 16px 60px #0008; }
   #settingsDialog .sm-search { display: flex; }
   #profMenu { right: auto; left: 8px; width: 290px; }
   #tabHoverMenu { position: fixed; z-index: 65; width: 310px; max-width: calc(100vw - 16px); padding: 8px;
@@ -712,6 +713,7 @@
     #sessMenu #smDownloads { order: 1; }
     #sessMenu #smReopen { order: 2; }
     #sessMenu #smDevtools { order: 3; }
+    #sessMenu #smShortcuts { order: 3; }
     #sessMenu > hr { order: 4; }
     #sessMenu #smStop { order: 5; }
 
@@ -753,8 +755,8 @@
   .ask-actions button, #shareDialog .sh-actions button, #shareDialog .sh-link button, .sm-rec button, .sm-rec button.sm-rec-pill { height: 44px; border-radius: 12px; font-size: 14px; }
   .sm-rec button { width: 44px; }
   .sm-rec button.sm-rec-pill { width: auto; border-radius: 999px; }
-  #settingsDialog .settings-close, .btn-close { width: 44px; height: 44px; border-radius: 12px; border: 0; background: var(--btn); color: var(--muted); }
-  .btn-close:hover, #settingsDialog .settings-close:hover { color: var(--fg); }
+  #settingsDialog .settings-close, #shortcutsDialog .settings-close, .btn-close { width: 44px; height: 44px; border-radius: 12px; border: 0; background: var(--btn); color: var(--muted); }
+  .btn-close:hover, #settingsDialog .settings-close:hover, #shortcutsDialog .settings-close:hover { color: var(--fg); }
   .sm-seg button { height: 40px; font-size: 13.5px; }
   .thm-actions .sm-item { height: 40px; font-size: 13.5px; }
   .fd-btn { min-height: 44px; }
@@ -835,10 +837,16 @@
   <button class="sm-item" id="smNotes"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M14 3v5h5M7 12h8M7 16h6"/></svg><span id="smNotesText">Notes…</span></button>
  <button class="sm-item" id="smSave" hidden title="Keep this session's logins, cookies and storage as a new profile"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6"/></svg>Save as profile…</button>
   <button class="sm-item" id="smDevtools" title="Chromium's DevTools for this tab, in a new browser tab" hidden><svg viewBox="0 0 24 24"><path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>DevTools</button>
+  <button class="sm-item" id="smShortcuts" title="Keyboard shortcuts of this view (Alt+H)"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9"/></svg>Keyboard shortcuts</button>
   <hr>
   <button class="sm-item danger" id="smStop"><svg viewBox="0 0 24 24"><path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/></svg><span id="smStopText">Stop session</span></button>
 </div>
 <div id="sheetScrim" class="ph"></div>
+<dialog id="shortcutsDialog" aria-label="Keyboard shortcuts">
+  <form method="dialog"><button class="settings-close" aria-label="Close shortcuts">✕</button></form>
+  <h2>Keyboard shortcuts</h2>
+  <div id="shortcutsBody"></div>
+</dialog>
 <dialog id="settingsDialog" aria-label="Handoff settings">
   <form method="dialog"><button class="settings-close" aria-label="Close settings">✕</button></form>
   <h2>Settings</h2>
@@ -4766,13 +4774,25 @@ window.addEventListener("keydown", (e) => {
   E.urlInput.focus();
   E.urlInput.select();
 }, true);
+function openShortcuts() {
+  toggleSessMenu(false);
+  bdShortcutsPanel($("shortcutsBody"), { scopes: ["live"], label: "Live view" }).blur();
+  $("shortcutsDialog").showModal();
+}
+$("smShortcuts").onclick = (e) => { e.stopPropagation(); openShortcuts(); };
 // Alt+Q / Alt+W: stop this session (asks first). Alt+D: back to the list of sessions
 // ("D" for dashboard). Caught before the remote page sees them; with the browser's
 // shortcuts out of the way (Alt+D is the address bar in most browsers).
 window.addEventListener("keydown", (e) => {
   if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.repeat) return;
-  const code = ["KeyQ", "KeyW", "KeyD"].find((c) => e.code === c);
-  if (!code || document.querySelector("dialog[open]")) return;
+  const code = ["KeyQ", "KeyW", "KeyD", "KeyH"].find((c) => e.code === c);
+  if (!code) return;
+  if (code === "KeyH") {
+    e.preventDefault(); e.stopImmediatePropagation();
+    if ($("shortcutsDialog").open) $("shortcutsDialog").close(); else if (!document.querySelector("dialog[open]")) openShortcuts();
+    return;
+  }
+  if (document.querySelector("dialog[open]")) return;
   e.preventDefault();
   e.stopImmediatePropagation();
   if (code === "KeyD") { location.href = "/#sessions"; return; }

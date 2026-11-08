@@ -264,3 +264,70 @@ function zoomImage(src, alt) {
   addEventListener('keydown', onKey, true);
   (document.querySelector('dialog[open]') || document.body).append(box);
 }
+
+/* ---------------------------------------------------------------- keyboard shortcuts
+   One list for the dashboard and the live view: the cheat-sheet in both, and the results of
+   the dashboard's search. `scopes` says where a shortcut works: "*dash" (the whole
+   dashboard), a view of it ("sessions", "profiles", "recordings", "nodes", "engines",
+   "labels"), "player" (the recording player) or "live" (the live view). Keep it in step
+   with the key handlers; "Mod" is Ctrl, or Cmd on a Mac. */
+const BD_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+const BD_VIEWS = ["sessions", "profiles", "recordings", "nodes", "engines", "labels"];
+const BD_SHORTCUTS = [
+  { where: "Search", scopes: ["*dash"], keys: [["Mod", "K"]], desc: "Search everything: actions, settings, sessions, profiles, recordings, nodes, labels" },
+  { where: "Search", scopes: ["*dash"], keys: [["↑"], ["↓"], ["Ctrl", "N"], ["Ctrl", "P"]], desc: "Move through the results" },
+  { where: "Search", scopes: ["*dash"], keys: [["Enter"]], desc: "Open the selected result" },
+  { where: "Search", scopes: ["*dash"], keys: [["Tab"], ["Shift", "Tab"]], desc: "Narrow the results to the next or previous kind" },
+  { where: "Dashboard", scopes: ["*dash"], keys: [["Alt", "N"]], desc: "New session (opens the dialog)" },
+  { where: "Dashboard", scopes: ["*dash"], keys: [["Double-click"]], desc: "On the New button: start a session right away, with the defaults and no start page" },
+  { where: "Dashboard", scopes: ["*dash"], keys: [["?"]], desc: "Show the shortcuts of the current view" },
+  { where: "Dashboard", scopes: ["*dash"], keys: [["Esc"]], desc: "Close the open dialog, sheet or menu" },
+  { where: "Dashboard", scopes: BD_VIEWS.filter((v) => v !== "engines"), keys: [["Right-click"], ["Shift", "F10"]], desc: "Actions of a session, profile, recording, node or label (Shift+right-click: the browser's menu)" },
+  { where: "Dashboard", scopes: ["sessions", "profiles", "nodes"], keys: [["Enter"], ["Space"]], desc: "Open the focused card or row" },
+  { where: "Notes", scopes: ["*dash"], keys: [["Mod", "Enter"]], desc: "Save the note you are writing" },
+  { where: "Recording player", scopes: ["player"], keys: [["Space"], ["K"]], desc: "Play or pause" },
+  { where: "Recording player", scopes: ["player"], keys: [["→"], ["L"], ["."]], desc: "Next frame" },
+  { where: "Recording player", scopes: ["player"], keys: [["←"], ["J"], [","]], desc: "Previous frame" },
+  { where: "Recording player", scopes: ["player"], keys: [["Shift", "→"], ["Shift", "←"]], desc: "Jump 5 seconds forward or back" },
+  { where: "Recording player", scopes: ["player"], keys: [["0"], ["…"], ["9"]], desc: "Jump to 0% … 90% of the recording" },
+  { where: "Recording player", scopes: ["player"], keys: [["M"]], desc: "Mute or unmute (recordings with sound)" },
+  { where: "Recording player", scopes: ["player"], keys: [["↑"], ["↓"]], desc: "Volume (recordings with sound)" },
+  { where: "Recording player", scopes: ["player"], keys: [["F"]], desc: "Full screen" },
+  { where: "Recording player", scopes: ["player"], keys: [["Ctrl", "scroll"], ["Pinch"]], desc: "Zoom the picture at the pointer" },
+  { where: "Live view", scopes: ["live"], keys: [["Alt", "L"]], desc: "Go to this view's address bar" },
+  { where: "Live view", scopes: ["live"], keys: [["Alt", "Q"], ["Alt", "W"]], desc: "Stop the session (asks first)" },
+  { where: "Live view", scopes: ["live"], keys: [["Alt", "D"]], desc: "Back to the list of sessions" },
+  { where: "Live view", scopes: ["live"], keys: [["Alt", "H"]], desc: "Show these shortcuts" },
+  { where: "Live view", scopes: ["live"], keys: [["Ctrl", "+"], ["Ctrl", "-"], ["Ctrl", "0"]], desc: "Zoom this view's picture in, out, back to 100% (the page does not see it)" },
+  { where: "Live view", scopes: ["live"], keys: [["Mod", "A"], ["Mod", "Z"], ["Mod", "Y"]], desc: "Select all, undo, redo in the page" },
+  { where: "Live view", scopes: ["live"], keys: [["Mod", "C"], ["Mod", "X"], ["Mod", "V"]], desc: "Copy, cut and paste between this device and the page" },
+  { where: "Live view", scopes: ["live"], keys: [["Esc"]], desc: "Close the open list or dialog; otherwise the page gets it" },
+  { where: "Live view", scopes: ["live"], keys: [["Any key"]], desc: "Typing and named keys (Enter, Tab, arrows, …) go to the page while you control it" },
+  { where: "Live view", scopes: ["live"], keys: [["Mod", "T"], ["Mod", "W"], ["…"]], desc: "With “Capture keys” on, other Ctrl shortcuts go to the page instead of this browser" },
+];
+const bdKey = (k) => (k === "Mod" ? (BD_MAC ? "⌘" : "Ctrl") : k === "Alt" && BD_MAC ? "⌥" : k);
+const bdKeysText = (sc) => sc.keys.map((chord) => chord.map(bdKey).join("+")).join(" or ");
+// The cheat-sheet inside `host`: the shortcuts of `scopes` (this view), or all of them, and a filter.
+function bdShortcutsPanel(host, { scopes = [], label = "", all = false, filter = "" } = {}) {
+  let mode = scopes.length && !all ? "view" : "all", q = filter;
+  host.innerHTML = `<div class="kb-tools"><div class="kb-seg" role="group" aria-label="Show">
+      ${scopes.length ? `<button type="button" data-mode="view">${esc(label || "This view")}</button>` : ""}<button type="button" data-mode="all">Everything</button></div>
+    <input class="kb-filter" type="search" placeholder="Filter shortcuts…" aria-label="Filter shortcuts" autocomplete="off" spellcheck="false"></div><div class="kb-list" role="list"></div>`;
+  const input = host.querySelector(".kb-filter"), list = host.querySelector(".kb-list");
+  input.value = q;
+  const render = () => {
+    host.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const rows = BD_SHORTCUTS.filter((sc) => (mode === "all" || sc.scopes.some((s) => scopes.includes(s)))
+      && words.every((w) => `${sc.desc} ${sc.where} ${bdKeysText(sc)}`.toLowerCase().includes(w)));
+    const groups = [...new Set(rows.map((sc) => sc.where))];
+    list.innerHTML = groups.map((g) => `<div class="kb-group" role="listitem"><h3>${esc(g)}</h3>${rows.filter((sc) => sc.where === g).map((sc) =>
+      `<div class="kb-row"><span class="kb-desc">${esc(sc.desc)}</span><span class="kb-keys">${sc.keys.map((chord) =>
+        `<span class="kb-chord">${chord.map((k) => `<kbd>${esc(bdKey(k))}</kbd>`).join("")}</span>`).join('<i>or</i>')}</span></div>`).join("")}</div>`).join("")
+      || `<p class="kb-none">No shortcut matches “${esc(q.trim())}”.</p>`;
+  };
+  host.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { mode = b.dataset.mode; render(); }));
+  input.addEventListener("input", () => { q = input.value; render(); });
+  render();
+  return input;
+}
