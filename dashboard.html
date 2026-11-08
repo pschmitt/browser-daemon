@@ -1232,7 +1232,7 @@ header.top { gap: 10px; min-height: 60px; }
   main { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 28px) !important; }
   .toasts { bottom: calc(var(--nav-h) + 12px + env(safe-area-inset-bottom)); right: 12px; width: calc(100vw - 24px); }
   header.top { padding-top: calc(8px + env(safe-area-inset-top)); padding-bottom: 8px; flex-wrap: nowrap !important; }
-  .brand { display: none; }
+  .brand { display: flex; }   /* the mascot (its name is hidden above) is back in the header */
 }
 @media (min-width: 761px) {
   .appnav { left: 0; top: 0; bottom: 0; width: calc(var(--rail-w) + env(safe-area-inset-left)); padding: calc(14px + env(safe-area-inset-top)) 0 14px env(safe-area-inset-left);
@@ -4276,7 +4276,7 @@ function renderStats() {
   secStats.mesh = { text: `${online} of ${plural(total, 'node')} online`, level: online < total ? 'warn' : '' };
   renderSecTitle();
 
-  setCount('countSessions', dashboardSessions().filter(inFilter).length);
+  setCount('countSessions', (ov?.sessions || []).filter(inFilter).length);   // not the real browsers (extension nodes)
   setCount('countProfiles', profs.length);
   setCount('countRecordings', visibleRecordings().length);
   setCount('countNodes', nodes.length + extensionBrowserNodes.length + ephemeralNodes().length);
