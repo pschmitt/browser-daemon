@@ -886,8 +886,23 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 eprintln!("saved as profile {name}");
             }
         }
-        SessionCmd::Url { session, node } => {
-            let url = ws_url(c.session(&session, node.as_deref())?);
+        SessionCmd::Url {
+            session,
+            node,
+            token,
+        } => {
+            let mut url = ws_url(c.session(&session, node.as_deref())?);
+            if token {
+                let answer = c.call(c.req(Method::GET, "/api/auth/token")).await?;
+                let Some(t) = answer["token"].as_str() else {
+                    return Err("This daemon has no cluster secret: the URL needs no token".into());
+                };
+                url = format!("{url}&auth={}", enc(t));
+            } else if !c.json {
+                eprintln!(
+                    "From another host, send the X-Browser-Cluster-Secret header with it, or use --token."
+                );
+            }
             c.say(json!({ "url": url }), &url);
         }
         SessionCmd::Downloads { session, node } => {

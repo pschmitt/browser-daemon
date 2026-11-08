@@ -138,10 +138,17 @@ pub enum SessionCmd {
         node: Option<String>,
     },
     /// Print a session's WebSocket URL (for Playwright or Puppeteer).
+    ///
+    /// From another host the URL needs credentials: send the X-Browser-Cluster-Secret
+    /// header (Playwright: `connectOverCDP(url, { headers })`), or use `--token`.
     Url {
         session: String,
         #[arg(long)]
         node: Option<String>,
+        /// Put a token in the URL (`&auth=`, valid on the whole mesh for 30 days), for
+        /// clients that cannot send a header. Treat the URL as a password.
+        #[arg(long)]
+        token: bool,
     },
     /// List what a session's pages downloaded (kept on its node until it ends).
     Downloads {

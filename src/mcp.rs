@@ -241,6 +241,11 @@ struct State {
     client_name: Mutex<String>,
     child: Mutex<Option<Arc<Child>>>,
     stdout: Mutex<tokio::io::Stdout>,
+    /// The tool names the client was last given (None before its first tools/list),
+    /// to tell it when that changes.
+    listed: std::sync::Mutex<Option<Vec<String>>>,
+    /// A background retry of the browser tools is running.
+    retrying: AtomicBool,
 }
 
 pub async fn run(args: McpArgs) -> R<()> {
@@ -275,6 +280,8 @@ pub async fn run(args: McpArgs) -> R<()> {
         client_name: Mutex::new(String::new()),
         child: Mutex::new(None),
         stdout: Mutex::new(tokio::io::stdout()),
+        listed: std::sync::Mutex::new(None),
+        retrying: AtomicBool::new(false),
     });
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {
@@ -291,6 +298,46 @@ pub async fn run(args: McpArgs) -> R<()> {
         child.stop().await;
     }
     Ok(())
+}
+
+fn tool_names(tools: &[Value]) -> Vec<String> {
+    tools
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Where the browser tools' list is kept between runs, so they can be listed
+/// before (or without) a browser: `$XDG_CACHE_HOME/browser-daemon/mcp-tools.json`.
+fn tool_cache_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .map(|d| d.join("browser-daemon/mcp-tools.json"))
+}
+
+fn load_tool_cache() -> Vec<Value> {
+    tool_cache_path()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_tool_cache(tools: &[Value]) {
+    let Some(path) = tool_cache_path() else {
+        return;
+    };
+    if tools.is_empty() || load_tool_cache() == tools {
+        return;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // Written aside and renamed, so a parallel reader never sees half a file.
+    let tmp = path.with_extension(format!("json.{}", std::process::id()));
+    if std::fs::write(&tmp, serde_json::to_vec(tools).unwrap_or_default()).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
 }
 
 /// Whether an `--allow-*` list lets agents use `name`: named in it, or `*` is.
@@ -619,7 +666,7 @@ impl State {
                 }))
             }
             "ping" => Ok(json!({})),
-            "tools/list" => Ok(self.tools_list().await),
+            "tools/list" => Ok(self.clone().tools_list().await),
             "tools/call" => self.tools_call(params).await,
             other => Err((-32601, format!("Method not found: {other}"))),
         };
@@ -632,18 +679,74 @@ impl State {
         .await;
     }
 
-    async fn tools_list(&self) -> Value {
+    async fn tools_list(self: Arc<Self>) -> Value {
+        let browser = match self.child_or_default().await {
+            Ok(child) => child.tools.lock().unwrap().clone(),
+            Err(e) => {
+                // The page tools are listed anyway, as the browser tools last listed
+                // them: a call starts a browser. Meanwhile they are retried, and the
+                // client is told once the list changes.
+                eprintln!(
+                    "browser-daemon mcp: browser tools not up yet, listing the cached ones: {e}"
+                );
+                self.clone().retry_browser_tools();
+                load_tool_cache()
+            }
+        };
+        let tools = self.all_tools(browser);
+        *self.listed.lock().unwrap() = Some(tool_names(&tools));
+        json!({ "tools": tools })
+    }
+
+    fn all_tools(&self, browser: Vec<Value>) -> Vec<Value> {
         let mut tools = own_tools(
             &self.allow_secrets,
             &self.allow_passkeys,
             self.ask_human_cmd.is_some(),
             &self.allow_exports,
         );
-        match self.child_or_default().await {
-            Ok(child) => tools.extend(child.tools.lock().unwrap().iter().cloned()),
-            Err(e) => eprintln!("browser-daemon mcp: no browser tools yet: {e}"),
+        tools.extend(browser);
+        tools
+    }
+
+    /// Tells the client to list the tools again when they differ from what it was
+    /// given (`listChanged` is promised in initialize).
+    async fn notify_tools_changed(&self) {
+        let browser = match self.child.lock().await.as_ref() {
+            Some(child) => child.tools.lock().unwrap().clone(),
+            None => load_tool_cache(),
+        };
+        let names = tool_names(&self.all_tools(browser));
+        {
+            let mut listed = self.listed.lock().unwrap();
+            match listed.as_ref() {
+                Some(old) if *old != names => *listed = Some(names),
+                _ => return,
+            }
         }
-        json!({ "tools": tools })
+        self.send(json!({ "jsonrpc": "2.0", "method": "notifications/tools/list_changed" }))
+            .await;
+    }
+
+    /// Starts the browser tools again in the background, with growing pauses, until
+    /// they are up; then the client hears that the tool list changed.
+    fn retry_browser_tools(self: Arc<Self>) {
+        if self.retrying.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        tokio::spawn(async move {
+            for secs in [5, 10, 20, 30, 60, 60, 120, 120, 300, 300] {
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+                match self.child_or_default().await {
+                    Ok(_) => {
+                        self.notify_tools_changed().await;
+                        break;
+                    }
+                    Err(e) => eprintln!("browser-daemon mcp: browser tools still not up: {e}"),
+                }
+            }
+            self.retrying.store(false, Ordering::SeqCst);
+        });
     }
 
     /// Masks every secret filled so far in a message.
@@ -743,6 +846,7 @@ impl State {
             _ => {
                 let is_browser_tabs = name == "browser_tabs";
                 let child = self.child_or_default().await.map_err(|e| (-32000, e))?;
+                self.notify_tools_changed().await;
                 let first =
                     child.target.profile.is_some() && !child.used.swap(true, Ordering::SeqCst);
                 let mut result = child
@@ -1851,6 +1955,7 @@ impl State {
         if let Some(old) = old {
             old.stop().await;
         }
+        self.notify_tools_changed().await;
         let start = if ephemeral {
             "The dedicated node and session are ready"
         } else {
@@ -1985,6 +2090,7 @@ impl State {
                     Some(c) => advance_tool_cursor(&mut cursors, c)?,
                 }
             }
+            save_tool_cache(&tools);
             *child.tools.lock().unwrap() = tools;
             Ok::<(), (i64, String)>(())
         };

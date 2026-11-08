@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* `browser-daemon mcp` lists the page tools (`browser_navigate`, `browser_snapshot`,
+  `browser_click`, …) even when the browser tools could not start yet: it lists
+  them as they were last seen (kept in `~/.cache/browser-daemon/mcp-tools.json`),
+  a call starts the browser, and it retries in the background. It now sends
+  `notifications/tools/list_changed` when the list changes (after a retry, a
+  `browser_use` or a first page tool call), as its `listChanged` capability
+  promised; before, a session whose first listing failed never got page tools.
+
+### Added
+
+* `browser-daemon session url --token` puts a token in the URL (`&auth=`) for clients
+  on another host that cannot send the `X-Browser-Cluster-Secret` header; without it
+  the command says that the URL needs one of the two.
+
 ## [0.15.0] - 2026-11-07
 
 ### Changed
