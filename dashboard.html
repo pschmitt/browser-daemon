@@ -1415,6 +1415,15 @@ select.fancy-native { display: none !important; }
 .menu .lead .seg-lead, .obj-row .lead .seg-lead { display: inline-flex; color: var(--node, var(--muted)); }
 .menu .lead .seg-lead .dot, .obj-row .lead .seg-lead .dot { width: 10px; height: 10px; color: var(--node, var(--muted)); }
 #sizePresets + .pick { margin-top: 8px; }
+/* Every dropdown has the same height, with or without a detail line. */
+.pick, .pick.pick-sm { height: 56px; min-height: 56px; padding-top: 0; padding-bottom: 0; }
+.pick .avatar { width: 36px; height: 36px; }
+/* The leading picture or icon has one slot, so labels line up across dropdowns. */
+.pick, .pick.pick-sm { padding-left: 10px; padding-right: 14px; gap: 12px; }
+.pick > .avatar, .pick > .seg-lead, .pick > .i:first-child { width: 36px !important; min-width: 36px; display: inline-grid; place-items: center; flex: none; }
+.pick > .i:first-child { height: 18px; padding: 0 9px; box-sizing: content-box; width: 18px !important; min-width: 18px; }
+.pick .pc-txt { justify-content: center; }
+.pick .pc-name, .pick .pc-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Menus: one style for every overflow and popover menu. */
 .menu { min-width: 260px; padding: 6px; border-radius: 14px; }
 .menu button { height: auto; min-height: 44px; padding: 0 12px; gap: 12px; font-size: 15px; font-weight: 500; border-radius: 10px; }
@@ -1708,8 +1717,8 @@ select.fancy-native { display: none !important; }
         <span class="hint" id="sessionProfileHint"></span>
       </div>
       <div class="field managed-only" id="sessionEngineField"><div class="seg" id="sessionEngines" role="radiogroup" aria-label="Engine">
-          <button type="button" data-engine="chromium" class="on"><svg class="i" style="color:var(--chromium)"><use href="#i-chromium"/></svg>Chromium</button>
-          <button type="button" data-engine="firefox"><svg class="i" style="color:var(--firefox)"><use href="#i-firefox"/></svg>Firefox</button>
+          <button type="button" data-engine="chromium" class="on" data-meta="DevTools protocol, live video"><svg class="i" style="color:var(--chromium)"><use href="#i-chromium"/></svg>Chromium</button>
+          <button type="button" data-engine="firefox" data-meta="WebDriver BiDi"><svg class="i" style="color:var(--firefox)"><use href="#i-firefox"/></svg>Firefox</button>
         </div>
         <span class="hint" id="engineHint"></span>
       </div>
