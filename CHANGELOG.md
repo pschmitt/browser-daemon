@@ -5,8 +5,8 @@
 ### Changed
 
 * Live view: while connecting, the mascot sprints over hurdles (it jumps as each
-  one reaches it); when something went wrong, a sad mascot (tears, droopy arms)
-  replaces the warning sign. Still with reduced motion.
+  one reaches it); when something went wrong, the mascot looks sad (worried brows,
+  a frown, a tear) instead of the warning sign. Still with reduced motion.
 
 ### Fixed
 

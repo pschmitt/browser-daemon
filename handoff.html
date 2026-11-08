@@ -503,10 +503,12 @@
   @keyframes ghost-shadow { 0%, 20%, 50%, 70%, 100% { transform: scaleX(1); opacity: .9; } 10%, 60% { transform: scaleX(.45); opacity: .35; } }
   @keyframes speed-line { from { transform: translateX(0); opacity: .9; } to { transform: translateX(-26px); opacity: 0; } }
   /* Something went wrong: the mascot is sad. It sways and sighs, a tear rolls down. */
-  #ovSad { width: 96px; height: 96px; display: block; }
+  #ovSad { position: relative; width: 104px; height: 112px; display: grid; justify-items: center; align-content: end; }
   #ovSad[hidden] { display: none; }
-  #ovSad .body { transform-origin: 50% 90%; animation: sad-sway 3.2s ease-in-out infinite; }
-  #ovSad .tear { animation: sad-tear 2.6s ease-in infinite; }
+  #ovSad .body { position: relative; width: 104px; height: 104px; transform-origin: 50% 90%; animation: sad-sway 3.2s ease-in-out infinite; }
+  #ovSad .body > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #ovSad .shadow { width: 56px; height: 7px; margin-top: -14px; border-radius: 50%; background: color-mix(in oklab, var(--fg) 18%, transparent); }
+  #ovSad .tear { transform-box: fill-box; transform-origin: 50% 0; animation: sad-tear 2.6s ease-in infinite; }
   @keyframes sad-sway { 0%, 100% { transform: rotate(-4deg) scale(1, 1); } 45% { transform: rotate(3deg) scale(1.02, .97); } 60% { transform: rotate(3deg) scale(1.02, .97); } }
   @keyframes sad-tear { 0%, 25% { transform: translateY(0) scale(.2); opacity: 0; } 35% { transform: translateY(0) scale(1); opacity: 1; } 85% { transform: translateY(26px) scale(.9); opacity: .9; } 100% { transform: translateY(32px) scale(.6); opacity: 0; } }
   @media (prefers-reduced-motion: reduce) {
@@ -898,23 +900,18 @@
     <div id="ovGhost" hidden aria-hidden="true"><div class="track"></div><i class="hurdle"></i><i class="hurdle h2"></i>
       <span class="speed"></span><span class="speed"></span><span class="speed"></span>
       <div class="runner"><div class="jump"><img src="/icon-192.png" alt=""></div><div class="shadow"></div></div></div>
-    <svg id="ovSad" hidden aria-hidden="true" viewBox="0 0 200 200">
-      <defs><clipPath id="sadClip"><path d="M100 30C148 30 170 68 170 110C170 140 160 158 150 166C146 177 135 179 129 172C121 181 109 181 103 174C95 181 82 181 76 173C66 179 54 175 52 165C40 155 30 138 30 110C30 66 52 30 100 30Z"/></clipPath></defs>
-      <ellipse cx="100" cy="186" rx="46" ry="7" fill="currentColor" opacity=".14"/>
-      <g class="body" stroke="#2D0861" stroke-width="5" stroke-linejoin="round" stroke-linecap="round">
-        <ellipse cx="36" cy="132" rx="12" ry="19" transform="rotate(22 36 132)" fill="#E9E3F8"/>
-        <ellipse cx="164" cy="132" rx="12" ry="19" transform="rotate(-22 164 132)" fill="#E9E3F8"/>
-        <path d="M100 30C148 30 170 68 170 110C170 140 160 158 150 166C146 177 135 179 129 172C121 181 109 181 103 174C95 181 82 181 76 173C66 179 54 175 52 165C40 155 30 138 30 110C30 66 52 30 100 30Z" fill="#F7F5FC" stroke="none"/>
-        <g clip-path="url(#sadClip)" stroke="none"><ellipse cx="100" cy="190" rx="92" ry="58" fill="#DCD1F6"/><ellipse cx="78" cy="58" rx="30" ry="14" fill="#fff" opacity=".7"/></g>
-        <path d="M100 30C148 30 170 68 170 110C170 140 160 158 150 166C146 177 135 179 129 172C121 181 109 181 103 174C95 181 82 181 76 173C66 179 54 175 52 165C40 155 30 138 30 110C30 66 52 30 100 30Z" fill="none"/>
-        <path d="M62 84L84 75M138 84L116 75" stroke-width="4.5"/>
-        <g stroke="none" fill="#2D0861"><ellipse cx="78" cy="98" rx="7" ry="9"/><ellipse cx="122" cy="98" rx="7" ry="9"/></g>
-        <g stroke="none" fill="#fff"><circle cx="80.5" cy="94.5" r="2.4"/><circle cx="124.5" cy="94.5" r="2.4"/></g>
-        <g stroke="none" fill="#F7A8D8" opacity=".85"><ellipse cx="62" cy="114" rx="10" ry="5.5"/><ellipse cx="138" cy="114" rx="10" ry="5.5"/></g>
-        <path d="M86 130Q93 121 100 126Q107 121 114 130" fill="none" stroke-width="4.5"/>
-        <path class="tear" d="M127 108C127 108 121 116 121 120A6 6 0 0 0 133 120C133 116 127 108 127 108Z" fill="#7CC4FF" stroke="#2D6BC9" stroke-width="2"/>
-      </g>
-    </svg>
+    <div id="ovSad" hidden aria-hidden="true"><div class="body"><img src="/icon-192.png" alt="">
+      <svg viewBox="0 0 192 192"><!-- the real mascot, its wink and grin painted over with a sad face in its own lines -->
+        <g fill="#F6F5FC"><ellipse cx="88" cy="72" rx="16.5" ry="11.5" transform="rotate(12 88 72)"/><ellipse cx="130" cy="53" rx="13" ry="12"/><ellipse cx="119" cy="75" rx="15.5" ry="11" transform="rotate(-20 119 75)"/></g>
+        <g fill="#FDACE9"><ellipse cx="79.5" cy="84.5" rx="9.6" ry="5.6"/><ellipse cx="146.3" cy="65.6" rx="9.2" ry="5.6"/></g>
+        <g transform="rotate(-14 110 66)" stroke="#2F0B60" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M82 57L96.5 54.5M121 53L136.5 60"/>
+          <g fill="#2F0B60" stroke="none"><ellipse cx="90.5" cy="67.5" rx="5.2" ry="6.6"/><ellipse cx="127.5" cy="67.5" rx="5.2" ry="6.6"/></g>
+          <g fill="#fff" stroke="none"><circle cx="92.3" cy="65.2" r="1.8"/><circle cx="129.3" cy="65.2" r="1.8"/></g>
+          <path d="M100 85Q104.5 79.5 109 82Q113.5 79.5 118 85"/>
+          <path class="tear" d="M133.5 73C133.5 73 130 78 130 80.4A3.5 3.5 0 0 0 137 80.4C137 78 133.5 73 133.5 73Z" fill="#8ECFFF" stroke-width="1.6"/>
+        </g>
+      </svg></div><span class="shadow"></span></div>
     <div class="ov-icon"><div id="ovProgress" role="progressbar" aria-label="Connecting" aria-valuemin="0" aria-valuemax="100" hidden><i></i></div><div class="spin" id="spin"></div><svg id="ovWarn" hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.5"/></svg></div>
     <p id="msg">Connecting to the browser…</p>
     <p id="msgSub" aria-live="polite"></p>
