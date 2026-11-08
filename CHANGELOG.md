@@ -14,6 +14,11 @@
 
 ### Added
 
+* Small, springy animations: the nav icon hops when its section opens and counts
+  pop when they change; the mascot in the rail waves on hover and hops on a click;
+  New's plus turns; session cards float in; empty states float; the favorite star
+  pops in and deflates; tiles and the live view's buttons squish when pressed
+  (reload turns its arrow). None with reduced motion.
 * The mascot in the rail or header always opens the list of sessions (it used to
   reload the page, which reopened the last view).
 * Firefox without the companion: a focus ring shows which field or button has

@@ -1576,6 +1576,37 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }
+
+/* Cute motion (off with reduced motion, see the rule near the top). Springy, short. */
+@keyframes nav-hop { 0% { transform: translateY(0) scale(.85); } 45% { transform: translateY(-4px) scale(1.12); } 100% { transform: none; } }
+@keyframes count-pop { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 70% { transform: scale(.92); } 100% { transform: scale(1); } }
+@keyframes mascot-wave { 0%, 100% { transform: rotate(0); } 20% { transform: rotate(-12deg) translateY(-2px); } 40% { transform: rotate(10deg); } 60% { transform: rotate(-6deg) translateY(-1px); } 80% { transform: rotate(4deg); } }
+@keyframes mascot-hop { 0% { transform: none; } 30% { transform: translateY(-8px) scale(.94, 1.08); } 60% { transform: translateY(0) scale(1.08, .92); } 100% { transform: none; } }
+@keyframes card-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes float-soft { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes star-pop { 0% { transform: scale(.6); } 45% { transform: scale(1.4) rotate(-8deg); } 70% { transform: scale(.92) rotate(4deg); } 100% { transform: scale(1); } }
+@keyframes star-deflate { 0% { transform: scale(1); } 30% { transform: scale(.78) rotate(-10deg); } 60% { transform: scale(.86) rotate(6deg); } 100% { transform: scale(1); } }
+.appnav button .i { transition: background .15s, color .15s, transform .18s cubic-bezier(.3, 1.6, .5, 1); }
+.appnav button:not(.on):hover .i { transform: translateY(-2px); }
+.appnav button:active .i { transform: scale(.88); transition-duration: .06s; }
+.appnav button.on .i { animation: nav-hop .46s cubic-bezier(.3, 1.6, .5, 1); }
+.appnav .count.bump { animation: count-pop .42s cubic-bezier(.3, 1.5, .5, 1); }
+.appnav .nav-logo img { transform-origin: 50% 80%; }
+.appnav .nav-logo:hover img { animation: mascot-wave .9s ease-in-out; }
+.appnav .nav-logo:active img { animation: mascot-hop .4s cubic-bezier(.3, 1.6, .5, 1); }
+.nav-new > span:first-child { transition: transform .12s cubic-bezier(.3, 1.6, .5, 1), box-shadow .2s; }
+.nav-new:hover > span:first-child { transform: translateY(-1px); }
+.nav-new:active > span:first-child { transform: scale(.9); }
+.nav-new .i { transition: transform .28s cubic-bezier(.3, 1.6, .5, 1); }
+.nav-new:hover .i, .nav-new[aria-expanded="true"] .i { transform: rotate(90deg); }
+.scard { animation: card-in .34s cubic-bezier(.25, 1.3, .5, 1) backwards; }
+.scard:nth-child(2) { animation-delay: .04s; } .scard:nth-child(3) { animation-delay: .08s; } .scard:nth-child(4) { animation-delay: .12s; }
+.scard:nth-child(5) { animation-delay: .16s; } .scard:nth-child(n+6) { animation-delay: .2s; }
+.empty .ico { animation: float-soft 3.2s ease-in-out infinite; }
+.obj-tile { transition: transform .12s cubic-bezier(.3, 1.6, .5, 1), background .15s, color .15s; }
+.obj-tile:active { transform: scale(.94); }
+.star-on.pop { animation: star-pop .45s cubic-bezier(.3, 1.5, .5, 1); }
+.i.star-deflate { animation: star-deflate .42s ease-out; }
 </style>
 </head>
 <body>
@@ -2225,6 +2256,18 @@ const enc = encodeURIComponent;
 
 
 const icon = (name, cls = '') => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
+// A nav count: it pops when it changes (not on the first fill).
+function setCount(id, n) {
+  const el = $(id);
+  if (!el) return;
+  const next = String(n), was = el.textContent;
+  if (was === next) return;
+  el.textContent = next;
+  if (was === '') return;
+  el.classList.remove('bump');
+  void el.offsetWidth;   // restart the animation
+  el.classList.add('bump');
+}
 
 function formatBytes(bytes) {
   if (!bytes) return '0 B';
@@ -3004,7 +3047,7 @@ function recordingSheetSpec(r) {
       `${flags.length ? `<div class="obj-facts">${flags.map((f) => `<span class="chip">${esc(f)}</span>`).join('')}</div>` : ''}${r.labels?.length ? `<div class="obj-facts">${lblChips(r.labels)}</div>` : ''}`),
     primary: `<button class="btn primary big" data-act="sheet-play" data-key="${esc(key)}">${icon('play', 'fill')}Play</button>`,
     items: [
-      { tile: true, icon: 'star', iconCls: r.keep ? 'star-on' : '', on: !!r.keep, label: 'Favorite', run: () => setRecordingKeep([r], !r.keep) },
+      { tile: true, icon: 'star', iconCls: starCls(r), on: !!r.keep, label: 'Favorite', run: () => setRecordingKeep([r], !r.keep) },
       { tile: true, icon: r.share ? 'globe' : 'share', on: !!r.share, label: r.share ? 'Public' : 'Share', run: () => openShare('recording', r) },
       { tile: true, icon: 'note', label: r.notes ? `Notes ${r.notes.count}` : 'Notes', run: () => openNotes('recording', r) },
       { tile: true, icon: 'select', label: 'Select', run: () => { selectedRecordings.add(key); selectMode = true; closeSheet(); renderRecordings(); } },
@@ -3622,7 +3665,7 @@ function renderLabels() {
   if (!ov) return;
   const sec = $('view-labels');
   const usage = lblUsage();
-  $('countLabels').textContent = usage.size;
+  setCount('countLabels', usage.size);
   const list = [...usage].map(([name, u]) => ({ name, ...u })).sort((a, b) => a.name.localeCompare(b.name));
   if (!list.length) {
     setStatic(sec, emptyState('tag', 'No labels',
@@ -4063,11 +4106,11 @@ function renderStats() {
   secStats.mesh = { text: `${online} of ${plural(total, 'node')} online`, level: online < total ? 'warn' : '' };
   renderSecTitle();
 
-  $('countSessions').textContent = dashboardSessions().filter(inFilter).length;
-  $('countProfiles').textContent = profs.length;
-  $('countRecordings').textContent = visibleRecordings().length;
-  $('countNodes').textContent = nodes.length + extensionBrowserNodes.length + ephemeralNodes().length;
-  $('countEngines').textContent = availableEngines().length;
+  setCount('countSessions', dashboardSessions().filter(inFilter).length);
+  setCount('countProfiles', profs.length);
+  setCount('countRecordings', visibleRecordings().length);
+  setCount('countNodes', nodes.length + extensionBrowserNodes.length + ephemeralNodes().length);
+  setCount('countEngines', availableEngines().length);
 }
 const SEC_TITLES = { sessions: 'Sessions', profiles: 'Profiles', recordings: 'Recordings', mesh: 'Mesh' };
 const secOf = (v) => (MESH_VIEWS.includes(v) ? 'mesh' : v);
@@ -4577,7 +4620,7 @@ function recordingRow(r) {
     <div role="cell" class="c-sel"><input class="recording-select" type="checkbox" data-act="select-recording" data-key="${key}" aria-label="Select recording ${esc(title)}" ${selected ? 'checked' : ''}></div>
     <div role="cell" class="c-play"><button class="play-btn" data-act="play" data-key="${key}" title="Play" aria-label="Play ${esc(title)}">${icon('play', 'fill')}</button><span class="sel-mark" aria-hidden="true">${icon('check')}</span></div>
     <div role="cell" class="main"><span class="site-fav">${favicon(url, recFavicon(r), r.favicon_url)}</span>
-      <div class="t"><b><span class="name">${esc(title)}</span>${lblChips(r.labels)}${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept fav" title="Favorite: the cleanup never removes it">${icon('star', 'sm star-on')}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}${noteBadge('recording', key, r.notes)}</b><span>${esc(sub)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(title)}</span>${lblChips(r.labels)}${live ? '<span class="chip bad" style="height:18px">LIVE</span>' : ''}${r.status === 'interrupted' ? '<span class="chip warn" style="height:18px" title="The daemon stopped while recording">cut short</span>' : ''}${r.share ? `<button class="chip public" style="height:18px" data-act="share-recording" data-key="${key}" title="${esc(`Public: anyone with the link can play it${r.share.expires_at ? ` (until ${absTime(r.share.expires_at)})` : ''}. Click for the link.`)}">${icon('globe', 'sm')}Public</button>` : ''}${r.keep ? `<span class="kept fav" title="Favorite: the cleanup never removes it">${icon('star', `sm ${starCls(r)}`)}</span>` : ''}${r.audio ? `<span class="kept" title="With sound">${icon('speaker', 'sm')}</span>` : ''}${r.merged_from?.length ? `<span class="kept" title="Merged from ${r.merged_from.length} recordings">${icon('layers', 'sm')}</span>` : ''}${cached}${noteBadge('recording', key, r.notes)}</b><span>${esc(sub)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(r.node_name)}</div>
     <div role="cell" class="num c-started" title="${esc(absTime(r.started_at_secs))}">${relTime(r.started_at_secs)}</div>
     <div role="cell" class="num c-dur">${formatUptime(r.duration_seconds)}</div>
@@ -7138,8 +7181,13 @@ function handleWorkerMessage(e) {
 }
 
 // Favorite recordings (the cleanup never removes them), or unfavorite them. Off unless asked.
+// The star pops in when a recording becomes a favorite and deflates when it stops
+// being one: only right after the toggle, not whenever a favorite is drawn.
+const starToggled = new Map();
+const starCls = (r) => r.keep ? `star-on${starToggled.get(r.id) === 'on' ? ' pop' : ''}` : starToggled.get(r.id) === 'off' ? 'star-deflate' : '';
 function setRecordingKeep(list, keep) {
   if (!list.length) return;
+  for (const r of list) { starToggled.set(r.id, keep ? 'on' : 'off'); setTimeout(() => { if (starToggled.get(r.id) === (keep ? 'on' : 'off')) starToggled.delete(r.id); }, 1200); }
   act(keep ? 'Adding to favorites' : 'Removing from favorites',
     () => Promise.all(list.map((r) => request('POST', api(r.node_name, `/recordings/${encodeURIComponent(r.id)}/keep`), { keep }))),
     keep ? `${list.length === 1 ? 'Recording' : `${list.length} recordings`} starred: the cleanup will not remove ${list.length === 1 ? 'it' : 'them'}` : 'No longer favorites: the cleanup may remove them again');

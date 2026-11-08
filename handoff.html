@@ -102,6 +102,12 @@
     background: transparent; color: var(--fg); cursor: pointer; text-decoration: none; }
   .ib:hover { background: var(--btn); }
   .ib:active { background: var(--btn); }
+  /* A springy press; reload gives its arrow a turn. */
+  .ib { transition: background .15s, transform .14s cubic-bezier(.3, 1.6, .5, 1); }
+  .ib:active:not([disabled]) { transform: scale(.9); transition-duration: .06s; }
+  #reload svg { transition: transform .45s cubic-bezier(.3, 1.4, .5, 1); }
+  #reload:active svg { transform: rotate(140deg); transition-duration: .2s; }
+  @media (prefers-reduced-motion: reduce) { .ib, #reload svg { transition: none; } .ib:active:not([disabled]) { transform: none; } #reload:active svg { transform: none; } }
   .ib[disabled] { opacity: .35; }
   .ib[hidden] { display: none; }
   .ib.on { background: color-mix(in oklab, var(--accent) 22%, transparent); color: var(--accent); }
