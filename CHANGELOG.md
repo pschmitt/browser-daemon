@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Live view, no connection: the message stays put while it retries (the retry
+  countdown has its own line, the waits grow from 2.5 s to 30 s), and the tab
+  strip, navigation, address bar and toolbars are grayed out and inert until it
+  connects. The session chip stays usable.
+
+### Added
+
+* Live view: **Alt+L** focuses the address bar (like Ctrl+L in a browser, which
+  can go to the page).
+
 ## [0.15.4] - 2026-11-08
 
 ### Changed

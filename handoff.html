@@ -457,6 +457,15 @@
     padding: 24px; text-align: center; background: color-mix(in oklab, var(--bg) 82%, transparent); backdrop-filter: blur(6px); }
   #overlay.show { display: flex; }
   #overlay p { margin: 0; color: var(--muted); max-width: 28ch; }
+  /* Steady while it retries: the icon, the message and the buttons keep their place. */
+  #overlay .ov-icon { width: 32px; height: 32px; display: grid; place-items: center; flex: none; }
+  #overlay .ov-icon .spin { margin: 0; }
+  #overlay .ov-icon svg { width: 30px; height: 30px; color: var(--bad, #ef4444); }
+  #overlay #msg { min-height: calc(3 * 1.45em); line-height: 1.45; display: flex; align-items: center; justify-content: center; }
+  #overlay #msgSub { min-height: 1.4em; line-height: 1.4; margin: -6px 0 0; font-size: 13px; opacity: .8; font-variant-numeric: tabular-nums; }
+  /* No connection: the controls that need the browser are grayed out and inert. */
+  body.offline :is(#tabStrip, #back, #fwd, #reload, #urlBar, #notePill, #pubPill, #kbbtn, #extSlot, #sessBtn, #toolbar, #keys) {
+    opacity: .35; filter: grayscale(1); pointer-events: none; transition: opacity .2s; }
   /* Tab switch in progress: the last picture stays, dimmed, until the new tab's first frame. */
   #switching { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center;
     background: rgba(0, 0, 0, .45); color: #fff; font-weight: 600; font-size: 14px; pointer-events: none; animation: fade-in .15s ease-out; }
@@ -836,8 +845,9 @@
   <button id="pkOffer" type="button" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M10.8 12.2L20 3M16 7l3 3M14 9l2 2"/></svg><span id="pkOfferText"></span></button>
   <div id="switching" hidden><div class="spin"></div><span id="switchingText">Loading tab…</span></div>
   <div id="overlay">
-    <div class="spin" id="spin"></div>
+    <div class="ov-icon"><div class="spin" id="spin"></div><svg id="ovWarn" hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.5"/></svg></div>
     <p id="msg">Connecting to the browser…</p>
+    <p id="msgSub" aria-live="polite"></p>
     <div style="display:flex;gap:10px;margin-top:6px;">
       <button class="btn" id="retry" hidden>Reconnect</button>
       <a href="/" class="btn" id="overlayDash" style="text-decoration:none;background:var(--btn);color:var(--fg);" hidden>Dashboard</a>
@@ -2077,17 +2087,44 @@ function renderConnectStep() {
   E.msg.textContent = `Connecting to the browser… · ${connectStepText} · ${((performance.now() - connectT0) / 1000).toFixed(1)} s`;
 }
 
+const OFFLINE_CONTROLS = ["tabStrip", "back", "fwd", "reload", "urlBar", "notePill", "pubPill", "kbbtn", "extSlot", "sessBtn", "toolbar", "keys"];
 function setState(kind, text) {
   if (kind !== "wait") { clearInterval(connectTicker); connectT0 = 0; connectStepText = ""; }
   if (kind === "bad") endSwitching();
+  if (kind !== "bad") { clearRetry(); retryDelay = 0; }
   E.dot.className = kind === "live" ? "live" : kind === "bad" ? "bad" : "wait";
   const show = kind !== "live";
   E.overlay.classList.toggle("show", show);
+  document.body.classList.toggle("offline", kind === "bad");
+  for (const id of OFFLINE_CONTROLS) document.getElementById(id)?.toggleAttribute("inert", kind === "bad");
+  if (kind === "bad" && document.activeElement?.closest?.("[inert]")) document.activeElement.blur();
   E.spin.hidden = kind === "bad";
+  $("ovWarn").toggleAttribute("hidden", kind !== "bad");   // an SVG has no .hidden
+  if (kind !== "bad") $("msgSub").textContent = "";
   E.retry.hidden = kind !== "bad";
   if (E.overlayDash) E.overlayDash.hidden = kind !== "bad";
-  if (show) E.msg.textContent = kind === "bad" ? (text || "Disconnected") : "Connecting to the browser…";
+  if (show) {
+    const next = kind === "bad" ? (text || "Disconnected") : "Connecting to the browser…";
+    if (E.msg.textContent !== next) E.msg.textContent = next;
+  }
   if (kind === "wait") renderConnectStep();
+}
+// After an error: try again by itself, less often each time (2.5 s, 5, 10, … 30 s),
+// with the countdown on its own line so the message and the buttons stay put.
+let retryDelay = 0, retryTimer = 0, retryTicker = 0, retryAt = 0;
+function clearRetry() { clearTimeout(retryTimer); clearInterval(retryTicker); retryTimer = retryTicker = 0; }
+function scheduleRetry() {
+  clearRetry();
+  if (document.visibilityState !== "visible") { $("msgSub").textContent = ""; return; }
+  retryDelay = Math.min(30000, retryDelay ? retryDelay * 2 : 2500);
+  retryAt = performance.now() + retryDelay;
+  const tick = () => {
+    const left = Math.max(0, Math.ceil((retryAt - performance.now()) / 1000));
+    $("msgSub").textContent = left ? `Trying again in ${left} s` : "Trying again…";
+  };
+  tick();
+  retryTicker = setInterval(tick, 250);
+  retryTimer = setTimeout(() => { clearInterval(retryTicker); $("msgSub").textContent = "Trying again…"; autoReconnect(); }, retryDelay);
 }
 
 /* ---------------------------------------------------------------- connecting */
@@ -2360,7 +2397,10 @@ async function doConnect({ quiet = false } = {}) {
   const old = drv;
   drv = null;
   if (old) old.close();
-  if (quiet) E.dot.className = "wait";
+  // Retrying after an error keeps the error shown (no flicker); its line says it tries.
+  const retrying = E.dot.className === "bad" && E.overlay.classList.contains("show");
+  if (retrying) { clearRetry(); $("msgSub").textContent = "Trying again…"; }
+  else if (quiet) E.dot.className = "wait";
   else setState("wait", "Connecting to the browser…");
   try {
     connectStep("finding the tab");
@@ -2428,7 +2468,7 @@ async function doConnect({ quiet = false } = {}) {
     loadTabs();
   } catch (e) {
     setState("bad", "Could not connect (" + e.message + ")");
-    if (document.visibilityState === "visible") setTimeout(autoReconnect, 2500);
+    scheduleRetry();
   } finally {
     connecting = false;
   }
@@ -4602,17 +4642,13 @@ async function autoReconnect() {
   }
 }
 
+// Back on the view: try now, and the waits after an error start short again.
+const reconnectNow = () => { retryDelay = 0; autoReconnect(); };
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") {
-    autoReconnect();
-  }
+  if (document.visibilityState === "visible") reconnectNow();
 });
-window.addEventListener("pageshow", () => {
-  autoReconnect();
-});
-window.addEventListener("focus", () => {
-  autoReconnect();
-});
+window.addEventListener("pageshow", reconnectNow);
+window.addEventListener("focus", reconnectNow);
 
 // Desktop: type straight into the page. Copy, cut and paste use the browser's own clipboard
 // events (no permission prompt): the remote selection is fetched ahead of time, after every
@@ -4634,6 +4670,16 @@ function refreshRemoteSelection(delay = 120) {
 }
 const localTyping = () => !drv || document.activeElement === E.kb || document.activeElement === E.urlInput
   || !!document.activeElement?.closest?.("#sessMenu, #tabsModal, .ext-pop, dialog");
+// Alt+L: this view's address bar, like Ctrl+L in a browser (Ctrl+L itself can go to
+// the page). Caught first, so neither the remote page nor an extension gets it.
+window.addEventListener("keydown", (e) => {
+  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.code !== "KeyL" && e.key.toLowerCase() !== "l")) return;
+  if (E.urlInput.closest("[inert]") || !E.urlInput.getClientRects().length) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  E.urlInput.focus();
+  E.urlInput.select();
+}, true);
 const SHORTCUTS = { a: "selectAll", z: "undo", y: "redo" };
 window.addEventListener("keydown", (e) => {
   if (localTyping()) return;
