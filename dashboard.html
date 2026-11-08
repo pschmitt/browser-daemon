@@ -3184,7 +3184,7 @@ function openContextMenu(e, title, items) {
 const SESSION_TILES = { Record: 'Start recording', Share: 'Share…', Notes: 'Notes…', Downloads: 'Downloads…' };
 document.addEventListener('contextmenu', (e) => {
   if (e.shiftKey || e.defaultPrevented || modalStack.length || handoffPicker) return;
-  if (e.target.closest('input, textarea, select, a[href], [contenteditable], video, canvas')) return;
+  if (e.target.closest('input, textarea, select, [contenteditable]')) return;   // the picture of a card is a link: it gets the menu too
   const card = e.target.closest('#sessionGrid .scard:not(.stale)');
   if (card) {
     const s = byKey.sessions.get(card.dataset.key);
