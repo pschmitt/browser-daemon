@@ -5086,6 +5086,7 @@ function openNewSession(prefill = {}) {
   $('sessionMore').open = !!(prefill.screen && prefill.screen !== 'window');
   syncDedicated();
   setEngine(prefill.engine || byKey.profiles.get(`${sessionNode}|${prefill.profile}`)?.engine || 'chromium');
+  if (prefill.quick) return;   // launched at once (quickSession): the dialog is never shown
   openModal('newSessionModal');
   setTimeout(() => $('sessionUrl').focus({ preventScroll: true }), 40);
 }
@@ -8871,7 +8872,9 @@ function openShortcuts({ all = false, filter = '' } = {}) {
 // A session right away: the dialog's defaults, submitted. No start page.
 function quickSession() {
   closeMenu();
-  openNewSession();
+  openNewSession({ quick: true });
+  // A connected browser needs an address first: that one asks in the dialog.
+  if (extensionNodeOf(sessionNode)) { openModal('newSessionModal'); return; }
   $('newSessionForm').requestSubmit();
 }
 document.addEventListener('dblclick', (e) => { if (e.target.closest('.nav-new')) { e.preventDefault(); clearTimeout(createTimer); quickSession(); } });
