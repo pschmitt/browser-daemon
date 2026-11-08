@@ -8870,11 +8870,11 @@ function openShortcuts({ all = false, filter = '' } = {}) {
   input.blur();
 }
 // A session right away: the dialog's defaults, submitted. No start page.
-function quickSession() {
+function quickSession(url = '') {
   closeMenu();
-  openNewSession({ quick: true });
+  openNewSession({ quick: true, url });
   // A connected browser needs an address first: that one asks in the dialog.
-  if (extensionNodeOf(sessionNode)) { openModal('newSessionModal'); return; }
+  if (extensionNodeOf(sessionNode) && !url) { openModal('newSessionModal'); return; }
   $('newSessionForm').requestSubmit();
 }
 document.addEventListener('dblclick', (e) => { if (e.target.closest('.nav-new')) { e.preventDefault(); clearTimeout(createTimer); quickSession(); } });
@@ -8909,6 +8909,7 @@ const PAL_TYPES = {
   shortcut: { label: 'Shortcut', plural: 'Shortcuts', hue: 90, cap: 5, emptyCap: 0 },
   page: { label: 'Page', plural: 'Pages', hue: 225, cap: 5, emptyCap: 0 },
 };
+const PAL_LAUNCH = { label: 'Launch', plural: 'Start a session', hue: 150 };
 const pal = { items: [], q: '', scope: 'all', active: 0, flat: [], words: [] };
 
 function paletteItems() {
@@ -9085,6 +9086,17 @@ function palCompute() {
     return { type, total: rows.length, rows: rows.slice(0, cap), best: rows[0].score };
   }).filter((g) => g.rows.length);
   ordered.sort((a, b) => (words.length ? b.best - a.best : 0) || types.indexOf(a.type) - types.indexOf(b.type));
+  // What was typed can always be opened in a new session: last, so a real match comes first.
+  const typed = pal.q.trim();
+  if (typed && (pal.scope === 'all' || pal.scope === 'action')) {
+    const node = filter !== 'all' && extensionNodeOf(filter)?.online !== false ? filter : localName();
+    const search = toTarget(typed).startsWith(searchEngine().url);
+    ordered.push({ type: 'launch', t: PAL_LAUNCH, total: 1, best: -Infinity, rows: [{ it: {
+      type: 'launch', icon: 'plus', title: `${search ? 'Search' : 'Open'} “${typed}” in a new session`, node, f: [],
+      sub: search ? `A new browser starts and searches ${searchEngine().name} for it` : 'A new browser starts on this address',
+      run: () => quickSession(typed),
+    }, score: 0 }] });
+  }
   pal.groups = ordered;
   pal.flat = ordered.flatMap((g) => g.rows.map((r) => r.it));
   pal.counts = counts;
@@ -9099,7 +9111,7 @@ function palRender() {
   }).join('');
   let i = 0;
   const html = pal.groups.map((g) => {
-    const t = PAL_TYPES[g.type];
+    const t = g.t || PAL_TYPES[g.type];
     const more = g.total > g.rows.length ? `<button type="button" class="more" tabindex="-1" data-pm-scope="${g.type}">Show all ${g.total} →</button>` : '';
     return `<div class="pm-group" style="--h:${t.hue}" role="presentation">${t.plural}${more}</div>` + g.rows.map(({ it }) => {
       const shownHit = (w) => it.f.some((f) => f.shown && f.low.includes(w));
