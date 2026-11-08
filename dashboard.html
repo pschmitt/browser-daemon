@@ -1415,6 +1415,27 @@ select.fancy-native { display: none !important; }
 .menu .lead .seg-lead, .obj-row .lead .seg-lead { display: inline-flex; color: var(--node, var(--muted)); }
 .menu .lead .seg-lead .dot, .obj-row .lead .seg-lead .dot { width: 10px; height: 10px; color: var(--node, var(--muted)); }
 #sizePresets + .pick { margin-top: 8px; }
+/* Menus: one style for every overflow and popover menu. */
+.menu { min-width: 260px; padding: 6px; border-radius: 14px; }
+.menu button { height: auto; min-height: 44px; padding: 0 12px; gap: 12px; font-size: 15px; font-weight: 500; border-radius: 10px; }
+.menu button > .i, .menu .lead .i, .menu .lead svg { width: 20px; height: 20px; }
+.menu .lead { width: 20px; }
+.menu .meta { font-size: 13px; }
+.menu .menu-label { padding: 8px 12px 4px; font-size: 12px; letter-spacing: .05em; }
+.menu hr { margin: 6px 4px; }
+.menu .tick { width: 18px; }
+/* The Labels button next to a search field: as tall as it. */
+.label-btn { height: var(--tap); border-radius: 12px; flex: none; }
+.label-btn .count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; display: inline-grid; place-items: center; }
+#recTools .rec-search { margin: 0; }
+#recTools { margin-bottom: 12px; }
+/* Phones: the search field gets the room, its buttons are icons. */
+@media (max-width: 760px) {
+  .sess-tools .label-btn, .sess-tools #agentsOnlyBtn { width: var(--tap); padding: 0; position: relative; }
+  .sess-tools .label-btn .lbl, .sess-tools #agentsOnlyBtn .lbl { display: none; }
+  .sess-tools .label-btn .count { position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; font-size: 10.5px; background: var(--accent); color: #fff; }
+  .sess-tools .label-btn .i, .sess-tools #agentsOnlyBtn .i { width: 18px; height: 18px; }
+}
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }
@@ -1431,6 +1452,7 @@ select.fancy-native { display: none !important; }
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="12" cy="19" r="1.2"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-select" viewBox="0 0 24 24"><rect x="3" y="4" width="6" height="6" rx="1.5"/><path d="m4.5 7 1.2 1.2L8 6"/><rect x="3" y="14" width="6" height="6" rx="1.5"/><path d="M13 7h8M13 17h8"/></symbol>
   <symbol id="i-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="m10.3 4.9-7.5 13a2 2 0 0 0 1.7 3h15a2 2 0 0 0 1.7-3l-7.5-13a2 2 0 0 0-3.4 0zM12 9v4M12 16.5v.01"/></symbol>
   <symbol id="i-info" viewBox="0 0 24 24"><path d="M12 11v6M12 7.5v.01"/></symbol>
@@ -1548,7 +1570,9 @@ select.fancy-native { display: none !important; }
     <div class="session-grid" id="sessionGrid"></div>
   </section>
   <section class="view profiles" id="view-profiles" hidden></section>
-  <label class="rec-search" id="recSearchWrap" hidden><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="recSearch" placeholder="Search recordings: title, address, profile, node, date…" autocomplete="off" spellcheck="false" aria-label="Search recordings"></label>
+  <div class="sess-tools" id="recTools" hidden>
+  <label class="rec-search" id="recSearchWrap"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="recSearch" placeholder="Search recordings: title, address, profile, node, date…" autocomplete="off" spellcheck="false" aria-label="Search recordings"></label>
+  </div>
   <section class="view recordings" id="view-recordings" hidden></section>
   <section class="view engines" id="view-engines" hidden><div id="enginesList" class="nodes-list"></div></section>
   <section class="view labels" id="view-labels" hidden></section>
@@ -2837,7 +2861,7 @@ function recordingSheetSpec(r) {
       { tile: true, icon: 'pin', on: !!r.keep, label: r.keep ? 'Kept' : 'Keep', run: () => setRecordingKeep([r], !r.keep) },
       { tile: true, icon: r.share ? 'globe' : 'share', on: !!r.share, label: r.share ? 'Public' : 'Share', run: () => openShare('recording', r) },
       { tile: true, icon: 'note', label: r.notes ? `Notes ${r.notes.count}` : 'Notes', run: () => openNotes('recording', r) },
-      { tile: true, icon: 'check', label: 'Select', run: () => { selectedRecordings.add(key); selectMode = true; closeSheet(); renderRecordings(); } },
+      { tile: true, icon: 'select', label: 'Select', run: () => { selectedRecordings.add(key); selectMode = true; closeSheet(); renderRecordings(); } },
       { label: 'Save' },
       { icon: 'download', label: 'Save as WebM, concise', sub: r.audio ? 'Still periods shortened, with sound' : 'Still periods shortened', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: true }) },
       { icon: 'download', label: 'Save as WebM, raw', sub: r.audio ? 'Original timing, with sound' : 'Original timing', run: () => exportWebMFromRecording(r.id, r.node_name, { concise: false }) },
@@ -3274,10 +3298,24 @@ function renderLabelFilter() {
   const box = $('labelFilter');
   const usage = ov ? lblUsage() : new Map();
   const show = LABEL_TABS[view] && (usage.size || labelFilter.size);
-  box.hidden = !show;
-  if (!show) return;
-  const html = `<button class="btn sm" data-act="label-filter" aria-haspopup="menu" title="Show only what has these labels">${icon('tag', 'sm')}<span class="lbl">Labels</span></button>`
-    + [...labelFilter].map((l) => { const k = lblColorAttr(l); return `<button class="chip label on${k.cls}"${k.style} data-act="label-filter-remove" data-label="${esc(l)}" title="Stop filtering by ${esc(l)}">${lblIconHtml(l)}${esc(l)}${icon('x', 'sm')}</button>`; }).join('');
+  // The Labels button sits next to the section's search field when it has one.
+  let btn = $('labelFilterBtn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.className = 'btn label-btn';
+    btn.id = 'labelFilterBtn';
+    btn.dataset.act = 'label-filter';
+    btn.setAttribute('aria-haspopup', 'menu');
+    btn.title = 'Show only what has these labels';
+  }
+  const host = view === 'sessions' && !$('sessTools').hidden ? $('sessTools') : view === 'recordings' ? $('recTools') : $('filterRow');
+  if (btn.parentElement !== host) host.insertBefore(btn, host === $('filterRow') ? box : host.querySelector('#agentsOnlyBtn'));
+  btn.hidden = !show;
+  const label = `${icon('tag', 'sm')}<span class="lbl">Labels</span>${labelFilter.size ? `<span class="count">${labelFilter.size}</span>` : ''}`;
+  if (btn.innerHTML !== label) btn.innerHTML = label;
+  box.hidden = !show || !labelFilter.size;
+  if (box.hidden) return;
+  const html = [...labelFilter].map((l) => { const k = lblColorAttr(l); return `<button class="chip label on${k.cls}"${k.style} data-act="label-filter-remove" data-label="${esc(l)}" title="Stop filtering by ${esc(l)}">${lblIconHtml(l)}${esc(l)}${icon('x', 'sm')}</button>`; }).join('');
   if (box.innerHTML !== html) box.innerHTML = html;
 }
 function openLabelFilter(el) {
@@ -3797,9 +3835,10 @@ function renderSessions() {
   const words = sessQuery.toLowerCase().split(/\s+/).filter(Boolean);
   const list = all.filter((s) => (!agentsOnly || driverOf(s) || playwrightOf(s)) && words.every((w) => sessHaystack(s).includes(w))).sort(newestFirst);
   const stale = words.length || agentsOnly ? [] : staleSessions().filter(inFilter);
-  $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery;
+  $('sessTools').hidden = all.length < 2 && !agentsOnly && !sessQuery && !labelFilter.size;
+  renderLabelFilter();
   $('agentsOnlyBtn').setAttribute('aria-pressed', String(agentsOnly));
-  $('agentsOnlyBtn').innerHTML = `${icon('bot', 'sm')}Agents only`;
+  $('agentsOnlyBtn').innerHTML = `${icon('bot', 'sm')}<span class="lbl">Agents only</span>`;
   if (!list.length && !stale.length) {
     grid.style.display = 'block';
     if (all.length) {
@@ -4099,7 +4138,7 @@ function renderViewActions(recordings = listedRecordings()) {
   const html = view === 'nodes' ? btn('add-node', 'plus', 'Add node: pair a browser or join a daemon')
     : view === 'labels' ? btn('new-label', 'plus', 'New label')
     : view === 'profiles' ? btn('new-profile', 'plus', 'New profile')
-    : view === 'recordings' && visibleRecordings().length ? btn('select-mode', 'check', 'Select recordings')
+    : view === 'recordings' && visibleRecordings().length ? btn('select-mode', 'select', 'Select recordings')
     : '';
   if (actions.innerHTML !== html) actions.innerHTML = html;
   renderSelBar(recordings);
@@ -4135,7 +4174,7 @@ function sectionMenuItems() {
   if (view === 'profiles') return [{ icon: 'plus', label: 'New profile…', run: () => openNewProfile() }];
   if (view === 'recordings') {
     return [
-      visibleRecordings().length && { icon: 'check', label: 'Select recordings', run: () => { selectMode = true; renderViewActions(); } },
+      visibleRecordings().length && { icon: 'select', label: 'Select recordings', run: () => { selectMode = true; renderViewActions(); } },
       { icon: 'trash', label: 'Prune recordings…', meta: 'retention policy', run: () => vacuum() },
     ];
   }
@@ -4226,7 +4265,7 @@ function setView(v) {
   try { localStorage.setItem('dash.view', v); } catch { /* storage unavailable */ }
   if (location.hash !== '#' + v) history.replaceState(history.state, '', '#' + v);
   for (const name of VIEWS) $('view-' + name).hidden = name !== v;
-  $('recSearchWrap').hidden = v !== 'recordings';
+  $('recTools').hidden = v !== 'recordings';
   document.body.dataset.view = v;
   if (ov) renderLabelFilter();
   document.querySelectorAll('#appNav [data-sec]').forEach((b) => { b.classList.toggle('on', b.dataset.sec === group); b.setAttribute('aria-current', b.dataset.sec === group ? 'page' : 'false'); });

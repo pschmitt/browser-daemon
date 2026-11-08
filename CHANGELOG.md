@@ -14,6 +14,9 @@
   screen, size, proxy, appearance, idle stop, lifetimes, profile copies, link
   expiry, node and engine settings) is a dropdown in the style of the profile
   picker: an icon, a label and a detail, opening a menu (a sheet on phones).
+* Menus share one style: 15px rows, 44px tall, 20px icons. The Labels filter sits
+  next to the search field (an icon on phones); selecting recordings has its own
+  icon.
 
 ## [0.15.1] - 2026-11-08
 
