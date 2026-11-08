@@ -2809,7 +2809,7 @@ syncThemeColor();
 const sheetQuery = matchMedia('(max-width: 760px), (pointer: coarse)');
 function openMenu(anchor, items, { align = 'right', side = 'below' } = {}) {
   const sheetOpen = $('objSheet').open;
-  if ((sheetOpen && topModal() === $('objSheet')) || (sheetQuery.matches && !sheetOpen)) { pushSheetLevel(items.filter(Boolean)); return; }
+  if (!anchor || (sheetOpen && topModal() === $('objSheet')) || (sheetQuery.matches && !sheetOpen)) { pushSheetLevel(items.filter(Boolean)); return; }
   const menu = $('menu');
   menuItems = items.filter(Boolean);
   // A check column only when some row is checked (an unchecked toggle needs none).
@@ -3128,6 +3128,104 @@ function recordingSheetSpec(r) {
   };
 }
 const openRecordingSheet = (key) => openObject(key, () => { const r = byKey.recordings.get(key); return r ? recordingSheetSpec(r) : null; });
+
+/* ================================================================ right-click menus
+   A session, profile, recording, node or label: right-click (long press on a phone,
+   the Menu key or Shift+F10 on the keyboard) opens the actions of its sheet as a menu
+   at the pointer, so one list serves both. Shift+right-click keeps the browser's own menu. */
+function specMenuItems(spec, tweak = (it) => it) {
+  const out = [];
+  const holder = document.createElement('div');
+  holder.innerHTML = spec.primary || '';
+  // The sheet's big buttons first. Links and data-act buttons are clicked for real, so the
+  // page's own handlers (an agent is driving: confirm first) apply.
+  for (const el of holder.children) {
+    const ico = el.querySelector('use')?.getAttribute('href')?.replace(/^#i-/, '') || 'play';
+    const label = el.textContent.trim();
+    let run = null;
+    if (el.dataset.sheetNodeLaunch) run = () => openNewSession({ node: el.dataset.sheetNodeLaunch });
+    else if (el.dataset.ephemeralLaunch) run = () => openNewSession({ ephemeral: { lease_id: el.dataset.ephemeralLaunch, provider: el.dataset.provider } });
+    else if (el.tagName === 'A' || el.dataset.act) run = () => { el.hidden = true; document.body.append(el); el.click(); el.remove(); };
+    if (run) out.push({ icon: ico, label, run });
+  }
+  if (out.length) out.push('-');
+  for (const raw of spec.items) {
+    if (!raw) continue;
+    if (raw === '-') { out.push('-'); continue; }
+    if (!raw.run && !raw.href) { if (raw.label && !raw.icon && !raw.lead) out.push({ label: raw.label }); continue; }   // a heading; plain facts are dropped
+    const it = tweak({ icon: raw.icon || 'info-c', lead: raw.lead, label: raw.label, meta: raw.meta, danger: raw.danger, tile: raw.tile, on: raw.on,
+      run: raw.run || (() => window.open(raw.href, '_blank', 'noopener')) });
+    if (it) out.push({ ...it, on: undefined });
+  }
+  // No heading over nothing, no doubled or trailing rule.
+  return out.filter((it, i, all) => {
+    const next = all[i + 1];
+    if (it === '-') return i > 0 && all[i - 1] !== '-' && !!next;
+    if (typeof it === 'object' && !it.run) return next && next !== '-' && (typeof next !== 'object' || next.run);
+    return true;
+  });
+}
+function openContextMenu(e, title, items) {
+  if (!items.length) return false;
+  e.preventDefault();
+  const rect = (e.clientX || e.clientY) ? { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY, width: 0, height: 0 } : e.target.closest('[data-key], [data-nkey]').getBoundingClientRect();
+  const at = { getBoundingClientRect: () => rect };
+  openMenu(at, [{ label: title }, ...items], { align: 'left' });
+  return true;
+}
+const SESSION_TILES = { Record: 'Start recording', Share: 'Share…', Notes: 'Notes…', Downloads: 'Downloads…' };
+document.addEventListener('contextmenu', (e) => {
+  if (e.shiftKey || e.defaultPrevented || modalStack.length || handoffPicker) return;
+  if (e.target.closest('input, textarea, select, a[href], [contenteditable], video, canvas')) return;
+  const card = e.target.closest('#sessionGrid .scard:not(.stale)');
+  if (card) {
+    const s = byKey.sessions.get(card.dataset.key);
+    if (!s) return;
+    openContextMenu(e, sessName(s), specMenuItems(sessionSheetSpec(s), (it) => {
+      if (!it.tile) return it;
+      if (/^Notes\b/.test(it.label)) return { ...it, label: 'Notes…' };
+      if (/^Public\b/.test(it.label)) return { ...it, label: 'Public link…' };
+      if (it.label === 'Recording') return { ...it, icon: 'stop', label: 'Stop recording', run: () => toggleRecording(s) };
+      if (it.label === 'Paused') return { ...it, label: 'Recording paused…' };
+      return SESSION_TILES[it.label] ? { ...it, label: SESSION_TILES[it.label] } : it;
+    }));
+    return;
+  }
+  const prow = e.target.closest('#view-profiles .row[data-key]');
+  if (prow) {
+    const p = byKey.profiles.get(prow.dataset.key);
+    if (p) openContextMenu(e, p.display, specMenuItems(profileSheetSpec(p)));
+    return;
+  }
+  const rrow = e.target.closest('#view-recordings .row[data-key]');
+  if (rrow) {
+    if (document.body.classList.contains('selecting') || matchMedia('(pointer: coarse)').matches) return;   // long press selects
+    const r = byKey.recordings.get(rrow.dataset.key);
+    if (r) openContextMenu(e, recordingTitle(r), specMenuItems(recordingSheetSpec(r), (it) => {
+      if (!it.tile) return it;
+      if (it.label === 'Favorite') return { ...it, label: r.keep ? 'Remove from favorites' : 'Add to favorites' };
+      if (it.label === 'Share') return { ...it, label: 'Share…' };
+      if (it.label === 'Public') return { ...it, label: 'Public link…' };
+      return /^Notes\b/.test(it.label) ? { ...it, label: 'Notes…' } : it;
+    }));
+    return;
+  }
+  const nrow = e.target.closest('.nrow[data-nkind]');
+  if (nrow) {
+    const { nkind: kind, nkey: key } = nrow.dataset;
+    const n = kind === 'node' ? nodes.find((x) => x.name === key) : kind === 'ephemeral' ? ephemeralNodes().find((x) => x.lease_id === key) : extensionNodeOf(key);
+    if (!n) return;
+    const spec = kind === 'node' ? daemonSheetSpec(n) : kind === 'ephemeral' ? ephemeralSheetSpec(n) : browserSheetSpec(n);
+    openContextMenu(e, kind === 'ephemeral' ? 'Ephemeral node' : (n.name || key), specMenuItems(spec));
+    return;
+  }
+  const lrow = e.target.closest('#view-labels .row[data-key]');
+  if (lrow) {
+    e.preventDefault();
+    const rect = (e.clientX || e.clientY) ? { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY, width: 0, height: 0 } : lrow.getBoundingClientRect();
+    ACT['label-menu']({ dataset: { key: lrow.dataset.key }, getBoundingClientRect: () => rect });
+  }
+});
 
 // Tapping a card or a row opens its sheet; its own buttons and links keep their job.
 document.addEventListener('click', (e) => {
