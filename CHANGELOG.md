@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+* The recording player follows the app's design and theme: its bars use the
+  app's surfaces, controls are 44px with a round play button, the timeline is
+  easier to grab, and phones get two rows of controls.
+
+### Added
+
+* Pinch to zoom in the recording player: two fingers zoom (up to 6×) and pan the
+  picture only, not the page or the controls; one finger pans while zoomed; a double
+  tap or the zoom pill goes back. Ctrl+wheel and a trackpad pinch zoom at the pointer.
+
 ## [0.15.3] - 2026-11-08
 
 ### Added

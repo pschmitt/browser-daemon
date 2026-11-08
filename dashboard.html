@@ -1513,6 +1513,49 @@ select.fancy-native { display: none !important; }
 .appnav .nav-settings { margin-top: auto; }
 @media (max-width: 760px) { .appnav .nav-settings { display: none; } }
 .obj-pic img[src="/icon-192.png"] { object-fit: contain; padding: 6px; }
+/* ------------------------------------------------------------ player, in the app's style */
+dialog.modal.player { touch-action: pan-x pan-y; }
+.player-modal-card { background: var(--raised); color: var(--fg); border-radius: 18px; }
+.player-top { gap: 12px; min-height: 64px; padding: 10px 12px 10px 14px; background: var(--raised); }
+.player-top .site-fav { width: 36px; height: 36px; border-radius: 10px; background: var(--hover); display: grid; place-items: center; }
+.player-top .site b { font-size: 15px; }
+.player-top .site span { font-family: inherit; font-size: 12.5px; }
+.player-viewport-wrap { overflow: hidden; touch-action: none; }
+#playerCanvas { transform-origin: 0 0; will-change: transform; }
+.player-zoom-pill { position: absolute; top: 12px; right: 12px; z-index: 4; display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border: 0; border-radius: 18px;
+  background: rgba(15, 17, 24, .78); color: #fff; font: 700 13px system-ui, sans-serif; backdrop-filter: blur(6px); cursor: pointer; }
+.player-zoom-pill[hidden] { display: none; }
+.player-controls-wrap { background: var(--raised); padding: 6px 14px 12px; touch-action: manipulation; border-top: 1px solid var(--line); }
+.player-timeline { height: 34px; }
+.player-scrubber { height: 34px; }
+.player-track { top: 15px; height: 6px; background: color-mix(in oklab, var(--fg) 16%, transparent); }
+.player-track-buffered { background: color-mix(in oklab, var(--fg) 14%, transparent); }
+.player-stillness-bar { top: 5px; background: color-mix(in oklab, var(--fg) 8%, transparent); }
+.player-static-span { background: color-mix(in oklab, var(--fg) 40%, transparent); }
+.player-scrubber::-webkit-slider-thumb { width: 18px; height: 18px; margin-top: 8px; border-color: var(--raised); }
+.player-scrubber::-moz-range-thumb { width: 18px; height: 18px; border-color: var(--raised); }
+.player-buttons-row { gap: 10px; }
+.player-controls-left, .player-controls-right { gap: 6px; }
+.player-ctrl-btn { height: 44px; min-width: 44px; padding: 0 10px; border-radius: 12px; color: var(--fg); font-size: 13.5px; }
+.player-ctrl-btn:hover { background: var(--hover); }
+.player-ctrl-btn svg { width: 20px; height: 20px; }
+.player-ctrl-btn.play { width: 48px; height: 48px; border-radius: 50%; background: var(--accent-btn); color: #fff; }
+.player-ctrl-btn.play:hover { background: color-mix(in oklab, var(--accent-btn) 88%, #fff); }
+#playerModeBtn, #playerSpeedCycleBtn { background: var(--hover); min-width: 56px; }
+.player-time-text { font: 600 13.5px var(--mono); color: var(--fg); margin-left: 4px; }
+.player-frames-text { color: var(--muted); }
+/* Full screen: the controls float over the picture again, light on dark. */
+.player-modal-card.fullscreen-mode .player-controls-wrap { background: linear-gradient(to top, rgba(0, 0, 0, .9), rgba(0, 0, 0, .55)); border-top: 0; }
+.player-modal-card.fullscreen-mode .player-ctrl-btn:not(.play), .player-modal-card.fullscreen-mode .player-time-text { color: #fff; }
+.player-modal-card.fullscreen-mode #playerModeBtn, .player-modal-card.fullscreen-mode #playerSpeedCycleBtn { background: rgba(255, 255, 255, .14); }
+@media (max-width: 760px) {
+  .player-modal-card { border-radius: 0; }
+  .player-top { padding-top: calc(10px + env(safe-area-inset-top)); }
+  .player-controls-wrap { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .player-buttons-row { flex-wrap: wrap; row-gap: 6px; }
+  .player-controls-left { flex: 1 1 100%; }
+  .player-controls-right { flex: 1 1 100%; justify-content: space-between; }
+}
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }
@@ -2090,11 +2133,12 @@ select.fancy-native { display: none !important; }
     <div class="player-top">
       <div class="site"><span class="site-fav" id="playerFav"></span><div class="t"><b id="playerPageTitle">Ready</b><span id="playerPageUrl" title="Address of the page in the frame shown">about:blank</span></div></div>
       <span class="chip node" id="playerNodeBadge">local</span>
-      <button class="btn ghost sm icon" id="playerMoreBtn" onclick="openPlayerMenu(this)" title="More: details, copy, save, delete" aria-label="More" aria-haspopup="menu"><svg class="i sm"><use href="#i-more"/></svg></button>
+      <button class="btn ghost icon" id="playerMoreBtn" onclick="openPlayerMenu(this)" title="More: details, copy, save, delete" aria-label="More" aria-haspopup="menu"><svg class="i"><use href="#i-more"/></svg></button>
       <button class="x-btn" onclick="closePlayerModal()" title="Close (Esc)"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="player-viewport-wrap" id="playerViewportContainer">
-      <canvas id="playerCanvas" onclick="togglePlayPause()"></canvas>
+      <canvas id="playerCanvas" onclick="if (!playerZoomTookClick()) togglePlayPause()"></canvas>
+      <button class="player-zoom-pill" id="playerZoomPill" hidden onclick="resetPlayerZoom()" title="Back to the whole picture">100%</button>
       <audio id="playerAudio" preload="auto" controls tabindex="-1" aria-hidden="true"></audio>
       <div class="player-center-play paused" id="playerCenterPlayBtn" onclick="togglePlayPause()"><svg viewBox="0 0 24 24" id="playerCenterPlayIcon"><polygon points="8 5 19 12 8 19 8 5"/></svg></div>
       <div class="player-loading-overlay" id="playerLoadingOverlay" role="status" aria-live="polite">
@@ -3191,6 +3235,97 @@ function appSettingsSpec() {
   };
 }
 const openAppSettings = () => openObject('app-settings', appSettingsSpec);
+
+
+/* ================================================================ player zoom
+   Two fingers zoom and pan the picture, not the page (the player takes the pinch:
+   touch-action none on the picture, no pinch on the rest); one finger pans while
+   zoomed; a double tap, or the pill, goes back to the whole picture. Ctrl+wheel and
+   a trackpad pinch zoom at the pointer. */
+const pz = { s: 1, x: 0, y: 0, pts: new Map(), start: null, moved: false, lastTap: 0 };
+function applyPlayerZoom() {
+  const c = $('playerCanvas'), w = c.offsetWidth, h = c.offsetHeight;
+  pz.s = Math.min(6, Math.max(1, pz.s));
+  // The picture always covers its own box: no empty edges while zoomed.
+  pz.x = Math.min(0, Math.max(w * (1 - pz.s), pz.x));
+  pz.y = Math.min(0, Math.max(h * (1 - pz.s), pz.y));
+  if (pz.s === 1) { pz.x = 0; pz.y = 0; }
+  c.style.transform = pz.s === 1 ? '' : `translate(${pz.x}px, ${pz.y}px) scale(${pz.s})`;
+  const pill = $('playerZoomPill');
+  pill.hidden = pz.s === 1;
+  pill.innerHTML = `${Math.round(pz.s * 100)}% ${icon('x', 'sm')}`;
+}
+function resetPlayerZoom() { pz.s = 1; pz.x = 0; pz.y = 0; pz.pts.clear(); pz.start = null; applyPlayerZoom(); }
+// The click that ends a pinch or a pan is not a tap on the picture.
+function playerZoomTookClick() { const m = pz.moved; pz.moved = false; return m; }
+// Zoom by `f` keeping the point (px, py), in the canvas's own coordinates, in place.
+function zoomPlayerAt(f, px, py) {
+  const s0 = pz.s, s1 = Math.min(6, Math.max(1, s0 * f));
+  pz.x = px - (px - pz.x) * (s1 / s0);
+  pz.y = py - (py - pz.y) * (s1 / s0);
+  pz.s = s1;
+  applyPlayerZoom();
+}
+(() => {
+  const vp = $('playerViewportContainer'), c = $('playerCanvas');
+  // The canvas's untransformed top left, in client coordinates.
+  const origin = () => { const r = vp.getBoundingClientRect(); return { x: r.left + c.offsetLeft, y: r.top + c.offsetTop }; };
+  const two = () => { const [a, b] = [...pz.pts.values()]; return { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; };
+  vp.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && pz.s === 1) return;
+    // A new gesture: whatever the last one did is done (its click came and went).
+    if (!pz.pts.size) pz.moved = false;
+    pz.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { vp.setPointerCapture(e.pointerId); } catch { /* not capturable */ }
+    const o = origin();
+    if (pz.pts.size === 2) { const t = two(); pz.start = { ...t, s: pz.s, x: pz.x, y: pz.y, ox: o.x, oy: o.y }; }
+    else if (pz.pts.size === 1) pz.start = { px: e.clientX, py: e.clientY, x: pz.x, y: pz.y, s: pz.s };
+  });
+  vp.addEventListener('pointermove', (e) => {
+    if (!pz.pts.has(e.pointerId) || !pz.start) return;
+    pz.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pz.pts.size >= 2 && pz.start.d) {
+      const t = two(), st = pz.start;
+      const s1 = Math.min(6, Math.max(1, st.s * (t.d / st.d)));
+      // The point under the fingers' middle stays under it, and follows it.
+      const ax = st.mx - st.ox, ay = st.my - st.oy;
+      pz.s = s1;
+      pz.x = (t.mx - st.ox) - (ax - st.x) * (s1 / st.s);
+      pz.y = (t.my - st.oy) - (ay - st.y) * (s1 / st.s);
+      pz.moved = true;
+      applyPlayerZoom();
+    } else if (pz.pts.size === 1 && pz.s > 1 && pz.start.px !== undefined) {
+      const dx = e.clientX - pz.start.px, dy = e.clientY - pz.start.py;
+      if (Math.abs(dx) + Math.abs(dy) > 6) pz.moved = true;
+      pz.x = pz.start.x + dx; pz.y = pz.start.y + dy;
+      applyPlayerZoom();
+    }
+  });
+  const end = (e) => {
+    if (!pz.pts.has(e.pointerId)) return;
+    pz.pts.delete(e.pointerId);
+    if (pz.pts.size === 1) { const [p] = pz.pts.values(); pz.start = { px: p.x, py: p.y, x: pz.x, y: pz.y, s: pz.s }; }
+    else if (!pz.pts.size) {
+      pz.start = null;
+      // A double tap while zoomed goes back to the whole picture.
+      if (e.type === 'pointerup' && e.pointerType !== 'mouse' && !pz.moved) {
+        const now = Date.now();
+        if (pz.s > 1 && now - pz.lastTap < 320) { resetPlayerZoom(); pz.moved = true; }
+        pz.lastTap = now;
+      }
+    }
+  };
+  vp.addEventListener('pointerup', end);
+  vp.addEventListener('pointercancel', end);
+  vp.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey && pz.s === 1) return;
+    e.preventDefault();
+    const o = origin();
+    if (e.ctrlKey) zoomPlayerAt(Math.exp(-e.deltaY / 200), e.clientX - o.x, e.clientY - o.y);
+    else { pz.x -= e.deltaX; pz.y -= e.deltaY; applyPlayerZoom(); }
+  }, { passive: false });
+  addEventListener('resize', () => { if (pz.s > 1) applyPlayerZoom(); });
+})();
 
 /* ================================================================ keyed rendering */
 // Only items whose markup changed are replaced, so scroll positions, focus and
@@ -7061,6 +7196,7 @@ function handlePlayerModalOverlayClick(e) {
 }
 
 function closePlayerModal() {
+  resetPlayerZoom();
   playerOpenSeq++;
   const d = activeDownloadsMap.get(activePlayerModalId);
   if (d && !d.pToast) {
@@ -7674,6 +7810,7 @@ function togglePlayerMute() {
 
 let playerOpenSeq = 0;
 async function openPlayerModal(id, node, position = requestedPlayback) {
+  resetPlayerZoom();
   requestedPlayback = null;
   playerStartPosition = position?.id === id ? position : null;
   const openSeq = ++playerOpenSeq;
