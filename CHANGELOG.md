@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-08
+
 ### Fixed
 
 * `browser-daemon mcp` lists the page tools (`browser_navigate`, `browser_snapshot`,
