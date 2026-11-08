@@ -1167,9 +1167,9 @@ header.top { gap: 10px; min-height: 60px; }
 .appnav button.on .count { background: var(--accent); color: #fff; }
 .appnav #countNodes.warn { background: var(--warn); color: #000; }
 .appnav .count:is(:empty, [data-zero]) { display: none; }
-.nav-new span { width: 56px; height: 56px; border-radius: 18px; display: grid; place-items: center; background: var(--accent-btn); color: #fff;
+.nav-new > span:first-child { width: 56px; height: 56px; border-radius: 18px; display: grid; place-items: center; background: var(--accent-btn); color: #fff;
   box-shadow: 0 8px 22px color-mix(in oklab, var(--accent-btn) 45%, transparent); transition: transform .1s; }
-.nav-new:active span { transform: scale(.95); }
+.nav-new:active > span:first-child { transform: scale(.95); }
 .nav-new .i { width: 26px !important; height: 26px !important; padding: 0 !important; background: none !important; color: #fff !important; }
 
 @media (max-width: 760px) {
@@ -1178,7 +1178,7 @@ header.top { gap: 10px; min-height: 60px; }
   .appnav button { flex: 1; }
   .appnav button[data-sec="sessions"] { order: 1; } .appnav button[data-sec="profiles"] { order: 2; }
   .appnav .nav-new { order: 3; } .appnav button[data-sec="recordings"] { order: 4; } .appnav button[data-sec="mesh"] { order: 5; }
-  .nav-new span { margin-top: -18px; }
+  .nav-new > span:first-child { margin-top: -18px; }
   main { padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom) + 28px) !important; }
   .toasts { bottom: calc(var(--nav-h) + 12px + env(safe-area-inset-bottom)); right: 12px; width: calc(100vw - 24px); }
   header.top { padding-top: calc(8px + env(safe-area-inset-top)); padding-bottom: 8px; flex-wrap: nowrap !important; }
@@ -1556,6 +1556,20 @@ dialog.modal.player { touch-action: pan-x pan-y; }
   .player-controls-left { flex: 1 1 100%; }
   .player-controls-right { flex: 1 1 100%; justify-content: space-between; }
 }
+/* The rail: the app icon on top, then New as an entry like the sections. */
+.appnav .nav-logo { display: grid; place-items: center; height: 56px; margin-bottom: 6px; }
+.appnav .nav-logo img { width: 40px; height: 40px; border-radius: 50%; }
+@media (min-width: 761px) {
+  .appnav .nav-new { margin-bottom: 8px; }
+  .appnav .nav-new span:first-child { width: 48px; height: 36px; border-radius: 14px; box-shadow: none; }
+  .appnav .nav-new .i { width: 22px !important; height: 22px !important; }
+  .appnav .nav-new .nl { color: var(--fg); }
+  header.top .brand { display: none; }
+}
+@media (max-width: 760px) {
+  .appnav .nav-logo { display: none; }
+  .appnav .nav-new .nl { display: none; }
+}
 [data-handoff-picker] .appnav, [data-handoff-picker] .filters, [data-handoff-picker] .subviews { display: none !important; }
 [data-handoff-picker] header.top, [data-handoff-picker] main { margin-left: 0 !important; }
 [data-handoff-picker] main { padding-bottom: 40px !important; }
@@ -1653,7 +1667,8 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 
 <!-- Phones: a bar at the bottom with the big New button in the middle; wider screens: a rail on the left. -->
 <nav class="appnav" id="appNav" aria-label="Sections">
-  <button class="nav-new" data-act="new-session" title="New session" aria-label="New session"><span><svg class="i"><use href="#i-plus"/></svg></span></button>
+  <a class="nav-logo" href="/" title="Browser Daemon" aria-label="Browser Daemon"><img src="/icon-192.png" alt=""></a>
+  <button class="nav-new" data-act="create" title="New: a session, a profile, a node…" aria-label="New" aria-haspopup="menu"><span><svg class="i"><use href="#i-plus"/></svg></span><span class="nl">New</span></button>
   <button data-act="view" data-view="sessions" data-sec="sessions"><svg class="i"><use href="#i-layers"/></svg><span class="nl">Sessions</span><span class="count" id="countSessions">0</span></button>
   <button data-act="view" data-view="profiles" data-sec="profiles"><svg class="i"><use href="#i-folder"/></svg><span class="nl">Profiles</span><span class="count" id="countProfiles">0</span></button>
   <button data-act="view" data-view="recordings" data-sec="recordings"><svg class="i"><use href="#i-film"/></svg><span class="nl">Recordings</span><span class="count" id="countRecordings">0</span></button>
@@ -2684,7 +2699,7 @@ syncThemeColor();
 // a wide screen keeps the small popover. A menu opened from inside a sheet (a
 // submenu, like a profile's proxy) becomes the sheet's next level.
 const sheetQuery = matchMedia('(max-width: 760px), (pointer: coarse)');
-function openMenu(anchor, items, { align = 'right' } = {}) {
+function openMenu(anchor, items, { align = 'right', side = 'below' } = {}) {
   const sheetOpen = $('objSheet').open;
   if ((sheetOpen && topModal() === $('objSheet')) || (sheetQuery.matches && !sheetOpen)) { pushSheetLevel(items.filter(Boolean)); return; }
   const menu = $('menu');
@@ -2702,9 +2717,9 @@ function openMenu(anchor, items, { align = 'right' } = {}) {
   try { if (!menu.matches(':popover-open')) menu.showPopover(); } catch { /* no popover support */ }
   const r = anchor.getBoundingClientRect();
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
-  let left = Math.min(align === 'left' ? r.left : r.right - mw, innerWidth - mw - 8);
+  let left = Math.min(side === 'right' ? r.right + 8 : align === 'left' ? r.left : r.right - mw, innerWidth - mw - 8);
   left = Math.max(8, left);
-  let top = r.bottom + 6;
+  let top = side === 'right' ? r.top : r.bottom + 6;
   if (top + mh > innerHeight - 8) top = Math.max(8, r.top - mh - 6);
   menu.style.left = left + 'px';
   menu.style.top = top + 'px';
@@ -4623,6 +4638,16 @@ const ACT = {
   'nodes': () => setView('nodes'),
   'new-session': () => openNewSession(),
   'settings': () => openAppSettings(),
+  // One New for everything that can be created; each opens its own dialog.
+  'create': (el) => openMenu(el, [
+    { label: 'New' },
+    { icon: 'layers', label: 'Session', meta: 'a browser to use now', run: () => openNewSession() },
+    { icon: 'folder', label: 'Profile', meta: 'logins and cookies to keep', run: () => openNewProfile() },
+    { icon: 'globe', label: 'Browser', meta: 'pair your own browser', run: () => { showAddTab('browser'); openModal('addNodeModal'); } },
+    { icon: 'server', label: 'Daemon', meta: 'join another node', run: () => { showAddTab('daemon'); openModal('addNodeModal'); } },
+    hasEphemeralProvider() && { icon: 'clock', label: 'Ephemeral node', meta: 'a node for one session', run: () => { showAddTab('ephemeral'); openModal('addNodeModal'); } },
+    { icon: 'tag', label: 'Label', meta: 'to group things', run: () => openLabelEditor() },
+  ], { side: 'right' }),
   'new-profile': () => openNewProfile(),
   'new-label': () => openLabelEditor(),
   'edit-label': (el) => openLabelEditor(el.dataset.key),

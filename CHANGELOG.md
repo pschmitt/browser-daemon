@@ -13,6 +13,9 @@
 * Pinch to zoom in the recording player: two fingers zoom (up to 6×) and pan the
   picture only, not the page or the controls; one finger pans while zoomed; a double
   tap or the zoom pill goes back. Ctrl+wheel and a trackpad pinch zoom at the pointer.
+* One **New** for everything: a session, a profile, a browser, a daemon, an
+  ephemeral node or a label. On wide screens it is an entry of the rail, under the
+  app's icon at the top; on phones the large button in the bottom bar opens it.
 
 ## [0.15.3] - 2026-11-08
 
