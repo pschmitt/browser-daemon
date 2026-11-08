@@ -4766,6 +4766,36 @@ window.addEventListener("keydown", (e) => {
   E.urlInput.focus();
   E.urlInput.select();
 }, true);
+// Alt+Q / Alt+W: stop this session (asks first). Alt+D: back to the list of sessions
+// ("D" for dashboard). Caught before the remote page sees them; with the browser's
+// shortcuts out of the way (Alt+D is the address bar in most browsers).
+window.addEventListener("keydown", (e) => {
+  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.repeat) return;
+  const code = ["KeyQ", "KeyW", "KeyD"].find((c) => e.code === c);
+  if (!code || document.querySelector("dialog[open]")) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  if (code === "KeyD") { location.href = "/#sessions"; return; }
+  if (sharedBrowserId) { toast("This is your own browser: disconnect it from the session menu", 4000); return; }
+  if (stopping || !sess) return;
+  const keeps = sess.persistent || sess.profile;
+  ask({
+    title: "Stop this session?",
+    text: keeps ? "The browser closes. Its profile is kept." : "The browser closes and everything in it is discarded.",
+    ok: "Stop session", danger: true,
+  }).then(async (yes) => {
+    if (!yes) return;
+    try {
+      stopping = true;
+      await sessionApi("DELETE", "");
+      if (drv) drv.close();
+      location.href = "/#sessions";
+    } catch (err) {
+      stopping = false;
+      toast("Could not stop the session: " + err.message, 5000);
+    }
+  });
+}, true);
 const SHORTCUTS = { a: "selectAll", z: "undo", y: "redo" };
 window.addEventListener("keydown", (e) => {
   if (localTyping()) return;
