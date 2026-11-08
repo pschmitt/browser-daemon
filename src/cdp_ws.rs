@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// The largest CDP message passed through, both ways. Playwright sends the
+/// contents of a file set on an input inline (base64, up to 50 MB per file, as
+/// the browser is not on its machine), in one frame: the default limits (16 MB a
+/// frame, 64 MB a message) dropped the connection, which ended a non-persistent
+/// session.
+pub(crate) const CDP_MAX_MESSAGE: usize = 256 * 1024 * 1024;
+
+pub(crate) fn cdp_ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+    tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(CDP_MAX_MESSAGE))
+        .max_frame_size(Some(CDP_MAX_MESSAGE))
+}
+
 /// Registers a connecting automation client with its session; `client_gone` with
 /// the returned id when it disconnects.
 pub(crate) async fn client_arrived(
@@ -169,7 +182,9 @@ pub(crate) async fn handle_chromium_ws(
     let Some(mut slot) = ClientSlot::new(&state, &session, true) else {
         return (StatusCode::GONE, "Session is closing").into_response();
     };
-    ws.on_upgrade(move |socket| async move {
+    ws.max_message_size(CDP_MAX_MESSAGE)
+        .max_frame_size(CDP_MAX_MESSAGE)
+        .on_upgrade(move |socket| async move {
         slot.client = Some(client_arrived(&state, &session, &headers, &params).await);
         session.activity.touch();
 
@@ -182,7 +197,7 @@ pub(crate) async fn handle_chromium_ws(
             recs.get(&session.id).map(|h| h.frame_tx.clone())
         };
 
-        match tokio_tungstenite::connect_async_with_config(&backend_ws_url, None, true).await {
+        match tokio_tungstenite::connect_async_with_config(&backend_ws_url, Some(cdp_ws_config()), true).await {
             Ok((server_ws, _)) => {
                 let activity = Some((session.activity.clone(), false));
                 let sd = state
@@ -274,7 +289,9 @@ pub(crate) async fn handle_firefox_ws(
     let Some(mut slot) = ClientSlot::new(&state, &session, counted) else {
         return (StatusCode::GONE, "Session is closing").into_response();
     };
-    ws.on_upgrade(move |socket| async move {
+    ws.max_message_size(CDP_MAX_MESSAGE)
+        .max_frame_size(CDP_MAX_MESSAGE)
+        .on_upgrade(move |socket| async move {
         if !observer {
             slot.client = Some(client_arrived(&state, &session, &headers, &params).await);
         }
@@ -328,34 +345,42 @@ pub(crate) async fn handle_page_ws(
         activity.touch();
     }
     let backend_url = format!("ws://127.0.0.1:{}/devtools/page/{}", port, page_id);
-    ws.on_upgrade(move |socket| async move {
-        let _slot = slot;
-        match tokio_tungstenite::connect_async_with_config(&backend_url, None, true).await {
-            Ok((server_ws, _)) => {
-                let activity = Some((activity, observer));
-                bridge_websockets(
-                    socket,
-                    server_ws,
-                    frame_tx,
-                    proxy::FrameSource {
-                        port,
-                        page: Some(page_id.clone()),
-                    },
-                    activity,
-                    initial_url,
-                    initial_title,
-                    false,
-                    false,
-                    None,
-                    None,
-                )
-                .await;
+    ws.max_message_size(CDP_MAX_MESSAGE)
+        .max_frame_size(CDP_MAX_MESSAGE)
+        .on_upgrade(move |socket| async move {
+            let _slot = slot;
+            match tokio_tungstenite::connect_async_with_config(
+                &backend_url,
+                Some(cdp_ws_config()),
+                true,
+            )
+            .await
+            {
+                Ok((server_ws, _)) => {
+                    let activity = Some((activity, observer));
+                    bridge_websockets(
+                        socket,
+                        server_ws,
+                        frame_tx,
+                        proxy::FrameSource {
+                            port,
+                            page: Some(page_id.clone()),
+                        },
+                        activity,
+                        initial_url,
+                        initial_title,
+                        false,
+                        false,
+                        None,
+                        None,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    error!(page_id = %page_id, error = %e, "Failed to bridge to target page");
+                }
             }
-            Err(e) => {
-                error!(page_id = %page_id, error = %e, "Failed to bridge to target page");
-            }
-        }
-    })
+        })
 }
 
 // ---------------------------------------------------------------------------

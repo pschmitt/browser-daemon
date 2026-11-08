@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Setting a file on an input through CDP (Playwright's `setInputFiles`, the MCP's
+  `browser_file_upload`) works for files up to Playwright's 50 MB: the CDP routes
+  took messages of at most 64 MB and frames of 16 MB, so a larger file dropped the
+  connection (Playwright: "Cannot read properties of undefined (reading 'url')")
+  and ended a non-persistent session with its tabs. They now take 256 MB.
+
 ### Changed
 
 * The Nodes view groups daemons, ephemeral nodes and browsers (through the

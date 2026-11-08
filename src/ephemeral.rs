@@ -254,7 +254,14 @@ pub(crate) async fn ui_ws(
             .headers_mut()
             .insert("x-browser-cluster-secret", value);
     }
-    let Ok((upstream, _)) = tokio_tungstenite::connect_async(request).await else {
+    // Large CDP messages (files set on an input) pass, as on a node's own CDP route.
+    let Ok((upstream, _)) = tokio_tungstenite::connect_async_with_config(
+        request,
+        Some(crate::cdp_ws::cdp_ws_config()),
+        true,
+    )
+    .await
+    else {
         return StatusCode::BAD_GATEWAY.into_response();
     };
     // Hold a normal automation connection for the life of the live view. This
@@ -288,43 +295,45 @@ pub(crate) async fn ui_ws(
     } else {
         None
     };
-    ws.on_upgrade(move |socket| async move {
-        let _hold = hold;
-        use axum::extract::ws::Message as A;
-        use tokio_tungstenite::tungstenite::Message as T;
-        let (mut a_tx, mut a_rx) = socket.split();
-        let (mut b_tx, mut b_rx) = upstream.split();
-        let to_upstream = async {
-            while let Some(Ok(msg)) = a_rx.next().await {
-                let msg = match msg {
-                    A::Text(v) => T::Text(v.to_string().into()),
-                    A::Binary(v) => T::Binary(v),
-                    A::Ping(v) => T::Ping(v),
-                    A::Pong(v) => T::Pong(v),
-                    A::Close(_) => break,
-                };
-                if b_tx.send(msg).await.is_err() {
-                    break;
+    ws.max_message_size(crate::cdp_ws::CDP_MAX_MESSAGE)
+        .max_frame_size(crate::cdp_ws::CDP_MAX_MESSAGE)
+        .on_upgrade(move |socket| async move {
+            let _hold = hold;
+            use axum::extract::ws::Message as A;
+            use tokio_tungstenite::tungstenite::Message as T;
+            let (mut a_tx, mut a_rx) = socket.split();
+            let (mut b_tx, mut b_rx) = upstream.split();
+            let to_upstream = async {
+                while let Some(Ok(msg)) = a_rx.next().await {
+                    let msg = match msg {
+                        A::Text(v) => T::Text(v.to_string().into()),
+                        A::Binary(v) => T::Binary(v),
+                        A::Ping(v) => T::Ping(v),
+                        A::Pong(v) => T::Pong(v),
+                        A::Close(_) => break,
+                    };
+                    if b_tx.send(msg).await.is_err() {
+                        break;
+                    }
                 }
-            }
-        };
-        let to_client = async {
-            while let Some(Ok(msg)) = b_rx.next().await {
-                let msg = match msg {
-                    T::Text(v) => A::Text(v.to_string().into()),
-                    T::Binary(v) => A::Binary(v),
-                    T::Ping(v) => A::Ping(v),
-                    T::Pong(v) => A::Pong(v),
-                    T::Close(_) => break,
-                    T::Frame(_) => continue,
-                };
-                if a_tx.send(msg).await.is_err() {
-                    break;
+            };
+            let to_client = async {
+                while let Some(Ok(msg)) = b_rx.next().await {
+                    let msg = match msg {
+                        T::Text(v) => A::Text(v.to_string().into()),
+                        T::Binary(v) => A::Binary(v),
+                        T::Ping(v) => A::Ping(v),
+                        T::Pong(v) => A::Pong(v),
+                        T::Close(_) => break,
+                        T::Frame(_) => continue,
+                    };
+                    if a_tx.send(msg).await.is_err() {
+                        break;
+                    }
                 }
-            }
-        };
-        tokio::select! { _ = to_upstream => {}, _ = to_client => {} }
-    })
+            };
+            tokio::select! { _ = to_upstream => {}, _ = to_client => {} }
+        })
 }
 
 async fn save(state: &AppState, key: Uuid, lease: &Lease) -> std::io::Result<()> {
