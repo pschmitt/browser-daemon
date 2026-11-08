@@ -10,6 +10,10 @@ bump_version() {
   sed -i "0,/^version = \".*\"$/s//version = \"$1\"/" "$(repo_root)/python/pyproject.toml"
   sed -i "s/^  \"version\": \".*\"$/  \"version\": \"$1\"/" \
     "$(repo_root)/custom_components/browser_daemon/manifest.json"
+  # The integration needs the client of this very release: pinned ahead of its publication
+  # (the release workflow uploads it to PyPI), so Renovate never has to follow.
+  sed -i "s/\"browser-daemon-client==[^\"]*\"/\"browser-daemon-client==$1\"/" \
+    "$(repo_root)/custom_components/browser_daemon/manifest.json"
 }
 
 release_files() {

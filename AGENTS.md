@@ -22,6 +22,14 @@ rebases the ones that conflict; wait for it), and let CI finish on the
 resulting `main` before tagging. Leave out PRs with failing checks or major
 bumps that need real work, and say which.
 
+The Home Assistant integration pins the Python client of this repo
+(`custom_components/browser_daemon/manifest.json`, `browser-daemon-client==X.Y.Z`).
+It is bumped preemptively: `release-prepare` (`tools/release-hooks.sh`) sets it,
+together with the integration's own version, to the version being released, before
+the release publishes the client to PyPI. Renovate is told to leave the package
+alone, so there is no dependency PR for it to merge or wait for; if one shows up
+anyway, close it.
+
 Release with `just release-prepare X.Y.Z`, then `just release-tag` (see
 `tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
 release workflow signs the browser extension, publishes it and then commits

@@ -19,6 +19,13 @@
   "packageRules": [
     {
       "matchPackageNames": [
+        "browser-daemon-client"
+      ],
+      "enabled": false,
+      "description": "Our own Python client (python/): tools/release-hooks.sh pins the Home Assistant integration to it, ahead of the release that publishes it."
+    },
+    {
+      "matchPackageNames": [
         "reqwest"
       ],
       "matchUpdateTypes": [
