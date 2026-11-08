@@ -2831,12 +2831,15 @@ function openMenu(anchor, items, { align = 'right', side = 'below' } = {}) {
   placeOverlays();
   menu.classList.add('open');
   try { if (!menu.matches(':popover-open')) menu.showPopover(); } catch { /* no popover support */ }
+  // As tall as the window allows (the CSS cap would cut a long menu), then scroll.
+  menu.style.maxHeight = `${innerHeight - 16}px`;
   const r = anchor.getBoundingClientRect();
   const mw = menu.offsetWidth, mh = menu.offsetHeight;
   let left = Math.min(side === 'right' ? r.right + 8 : align === 'left' ? r.left : r.right - mw, innerWidth - mw - 8);
   left = Math.max(8, left);
   let top = side === 'right' ? r.top : r.bottom + 6;
-  if (top + mh > innerHeight - 8) top = Math.max(8, r.top - mh - 6);
+  // Too low: above the anchor if it fits there, else pushed up to the window's edge.
+  if (top + mh > innerHeight - 8) top = r.top - mh - 6 >= 8 ? r.top - mh - 6 : Math.max(8, innerHeight - mh - 8);
   menu.style.left = left + 'px';
   menu.style.top = top + 'px';
   menu.querySelector('button')?.focus({ preventScroll: true });
