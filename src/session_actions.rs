@@ -272,6 +272,8 @@ pub(crate) struct InsertTextRequest {
     /// so a navigation in between cannot send the text elsewhere.
     #[serde(default)]
     pub(crate) uris: Vec<secrets::Uri>,
+    /// Exact HTTPS origins for a card's merchant and payment frame.
+    pub(crate) card_origins: Option<[String; 2]>,
     /// Press Enter afterwards.
     #[serde(default)]
     pub(crate) enter: bool,
@@ -304,7 +306,11 @@ pub(crate) async fn api_page_insert_text(
         )
     })?;
     let page_url = page.url.clone();
-    if !secrets::url_matches(&page_url, &req.uris) {
+    let page_allowed = match &req.card_origins {
+        Some(origins) => secrets::exact_https_origin(&page_url, &origins[0]),
+        None => secrets::url_matches(&page_url, &req.uris),
+    };
+    if !page_allowed {
         return Err(api_error(
             StatusCode::CONFLICT,
             "The page is not on a site the entry is saved for",
@@ -313,9 +319,26 @@ pub(crate) async fn api_page_insert_text(
     session.activity.touch();
     let ws_url = format!("ws://127.0.0.1:{}/devtools/page/{}", session.port, page_id);
     let uris = req.uris;
-    page_input::insert_text(&ws_url, &req.text, req.enter, move |u| {
-        secrets::url_matches(u, &uris)
-    })
+    let origins = req.card_origins;
+    let require_frame = origins.is_some();
+    page_input::insert_text(
+        &ws_url,
+        &req.text,
+        req.enter,
+        |u| {
+            origins.as_ref().map_or_else(
+                || secrets::url_matches(u, &uris),
+                |o| secrets::exact_https_origin(u, &o[0]),
+            )
+        },
+        |u| {
+            origins.as_ref().map_or_else(
+                || secrets::url_matches(u, &uris),
+                |o| secrets::exact_https_origin(u, &o[1]),
+            )
+        },
+        require_frame,
+    )
     .await
     .map_err(|e| api_error(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(serde_json::json!({ "ok": true })))

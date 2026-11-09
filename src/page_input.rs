@@ -19,11 +19,13 @@ use crate::autofill::{frames, secret_css, Cdp, GUARD};
 /// is in when that is a child frame (None: the top frame).
 async fn check_focus(
     cdp: &mut Cdp,
-    allowed: &impl Fn(&str) -> bool,
+    page_allowed: &impl Fn(&str) -> bool,
+    frame_allowed: &impl Fn(&str) -> bool,
+    require_frame: bool,
 ) -> Result<(Option<String>, String), String> {
     let tree = cdp.call("Page.getFrameTree", json!({})).await?;
     let root = &tree["frameTree"];
-    if !root["frame"]["url"].as_str().is_some_and(allowed) {
+    if !root["frame"]["url"].as_str().is_some_and(page_allowed) {
         return Err("The page is not on the entry's site anymore".into());
     }
     let focus = cdp
@@ -49,10 +51,13 @@ async fn check_focus(
         let Some(frame) = node.pointer("/node/frameId").and_then(Value::as_str) else {
             return Err("Could not tell which frame has focus".into());
         };
-        if !frame_tree_allowed(root, frame, allowed) {
+        if !frame_tree_allowed(root, frame, frame_allowed) {
             return Err("The focused field is in a frame of another site".into());
         }
         in_frame = Some(frame.to_string());
+    }
+    if require_frame && in_frame.is_none() {
+        return Err("The focused field is not in an authorized frame".into());
     }
     Ok((in_frame, top))
 }
@@ -118,12 +123,18 @@ pub async fn insert_text(
     ws_url: &str,
     text: &str,
     enter: bool,
-    allowed: impl Fn(&str) -> bool,
+    page_allowed: impl Fn(&str) -> bool,
+    frame_allowed: impl Fn(&str) -> bool,
+    require_frame: bool,
 ) -> Result<(), String> {
     let work = async {
         let mut cdp = Cdp::connect(ws_url).await?;
-        let (in_frame, top) = check_focus(&mut cdp, &allowed).await?;
+        let (in_frame, top) =
+            check_focus(&mut cdp, &page_allowed, &frame_allowed, require_frame).await?;
         if !guard_focused(&mut cdp, in_frame.as_deref().unwrap_or(&top)).await {
+            if require_frame {
+                return Err("Could not protect the focused field".into());
+            }
             tracing::warn!("Could not mask the field a vault value is typed into");
         }
         let mut calls = vec![("Input.insertText", json!({ "text": text }))];

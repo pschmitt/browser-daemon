@@ -59,6 +59,10 @@ pub struct McpArgs {
     #[arg(long = "allow-secret")]
     pub allow_secrets: Vec<String>,
 
+    /// Card entry and exact merchant and frame HTTPS origins, separated by `|` (repeatable).
+    #[arg(long = "allow-card")]
+    pub allow_cards: Vec<String>,
+
     /// A site (relying party, with its subdomains) agents may sign in to with a vault passkey through browser_passkey (repeat for several, `*` for all).
     #[arg(long = "allow-passkey")]
     pub allow_passkeys: Vec<String>,
@@ -226,6 +230,7 @@ struct State {
     secret: Option<String>,
     allow: Vec<String>,
     allow_secrets: Vec<String>,
+    allow_cards: Vec<String>,
     allow_passkeys: Vec<String>,
     ask_human_cmd: Option<PathBuf>,
     allow_exports: Vec<String>,
@@ -268,6 +273,7 @@ pub async fn run(args: McpArgs) -> R<()> {
         secret,
         allow: args.allow,
         allow_secrets: args.allow_secrets,
+        allow_cards: args.allow_cards,
         allow_passkeys: args.allow_passkeys,
         ask_human_cmd: args.ask_human_cmd,
         allow_exports: args.allow_exports,
@@ -705,6 +711,19 @@ impl State {
             self.ask_human_cmd.is_some(),
             &self.allow_exports,
         );
+        if !self.allow_cards.is_empty() {
+            tools.push(json!({
+                "name": "browser_fill_card",
+                "description": "Fill an authorized RBW card field into an authorized payment iframe without revealing its value. Never submits payment.",
+                "inputSchema": {"type":"object", "properties": {
+                    "entry": {"type":"string"},
+                    "field": {"type":"string", "enum":["number", "exp_month", "exp_year", "cvv"]},
+                    "target": {"type":"string"},
+                    "element": {"type":"string"}
+                }, "required":["entry", "field", "target"], "additionalProperties":false},
+                "annotations": {"title":"Fill a card field", "readOnlyHint":false}
+            }));
+        }
         tools.extend(browser);
         tools
     }
@@ -814,7 +833,13 @@ impl State {
                 Err(e) => text_result(e, true),
             }),
             "browser_fill_secret" if !self.allow_secrets.is_empty() => {
-                Ok(match self.fill_secret(&args).await {
+                Ok(match self.fill_secret(&args, false).await {
+                    Ok(text) => text_result(text, false),
+                    Err(e) => text_result(e, true),
+                })
+            }
+            "browser_fill_card" if !self.allow_cards.is_empty() => {
+                Ok(match self.fill_secret(&args, true).await {
                     Ok(text) => text_result(text, false),
                     Err(e) => text_result(e, true),
                 })
@@ -892,12 +917,12 @@ impl State {
 
     // --------------------------------------------------------------- secrets
 
-    async fn fill_secret(&self, args: &Value) -> Result<String, String> {
+    async fn fill_secret(&self, args: &Value, card: bool) -> Result<String, String> {
         let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
         let entry = arg("entry").ok_or("Name the vault entry (`entry`)")?;
         let target = arg("target").ok_or("Name the field to type into (`target`)")?;
         let field = arg("field").unwrap_or("password");
-        if !allows(&self.allow_secrets, entry) {
+        if !card && !allows(&self.allow_secrets, entry) {
             return Err(format!(
                 "The entry '{entry}' is not open to agents here. Allowed: {}.",
                 allowed(&self.allow_secrets)
@@ -917,9 +942,39 @@ impl State {
         let (page_id, address, host) =
             parse_page_info(&info).ok_or("Could not find the page (no page open?)")?;
 
-        let secret = secrets::lookup(&self.rbw, entry, arg("user"), field)
-            .await
-            .map_err(|e| self.mask(&e))?;
+        let card_origins: Option<[String; 2]> = if card {
+            self.allow_cards
+                .iter()
+                .find_map(|rule| {
+                    let parts: Vec<_> = rule.split('|').collect();
+                    if parts.len() == 3
+                        && parts[0] == entry
+                        && secrets::exact_https_origin(&address, parts[1])
+                        && secrets::exact_https_origin(parts[2], parts[2])
+                    {
+                        Some([parts[1].to_string(), parts[2].to_string()])
+                    } else {
+                        None
+                    }
+                })
+                .ok_or("Card and merchant are not authorized")?
+                .into()
+        } else {
+            None
+        };
+        let secret = if card {
+            secrets::Secret {
+                value: secrets::lookup_card(&self.rbw, entry, field)
+                    .await
+                    .map_err(|e| self.mask(&e))?,
+                username: None,
+                uris: vec![],
+            }
+        } else {
+            secrets::lookup(&self.rbw, entry, arg("user"), field)
+                .await
+                .map_err(|e| self.mask(&e))?
+        };
         // Masked from here on, whatever fails later.
         {
             let mut filled = self.filled.lock().unwrap();
@@ -929,7 +984,7 @@ impl State {
                 filled.push(format!("{user}:{}", secret.value));
             }
         }
-        if !secrets::url_matches(&address, &secret.uris) {
+        if !card && !secrets::url_matches(&address, &secret.uris) {
             return Err(format!(
                 "The entry '{entry}' is not saved for {host}, so it is not typed there."
             ));
@@ -954,7 +1009,7 @@ impl State {
                 .collect();
             return Err(format!("Could not focus the field: {}", why.trim()));
         }
-        let submit = args["submit"].as_bool().unwrap_or(false);
+        let submit = !card && args["submit"].as_bool().unwrap_or(false);
         let session_id = self.page_session(&child.target.url, &page_id).await;
         let mut req = self
             .http
@@ -965,6 +1020,7 @@ impl State {
             .json(&json!({
                 "text": secret.value,
                 "uris": secret.uris,
+                "card_origins": card_origins,
                 "enter": submit,
                 "session_id": session_id,
             }));

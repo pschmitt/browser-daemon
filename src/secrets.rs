@@ -16,9 +16,6 @@ pub const MASK: &str = "•••";
 /// argument (rbw's `--challenge=…`) may have.
 pub const MAX_WEBAUTHN_B64URL: usize = 16 * 1024;
 
-/// Secrets shorter than this are not redacted (they would mangle unrelated text).
-const MIN_REDACT: usize = 4;
-
 /// A field of a vault entry and the sites the entry is for.
 pub struct Secret {
     pub value: String,
@@ -105,6 +102,45 @@ pub async fn lookup(
         username: pick_field(&raw, "username").filter(|u| !u.is_empty()),
         uris: uris(&raw),
     })
+}
+
+/// Read only the supported fields of an RBW Card entry.
+pub async fn lookup_card(rbw_bin: &Path, entry: &str, field: &str) -> Result<String, String> {
+    let raw: Value = serde_json::from_str(&rbw(rbw_bin, &["get", "--raw", entry]).await?)
+        .map_err(|_| "rbw: unexpected output".to_string())?;
+    pick_card_field(&raw, field)
+}
+
+fn pick_card_field(raw: &Value, field: &str) -> Result<String, String> {
+    let key = match field {
+        "number" | "exp_month" | "exp_year" => field,
+        "cvv" => "code",
+        _ => return Err("Unsupported card field".into()),
+    };
+    if raw["data"]["type"] != "Card" {
+        return Err("The entry is not a card".into());
+    }
+    raw["data"][key]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("The card has no {field}"))
+}
+
+/// Compare an HTTPS URL to a configured HTTPS origin, without accepting paths or credentials in the latter.
+pub fn exact_https_origin(url: &str, origin: &str) -> bool {
+    let (Ok(url), Ok(expected)) = (url::Url::parse(url), url::Url::parse(origin)) else {
+        return false;
+    };
+    expected.scheme() == "https"
+        && expected.host_str().is_some()
+        && expected.username().is_empty()
+        && expected.password().is_none()
+        && expected.path() == "/"
+        && expected.query().is_none()
+        && expected.fragment().is_none()
+        && url.scheme() == "https"
+        && url.origin() == expected.origin()
 }
 
 /// A field of `rbw get --raw` output: password, username or a custom field.
@@ -302,18 +338,11 @@ fn base64_forms(secret: &str) -> Vec<String> {
 }
 
 /// Replaces every filled secret in the strings of `v` with MASK, in every
-/// form `variants` lists. A secret shorter than MIN_REDACT would mangle
-/// unrelated text, so it is only masked where it is the whole string.
+/// form `variants` lists. Short values can also occur inside snapshots.
 pub fn redact(v: &mut Value, secrets: &[String]) {
     match v {
         Value::String(s) => {
             for secret in secrets.iter().filter(|s| !s.is_empty()) {
-                if secret.chars().count() < MIN_REDACT {
-                    if s == secret {
-                        *s = MASK.to_string();
-                    }
-                    continue;
-                }
                 for variant in variants(secret) {
                     if s.contains(variant.as_str()) {
                         *s = s.replace(variant.as_str(), MASK);
@@ -377,6 +406,44 @@ pub fn redact_files(dir: &Path, since: std::time::SystemTime, secrets: &[String]
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_origins_require_exact_https_origin() {
+        for (url, origin, expected) in [
+            (
+                "https://shop.example/checkout",
+                "https://shop.example",
+                true,
+            ),
+            ("https://evil.shop.example/", "https://shop.example", false),
+            ("http://shop.example/", "https://shop.example", false),
+            ("https://shop.example:444/", "https://shop.example", false),
+            ("https://shop.example/", "https://shop.example/path", false),
+            ("https://shop.example/", "https://user@shop.example", false),
+        ] {
+            assert_eq!(exact_https_origin(url, origin), expected, "{url} {origin}");
+        }
+    }
+
+    #[test]
+    fn card_fields_are_restricted_to_card_entries() {
+        let card = json!({"data": {"type":"Card", "number":"4111111111111111", "exp_month":"01", "exp_year":"2030", "code":"123"}});
+        for (field, value) in [
+            ("number", "4111111111111111"),
+            ("exp_month", "01"),
+            ("exp_year", "2030"),
+            ("cvv", "123"),
+        ] {
+            assert_eq!(pick_card_field(&card, field).unwrap(), value);
+        }
+        assert!(pick_card_field(&card, "code").is_err());
+        assert!(pick_card_field(
+            &json!({"data":{"type":"Login", "number":"4111111111111111"}}),
+            "number"
+        )
+        .is_err());
+        assert!(pick_card_field(&json!({"data":{"type":"Card"}}), "cvv").is_err());
+    }
     use serde_json::json;
 
     #[test]
@@ -445,7 +512,7 @@ mod tests {
         );
         let mut short = json!("abc d");
         redact(&mut short, &["abc".into()]);
-        assert_eq!(short, "abc d");
+        assert_eq!(short, format!("{MASK} d"));
     }
 
     #[test]
@@ -547,11 +614,11 @@ mod tests {
     }
 
     #[test]
-    fn short_secrets_are_masked_only_when_they_are_the_whole_value() {
+    fn short_secrets_are_masked_inside_text() {
         let mut v = json!({ "a": "123", "b": "room 123 is free", "c": ["123"] });
         redact(&mut v, &["123".into()]);
         assert_eq!(v["a"], MASK);
-        assert_eq!(v["b"], "room 123 is free");
+        assert_eq!(v["b"], format!("room {MASK} is free"));
         assert_eq!(v["c"][0], MASK);
         assert_eq!(
             redact_str("error: hunter22 refused", &["hunter22".into()]),
