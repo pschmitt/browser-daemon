@@ -22,7 +22,7 @@ async fn check_focus(
     page_allowed: &impl Fn(&str) -> bool,
     frame_allowed: &impl Fn(&str) -> bool,
     require_frame: bool,
-) -> Result<(Option<String>, String), String> {
+) -> Result<(Option<String>, String, bool), String> {
     let tree = cdp.call("Page.getFrameTree", json!({})).await?;
     let root = &tree["frameTree"];
     if !root["frame"]["url"].as_str().is_some_and(page_allowed) {
@@ -46,13 +46,18 @@ async fn check_focus(
         .unwrap_or_default();
     let top = root["frame"]["id"].as_str().unwrap_or_default().to_string();
     let mut in_frame = None;
+    let mut out_of_process = false;
     if matches!(name, "IFRAME" | "FRAME" | "OBJECT" | "EMBED") {
         // Focus is inside another document: it and every frame in it must be allowed.
         let Some(frame) = node.pointer("/node/frameId").and_then(Value::as_str) else {
             return Err("Could not tell which frame has focus".into());
         };
         if require_frame {
-            card_frame_allowed(root, frame, frame_allowed)?;
+            if frame_present(root, frame) {
+                card_frame_allowed(root, frame, frame_allowed)?;
+            } else {
+                out_of_process = true;
+            }
         } else if !frame_tree_allowed(root, frame, frame_allowed) {
             return Err("The focused field is in a frame of another site".into());
         }
@@ -61,7 +66,31 @@ async fn check_focus(
     if require_frame && in_frame.is_none() {
         return Err("The focused field is not in an authorized frame".into());
     }
-    Ok((in_frame, top))
+    Ok((in_frame, top, out_of_process))
+}
+
+fn frame_present(node: &Value, id: &str) -> bool {
+    node["frame"]["id"].as_str() == Some(id)
+        || node["childFrames"]
+            .as_array()
+            .is_some_and(|children| children.iter().any(|child| frame_present(child, id)))
+}
+
+/// Only a directly embedded iframe with the configured origin may use the
+/// separate Chromium target path. Never trust a target from another page.
+fn card_target_allowed(
+    info: &Value,
+    frame: &str,
+    top: &str,
+    allowed: &impl Fn(&str) -> bool,
+) -> bool {
+    let target = &info["targetInfo"];
+    target["targetId"].as_str() == Some(frame)
+        && target["type"].as_str() == Some("iframe")
+        && target["parentFrameId"].as_str() == Some(top)
+        && target["url"].as_str().is_some_and(allowed)
+        && !frame.is_empty()
+        && frame.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Reject an unknown or unauthorized frame without revealing its path or query.
@@ -173,9 +202,41 @@ pub async fn insert_text(
 ) -> Result<(), String> {
     let work = async {
         let mut cdp = Cdp::connect(ws_url).await?;
-        let (in_frame, top) =
+        let (in_frame, top, out_of_process) =
             check_focus(&mut cdp, &page_allowed, &frame_allowed, require_frame).await?;
-        if !guard_focused(&mut cdp, in_frame.as_deref().unwrap_or(&top)).await {
+        let protected = if out_of_process {
+            let frame = in_frame
+                .as_deref()
+                .ok_or("Could not tell which frame has focus")?;
+            let info = cdp
+                .call("Target.getTargetInfo", json!({"targetId": frame}))
+                .await?;
+            if !card_target_allowed(&info, frame, &top, &frame_allowed) {
+                return Err("The focused payment frame is not authorized for this page".into());
+            }
+            let (prefix, _) = ws_url.rsplit_once('/').ok_or("Invalid page connection")?;
+            let mut child = Cdp::connect(&format!("{prefix}/{frame}")).await?;
+            let tree = child.call("Page.getFrameTree", json!({})).await?;
+            card_frame_allowed(&tree["frameTree"], frame, &frame_allowed)?;
+            let protected = guard_focused(&mut child, frame).await;
+            child.close().await;
+            let (focused, current_top, still_out_of_process) =
+                check_focus(&mut cdp, &page_allowed, &frame_allowed, true).await?;
+            let info = cdp
+                .call("Target.getTargetInfo", json!({"targetId": frame}))
+                .await?;
+            if focused.as_deref() != Some(frame)
+                || current_top != top
+                || !still_out_of_process
+                || !card_target_allowed(&info, frame, &top, &frame_allowed)
+            {
+                return Err("The focused payment frame changed before input".into());
+            }
+            protected
+        } else {
+            guard_focused(&mut cdp, in_frame.as_deref().unwrap_or(&top)).await
+        };
+        if !protected {
             if require_frame {
                 return Err("Could not protect the focused field".into());
             }
@@ -267,5 +328,146 @@ mod tests {
         assert!(
             card_frame_allowed(&json!({ "frame": { "id": "payment" } }), "payment", &card).is_err()
         );
+    }
+
+    #[test]
+    fn out_of_process_target_must_be_the_authorized_direct_child() {
+        let allowed =
+            |url: &str| crate::secrets::exact_https_origin(url, "https://payments.example");
+        let good = json!({"targetInfo": {"targetId": "ABCD12", "type": "iframe", "parentFrameId": "PAGE", "url": "https://payments.example/frame"}});
+        assert!(card_target_allowed(&good, "ABCD12", "PAGE", &allowed));
+        for (key, value) in [
+            ("parentFrameId", "OTHER"),
+            ("type", "page"),
+            ("targetId", "BEEF"),
+            ("url", "https://evil.example/"),
+        ] {
+            let mut bad = good.clone();
+            bad["targetInfo"][key] = json!(value);
+            assert!(
+                !card_target_allowed(&bad, "ABCD12", "PAGE", &allowed),
+                "{key}"
+            );
+        }
+        assert!(!card_target_allowed(&good, "../escape", "PAGE", &allowed));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Chromium on PATH"]
+    async fn card_fill_reaches_an_authorized_out_of_process_frame() {
+        use axum::{routing::get, Router};
+        use std::process::Stdio;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let app = Router::new()
+            .route(
+                "/",
+                get(move || async move {
+                    axum::response::Html(format!(
+                        r#"<iframe src="http://localhost:{port}/field"></iframe>"#
+                    ))
+                }),
+            )
+            .route(
+                "/field",
+                get(|| async { axum::response::Html("<input id='card'>") }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let directory = tempfile::tempdir().unwrap();
+        let mut browser = tokio::process::Command::new("chromium")
+            .args([
+                "--headless=new",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--no-first-run",
+                "--site-per-process",
+                "--remote-debugging-port=0",
+            ])
+            .arg(format!("--user-data-dir={}", directory.path().display()))
+            .arg(format!("http://127.0.0.1:{port}/"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let client = reqwest::Client::new();
+        let (ws_url, frame) = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(file) =
+                    tokio::fs::read_to_string(directory.path().join("DevToolsActivePort")).await
+                {
+                    let debug_port = file.lines().next().unwrap();
+                    if let Ok(response) = client
+                        .get(format!("http://127.0.0.1:{debug_port}/json/list"))
+                        .send()
+                        .await
+                    {
+                        if let Ok(targets) = response.json::<Vec<Value>>().await {
+                            let page = targets
+                                .iter()
+                                .find(|t| t["type"] == "page")
+                                .and_then(|t| t["webSocketDebuggerUrl"].as_str());
+                            if let Some(ws) = page {
+                                if let Ok(mut cdp) = Cdp::connect(ws).await {
+                                    if let Ok(info) = cdp.call("Target.getTargets", json!({})).await
+                                    {
+                                        if let Some(frame) = info["targetInfos"]
+                                            .as_array()
+                                            .and_then(|a| {
+                                                a.iter().find(|t| {
+                                                    t["type"] == "iframe"
+                                                        && t["url"].as_str().is_some_and(|u| {
+                                                            u.starts_with("http://localhost:")
+                                                        })
+                                                })
+                                            })
+                                            .and_then(|t| t["targetId"].as_str())
+                                        {
+                                            break (ws.to_string(), frame.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let (prefix, _) = ws_url.rsplit_once('/').unwrap();
+        let mut child = Cdp::connect(&format!("{prefix}/{frame}")).await.unwrap();
+        child
+            .call(
+                "Runtime.evaluate",
+                json!({"expression":"document.querySelector('#card').focus()"}),
+            )
+            .await
+            .unwrap();
+        let page = |url: &str| url.starts_with(&format!("http://127.0.0.1:{port}/"));
+        let payment = |url: &str| url.starts_with(&format!("http://localhost:{port}/"));
+        assert!(insert_text(&ws_url, "fixture", false, page, page, false)
+            .await
+            .is_err());
+        assert!(
+            insert_text(&ws_url, "fixture", false, page, |_| false, true)
+                .await
+                .is_err()
+        );
+        insert_text(&ws_url, "fixture", false, page, payment, true)
+            .await
+            .unwrap();
+        let value = child
+            .call(
+                "Runtime.evaluate",
+                json!({"expression":"document.querySelector('#card').value", "returnByValue":true}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value["result"]["value"], "fixture");
+        child.close().await;
+        browser.kill().await.unwrap();
+        server.abort();
     }
 }
