@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.15.8] - 2026-11-09
+
+### Added
+
+* MCP: `browser_fill_card` fills authorized RBW card fields without exposing
+  their values. It supports a combined `MM/YY` expiry and checks the exact
+  merchant and hosted payment-frame origins before typing, including Chromium
+  frames running in a separate process. It never submits the payment.
+
 ## [0.15.7] - 2026-11-08
 
 ### Added
