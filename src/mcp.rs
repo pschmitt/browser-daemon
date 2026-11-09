@@ -717,7 +717,7 @@ impl State {
                 "description": "Fill an authorized RBW card field into an authorized payment iframe without revealing its value. Never submits payment.",
                 "inputSchema": {"type":"object", "properties": {
                     "entry": {"type":"string"},
-                    "field": {"type":"string", "enum":["number", "exp_month", "exp_year", "cvv"]},
+                    "field": {"type":"string", "enum":["number", "exp_month", "exp_year", "exp_date", "cvv"], "description":"Use exp_date for a combined expiration field (MM/YY)."},
                     "target": {"type":"string"},
                     "element": {"type":"string"}
                 }, "required":["entry", "field", "target"], "additionalProperties":false},
@@ -979,6 +979,11 @@ impl State {
         {
             let mut filled = self.filled.lock().unwrap();
             filled.push(secret.value.clone());
+            if let (true, "exp_date", Some((month, year))) =
+                (card, field, secret.value.split_once('/'))
+            {
+                filled.extend([month.to_string(), year.to_string()]);
+            }
             if let Some(ref user) = secret.username {
                 // HTTP Basic auth carries both, base64-encoded.
                 filled.push(format!("{user}:{}", secret.value));

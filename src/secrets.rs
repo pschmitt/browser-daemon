@@ -112,14 +112,29 @@ pub async fn lookup_card(rbw_bin: &Path, entry: &str, field: &str) -> Result<Str
 }
 
 fn pick_card_field(raw: &Value, field: &str) -> Result<String, String> {
+    if raw["data"]["type"] != "Card" {
+        return Err("The entry is not a card".into());
+    }
+    if field == "exp_date" {
+        let month = raw["data"]["exp_month"].as_str().unwrap_or("").trim();
+        let year = raw["data"]["exp_year"].as_str().unwrap_or("").trim();
+        let valid_month =
+            (1..=2).contains(&month.len()) && month.bytes().all(|b| b.is_ascii_digit());
+        let month = month
+            .parse::<u8>()
+            .ok()
+            .filter(|m| valid_month && (1..=12).contains(m))
+            .ok_or("The card has an invalid expiration month")?;
+        if !matches!(year.len(), 2 | 4) || !year.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("The card has an invalid expiration year".into());
+        }
+        return Ok(format!("{month:02}/{}", &year[year.len() - 2..]));
+    }
     let key = match field {
         "number" | "exp_month" | "exp_year" => field,
         "cvv" => "code",
         _ => return Err("Unsupported card field".into()),
     };
-    if raw["data"]["type"] != "Card" {
-        return Err("The entry is not a card".into());
-    }
     raw["data"][key]
         .as_str()
         .filter(|v| !v.is_empty())
@@ -432,6 +447,7 @@ mod tests {
             ("number", "4111111111111111"),
             ("exp_month", "01"),
             ("exp_year", "2030"),
+            ("exp_date", "01/30"),
             ("cvv", "123"),
         ] {
             assert_eq!(pick_card_field(&card, field).unwrap(), value);
@@ -443,6 +459,31 @@ mod tests {
         )
         .is_err());
         assert!(pick_card_field(&json!({"data":{"type":"Card"}}), "cvv").is_err());
+    }
+
+    #[test]
+    fn combined_card_expiry_validates_and_formats_both_parts() {
+        for (month, year, expected) in [
+            ("1", "2030", Some("01/30")),
+            ("12", "30", Some("12/30")),
+            (" 09 ", " 2031 ", Some("09/31")),
+            ("0", "2030", None),
+            ("13", "2030", None),
+            ("001", "2030", None),
+            ("1", "2", None),
+            ("1", "203", None),
+            ("1", "20a0", None),
+            ("", "2030", None),
+            ("1", "", None),
+        ] {
+            let card = json!({"data":{"type":"Card", "exp_month":month, "exp_year":year}});
+            assert_eq!(pick_card_field(&card, "exp_date").ok().as_deref(), expected);
+        }
+        assert!(pick_card_field(
+            &json!({"data":{"type":"Login", "exp_month":"1", "exp_year":"2030"}}),
+            "exp_date"
+        )
+        .is_err());
     }
     use serde_json::json;
 
