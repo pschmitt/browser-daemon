@@ -51,7 +51,9 @@ async fn check_focus(
         let Some(frame) = node.pointer("/node/frameId").and_then(Value::as_str) else {
             return Err("Could not tell which frame has focus".into());
         };
-        if !frame_tree_allowed(root, frame, frame_allowed) {
+        if require_frame {
+            card_frame_allowed(root, frame, frame_allowed)?;
+        } else if !frame_tree_allowed(root, frame, frame_allowed) {
             return Err("The focused field is in a frame of another site".into());
         }
         in_frame = Some(frame.to_string());
@@ -60,6 +62,48 @@ async fn check_focus(
         return Err("The focused field is not in an authorized frame".into());
     }
     Ok((in_frame, top))
+}
+
+/// Reject an unknown or unauthorized frame without revealing its path or query.
+fn card_frame_allowed(
+    node: &Value,
+    id: &str,
+    allowed: &impl Fn(&str) -> bool,
+) -> Result<(), String> {
+    fn find<'a>(node: &'a Value, id: &str) -> Option<&'a Value> {
+        if node["frame"]["id"].as_str() == Some(id) {
+            return Some(node);
+        }
+        node["childFrames"]
+            .as_array()?
+            .iter()
+            .find_map(|child| find(child, id))
+    }
+    fn check(node: &Value, allowed: &impl Fn(&str) -> bool) -> Result<(), String> {
+        let url = node["frame"]["url"]
+            .as_str()
+            .ok_or("Browser did not expose a payment frame URL")?;
+        if !allowed(url) {
+            let origin = url::Url::parse(url)
+                .ok()
+                .map(|u| u.origin().ascii_serialization())
+                .unwrap_or_else(|| "unknown".to_string());
+            return Err(format!(
+                "Payment frame origin {origin} is not authorized for this card"
+            ));
+        }
+        if let Some(children) = node["childFrames"].as_array() {
+            for child in children {
+                check(child, allowed)?;
+            }
+        }
+        Ok(())
+    }
+    check(
+        find(node, id)
+            .ok_or("Browser did not expose the focused payment frame for authorization")?,
+        allowed,
+    )
 }
 
 /// Script for `guard_focused`: marks the focused field (looking into shadow
@@ -189,5 +233,39 @@ mod tests {
         assert!(!frame_tree_allowed(&tree, "C", &ok));
         assert!(!frame_tree_allowed(&tree, "missing", &ok));
         assert!(frame_tree_allowed(&tree, "A", &|_| true));
+    }
+
+    #[test]
+    fn card_frame_is_allowed_only_for_the_configured_payment_origin() {
+        let tree = json!({ "frame": { "id": "merchant", "url": "https://shop.example/checkout" }, "childFrames": [
+            { "frame": { "id": "payment", "url": "https://payments.example/hosted-field" } },
+            { "frame": { "id": "other", "url": "https://evil.example/hosted-field" } }
+        ] });
+        let card = |url: &str| crate::secrets::exact_https_origin(url, "https://payments.example");
+        let login = |url: &str| {
+            crate::secrets::url_matches(
+                url,
+                &[crate::secrets::Uri {
+                    uri: "https://shop.example".into(),
+                    match_type: Some(1),
+                }],
+            )
+        };
+        assert!(card_frame_allowed(&tree, "payment", &card).is_ok());
+        assert_eq!(
+            card_frame_allowed(&tree, "other", &card).unwrap_err(),
+            "Payment frame origin https://evil.example is not authorized for this card"
+        );
+        assert!(!frame_tree_allowed(&tree, "payment", &login));
+        assert!(card_frame_allowed(&tree, "missing", &card)
+            .unwrap_err()
+            .contains("did not expose"));
+        let nested = json!({ "frame": { "id": "payment", "url": "https://payments.example/hosted-field" }, "childFrames": [ { "frame": { "id": "nested", "url": "https://evil.example/path?token=private" } } ] });
+        let error = card_frame_allowed(&nested, "payment", &card).unwrap_err();
+        assert!(error.contains("https://evil.example"));
+        assert!(!error.contains("private"));
+        assert!(
+            card_frame_allowed(&json!({ "frame": { "id": "payment" } }), "payment", &card).is_err()
+        );
     }
 }

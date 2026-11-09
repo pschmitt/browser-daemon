@@ -33,7 +33,7 @@ Default tabs are not opened for Playwright connections (it ignores tabs it did n
 
 ## Cards: `browser_fill_card`
 
-Allow each card and merchant/payment-frame pair explicitly, for example `--allow-card 'My card|https://shop.example|https://payments.example'`. Repeat the flag for other pairs. Origins must be exact HTTPS origins, including any non-default port; paths, wildcards and credentials are not accepted. The tool accepts `number`, `exp_month`, `exp_year` and `cvv` (RBW's `code`) and a snapshot target. It only reads Card entries, requires the authorized merchant page and payment iframe, checks them again before insertion, and never submits the form. The same redaction limitations described above apply; a short card field can mask unrelated text in later results. Chromium sessions only.
+Allow each card and merchant/payment-frame pair explicitly, for example `--allow-card 'My card|https://shop.example|https://payments.example'`. Repeat the flag for other pairs. Origins must be exact HTTPS origins, including any non-default port; paths, wildcards and credentials are not accepted. The tool accepts `number`, `exp_month`, `exp_year` and `cvv` (RBW's `code`) and a snapshot target. It only reads Card entries, requires the authorized merchant page and payment iframe, checks them again before insertion, and never submits the form. If the frame check fails, the error identifies the unauthorized origin or says the browser did not expose the frame; it never includes URL paths or queries. The same redaction limitations described above apply; a short card field can mask unrelated text in later results. Chromium sessions only.
 
 ## Passkeys: `browser_passkey`
 
