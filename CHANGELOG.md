@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-10
+
+### Changed
+
+* MCP secret and card fills now use the RBW agent's mTLS API, with a separate
+  certificate for each vault account and server-side field grants. Saved login
+  URI matching and the card merchant and hosted-frame checks remain in place.
+  Configure the API URL, CA, client certificates and keys before enabling fills;
+  the previous local `--rbw` MCP option has been removed. The live-view secret
+  agent and passkeys continue to use the RBW CLI.
+
 ## [0.15.8] - 2026-11-09
 
 ### Added
