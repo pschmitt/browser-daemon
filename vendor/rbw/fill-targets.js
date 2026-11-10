@@ -21,15 +21,22 @@
     const passwords = fields.filter(el => el.type === "password" && !el.autocomplete.split(/\s+/).includes("new-password") && !isIntegrationSecret(el));
     if (passwords.length > 1) throw new Error("Several password fields found. Select a login form.");
     const password = passwords[0];
+    // A set-password step (Keycloak's UPDATE_PASSWORD, a reset link) has only
+    // new-password fields: the new one and its confirmation. With no current
+    // password to fill, those take the item's password (manual fills only).
+    const newPasswords = password ? [] : fields.filter(el => el.type === "password" && el.autocomplete.split(/\s+/).includes("new-password") && !isIntegrationSecret(el));
+    const newPasswordForm = newPasswords[0]?.form;
+    const setPasswords = newPasswords.filter(el => el.form === newPasswordForm).slice(0, 2);
     const isSearch = el => el.type === "search" || el.closest('[role="search"],form[action*="search"]') || /search|(^|[\s_-])q($|[\s_-])/i.test([el.id, el.name, el.autocomplete, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" "));
     const users = fields.filter(el => (!password?.form || el.form === password.form) && ["text", "email", "tel"].includes(el.type) && !isSearch(el) && !isOtpField(el));
     const recognizable = el => el.autocomplete?.split(/\s+/).includes("username") || el.type === "email" || /(^|[\s_-])(user(name)?|email|login|identifier|account)([\s_-]|$)/i.test([el.id, el.name, el.getAttribute("aria-label")].filter(Boolean).join(" "));
     // Generic text fields are only eligible inside the same real login form.
     // Username-only flows require explicit login semantics; never guess a search box.
-    const usernameOnly = el => el.autocomplete?.split(/\s+/).includes("username") || /username|identifier|login/i.test([el.id, el.name].join(" ")) || (recognizable(el) && /login|sign.?in|auth/i.test([el.form?.id, el.form?.name, el.form?.getAttribute("action"), el.form?.getAttribute("aria-label")].filter(Boolean).join(" ")));
+    const usernameOnly = el => el.autocomplete?.split(/\s+/).includes("username") || /username|identifier|login|e-?mail/i.test([el.id, el.name, el.placeholder, el.getAttribute("aria-label")].filter(Boolean).join(" ")) || (recognizable(el) && /login|sign.?in|auth/i.test([el.form?.id, el.form?.name, el.form?.getAttribute("action"), el.form?.getAttribute("aria-label")].filter(Boolean).join(" ")));
     const user = password ? users.find(recognizable) || (password.form ? users.filter(el => el.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).at(-1) : null) : users.find(usernameOnly);
-    const scoped = password?.form ? fields.filter(el => el.form === password.form) : fields;
-    return { user, password, otp: fields.find(isOtpField), scoped };
+    const scopeForm = password ? password.form : newPasswordForm;
+    const scoped = scopeForm ? fields.filter(el => el.form === scopeForm) : fields;
+    return { user, password, newPasswords: setPasswords, otp: fields.find(isOtpField), scoped };
   }
   Object.defineProperty(globalThis, "rbwFillTargets", { configurable: true, value: { isOtpField, loginTargets } });
 })();
