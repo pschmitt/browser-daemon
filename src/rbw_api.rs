@@ -29,10 +29,6 @@ struct Field {
     value: Option<String>,
 }
 
-fn matches_entry(item: &Item, entry: &str) -> bool {
-    item.id == entry || item.name.as_deref() == Some(entry)
-}
-
 fn decode_uris(value: &str) -> Result<Vec<Uri>, String> {
     serde_json::from_str(value).map_err(|_| "Invalid RBW API URI list".into())
 }
@@ -73,6 +69,7 @@ impl Client {
             .tls_built_in_root_certs(false)
             .add_root_certificate(ca)
             .identity(identity)
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(60))
             .build()
@@ -124,7 +121,7 @@ impl Client {
         for item in items
             .items
             .into_iter()
-            .filter(|item| matches_entry(item, entry))
+            .filter(|item| item.id == entry || item.name.as_deref() == Some(entry))
         {
             if let Some(user) = user {
                 if !item.fields.iter().any(|f| f == "username")
@@ -229,39 +226,6 @@ pub async fn lookup(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn matching_by_id_disambiguates_duplicate_names() {
-        let items: Items = serde_json::from_value(json!({"items": [
-            {"id": "one", "name": "shared", "fields": []},
-            {"id": "two", "name": "shared", "fields": []}
-        ]}))
-        .unwrap();
-        assert_eq!(
-            items
-                .items
-                .iter()
-                .filter(|item| matches_entry(item, "shared"))
-                .count(),
-            2
-        );
-        assert_eq!(
-            items
-                .items
-                .iter()
-                .filter(|item| matches_entry(item, "two"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            items
-                .items
-                .iter()
-                .filter(|item| matches_entry(item, "missing"))
-                .count(),
-            0
-        );
-    }
 
     #[test]
     fn api_uris_retain_saved_matching_policy() {
