@@ -8,7 +8,7 @@ browser-daemon fills logins and passkeys from an [rbw](https://github.com/doy/rb
 | MCP server (`browser-daemon mcp`) | as the agent's user, next to the AI agent | `browser_fill_secret` types a vault field into a page (see [MCP](mcp.md#secrets-browser_fill_secret)) |
 | `rbw` flake input | at build time only | rbw's live-view extension, the vault's UI (see [Styling](#styling)) |
 
-browser-daemon only runs the `rbw` command (`rbw get`, `rbw code`, `rbw list`, `rbw search`, `rbw passkey ...`); rbw talks to its own `rbw-agent` as usual. Nothing reads rbw's database or the agent's socket directly.
+The live-view secret agent runs the `rbw` command (`rbw get`, `rbw code`, `rbw search`, `rbw passkey ...`); rbw talks to its own `rbw-agent` as usual. MCP fills instead use the agent's mTLS API. Neither reads rbw's database or the agent's socket directly.
 
 ## Secret agent
 

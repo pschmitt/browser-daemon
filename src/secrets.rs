@@ -1,4 +1,4 @@
-//! Vault secrets for `browser_fill_secret` (see mcp.rs): read with rbw, matched
+//! Vault secrets for `browser_fill_secret` (see mcp.rs): read from RBW, matched
 //! against the page they go into, and kept out of everything the agent sees.
 
 use std::path::Path;
@@ -57,58 +57,6 @@ pub async fn rbw(rbw: &Path, args: &[&str]) -> Result<String, String> {
         ));
     }
     String::from_utf8(out.stdout).map_err(|_| "rbw: not UTF-8".to_string())
-}
-
-/// `field` of the vault entry `entry` (`user` picks one of several entries of
-/// that name): password, username, totp (the current code) or the name of a
-/// custom field. Never falls back to another field; an empty one is an error.
-pub async fn lookup(
-    rbw_bin: &Path,
-    entry: &str,
-    user: Option<&str>,
-    field: &str,
-) -> Result<Secret, String> {
-    let unlocked = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        Command::new(rbw_bin)
-            .arg("unlocked")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .status(),
-    )
-    .await
-    .is_ok_and(|s| s.is_ok_and(|s| s.success()));
-    if !unlocked {
-        return Err("rbw is locked: unlock it first (rbw skill), then try again".into());
-    }
-    let mut args = vec!["get", "--raw", entry];
-    args.extend(user);
-    let raw: Value = serde_json::from_str(&rbw(rbw_bin, &args).await?)
-        .map_err(|_| "rbw: unexpected output".to_string())?;
-    let value = match field {
-        "totp" => {
-            let mut args = vec!["code", entry];
-            args.extend(user);
-            rbw(rbw_bin, &args).await?.trim().to_string()
-        }
-        _ => pick_field(&raw, field).unwrap_or_default(),
-    };
-    if value.is_empty() {
-        return Err(format!("The entry '{entry}' has no {field}"));
-    }
-    Ok(Secret {
-        value,
-        username: pick_field(&raw, "username").filter(|u| !u.is_empty()),
-        uris: uris(&raw),
-    })
-}
-
-/// Read only the supported fields of an RBW Card entry.
-pub async fn lookup_card(rbw_bin: &Path, entry: &str, field: &str) -> Result<String, String> {
-    let raw: Value = serde_json::from_str(&rbw(rbw_bin, &["get", "--raw", entry]).await?)
-        .map_err(|_| "rbw: unexpected output".to_string())?;
-    pick_card_field(&raw, field)
 }
 
 pub(crate) fn pick_card_field(raw: &Value, field: &str) -> Result<String, String> {

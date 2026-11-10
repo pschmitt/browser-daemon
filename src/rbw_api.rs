@@ -29,17 +29,12 @@ struct Field {
     value: Option<String>,
 }
 
-fn resolve_item<'a>(items: &'a [Item], entry: &str) -> Result<&'a Item, String> {
-    let mut matches = items
-        .iter()
-        .filter(|item| item.id == entry || item.name.as_deref() == Some(entry));
-    let item = matches
-        .next()
-        .ok_or("RBW API item is not granted or was not found")?;
-    if matches.next().is_some() {
-        return Err("RBW API item name is ambiguous; use the item ID".into());
-    }
-    Ok(item)
+fn matches_entry(item: &Item, entry: &str) -> bool {
+    item.id == entry || item.name.as_deref() == Some(entry)
+}
+
+fn decode_uris(value: &str) -> Result<Vec<Uri>, String> {
+    serde_json::from_str(value).map_err(|_| "Invalid RBW API URI list".into())
 }
 
 impl Client {
@@ -79,7 +74,7 @@ impl Client {
             .add_root_certificate(ca)
             .identity(identity)
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
             .build()
             .map_err(|_| "Cannot configure RBW API client")?;
         Ok(Self { base, http })
@@ -123,15 +118,56 @@ impl Client {
         Ok(value.value.filter(|s| !s.is_empty()))
     }
 
-    pub async fn lookup(
-        &self,
-        entry: &str,
-        field: &str,
-        card: bool,
-        uris: Vec<Uri>,
-    ) -> Result<Secret, String> {
+    async fn resolve(&self, entry: &str, user: Option<&str>) -> Result<Option<Item>, String> {
         let items: Items = self.get(&["v1", "items"]).await?;
-        let item = resolve_item(&items.items, entry)?;
+        let mut matched = None;
+        for item in items
+            .items
+            .into_iter()
+            .filter(|item| matches_entry(item, entry))
+        {
+            if let Some(user) = user {
+                if !item.fields.iter().any(|f| f == "username")
+                    || self
+                        .optional_field(&item.id, &["username"])
+                        .await?
+                        .as_deref()
+                        != Some(user)
+                {
+                    continue;
+                }
+            }
+            if matched.is_some() {
+                return Err("RBW API item is ambiguous; use the item ID".into());
+            }
+            matched = Some(item);
+        }
+        Ok(matched)
+    }
+
+    async fn read_item(&self, item: &Item, field: &str, card: bool) -> Result<Secret, String> {
+        let mut uris = Vec::new();
+        if !card {
+            let all_uris = item.fields.iter().any(|field| field == "uri_all");
+            if all_uris {
+                let value = self.field(&item.id, &["uri_all"]).await?;
+                uris = decode_uris(&value)?;
+            }
+            for token in &item.fields {
+                if all_uris {
+                    break;
+                }
+                if let Some(index) = token.strip_prefix("uri/") {
+                    let index: usize = index.parse().map_err(|_| "Invalid RBW API URI grant")?;
+                    let index = index.to_string();
+                    let uri = self.field(&item.id, &["uri", &index]).await?;
+                    let policy = self.field(&item.id, &["uri_match", &index]).await?;
+                    let match_type: Option<u64> = serde_json::from_str(&policy)
+                        .map_err(|_| "Invalid RBW API URI match type")?;
+                    uris.push(Uri { uri, match_type });
+                }
+            }
+        }
         let value = if card {
             if field == "exp_date" {
                 let month = self.field(&item.id, &["card_exp_month"]).await?;
@@ -170,20 +206,73 @@ impl Client {
     }
 }
 
+pub async fn lookup(
+    clients: &[Client],
+    entry: &str,
+    user: Option<&str>,
+    field: &str,
+    card: bool,
+) -> Result<Secret, String> {
+    let mut matched = None;
+    for client in clients {
+        if let Some(item) = client.resolve(entry, user).await? {
+            if matched.is_some() {
+                return Err("RBW API item is ambiguous across accounts; use the item ID".into());
+            }
+            matched = Some((client, item));
+        }
+    }
+    let (client, item) = matched.ok_or("RBW API item is not granted or was not found")?;
+    client.read_item(&item, field, card).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn item_selection_refuses_ambiguous_names_and_ungranted_ids() {
+    fn matching_by_id_disambiguates_duplicate_names() {
         let items: Items = serde_json::from_value(json!({"items": [
-            {"id": "one", "name": "shared", "fields": ["password"]},
-            {"id": "two", "name": "shared", "fields": ["card_number"]}
+            {"id": "one", "name": "shared", "fields": []},
+            {"id": "two", "name": "shared", "fields": []}
         ]}))
         .unwrap();
-        assert!(resolve_item(&items.items, "shared").is_err());
-        assert_eq!(resolve_item(&items.items, "two").unwrap().id, "two");
-        assert!(resolve_item(&items.items, "ungranted").is_err());
+        assert_eq!(
+            items
+                .items
+                .iter()
+                .filter(|item| matches_entry(item, "shared"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            items
+                .items
+                .iter()
+                .filter(|item| matches_entry(item, "two"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            items
+                .items
+                .iter()
+                .filter(|item| matches_entry(item, "missing"))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn api_uris_retain_saved_matching_policy() {
+        let uris =
+            decode_uris(r#"[{"uri":"https://login.example/signin","match_type":3}]"#).unwrap();
+        assert!(secrets::url_matches("https://login.example/signin", &uris));
+        assert!(!secrets::url_matches("https://login.example/other", &uris));
+        assert!(!secrets::url_matches("http://login.example/signin", &uris));
+        assert!(
+            decode_uris(r#"[{"uri":"https://login.example","match_type":"unexpected"}]"#).is_err()
+        );
     }
 
     #[test]

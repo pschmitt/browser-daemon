@@ -46,44 +46,6 @@ use crate::MeshOverview;
 type R<T> = Result<T, Box<dyn std::error::Error>>;
 type Rpc = Result<Value, (i64, String)>;
 
-fn api_login_origins(rules: &[String], entry: &str, address: &str) -> Vec<secrets::Uri> {
-    rules
-        .iter()
-        .filter_map(|rule| {
-            let (name, origin) = rule.split_once('|')?;
-            (name == entry && secrets::exact_https_origin(address, origin)).then(|| secrets::Uri {
-                uri: origin.to_owned(),
-                match_type: Some(1),
-            })
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod api_origin_tests {
-    use super::*;
-
-    #[test]
-    fn api_login_rule_enforces_entry_scheme_host_and_port() {
-        let rules = vec!["login|https://login.example:8443".to_string()];
-        let uris = api_login_origins(&rules, "login", "https://login.example:8443/sign-in");
-        assert_eq!(uris.len(), 1);
-        assert!(secrets::url_matches(
-            "https://login.example:8443/other",
-            &uris
-        ));
-        for address in [
-            "http://login.example:8443/",
-            "https://login.example/",
-            "https://sub.login.example:8443/",
-        ] {
-            assert!(api_login_origins(&rules, "login", address).is_empty());
-            assert!(!secrets::url_matches(address, &uris));
-        }
-        assert!(api_login_origins(&rules, "other", "https://login.example:8443/").is_empty());
-    }
-}
-
 #[derive(Args, Debug)]
 pub struct McpArgs {
     #[command(flatten)]
@@ -113,25 +75,17 @@ pub struct McpArgs {
     #[arg(long = "allow-export")]
     pub allow_exports: Vec<String>,
 
-    /// rbw binary, for browser_fill_secret.
-    #[arg(long, default_value = "rbw")]
-    pub rbw: PathBuf,
-
-    /// RBW agent HTTPS API origin (enables the remote backend).
+    /// RBW agent HTTPS API origin.
     #[arg(long, requires_all = ["rbw_api_ca", "rbw_api_cert", "rbw_api_key"])]
     pub rbw_api_url: Option<String>,
 
-    /// RBW API CA certificate, client certificate and private key.
+    /// RBW API CA certificate.
     #[arg(long, requires = "rbw_api_url")]
     pub rbw_api_ca: Option<PathBuf>,
     #[arg(long, requires = "rbw_api_url")]
-    pub rbw_api_cert: Option<PathBuf>,
+    pub rbw_api_cert: Vec<PathBuf>,
     #[arg(long, requires = "rbw_api_url")]
-    pub rbw_api_key: Option<PathBuf>,
-
-    /// API login entry and exact HTTPS origin, separated by `|` (repeatable).
-    #[arg(long = "rbw-api-origin", requires = "rbw_api_url")]
-    pub rbw_api_origins: Vec<String>,
+    pub rbw_api_key: Vec<PathBuf>,
 
     /// Program that runs Playwright MCP on a CDP endpoint, called as `PROGRAM ENDPOINT OUTPUT_DIR`.
     #[arg(long, default_value = "browser-mcp")]
@@ -290,9 +244,7 @@ struct State {
     allow_exports: Vec<String>,
     /// Files browser_export_auth wrote, removed when they expire or on exit.
     exports: std::sync::Mutex<Vec<PathBuf>>,
-    rbw: PathBuf,
-    rbw_api: Option<crate::rbw_api::Client>,
-    rbw_api_origins: Vec<String>,
+    rbw_api: Vec<crate::rbw_api::Client>,
     /// Secrets filled in this session, masked in every tool result.
     filled: std::sync::Mutex<Vec<String>>,
     cmd: PathBuf,
@@ -310,18 +262,30 @@ struct State {
 }
 
 pub async fn run(args: McpArgs) -> R<()> {
-    let rbw_api = match (
-        &args.rbw_api_url,
-        &args.rbw_api_ca,
-        &args.rbw_api_cert,
-        &args.rbw_api_key,
-    ) {
-        (Some(url), Some(ca), Some(cert), Some(key)) => {
-            Some(crate::rbw_api::Client::new(url, ca, cert, key)?)
+    let rbw_api = match (&args.rbw_api_url, &args.rbw_api_ca) {
+        (Some(url), Some(ca))
+            if !args.rbw_api_cert.is_empty()
+                && args.rbw_api_cert.len() == args.rbw_api_key.len() =>
+        {
+            args.rbw_api_cert
+                .iter()
+                .zip(&args.rbw_api_key)
+                .map(|(cert, key)| crate::rbw_api::Client::new(url, ca, cert, key))
+                .collect::<Result<Vec<_>, _>>()?
         }
-        (None, None, None, None) => None,
-        _ => return Err("RBW API URL, CA, certificate and key must all be configured".into()),
+        (None, None) if args.rbw_api_cert.is_empty() && args.rbw_api_key.is_empty() => vec![],
+        _ => {
+            return Err(
+                "RBW API URL, CA and matching certificate/key pairs must all be configured".into(),
+            )
+        }
     };
+    if rbw_api.is_empty() && (!args.allow_secrets.is_empty() || !args.allow_cards.is_empty()) {
+        return Err(
+            "Secret and card fills require the RBW agent API URL, CA, client certificate and key"
+                .into(),
+        );
+    }
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(30))
@@ -346,9 +310,7 @@ pub async fn run(args: McpArgs) -> R<()> {
         ask_human_cmd: args.ask_human_cmd,
         allow_exports: args.allow_exports,
         exports: std::sync::Mutex::new(Vec::new()),
-        rbw: args.rbw,
         rbw_api,
-        rbw_api_origins: args.rbw_api_origins,
         filled: std::sync::Mutex::new(Vec::new()),
         cmd: args.playwright_cmd,
         out_dir,
@@ -1032,36 +994,8 @@ impl State {
         } else {
             None
         };
-        let secret = if let Some(api) = &self.rbw_api {
-            if arg("user").is_some() {
-                return Err(
-                    "The RBW API backend does not support selecting a username; use an item ID"
-                        .into(),
-                );
-            }
-            let origins = if card {
-                vec![]
-            } else {
-                let origins = api_login_origins(&self.rbw_api_origins, entry, &address);
-                if origins.is_empty() {
-                    return Err("Entry and login origin are not authorized for the RBW API".into());
-                }
-                origins
-            };
-            api.lookup(entry, field, card, origins).await?
-        } else if card {
-            secrets::Secret {
-                value: secrets::lookup_card(&self.rbw, entry, field)
-                    .await
-                    .map_err(|e| self.mask(&e))?,
-                username: None,
-                uris: vec![],
-            }
-        } else {
-            secrets::lookup(&self.rbw, entry, arg("user"), field)
-                .await
-                .map_err(|e| self.mask(&e))?
-        };
+        let secret =
+            { crate::rbw_api::lookup(&self.rbw_api, entry, arg("user"), field, card).await? };
         // Masked from here on, whatever fails later.
         {
             let mut filled = self.filled.lock().unwrap();
