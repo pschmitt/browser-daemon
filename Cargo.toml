@@ -32,6 +32,7 @@ data-encoding = "2"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 sha2 = "0.11"
 psl = "2"
+zeroize = "1"
 libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 flate2 = "1"

@@ -44,6 +44,7 @@ mod profiles;
 mod profiles_api;
 mod proxies;
 mod proxy;
+mod rbw_api;
 mod rec_audio;
 mod rec_export;
 mod recorder;

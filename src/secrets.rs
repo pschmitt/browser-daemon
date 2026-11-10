@@ -111,7 +111,7 @@ pub async fn lookup_card(rbw_bin: &Path, entry: &str, field: &str) -> Result<Str
     pick_card_field(&raw, field)
 }
 
-fn pick_card_field(raw: &Value, field: &str) -> Result<String, String> {
+pub(crate) fn pick_card_field(raw: &Value, field: &str) -> Result<String, String> {
     if raw["data"]["type"] != "Card" {
         return Err("The entry is not a card".into());
     }
