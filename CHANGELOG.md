@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-12
+
 ### Added
 
 * Flight recorder: a session can keep its last seconds of video (60 by
