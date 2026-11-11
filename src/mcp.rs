@@ -103,7 +103,7 @@ pub struct McpArgs {
     #[arg(long)]
     pub allow_share: bool,
 
-    /// Answer browser_take_screenshot with the censored screenshot (passwords, cards, one-time codes, filled inputs and secrets blacked out).
+    /// No uncensored screenshots: browser_take_screenshot_unsafe is not offered (and refused), and shared tabs cannot be shot with `unsafe: true`.
     #[arg(long)]
     pub censor_screenshots: bool,
 
@@ -124,8 +124,8 @@ Never type a password, token or TOTP code yourself: use browser_fill_secret when
 For a passkey sign-in call browser_passkey first; for a CAPTCHA, an approval on another device or \
 anything else only a person may do, call browser_ask_human when it is listed. \
 Label your session with browser_set_topic when you start and when the task changes. \
-Prefer browser_screenshot_censored for screenshots; use browser_take_screenshot only when the \
-censored one gets in the way of the task, as it may show credentials.";
+browser_take_screenshot blacks out credentials; use browser_take_screenshot_unsafe only when \
+that gets in the way of the task.";
 
 /// A node and profile the browser runs on.
 #[derive(Clone)]
@@ -277,7 +277,7 @@ struct State {
     human_input: bool,
     /// browser_share and browser_unshare are offered.
     allow_share: bool,
-    /// browser_take_screenshot is answered by the censored implementation.
+    /// No browser_take_screenshot_unsafe, no `unsafe` shared screenshots.
     censor_screenshots: bool,
     /// The agent's conversation id (from its environment), to label its connections.
     conversation: Option<String>,
@@ -440,6 +440,42 @@ fn allowed(list: &[String]) -> String {
     }
 }
 
+/// The uncensored screenshot: the child's own tool under a name that says so.
+const UNSAFE_SHOT: &str = "browser_take_screenshot_unsafe";
+
+/// The child's tools as the agent sees them: its `browser_take_screenshot` is
+/// offered as `browser_take_screenshot_unsafe` (the censored one of ours has
+/// the plain name), or not at all when uncensored screenshots are switched off.
+fn browser_tools(browser: Vec<Value>, no_unsafe: bool) -> Vec<Value> {
+    browser
+        .into_iter()
+        .filter_map(|mut tool| {
+            if tool["name"] == "browser_take_screenshot" {
+                if no_unsafe {
+                    return None;
+                }
+                tool["name"] = json!(UNSAFE_SHOT);
+                tool["description"] = json!(format!(
+                    "Take an uncensored screenshot of the current page. It may show passwords, card numbers and other credentials; use only when the censored screenshot (browser_take_screenshot) gets in the way of the task. {}",
+                    tool["description"].as_str().unwrap_or_default()
+                ).trim_end().to_string());
+                tool["annotations"]["title"] = json!("Take a screenshot (uncensored, unsafe)");
+                tool["annotations"]["readOnlyHint"] = json!(true);
+                tool["annotations"]["destructiveHint"] = json!(false);
+            }
+            Some(tool)
+        })
+        .collect()
+}
+
+/// A call as the child knows it: the unsafe screenshot is its `browser_take_screenshot`.
+fn child_call_params(mut params: Value) -> Value {
+    if params["name"] == UNSAFE_SHOT {
+        params["name"] = json!("browser_take_screenshot");
+    }
+    params
+}
+
 fn text_result(text: impl Into<String>, error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text.into() }], "isError": error })
 }
@@ -508,7 +544,8 @@ fn own_tools_with(
             "tab": {"type": "integer", "minimum": 0},
             "action": {"type": "string", "enum": ["screenshot", "snapshot", "click", "type", "key", "scroll", "navigate", "back", "forward", "reload", "focus", "close", "cdp", "evaluate"]},
             "params": {"type": "object"},
-            "censor": {"type": "array", "items": {"type": "string", "enum": ["passwords", "cards", "otp", "secrets", "inputs", "emails"]}, "description": "screenshot only: black out these kinds of content (the user's server may force the defaults)."}
+            "censor": {"type": "array", "items": {"type": "string", "enum": ["passwords", "cards", "otp", "secrets", "inputs", "emails"]}, "description": "screenshot only: black out these kinds of content (default: passwords, cards, otp, secrets, inputs; emails is opt-in)."},
+            "unsafe": {"type": "boolean", "description": "screenshot only: do not censor (the image may show passwords, card numbers and other credentials). Use only when the censored screenshot gets in the way of the task; the user's server may refuse it."}
         }, "required": ["browser", "tab", "action"], "additionalProperties": false},
         "annotations": {"title": "Shared browser action", "readOnlyHint": false}
     }));
@@ -538,16 +575,16 @@ fn own_tools_with(
         "annotations": {"title": "Label the session"}
     }));
     tools.push(json!({
-        "name": "browser_screenshot_censored",
-        "description": "Take a screenshot of the page with passwords, card numbers, one-time codes, filled-in inputs and the secrets filled in this session blacked out. Prefer it to browser_take_screenshot whenever the page may show something private. Nothing is returned if the mask cannot be built.",
+        "name": "browser_take_screenshot",
+        "description": "Take a screenshot of the current page with passwords, card numbers, one-time codes, filled-in inputs and the secrets filled in this session blacked out (`censor` picks the kinds; emails are opt-in). Nothing is returned if the mask cannot be built. You can't perform actions based on the screenshot, use browser_snapshot for actions. Only if the blacked-out regions get in the way of the task, browser_take_screenshot_unsafe takes an uncensored one (it may be unavailable).",
         "inputSchema": {"type": "object", "properties": {
-            "fullPage": {"type": "boolean", "description": "The whole scrollable page instead of the viewport (not with target)."},
-            "target": {"type": "string", "description": "Only this element: an element reference from the snapshot or a CSS selector."},
-            "element": {"type": "string", "description": "Human-readable description of the target."},
+            "fullPage": {"type": "boolean", "description": "When true, takes a screenshot of the full scrollable page, instead of the currently visible viewport. Cannot be used with element screenshots."},
+            "target": {"type": "string", "description": "Exact target element reference from the page snapshot, or a unique element selector."},
+            "element": {"type": "string", "description": "Human-readable element description."},
             "type": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format (default png)."},
             "censor": {"type": "array", "items": {"type": "string", "enum": ["passwords", "cards", "otp", "secrets", "inputs", "emails"]}, "description": "What to black out (default: passwords, cards, otp, secrets, inputs; emails is opt-in)."}
         }, "additionalProperties": false},
-        "annotations": {"title": "Censored screenshot"}
+        "annotations": {"title": "Take a screenshot (censored)"}
     }));
     tools.push(json!({
         "name": "browser_live_link",
@@ -889,7 +926,7 @@ impl State {
             !self.allow_cards.is_empty(),
             self.allow_share,
         );
-        tools.extend(browser);
+        tools.extend(browser_tools(browser, self.censor_screenshots));
         tools
     }
 
@@ -960,7 +997,12 @@ impl State {
     }
 
     async fn tools_call_raw(&self, params: Value) -> Rpc {
-        let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let name = name.as_str();
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
         match name {
             "browser_shared_nodes" => Ok(match self.shared_nodes().await {
@@ -1035,10 +1077,11 @@ impl State {
                 Ok(text) => text_result(text, false),
                 Err(e) => text_result(e, true),
             }),
-            "browser_screenshot_censored" => Ok(self.censored_answer(&args).await),
-            "browser_take_screenshot" if self.censor_screenshots => {
-                Ok(self.censored_answer(&args).await)
-            }
+            "browser_take_screenshot" => Ok(self.censored_answer(&args).await),
+            UNSAFE_SHOT if self.censor_screenshots => Ok(text_result(
+                "Uncensored screenshots are switched off on this server (--censor-screenshots): use browser_take_screenshot.",
+                true,
+            )),
             "browser_set_topic" => Ok(match self.set_topic(&args).await {
                 Ok(text) => text_result(text, false),
                 Err(e) => text_result(e, true),
@@ -1066,6 +1109,7 @@ impl State {
                 })
             }
             _ => {
+                let params = child_call_params(params);
                 let is_browser_tabs = name == "browser_tabs";
                 let may_wall = may_hit_wall(name);
                 let child = match self.child_or_default().await {
@@ -1821,12 +1865,13 @@ impl State {
         let mut params = args.get("params").cloned().unwrap_or(json!({}));
         let mut censored = false;
         if action == "screenshot" {
+            let force = shared_screenshot_censored(&args["unsafe"], self.censor_screenshots)?;
             let given = args
                 .get("censor")
                 .filter(|c| !c.is_null())
                 .or(params.get("censor"));
             let filled = self.filled.lock().unwrap().clone();
-            if let Some((cats, secrets)) = shared_censor(given, self.censor_screenshots, &filled)? {
+            if let Some((cats, secrets)) = shared_censor(given, force, &filled)? {
                 params["censor"] = json!(cats);
                 if let Some(secrets) = secrets {
                     params["secrets"] = json!(secrets);
@@ -3182,7 +3227,7 @@ fn apply_hints(tools: &mut [Value]) {
         ("browser_flight_recorder", false, false, false, false),
         ("browser_set_topic", false, false, true, false),
         ("browser_live_link", true, false, true, false),
-        ("browser_screenshot_censored", true, false, true, false),
+        ("browser_take_screenshot", true, false, true, false),
         ("browser_recording", false, false, false, false),
         ("browser_share", false, false, false, true),
         ("browser_unshare", false, true, true, true),
@@ -3542,8 +3587,7 @@ struct CensorArgs {
     png: bool,
 }
 
-/// The arguments of browser_screenshot_censored, or of Playwright MCP's
-/// browser_take_screenshot when `--censor-screenshots` answers that one.
+/// The arguments of browser_take_screenshot (ours, the censored one).
 fn parse_censor_args(args: &Value) -> Result<CensorArgs, String> {
     let cats = match args.get("censor") {
         None | Some(Value::Null) => Censor::DEFAULT.to_vec(),
@@ -3688,6 +3732,19 @@ return 'BDSHOT:' + JSON.stringify({ mime: P.type === 'png' ? 'image/png' : 'imag
 /// What a shared tab's screenshot is asked to hide: the categories (`given`,
 /// plus all defaults when `force`) and, with `secrets` among them, the values
 /// filled in this session. None: no censoring asked for.
+/// Whether a shared tab's screenshot is censored (it is, unless the agent
+/// passes `unsafe: true`); an error when `unsafe` is not allowed.
+fn shared_screenshot_censored(unsafe_arg: &Value, no_unsafe: bool) -> Result<bool, String> {
+    match unsafe_arg {
+        Value::Null | Value::Bool(false) => Ok(true),
+        Value::Bool(true) if no_unsafe => Err(
+            "Uncensored screenshots are switched off on this server (--censor-screenshots): leave out `unsafe`.".into(),
+        ),
+        Value::Bool(true) => Ok(false),
+        _ => Err("`unsafe` is true or false".into()),
+    }
+}
+
 /// Categories and the secrets to hide, for a shared tab's screenshot.
 type SharedCensor = (Vec<&'static str>, Option<Vec<String>>);
 
@@ -4501,10 +4558,93 @@ mod tests {
         let tools = own_tools(&[], &[], false, &[]);
         let t = tools
             .iter()
-            .find(|t| t["name"] == "browser_screenshot_censored")
+            .find(|t| t["name"] == "browser_take_screenshot")
             .unwrap();
         assert_eq!(t["annotations"]["readOnlyHint"], true);
         assert!(t["inputSchema"]["properties"]["censor"].is_object());
+        assert!(t["description"]
+            .as_str()
+            .unwrap()
+            .contains("browser_take_screenshot_unsafe"));
+        assert!(!tools
+            .iter()
+            .any(|t| t["name"] == "browser_screenshot_censored"));
+    }
+
+    fn child_screenshot_tool() -> Vec<Value> {
+        vec![
+            json!({
+                "name": "browser_take_screenshot",
+                "description": "Take a screenshot of the current page.",
+                "inputSchema": {"type": "object", "properties": {"filename": {"type": "string"}}},
+                "annotations": {"title": "Take a screenshot", "readOnlyHint": true, "openWorldHint": true}
+            }),
+            json!({"name": "browser_snapshot"}),
+        ]
+    }
+
+    #[test]
+    fn the_unsafe_screenshot_is_the_childs_tool_unless_switched_off() {
+        let names = |t: &[Value]| -> Vec<String> {
+            t.iter()
+                .map(|t| t["name"].as_str().unwrap().into())
+                .collect()
+        };
+        let on = browser_tools(child_screenshot_tool(), false);
+        assert_eq!(
+            names(&on),
+            ["browser_take_screenshot_unsafe", "browser_snapshot"]
+        );
+        assert!(on[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("may show passwords, card numbers and other credentials"));
+        assert!(on[0]["inputSchema"]["properties"]["filename"].is_object());
+        assert_eq!(on[0]["annotations"]["readOnlyHint"], true);
+        assert_eq!(on[0]["annotations"]["destructiveHint"], false);
+        let off = browser_tools(child_screenshot_tool(), true);
+        assert_eq!(names(&off), ["browser_snapshot"]);
+        // Together with the own tools: the censored name once, the old name never.
+        let own = own_tools(&[], &[], false, &[]);
+        for (flag, unsafe_listed) in [(false, true), (true, false)] {
+            let mut all = names(&own);
+            all.extend(names(&browser_tools(child_screenshot_tool(), flag)));
+            let count = |n: &str| all.iter().filter(|x| *x == n).count();
+            assert_eq!(count("browser_take_screenshot"), 1);
+            assert_eq!(
+                count("browser_take_screenshot_unsafe"),
+                unsafe_listed as usize
+            );
+            assert_eq!(count("browser_screenshot_censored"), 0);
+        }
+    }
+
+    #[test]
+    fn the_unsafe_screenshot_is_called_on_the_child_by_its_own_name() {
+        let p = child_call_params(json!({"name": UNSAFE_SHOT, "arguments": {"fullPage": true}}));
+        assert_eq!(p["name"], "browser_take_screenshot");
+        assert_eq!(p["arguments"]["fullPage"], true);
+        let p = child_call_params(json!({"name": "browser_snapshot"}));
+        assert_eq!(p["name"], "browser_snapshot");
+    }
+
+    #[test]
+    fn shared_screenshots_are_censored_unless_unsafe_and_allowed() {
+        let filled = vec!["SuperSecret123".to_string()];
+        for arg in [Value::Null, json!(false)] {
+            let force = shared_screenshot_censored(&arg, false).unwrap();
+            assert!(force);
+            let (cats, secrets) = shared_censor(None, force, &filled).unwrap().unwrap();
+            assert_eq!(cats, ["passwords", "cards", "otp", "secrets", "inputs"]);
+            assert_eq!(secrets, Some(vec!["SuperSecret123".to_string()]));
+        }
+        let force = shared_screenshot_censored(&json!(true), false).unwrap();
+        assert!(!force);
+        assert_eq!(shared_censor(None, force, &filled), Ok(None));
+        assert!(shared_screenshot_censored(&json!(true), true).is_err());
+        assert_eq!(shared_screenshot_censored(&json!(false), true), Ok(true));
+        assert_eq!(shared_screenshot_censored(&Value::Null, true), Ok(true));
+        assert!(shared_screenshot_censored(&json!("yes"), false).is_err());
     }
 
     #[test]

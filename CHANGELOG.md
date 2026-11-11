@@ -19,9 +19,13 @@
   points to `browser_ask_human`.
 * MCP: `browser_network_har` records the page's traffic to a HAR file with
   credentials, cookies and secret-looking parameters redacted.
-* MCP: `browser_screenshot_censored` blacks out passwords, card and one-time-code
-  fields, filled inputs and filled vault secrets; `--censor-screenshots` makes
-  every screenshot censored, shared desktop-browser tabs included.
+* MCP: `browser_take_screenshot` is now the censored screenshot: it blacks out
+  passwords, card and one-time-code fields, filled inputs and filled vault
+  secrets (`censor` picks the categories). The raw Playwright screenshot is
+  `browser_take_screenshot_unsafe`. Shared desktop-browser tabs are censored
+  unless `browser_shared_command` passes `unsafe: true`. `--censor-screenshots`
+  removes the unsafe ways: the unsafe tool is not offered and `unsafe: true` is
+  refused.
 * MCP: `browser_set_topic` (replaces the `browser-agent-topic` script),
   `browser_live_link`, `browser_recording`, and with `--allow-share`
   `browser_share` and `browser_unshare` for public links. Every own tool has
