@@ -39,7 +39,10 @@ pub async fn bridge_websockets(
     // connected (see downloads.rs).
     downloads: Option<crate::downloads::Claim>,
     ownership: Option<(Arc<crate::clients::Clients>, u64)>,
+    // Chromium clients that opted in (`human_input=1`): see human_input.rs.
+    human_input: bool,
 ) {
+    let mut human = human_input.then(crate::human_input::HumanInput::new);
     let downloads = std::sync::Mutex::new(downloads);
     let (client_tx, mut client_rx) = client_ws.split();
     let client_tx = tokio::sync::Mutex::new(client_tx);
@@ -94,6 +97,25 @@ pub async fn bridge_websockets(
                     break;
                 }
             };
+            // Input commands of a human-input client go out as a timed series; the
+            // loop waits for it, so later messages queue behind it.
+            if let (Some(h), ServerMsg::Text(text)) = (human.as_mut(), &server_msg) {
+                if let Some(steps) = h.plan(text.as_str()) {
+                    let mut failed = false;
+                    for step in steps {
+                        tokio::time::sleep(step.delay).await;
+                        if let Err(e) = server_tx.send(ServerMsg::Text(step.text.into())).await {
+                            debug!(error = %e, "Forwarding to backend failed");
+                            failed = true;
+                            break;
+                        }
+                    }
+                    if failed {
+                        break;
+                    }
+                    continue;
+                }
+            }
             if let Err(e) = server_tx.send(server_msg).await {
                 debug!(error = %e, "Forwarding to backend failed");
                 break;
@@ -106,6 +128,15 @@ pub async fn bridge_websockets(
         let current_title = initial_title;
 
         while let Some(Ok(msg)) = server_rx.next().await {
+            // Answers to the input messages injected for human_input are not the client's.
+            if let (true, ServerMsg::Text(text)) = (human_input, &msg) {
+                if crate::human_input::is_injected_response(text.as_str()) {
+                    if text.contains("\"error\"") {
+                        debug!(response = %text.as_str(), "Injected input message failed");
+                    }
+                    continue;
+                }
+            }
             if let (Some((clients, client)), ServerMsg::Text(text)) = (&ownership, &msg) {
                 ownership_tap
                     .lock()

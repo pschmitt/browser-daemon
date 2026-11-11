@@ -3049,6 +3049,10 @@ function sessionSheetSpec(s) {
       others.length ? { icon: 'users', label: plural(others.length, 'automation client'), more: true, run: () => showClientDetails(s) }
         : (!(s.clients || []).length && s.client_count ? { icon: 'users', label: plural(s.client_count, 'automation client') } : null),
       { label: 'Session' },
+      s.flight_recorder
+        ? { icon: 'rec', label: `Save last ${flightSpan(s.flight_recorder.seconds)}`, sub: 'Flight recorder: keeps the end of the video in memory', run: () => flightRecorder(s, 'save') }
+        : { icon: 'rec', label: 'Flight recorder', sub: 'Keep the last minute of video in memory', run: () => flightRecorder(s, 'start') },
+      s.flight_recorder && { icon: 'stop', label: 'Stop flight recorder', run: () => flightRecorder(s, 'stop') },
       { icon: 'tabs', label: 'Tabs and details', meta: plural(pagesOf(s).length, 'tab'), more: true, run: () => showSessionDetails(s) },
       { icon: 'gear', label: 'Settings', meta: settingsMeta, more: true, run: () => openSessionSettings(s) },
       { icon: 'edit', label: 'Rename', run: () => renameSession(s) },
@@ -5510,6 +5514,14 @@ $('recordStop').addEventListener('click', () => {
   if (s?.is_recording) toggleRecording(s);
 });
 $('recordModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeModal('recordModal'); });
+// The flight recorder keeps the last seconds of a session's video in memory;
+// saving makes an ordinary recording of them.
+const flightSpan = (n) => (n % 60 === 0 ? (n === 60 ? 'minute' : `${n / 60} minutes`) : `${n} seconds`);
+function flightRecorder(s, action) {
+  const text = { start: 'Flight recorder on', stop: 'Flight recorder off', save: 'Saved under Recordings' }[action];
+  return act({ start: 'Starting the flight recorder', stop: 'Stopping the flight recorder', save: 'Saving the flight recorder' }[action],
+    () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/flight-recorder`), { action }), text);
+}
 function toggleRecording(s, audio) {
   const path = `/sessions/${enc(s.id)}/${s.is_recording ? 'stop-record' : 'record'}${!s.is_recording && audio !== undefined ? `?audio=${audio}` : ''}`;
   act(s.is_recording ? 'Stopping recording' : 'Starting recording', () => request('POST', api(s.node_name, path)),

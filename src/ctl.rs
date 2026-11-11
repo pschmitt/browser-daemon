@@ -806,6 +806,44 @@ pub async fn session(args: SessionArgs) -> R<()> {
             let v = c.call(c.req(Method::POST, &path)).await?;
             done(&c, v, verb);
         }
+        SessionCmd::FlightRecorder {
+            session,
+            action,
+            seconds,
+            node,
+        } => {
+            let s = c.session(&session, node.as_deref())?;
+            let verb = match action {
+                FlightAction::Start => "start",
+                FlightAction::Stop => "stop",
+                FlightAction::Status => "status",
+                FlightAction::Save => "save",
+            };
+            let mut body = json!({ "action": verb });
+            if let (FlightAction::Start, Some(n)) = (action, seconds) {
+                body["seconds"] = json!(n);
+            }
+            let path = c.api(
+                &s.node_name,
+                &format!("/sessions/{}/flight-recorder", s.session.id),
+            );
+            let v = c.call(c.req(Method::POST, &path).json(&body)).await?;
+            if c.json {
+                c.print_json(&v);
+            } else if v["active"].as_bool() == Some(true) {
+                let saved = v["recording_id"]
+                    .as_str()
+                    .map(|id| format!(", saved as recording {id}"))
+                    .unwrap_or_default();
+                println!(
+                    "flight recorder on: last {}s, {:.1}s buffered{saved}",
+                    v["seconds"],
+                    v["buffered_secs"].as_f64().unwrap_or(0.0)
+                );
+            } else {
+                println!("flight recorder off");
+            }
+        }
         SessionCmd::Tabs { session, node } => {
             let s = c.session(&session, node.as_deref())?;
             let tabs: Vec<_> =

@@ -9,6 +9,15 @@
 - `browser_passkey` (only with `--allow-passkey`): sign in with a passkey from the vault. See [Passkeys](#passkeys-browser_passkey).
 - `browser_ask_human` (only with `--ask-human-cmd`): ask the user to do something only a person may do, in the live view of the agent's own page. See [Asking the user](#asking-the-user-browser_ask_human).
 - `browser_export_auth` and `browser_fetch` (only with `--allow-export`): hand the login of a page (cookies, storage values) to the agent's other tools, or use it for one HTTP request, without the agent seeing it. See [Logins](#logins-browser_export_auth-and-browser_fetch).
+- `browser_network_har`: record the traffic of the browser and save it as a HAR file. See [Network recording](#network-recording-browser_network_har).
+- `browser_flight_recorder`: keep a rolling video of the last seconds of the browser and save it as a recording. See [Flight recorder](#flight-recorder-browser_flight_recorder).
+- `browser_screenshot_censored`: a screenshot with passwords, card fields, one-time codes, filled inputs and filled secrets blacked out. See [Censored screenshots](#censored-screenshots-browser_screenshot_censored).
+- `browser_set_topic`: label this conversation's browser sessions on the dashboard. See [Session label](#session-label-browser_set_topic).
+- `browser_live_link`: the address of the live view of the agent's current page, the same one `browser_ask_human` sends. Read-only.
+- `browser_recording`: record the agent's own session (`action`: `start`, `stop`, `status`); the answer gives the recording id. See [Recording and sharing](#recording-and-sharing).
+- `browser_share` and `browser_unshare` (only with `--allow-share`): make a public link to the agent's session or to a recording, and end it. See [Recording and sharing](#recording-and-sharing).
+
+Other options: `--censor-screenshots` (the child's `browser_take_screenshot` is answered by the censored screenshot, so an agent cannot take an uncensored one), `--challenge-wait SECS` (default 15) sets how long to wait for a [bot wall](#bot-walls) to clear, `--human-input` asks the node for [human-like input](#human-like-input).
 
 Without a choice the agent gets a throwaway browser on the node with the most room. Profiles keep whatever they are signed in to, so agents may only open the ones named with `--allow-profile` (repeatable; `*` allows every profile); anything else is refused. `--playwright-cmd` names the program that runs Playwright MCP, called as `PROGRAM ENDPOINT OUTPUT_DIR`; `--url`, `--secret-file` as for the other commands.
 
@@ -81,3 +90,61 @@ Either works on the agent's own page, or on a shared browser's tab (`browser`, `
 The node serves this as `POST /api/pages/{page}/auth` (a session's page; Chromium over CDP, Firefox over BiDi) and `POST /api/extension/nodes/{id}/tabs/{tab}/auth` (a shared tab with control; the browser extension reads them, Firefox with its `cookies` permission), with `{urls, storage}`; both need the cluster secret and log nothing of the values. The shared-browser command route never takes the extension's `authExport` action, so `browser_shared_command` cannot read them.
 
 What this does not protect: a file the agent's shell can read, it can also print. An exported session cookie is the account, often without a second factor: allow only sites agents need, keep the files short-lived, and treat one that reaches a transcript as leaked (sign that session out).
+
+## Bot walls
+
+After `browser_navigate`, `browser_navigate_back`, `browser_click` and `browser_press_key` the server checks whether the page is a bot wall: Cloudflare, Akamai, DataDome, PerimeterX (HUMAN), Imperva (Incapsula), AWS WAF, a page that is only a reCAPTCHA or hCaptcha, or a generic "Access denied" or 403 page. The check is conservative: a form that embeds a CAPTCHA or a challenge script is not a wall; a strong marker (or a weak one on a page with almost no text) is. It runs a small script in the page and says nothing when the script fails.
+
+When a wall is found, the server polls for up to `--challenge-wait` seconds (default 15; `0` only reports) for it to clear by itself, as many non-interactive checks do. The answer then ends with a note that the check cleared, or with a note that names the vendor, tells the agent not to try to solve it and, if `--ask-human-cmd` is set, to call `browser_ask_human`. The call never blocks longer than the wait.
+
+## Network recording: `browser_network_har`
+
+`browser_network_har` takes `action`: `start`, `stop`, `status` or `cancel`. `start` records the requests of all tabs of the browser; `stop` writes a HAR 1.2 file to `har/<timestamp>-<id>.har` in the output directory (`--output-dir`) and returns its path and the number of requests.
+
+- The recording runs in Playwright MCP: listeners on the browser context keep the entries on the context object, which stays the same between `browser_run_code_unsafe` calls. Switching browsers (`browser_use`) loses a recording.
+- Entries have timings where Playwright knows them. Text response bodies (text, JSON, XML, JavaScript, form data) are kept up to 256 KiB each and 16 MiB in all; at most 2000 requests are kept, the rest are counted. Posted bodies are not recorded.
+- Credentials are replaced with `[redacted]`: the values of `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, and any header whose name contains `token`, `secret`, `auth`, `api-key`, `csrf`, `xsrf` or `session`; the values of cookies; query parameters whose names contain `token`, `code`, `pass`, `key`, `secret`, `sig`, `auth`, `session`, `jwt`, `otp` or `credential`; secret-looking fields of JSON bodies. JSON that cannot be parsed (cut off at the cap) is left out. HTTP/2 pseudo-headers are dropped. Values filled with `browser_fill_secret` are masked like everywhere else. Other bodies (HTML, scripts) are kept as they are: treat the file as sensitive.
+- The file and its directory are readable by the user only (0600, 0700).
+
+## Flight recorder: `browser_flight_recorder`
+
+`browser_flight_recorder` takes `action`: `start` (optional `seconds` to keep, default 60), `stop`, `status` or `save`. It calls `POST /api/sessions/{id}/flight-recorder` on the node of the agent's page, which buffers the session's video. `save` stores the buffered seconds as a recording and the answer gives its id and a link to it in the dashboard (`<node>/#recordings/<id>`), so the user can watch what just went wrong.
+
+## Human-like input
+
+`--human-input` adds `human_input=1` to the CDP address of the node's `/chromium` endpoint. The node's CDP proxy then makes the agent's mouse and keyboard input human-like.
+
+## Session label: `browser_set_topic`
+
+The dashboard shows what each agent connection is doing. `browser_set_topic` (`topic`, a few words; empty clears it) sets that label for every connection of the agent's conversation, so agents need no shell script. The conversation id is read once at startup from `CLAUDE_CODE_SESSION_ID`, else `CODEX_THREAD_ID`, else `CODEX_SESSION_ID`; without one the tool says so. The label goes to `POST /api/agent-topic` on every online node (no secret is sent) and the answer counts the connections labelled. A label only sticks to connected clients: when no browser is connected yet, the topic is kept and applied after the first browser tool call, and again after each browser switch.
+
+## Recording and sharing
+
+`browser_recording` starts and stops an ordinary recording of the agent's own session (`POST /api/sessions/{id}/record`, `.../stop-record`) and says whether one is running; the answer names the recording id and the dashboard link (`<node>/#recordings/<id>`). Recordings cannot be named.
+
+`browser_share` and `browser_unshare` exist only with `--allow-share`, as a public link needs the user's consent in advance. `browser_share` makes a [public link](sharing.md) (`POST /api/shares`) to the agent's session, view-only unless `control: true` (Chromium), or to a recording (`recording_id`). The link works for anyone without signing in, so the description says so. `expires` is a duration (`30m`, `1h`, `2d`; default 1 hour, at least a minute, at most 7 days): links that never expire cannot be made here. `browser_unshare` (`share_id`) ends a link; it only ends links made by this server, never the user's or another client's.
+
+## Tool definitions
+
+Every tool of the server has a title and the hints `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`, so clients can decide what needs a confirmation (for example `browser_use` and `browser_fetch` are marked destructive, `browser_status` and `browser_live_link` read-only). Input schemas list `required` fields and refuse unknown ones. Failures of a tool, including a browser that did not answer, come back as results with `isError` and a message to act on; only unknown tools and malformed arguments are protocol errors.
+
+## Censored screenshots: `browser_screenshot_censored`
+
+The visual counterpart of the redacted HAR. Arguments: `fullPage`, `target` (an element reference from the snapshot or a CSS selector; `element` describes it), `type` (`png`, the default, or `jpeg`) and `censor`, a list of categories (default: all but `emails`):
+
+| Category | What is blacked out |
+| --- | --- |
+| `passwords` | `input[type=password]` |
+| `cards` | `autocomplete=cc-*`, inputs whose name or id says card, cc number, cvc, cvv, expiry or security code, and every cross-origin iframe (payment frames) |
+| `otp` | `autocomplete=one-time-code`, inputs named otp, totp, 2fa, mfa, one-time or `code` |
+| `secrets` | every element whose text or value holds a value filled in this session with `browser_fill_secret`, `browser_fill_card` or used by `browser_export_auth` (also as the encodings the other masks know) |
+| `inputs` | text inputs, textareas and editable elements that have a value |
+| `emails` | elements whose text, or inputs whose value, hold an email address (opt-in) |
+
+The server marks the elements in the page and every same-origin and cross-origin frame, takes the screenshot with Playwright's `mask` option (`maskColor` black) and removes the marks again. The answer is an image, as Playwright MCP's own screenshot, and a line saying how many regions were blacked out. The secrets are not put into any script, as Playwright MCP echoes scripts: a first script returns the page's texts, the server looks for the secrets in them, and the second script only gets the numbers of the elements to mask.
+
+It fails closed: when the mask cannot be built (a script error, an unreadable frame) the answer is an error and no screenshot. What it does not cover: Shadow DOM, canvas and images with text, text the page shows in other forms than it was filled in, and secrets the agent typed with `browser_type`. With `--censor-screenshots` the agent can still reach the page with other tools, so this limits accidents, not an agent bent on reading a secret.
+
+### Shared browsers
+
+`browser_shared_command` with `action: screenshot` takes the same `censor` list (also as `params.censor`). The extension of the user's browser blacks out the content with overlays; the server sends it the categories and, for `secrets`, the values filled in this session (`params.secrets`: they go to the user's own browser, which has them typed in already). With `--censor-screenshots` the default categories are always added to a shared screenshot, whatever the agent asks for. If the extension's reply is not marked `censored: true` (an old extension), the image is discarded and the agent gets an error that tells the user to update the extension. The extension fails closed as well.

@@ -165,14 +165,49 @@ never shared. Sharing
 belongs to the tab and follows it across navigations and sites. While a shared
 tab shows a page that must never be shared, it is paused: unlisted, its live
 views closed, nothing read from it or sent to it, until it shows a shareable
-page again. The toolbar badge counts
-shared tabs: red while any may be controlled, green when all are view only.
+page again. The toolbar icon's dot shows the
+connection: orange while a client views, red while it may control.
 
 **Stop sharing**, **Ctrl+Shift+Period**, expiry, socket loss, browser restart,
 remote disconnect, and Chromium's **Cancel debugging** bar all revoke access.
 Temporary browsers require another pairing code or dashboard approval to reconnect.
 Remembered browsers use their revocable key. Tab grants and pairing codes are
 never restored from persistent storage.
+
+## Per tab: badge, toggle and agent tabs
+
+The toolbar badge is per tab. **ON** marks a shared tab: red with remote
+control, green view only. **RUN** replaces it while a client command runs on
+the tab. It disappears when the tab is not shared. There is no WAIT: the
+daemon never tells the extension that a client waits for a person.
+
+To share or take back the tab in front without opening the popup, use the
+**Share this tab with browser-daemon** / **Stop sharing this tab** entry in the
+page menu (Firefox: tab menu too) or the toolbar button's menu, the shortcut
+**Ctrl+Shift+Comma** (change it in the browser's shortcut settings), or the
+**This tab** switch at the top of the popup. Taking a tab back ends commands
+still running on it (the client gets an error at once) and detaches the debugger.
+These apply to the one tab, also under **Share all tabs**.
+
+Tabs a client opens (the `open` action, and popups or new tabs of such a tab)
+are agent tabs, not the owner's:
+
+* They open in the background and never take focus.
+* **Group agent tabs** (on): they go into one collapsed tab group, "Agents", per
+  window, placed at the start of the tab strip after pinned tabs. A tab you
+  drag out of the group, or unshare, stays out and is yours from then on.
+  Needs the tab groups API (Chromium 89+, Firefox 139+; the Firefox build requires
+  142). Without it (Firefox for Android) tabs stay ungrouped.
+* **Close idle agent tabs**: after 10 (default), 30 or 60 minutes, or never, an
+  agent tab that no client command, live view, recording or sound capture, and
+  you (the tab in front counts), have touched is closed. A tab is never closed
+  while a command runs on it. Your own tabs, shared or not, are never closed.
+  A check runs every minute; after the machine wakes from suspend the idle
+  time starts again.
+
+Both settings are in the popup's Settings and saved in the browser. Managed
+policy covers only the allowed daemons, so these stay a local choice. Which
+tabs are agent tabs is kept in `storage.session` and lost with the browser session.
 
 ## Firefox trusted input
 
@@ -266,6 +301,38 @@ supports `cdp {method, params}` for explicitly allowed Runtime, DOM, Input,
 Accessibility and page-inspection methods. Firefox's companion adds
 `evaluate {script, args?}`; `script` is a JavaScript function body, e.g.
 `return document.title;`.
+
+### Censored screenshots
+
+`screenshot` takes optional `params.censor`, a list of categories, and
+`params.secrets`, a list of strings that must not show. With a non-empty
+`censor`, the extension draws opaque black boxes over the matches in the page,
+captures, and removes the boxes again (also after a failure; the page itself
+removes them after 15 seconds if the extension stops). Works on view-only tabs.
+
+* `passwords`: password fields. `cards`: `autocomplete=cc-*` fields, fields whose
+  name, id, placeholder or label looks like a card number, CVC or expiry, and
+  every iframe of another origin (whole box). `otp`: `autocomplete=one-time-code`
+  and fields named like otp, totp, code, 2fa, mfa. `inputs`: every text field,
+  text area and editable area that has content. `secrets`: fields and text that
+  contain one of `params.secrets` (only strings of 4 to 1024 characters). `emails`:
+  text and field values that look like an email address.
+* Matching text is covered by the box of its text node, so a text node that
+  shares a line with other words is masked as a whole.
+* Boxes sit in a closed shadow root, on top of everything including modal
+  dialogs, and are drawn in every frame the extension can script, each in its own
+  frame. Open shadow roots are searched.
+* Fails closed: an unknown category, a page the extension cannot script (browser
+  pages, Firefox without site access) or a frame it could not reach gives the error
+  `Could not censor this page; no screenshot taken.` and no image.
+* The reply is the usual screenshot plus `censored: true` and `masked`, the number
+  of boxes. Secrets never appear in replies, errors or the connection history.
+
+Limits: text drawn on a canvas or in an image, closed shadow roots, text split
+over several elements (a secret broken by markup), content that moves between
+the boxes being drawn and the capture, and secrets that differ in case or
+spacing are not found. Fields in other origins' frames are only found where
+the extension may script that frame; the frame's box is masked for `cards` only.
 
 API: `POST /api/extension/pair`, `GET /api/extension/nodes`,
 `DELETE /api/extension/nodes/<browser>`, and

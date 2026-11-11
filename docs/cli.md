@@ -4,7 +4,7 @@ The `browser-daemon` binary is the daemon (`run`, what the systemd service start
 
 ```text
 browser-daemon run [OPTIONS]              the daemon (see `run --help`)
-browser-daemon session list|show|new|delete (stop)|stop-all|rename|proxy|idle-timeout|record|tabs|open|close-tab|save-as-profile|url|downloads|download
+browser-daemon session list|show|new|delete (stop)|stop-all|rename|proxy|idle-timeout|record|flight-recorder|tabs|open|close-tab|save-as-profile|url|downloads|download
 browser-daemon profile list|show|new|set|clone|delete (rm)|clear|backup|export|import|transfer
 browser-daemon profile backup list|create|restore|rm PROFILE
 browser-daemon recording list|show|favorite|unfavorite|delete (rm)|merge|export|vacuum
@@ -24,6 +24,7 @@ browser-daemon session list
 browser-daemon session new --engine firefox --profile hrworks --node rofl-14   # prints the id, WebSocket URL on stderr
 browser-daemon session open quiet-otter https://example.org/
 browser-daemon session record quiet-otter pause
+browser-daemon session flight-recorder quiet-otter start --seconds 120   # then: status, save, stop
 browser-daemon session stop-all --node rofl-13 -y
 browser-daemon profile backup create hrworks before-cleanup
 browser-daemon profile transfer hrworks --to rofl-14 --move
@@ -88,6 +89,8 @@ Options:
           Ad blocker add-on (uBlock Origin .xpi) for Firefox
       --adblock-default <ADBLOCK_DEFAULT>
           Block ads in new sessions unless they opt out [default: true] [possible values: true, false]
+      --human-input-default <HUMAN_INPUT_DEFAULT>
+          Reshape the input of /chromium clients to look human unless they opt out (human_input=0) [default: false] [possible values: true, false]
       --proxies-file <PROXIES_FILE>
           JSON list of upstream proxies sessions can use: [{"id", "name", "url"}]
       --extension-dir <EXTENSION_DIRS>

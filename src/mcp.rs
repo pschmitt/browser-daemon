@@ -94,6 +94,22 @@ pub struct McpArgs {
     /// Where Playwright MCP keeps its output (default: ~/.cache/playwright-mcp/browser).
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
+
+    /// Seconds to wait for a bot wall (Cloudflare and the like) to clear by itself after a navigation or click; 0 only reports it.
+    #[arg(long, default_value_t = 15)]
+    pub challenge_wait: u64,
+
+    /// Let agents make public links to their session or a recording with browser_share (off by default).
+    #[arg(long)]
+    pub allow_share: bool,
+
+    /// Answer browser_take_screenshot with the censored screenshot (passwords, cards, one-time codes, filled inputs and secrets blacked out).
+    #[arg(long)]
+    pub censor_screenshots: bool,
+
+    /// Ask the node to make the agent's mouse and keyboard input human-like (`human_input=1` on the CDP address).
+    #[arg(long)]
+    pub human_input: bool,
 }
 
 const INSTRUCTIONS: &str = "Browsers run on a mesh of nodes. Without a choice you get a \
@@ -106,7 +122,9 @@ For the user's own running browsers, browser_shared_nodes lists temporary extens
 and browser_shared_command acts on their explicitly shared tabs; browser_use selects managed browsers. \
 Never type a password, token or TOTP code yourself: use browser_fill_secret when it is listed. \
 For a passkey sign-in call browser_passkey first; for a CAPTCHA, an approval on another device or \
-anything else only a person may do, call browser_ask_human when it is listed.";
+anything else only a person may do, call browser_ask_human when it is listed. \
+Label your session with browser_set_topic when you start and when the task changes. \
+Take screenshots with browser_screenshot_censored when the page may show secrets.";
 
 /// A node and profile the browser runs on.
 #[derive(Clone)]
@@ -129,7 +147,7 @@ impl Target {
 }
 
 /// The CDP endpoint of a target, with the auth token when there is one.
-fn cdp_endpoint(target: &Target, token: Option<&str>) -> String {
+fn cdp_endpoint(target: &Target, token: Option<&str>, human_input: bool) -> String {
     let mut query = Vec::new();
     if let Some(id) = &target.session_id {
         query.push(format!("session_id={}", url_component(id)));
@@ -145,6 +163,9 @@ fn cdp_endpoint(target: &Target, token: Option<&str>) -> String {
             "auth={}",
             url::form_urlencoded::byte_serialize(t.as_bytes()).collect::<String>()
         ));
+    }
+    if human_input {
+        query.push("human_input=1".to_string());
     }
     let query = if query.is_empty() {
         String::new()
@@ -249,6 +270,22 @@ struct State {
     filled: std::sync::Mutex<Vec<String>>,
     cmd: PathBuf,
     out_dir: PathBuf,
+    /// Seconds to wait for a bot wall to clear (0: only report it).
+    challenge_wait: u64,
+    /// Ask the node for human-like input (`human_input=1` on the CDP address).
+    human_input: bool,
+    /// browser_share and browser_unshare are offered.
+    allow_share: bool,
+    /// browser_take_screenshot is answered by the censored implementation.
+    censor_screenshots: bool,
+    /// The agent's conversation id (from its environment), to label its connections.
+    conversation: Option<String>,
+    /// What the agent said it is doing (browser_set_topic).
+    topic: std::sync::Mutex<Option<String>>,
+    /// The topic reached a connected browser (else it is applied after the next tool call).
+    topic_applied: AtomicBool,
+    /// Public links made here: (share id, node name, node address).
+    shares: std::sync::Mutex<Vec<(String, String, String)>>,
     version: Mutex<String>,
     /// What the agent's MCP client calls itself (`clientInfo.name` of its initialize).
     client_name: Mutex<String>,
@@ -314,6 +351,14 @@ pub async fn run(args: McpArgs) -> R<()> {
         filled: std::sync::Mutex::new(Vec::new()),
         cmd: args.playwright_cmd,
         out_dir,
+        challenge_wait: args.challenge_wait,
+        human_input: args.human_input,
+        allow_share: args.allow_share,
+        censor_screenshots: args.censor_screenshots,
+        conversation: conversation_id(|k| std::env::var(k).ok()),
+        topic: std::sync::Mutex::new(None),
+        topic_applied: AtomicBool::new(false),
+        shares: std::sync::Mutex::new(Vec::new()),
         version: Mutex::new("2025-06-18".into()),
         client_name: Mutex::new(String::new()),
         child: Mutex::new(None),
@@ -398,11 +443,23 @@ fn text_result(text: impl Into<String>, error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text.into() }], "isError": error })
 }
 
+#[cfg(test)]
 fn own_tools(
     secrets: &[String],
     passkeys: &[String],
     ask_human: bool,
     exports: &[String],
+) -> Vec<Value> {
+    own_tools_with(secrets, passkeys, ask_human, exports, false, false)
+}
+
+fn own_tools_with(
+    secrets: &[String],
+    passkeys: &[String],
+    ask_human: bool,
+    exports: &[String],
+    cards: bool,
+    share: bool,
 ) -> Vec<Value> {
     let mut tools = vec![
         json!({
@@ -449,9 +506,61 @@ fn own_tools(
             "browser": {"type": "string", "description": "Temporary browser UUID."},
             "tab": {"type": "integer", "minimum": 0},
             "action": {"type": "string", "enum": ["screenshot", "snapshot", "click", "type", "key", "scroll", "navigate", "back", "forward", "reload", "focus", "close", "cdp", "evaluate"]},
-            "params": {"type": "object"}
+            "params": {"type": "object"},
+            "censor": {"type": "array", "items": {"type": "string", "enum": ["passwords", "cards", "otp", "secrets", "inputs", "emails"]}, "description": "screenshot only: black out these kinds of content (the user's server may force the defaults)."}
         }, "required": ["browser", "tab", "action"], "additionalProperties": false},
         "annotations": {"title": "Shared browser action", "readOnlyHint": false}
+    }));
+    tools.push(json!({
+        "name": "browser_network_har",
+        "description": "Record the network traffic of this browser (all its tabs) and save it as a HAR 1.2 file, e.g. to see which requests a page makes or why one fails. `start` begins recording, `stop` writes the file and returns its path and the number of requests, `status` says whether it records, `cancel` discards it. Credentials (Authorization and Cookie headers, tokens in query parameters, secret fields of JSON bodies) are replaced with [redacted]; text response bodies are kept up to 256 KiB each, posted bodies are not. Switching browsers (browser_use) loses a running recording.",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["start", "stop", "status", "cancel"], "description": "What to do (default status)."}
+        }, "additionalProperties": false},
+        "annotations": {"title": "Record network traffic (HAR)", "readOnlyHint": false}
+    }));
+    tools.push(json!({
+        "name": "browser_flight_recorder",
+        "description": "Keep a rolling video of the last seconds of this browser, so that something that just went wrong can be shown to the user afterwards. `start` begins buffering (`seconds`: how much to keep, default 60), `stop` stops it, `status` says whether it runs, `save` stores the buffered seconds as a recording the user can watch in the dashboard and returns its id.",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["start", "stop", "status", "save"], "description": "What to do (default status)."},
+            "seconds": {"type": "integer", "minimum": 1, "description": "start only: how many seconds to keep (default 60)."}
+        }, "additionalProperties": false},
+        "annotations": {"title": "Flight recorder"}
+    }));
+    tools.push(json!({
+        "name": "browser_set_topic",
+        "description": "Label this conversation's browser sessions on the dashboard with what you are doing, so the user can tell agents apart. Call it when you start and when the task changes; the label sticks to connected browsers and is applied to the first one if none is open yet.",
+        "inputSchema": {"type": "object", "properties": {
+            "topic": {"type": "string", "description": "A few words, e.g. \"Check the invoice on the supplier portal\". Empty clears the label."}
+        }, "required": ["topic"], "additionalProperties": false},
+        "annotations": {"title": "Label the session"}
+    }));
+    tools.push(json!({
+        "name": "browser_screenshot_censored",
+        "description": "Take a screenshot of the page with passwords, card numbers, one-time codes, filled-in inputs and the secrets filled in this session blacked out. Prefer it to browser_take_screenshot whenever the page may show something private. Nothing is returned if the mask cannot be built.",
+        "inputSchema": {"type": "object", "properties": {
+            "fullPage": {"type": "boolean", "description": "The whole scrollable page instead of the viewport (not with target)."},
+            "target": {"type": "string", "description": "Only this element: an element reference from the snapshot or a CSS selector."},
+            "element": {"type": "string", "description": "Human-readable description of the target."},
+            "type": {"type": "string", "enum": ["png", "jpeg"], "description": "Image format (default png)."},
+            "censor": {"type": "array", "items": {"type": "string", "enum": ["passwords", "cards", "otp", "secrets", "inputs", "emails"]}, "description": "What to black out (default: passwords, cards, otp, secrets, inputs; emails is opt-in)."}
+        }, "additionalProperties": false},
+        "annotations": {"title": "Censored screenshot"}
+    }));
+    tools.push(json!({
+        "name": "browser_live_link",
+        "description": "The address of the live view of your current page, where the user can watch and take over. Use it instead of guessing node addresses.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
+        "annotations": {"title": "Live view link"}
+    }));
+    tools.push(json!({
+        "name": "browser_recording",
+        "description": "Record a video of your own browser session, to show the user afterwards. `start` begins, `stop` ends and returns the recording id, `status` says whether one is running.",
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["start", "stop", "status"], "description": "What to do (default status)."}
+        }, "additionalProperties": false},
+        "annotations": {"title": "Record the session"}
     }));
     if !secrets.is_empty() {
         tools.push(json!({
@@ -559,6 +668,40 @@ fn own_tools(
             "annotations": { "title": "Ask the user for help", "readOnlyHint": false }
         }));
     }
+    if cards {
+        tools.push(json!({
+            "name": "browser_fill_card",
+            "description": "Fill an authorized vault card field into an authorized payment iframe without revealing its value. Never submits the payment.",
+            "inputSchema": {"type":"object", "properties": {
+                "entry": {"type":"string", "description": "Name of the vault card entry."},
+                "field": {"type":"string", "enum":["number", "exp_month", "exp_year", "exp_date", "cvv"], "description":"Use exp_date for a combined expiration field (MM/YY)."},
+                "target": {"type":"string", "description": "The field to fill: an element reference from the page snapshot or a unique selector."},
+                "element": {"type":"string", "description": "Human-readable description of that field."}
+            }, "required":["entry", "field", "target"], "additionalProperties":false},
+            "annotations": {"title":"Fill a card field"}
+        }));
+    }
+    if share {
+        tools.push(json!({
+            "name": "browser_share",
+            "description": "Make a PUBLIC link to your browser session or to a recording: anyone who has the link can see it, without signing in. View-only unless `control` is true. The link expires (default 1 hour, at most 7 days). Only use it when the user asked you to share something.",
+            "inputSchema": {"type": "object", "properties": {
+                "recording_id": {"type": "string", "description": "Share this recording instead of your session."},
+                "control": {"type": "boolean", "description": "Session only: let the viewer click and type too (Chromium). Default false."},
+                "expires": {"type": "string", "description": "How long the link works: 30m, 1h (default), 2d ... at most 7d."}
+            }, "additionalProperties": false},
+            "annotations": {"title": "Make a public link"}
+        }));
+        tools.push(json!({
+            "name": "browser_unshare",
+            "description": "End a public link made with browser_share, so it stops working at once.",
+            "inputSchema": {"type": "object", "properties": {
+                "share_id": {"type": "string", "description": "The share id browser_share returned."}
+            }, "required": ["share_id"], "additionalProperties": false},
+            "annotations": {"title": "End a public link"}
+        }));
+    }
+    apply_hints(&mut tools);
     tools
 }
 
@@ -737,25 +880,14 @@ impl State {
     }
 
     fn all_tools(&self, browser: Vec<Value>) -> Vec<Value> {
-        let mut tools = own_tools(
+        let mut tools = own_tools_with(
             &self.allow_secrets,
             &self.allow_passkeys,
             self.ask_human_cmd.is_some(),
             &self.allow_exports,
+            !self.allow_cards.is_empty(),
+            self.allow_share,
         );
-        if !self.allow_cards.is_empty() {
-            tools.push(json!({
-                "name": "browser_fill_card",
-                "description": "Fill an authorized RBW card field into an authorized payment iframe without revealing its value. Never submits payment.",
-                "inputSchema": {"type":"object", "properties": {
-                    "entry": {"type":"string"},
-                    "field": {"type":"string", "enum":["number", "exp_month", "exp_year", "exp_date", "cvv"], "description":"Use exp_date for a combined expiration field (MM/YY)."},
-                    "target": {"type":"string"},
-                    "element": {"type":"string"}
-                }, "required":["entry", "field", "target"], "additionalProperties":false},
-                "annotations": {"title":"Fill a card field", "readOnlyHint":false}
-            }));
-        }
         tools.extend(browser);
         tools
     }
@@ -894,6 +1026,38 @@ impl State {
                     Err(e) => text_result(e, true),
                 })
             }
+            "browser_network_har" => Ok(match self.network_har(&args).await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            "browser_flight_recorder" => Ok(match self.flight_recorder(&args).await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            "browser_screenshot_censored" => Ok(self.censored_answer(&args).await),
+            "browser_take_screenshot" if self.censor_screenshots => {
+                Ok(self.censored_answer(&args).await)
+            }
+            "browser_set_topic" => Ok(match self.set_topic(&args).await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            "browser_live_link" => Ok(match self.live_link().await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            "browser_recording" => Ok(match self.recording(&args).await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            "browser_share" if self.allow_share => Ok(match self.share(&args).await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
+            "browser_unshare" if self.allow_share => Ok(match self.unshare(&args).await {
+                Ok(text) => text_result(text, false),
+                Err(e) => text_result(e, true),
+            }),
             "browser_ask_human" if self.ask_human_cmd.is_some() => {
                 Ok(match self.ask_human(&args).await {
                     Ok(text) => text_result(text, false),
@@ -902,13 +1066,30 @@ impl State {
             }
             _ => {
                 let is_browser_tabs = name == "browser_tabs";
-                let child = self.child_or_default().await.map_err(|e| (-32000, e))?;
+                let may_wall = may_hit_wall(name);
+                let child = match self.child_or_default().await {
+                    Ok(child) => child,
+                    Err(e) => return Ok(text_result(e, true)),
+                };
                 self.notify_tools_changed().await;
                 let first =
                     child.target.profile.is_some() && !child.used.swap(true, Ordering::SeqCst);
-                let mut result = child
+                let mut result = match child
                     .request("tools/call", params, Duration::from_secs(600))
-                    .await?;
+                    .await
+                {
+                    Ok(result) => result,
+                    // Unknown tool and bad arguments are protocol errors; a browser that
+                    // died or timed out is a tool failure the agent can act on.
+                    Err((code, e)) if code == -32601 || code == -32602 => return Err((code, e)),
+                    Err((_, e)) => {
+                        return Ok(text_result(
+                            format!("The browser tool did not finish: {e}. Try again, or switch browsers with browser_use."),
+                            true,
+                        ))
+                    }
+                };
+                self.apply_pending_topic(&child).await;
                 // Both agents may select before either starts the profile. Check
                 // once more after connecting; this never blocks the operation.
                 let after = if first {
@@ -927,6 +1108,9 @@ impl State {
                     if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
                         content.push(json!({ "type": "text", "text": warning }));
                     }
+                }
+                if may_wall && !result["isError"].as_bool().unwrap_or(false) {
+                    self.watch_challenge(&child, &mut result).await;
                 }
                 if is_browser_tabs && !result["isError"].as_bool().unwrap_or(false) {
                     if let Ok(Ok(tabs)) = tokio::time::timeout(
@@ -1508,7 +1692,7 @@ impl State {
         let title = args["title"].as_str().map(str::trim).unwrap_or_default();
         let (child, page_id, _, host) = self.current_page().await?;
         let node_url = child.target.url.trim_end_matches('/');
-        let link = format!("{node_url}/handoff/?page={}", url_component(&page_id));
+        let link = handoff_url(node_url, &page_id);
         let agent = self.client_name.lock().await.clone();
         let run = Command::new(cmd)
             .arg(self.mask(message))
@@ -1633,9 +1817,36 @@ impl State {
             }
             None => "/api".to_string(),
         };
-        self.extension_request(&format!("{prefix}/extension/nodes/{browser}/command"), Some(json!({
-            "tab": tab, "action": action, "params": args.get("params").cloned().unwrap_or(json!({})),
-        }))).await
+        let mut params = args.get("params").cloned().unwrap_or(json!({}));
+        let mut censored = false;
+        if action == "screenshot" {
+            let given = args
+                .get("censor")
+                .filter(|c| !c.is_null())
+                .or(params.get("censor"));
+            let filled = self.filled.lock().unwrap().clone();
+            if let Some((cats, secrets)) = shared_censor(given, self.censor_screenshots, &filled)? {
+                params["censor"] = json!(cats);
+                if let Some(secrets) = secrets {
+                    params["secrets"] = json!(secrets);
+                }
+                censored = true;
+            }
+        }
+        let reply = self
+            .extension_request(
+                &format!("{prefix}/extension/nodes/{browser}/command"),
+                Some(json!({ "tab": tab, "action": action, "params": params })),
+            )
+            .await?;
+        if censored
+            && reply["error"].is_null()
+            && reply["censored"] != true
+            && reply["result"]["censored"] != true
+        {
+            return Err("The browser extension did not censor the screenshot (it is too old): the image was discarded. Ask the user to update the Browser Daemon Node extension.".into());
+        }
+        Ok(reply)
     }
 
     async fn overview(&self) -> Result<MeshOverview, String> {
@@ -2108,7 +2319,9 @@ impl State {
         // send a header on a CDP connection, so the token goes in the address. The
         // cluster secret never does.
         let token = self.auth_token(target).await;
-        let endpoint = cdp_endpoint(target, token.as_deref());
+        // A new connection: its label has to be applied again.
+        self.topic_applied.store(false, Ordering::SeqCst);
+        let endpoint = cdp_endpoint(target, token.as_deref(), self.human_input);
         let out = self.out_dir.join(format!(
             "{}-{}",
             target.node,
@@ -2181,6 +2394,1410 @@ impl State {
             return Err(format!("The browser tools did not start: {e}"));
         }
         Ok(child)
+    }
+}
+
+// ------------------------------------------------- page scripts and parsing
+
+/// The text a `browser_run_code_unsafe` answer carries between `BDxxx:` and
+/// `:BDEND`, as JSON. Playwright MCP prints a string result as a JSON string
+/// (escaped) and echoes the script after it, so the first marker is the result's.
+fn parse_marked(result: &Value, tag: &str) -> Option<Value> {
+    let text: String = result["content"]
+        .as_array()?
+        .iter()
+        .filter_map(|c| c["text"].as_str())
+        .collect();
+    let start = text.find(&format!("{tag}:"))? + tag.len() + 1;
+    let body = &text[start..];
+    let body = &body[..body.find(":BDEND")?];
+    serde_json::from_str::<String>(&format!("\"{body}\""))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .or_else(|| serde_json::from_str(body).ok())
+}
+
+fn answer_text(result: &Value) -> String {
+    result["content"]
+        .as_array()
+        .map(|c| c.iter().filter_map(|c| c["text"].as_str()).collect())
+        .unwrap_or_default()
+}
+
+// ------------------------------------------------------------ bot walls
+
+/// Playwright code that reports a few facts about the page; what they mean is
+/// decided in `classify_wall`. It runs in the page and fails quietly.
+const WALL_JS: &str = "async (page) => { try { return 'BDWALL:' + JSON.stringify(await page.evaluate(() => { \
+const d = document, q = (s) => !!d.querySelector(s); \
+const h = d.documentElement ? d.documentElement.outerHTML.slice(0, 400000).toLowerCase() : ''; \
+const text = ((d.body && d.body.innerText) || '').trim(); \
+const m = []; const add = (k, c) => { if (c) m.push(k); }; \
+add('cf', q('#challenge-form, #cf-challenge-running, #challenge-running, #challenge-stage, .cf-browser-verification')); \
+add('cf-weak', h.includes('cf-chl') || q('iframe[src*=\"challenges.cloudflare.com\"]')); \
+add('dd', q('iframe[src*=\"captcha-delivery.com\"]')); \
+add('dd-weak', h.includes('captcha-delivery.com')); \
+add('px', q('#px-captcha')); \
+add('imperva', q('iframe[src*=\"_incapsula_resource\" i]') || h.includes('incapsula incident id')); \
+add('akamai', h.includes('errors.edgesuite.net')); \
+add('awswaf', q('#awswaf-captcha, awswaf-captcha, #aws-waf-captcha')); \
+add('awswaf-weak', h.includes('token.awswaf.com') || h.includes('awswaf')); \
+add('recaptcha', q('iframe[src*=\"recaptcha\"], .g-recaptcha')); \
+add('hcaptcha', q('iframe[src*=\"hcaptcha.com\"], .h-captcha')); \
+return { t: d.title || '', n: text.length, i: d.querySelectorAll('input:not([type=hidden])').length, m, x: text.slice(0, 300).toLowerCase() }; })) + ':BDEND'; } catch (e) { return 'BDWALL:null:BDEND'; } }";
+
+/// What `WALL_JS` saw.
+#[derive(Debug, Default, PartialEq)]
+struct WallFacts {
+    title: String,
+    /// Characters of visible text.
+    body_len: usize,
+    /// Visible inputs (a captcha's own fields are not inputs).
+    inputs: usize,
+    marks: Vec<String>,
+    /// The first characters of the text, lowercase.
+    text: String,
+}
+
+fn parse_wall_facts(result: &Value) -> Option<WallFacts> {
+    let v = parse_marked(result, "BDWALL")?;
+    Some(WallFacts {
+        title: v["t"].as_str()?.to_string(),
+        body_len: v["n"].as_u64()? as usize,
+        inputs: v["i"].as_u64().unwrap_or(0) as usize,
+        marks: v["m"]
+            .as_array()?
+            .iter()
+            .filter_map(|m| m.as_str().map(str::to_string))
+            .collect(),
+        text: v["x"].as_str().unwrap_or_default().to_string(),
+    })
+}
+
+/// The vendor of the bot wall the page shows, if it is one. Conservative: a
+/// captcha or a challenge script inside a page with content (a login form) is
+/// no wall; a strong marker, or a weak one on a page with almost no text, is.
+fn classify_wall(f: &WallFacts) -> Option<&'static str> {
+    let has = |m: &str| f.marks.iter().any(|x| x == m);
+    let title = f.title.trim().to_lowercase();
+    let short = f.body_len < 600;
+    if has("cf")
+        || title.starts_with("just a moment")
+        || (title.starts_with("attention required")
+            && (title.contains("cloudflare") || f.text.contains("cloudflare")))
+        || (has("cf-weak") && short)
+    {
+        return Some("Cloudflare");
+    }
+    if has("dd") || (has("dd-weak") && short) {
+        return Some("DataDome");
+    }
+    if has("px") {
+        return Some("PerimeterX (HUMAN)");
+    }
+    if has("imperva") {
+        return Some("Imperva (Incapsula)");
+    }
+    if has("akamai") && (title.contains("access denied") || f.text.contains("reference #")) {
+        return Some("Akamai");
+    }
+    if has("awswaf") || (has("awswaf-weak") && short) {
+        return Some("AWS WAF");
+    }
+    if short && f.inputs == 0 {
+        if has("recaptcha") {
+            return Some("reCAPTCHA");
+        }
+        if has("hcaptcha") {
+            return Some("hCaptcha");
+        }
+    }
+    const BLOCKED: [&str; 7] = [
+        "access denied",
+        "403 forbidden",
+        "forbidden",
+        "you have been blocked",
+        "request blocked",
+        "pardon our interruption",
+        "sorry, you have been blocked",
+    ];
+    if short
+        && BLOCKED
+            .iter()
+            .any(|b| title.starts_with(b) || f.text.starts_with(b))
+    {
+        return Some("an unidentified bot filter or block page");
+    }
+    None
+}
+
+/// The note appended to a navigation's answer. `cleared`: the wall was there and went away.
+fn challenge_note(vendor: &str, cleared: bool, ask_human: bool) -> String {
+    if cleared {
+        return format!(
+            "Note: a {vendor} bot check showed up and cleared by itself. Take a snapshot to see the page."
+        );
+    }
+    format!(
+        "Note: this page is a bot wall ({vendor}) that did not clear by itself. Do not try to solve or bypass it yourself{}",
+        if ask_human {
+            ": call browser_ask_human so the user can do it in the live view, then wait and take a snapshot."
+        } else {
+            "; tell the user a person has to do this."
+        }
+    )
+}
+
+/// Tools after which the page is checked for a bot wall.
+fn may_hit_wall(name: &str) -> bool {
+    matches!(
+        name,
+        "browser_navigate" | "browser_navigate_back" | "browser_click" | "browser_press_key"
+    )
+}
+
+// -------------------------------------------------------------- HAR export
+
+/// Playwright code that collects the traffic of the page's context. Playwright
+/// MCP runs every script on the same `BrowserContext` object, so the collected
+/// entries live on it (`__bdHar`) from one call to the next (until the browser
+/// is switched). Headers are kept raw here and redacted by the MCP server.
+const HAR_JS: &str = "async (page) => { \
+const ACT = '__ACT__', MAXE = 2000, MAXB = 262144, MAXTOTAL = 16 * 1024 * 1024; \
+const TEXT = /^(text\\/|application\\/(json|xml|javascript|x-www-form-urlencoded|graphql)|[^;\\s]*\\+(json|xml))/i; \
+const ctx = page.context(); \
+const out = (o) => 'BDHAR:' + JSON.stringify(o) + ':BDEND'; \
+let h = ctx.__bdHar; \
+const off = () => { if (h) { for (const [ev, fn] of h.ls) { try { ctx.off(ev, fn); } catch (e) {} } h.ls = []; h.on = false; } }; \
+if (ACT === 'status') return out({ active: !!(h && h.on), entries: h ? h.entries.length : 0, dropped: h ? h.dropped : 0, since: h ? h.since : null }); \
+if (ACT === 'cancel') { off(); ctx.__bdHar = undefined; return out({ cancelled: !!h }); } \
+if (ACT === 'stop') { \
+if (!h) return out({ none: true }); \
+off(); \
+await Promise.race([Promise.allSettled([...h.pend]), page.waitForTimeout(10000)]); \
+ctx.__bdHar = undefined; \
+return out({ since: h.since, dropped: h.dropped, entries: h.entries }); } \
+if (h && h.on) return out({ already: true, entries: h.entries.length, since: h.since }); \
+h = { on: true, since: new Date().toISOString(), entries: [], map: new Map(), pend: new Set(), ls: [], dropped: 0, bytes: 0 }; \
+ctx.__bdHar = h; \
+const track = (p) => { h.pend.add(p); p.then(() => h.pend.delete(p)); }; \
+const hdrs = async (o) => { try { return await o.headersArray(); } catch (e) { return Object.entries(o.headers()).map(([name, value]) => ({ name, value: String(value) })); } }; \
+const on = (ev, fn) => { ctx.on(ev, fn); h.ls.push([ev, fn]); }; \
+on('request', (r) => { \
+if (!h.on) return; \
+if (h.entries.length >= MAXE) { h.dropped++; return; } \
+const pd = r.postDataBuffer(); \
+const e = { url: r.url(), method: r.method(), type: r.resourceType(), start: new Date().toISOString(), t0: Date.now(), post: pd ? pd.length : 0, status: 0 }; \
+h.map.set(r, e); h.entries.push(e); \
+track(hdrs(r).then((x) => { e.reqH = x; })); }); \
+on('response', (res) => { const e = h.map.get(res.request()); if (e) { e.status = res.status(); e.statusText = res.statusText(); } }); \
+on('requestfailed', (r) => { const e = h.map.get(r); if (e) { e.error = (r.failure() || {}).errorText || 'failed'; e.t1 = Date.now(); } }); \
+on('requestfinished', (r) => track((async () => { \
+const e = h.map.get(r); if (!e) return; \
+e.t1 = Date.now(); \
+try { e.timing = r.timing(); } catch (x) {} \
+try { e.sizes = await r.sizes(); } catch (x) {} \
+let res = null; try { res = await r.response(); } catch (x) {} \
+if (!res) return; \
+e.resH = await hdrs(res); \
+const ct = ((e.resH.find((x) => x.name.toLowerCase() === 'content-type') || {}).value || ''); \
+e.mime = ct.split(';')[0].trim().toLowerCase(); \
+if (TEXT.test(ct) && e.status >= 200 && e.status < 300 && e.status !== 204 && h.bytes < MAXTOTAL) { \
+try { const b = await res.body(); e.bodySize = b.length; e.trunc = b.length > MAXB; e.body = b.subarray(0, MAXB).toString('utf8'); h.bytes += e.body.length; } catch (x) {} } })())); \
+return out({ started: true, since: h.since }); }";
+
+const REDACTED: &str = "[redacted]";
+
+/// A header whose value must not be written to a file.
+fn secret_header(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    !n.starts_with(':')
+        && [
+            "cookie", "token", "secret", "auth", "api-key", "apikey", "api_key", "csrf", "xsrf",
+            "session",
+        ]
+        .iter()
+        .any(|s| n.contains(s))
+}
+
+/// A query parameter whose value must not be written to a file.
+fn secret_param(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "token",
+        "code",
+        "pass",
+        "pwd",
+        "key",
+        "secret",
+        "sig",
+        "auth",
+        "session",
+        "jwt",
+        "otp",
+        "credential",
+    ]
+    .iter()
+    .any(|s| n.contains(s))
+}
+
+/// A field of a JSON body whose value must not be written to a file (narrower
+/// than `secret_param`: `code` and `key` are common in harmless answers).
+fn secret_field(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "token",
+        "secret",
+        "pass",
+        "auth",
+        "apikey",
+        "api_key",
+        "api-key",
+        "session",
+        "jwt",
+        "credential",
+        "cookie",
+    ]
+    .iter()
+    .any(|s| n.contains(s))
+}
+
+/// The address with the values of secret-looking query parameters masked, and
+/// its query as HAR `queryString`.
+fn mask_url(address: &str) -> (String, Vec<Value>) {
+    let Ok(mut parsed) = url::Url::parse(address) else {
+        return (address.to_string(), Vec::new());
+    };
+    parsed.set_fragment(None);
+    let pairs: Vec<(String, String)> = parsed
+        .query_pairs()
+        .map(|(k, v)| {
+            let v = if secret_param(&k) {
+                REDACTED.to_string()
+            } else {
+                v.into_owned()
+            };
+            (k.into_owned(), v)
+        })
+        .collect();
+    if pairs.is_empty() {
+        return (parsed.to_string(), Vec::new());
+    }
+    parsed
+        .query_pairs_mut()
+        .clear()
+        .extend_pairs(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    let query = pairs
+        .into_iter()
+        .map(|(name, value)| json!({ "name": name, "value": value }))
+        .collect();
+    (parsed.to_string(), query)
+}
+
+/// HAR headers with secret values replaced, and the cookies of `Cookie` and
+/// `Set-Cookie` as HAR cookies without values.
+fn har_headers(raw: &Value) -> (Vec<Value>, Vec<Value>) {
+    let mut headers = Vec::new();
+    let mut cookies = Vec::new();
+    for h in raw.as_array().into_iter().flatten() {
+        let name = h["name"].as_str().unwrap_or_default();
+        let value = h["value"].as_str().unwrap_or_default();
+        match name.to_ascii_lowercase().as_str() {
+            "cookie" => cookies.extend(value.split(';').filter_map(|c| cookie_name(c, false))),
+            "set-cookie" => cookies.extend(value.lines().filter_map(|c| cookie_name(c, true))),
+            _ => {}
+        }
+        // HTTP/2 pseudo-headers repeat the address (with its query) and add nothing.
+        if name.starts_with(':') {
+            continue;
+        }
+        let value = if secret_header(name) { REDACTED } else { value };
+        headers.push(json!({ "name": name, "value": value }));
+    }
+    (headers, cookies)
+}
+
+fn cookie_name(pair: &str, set: bool) -> Option<Value> {
+    let pair = if set { pair.split(';').next()? } else { pair };
+    let name = pair.split('=').next()?.trim();
+    (!name.is_empty()).then(|| json!({ "name": name, "value": REDACTED }))
+}
+
+fn mask_json(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            for (k, v) in o.iter_mut() {
+                if secret_field(k) && !v.is_object() && !v.is_array() {
+                    *v = Value::String(REDACTED.into());
+                } else {
+                    mask_json(v);
+                }
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(mask_json),
+        _ => {}
+    }
+}
+
+/// A response body for the file: JSON gets its secret fields masked; JSON that
+/// cannot be parsed (cut off at the size cap) is left out, as it cannot be masked.
+fn har_body(text: &str, mime: &str) -> Option<String> {
+    if !mime.contains("json") {
+        return Some(text.to_string());
+    }
+    let mut v: Value = serde_json::from_str(text).ok()?;
+    mask_json(&mut v);
+    Some(v.to_string())
+}
+
+/// Milliseconds between two of a request's timing marks, -1 when not known.
+fn span(timing: &Value, from: &str, to: &str) -> f64 {
+    match (timing[from].as_f64(), timing[to].as_f64()) {
+        (Some(a), Some(b)) if a >= 0.0 && b >= a => b - a,
+        _ => -1.0,
+    }
+}
+
+/// A HAR 1.2 log from what `HAR_JS` collected, credentials redacted. The second
+/// number: entries with a response body.
+fn build_har(raw: &Value) -> (Value, usize) {
+    let mut bodies = 0;
+    let entries: Vec<Value> = raw["entries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|e| {
+            let (url, query) = mask_url(e["url"].as_str().unwrap_or_default());
+            let (req_headers, req_cookies) = har_headers(&e["reqH"]);
+            let (res_headers, res_cookies) = har_headers(&e["resH"]);
+            let timing = &e["timing"];
+            let elapsed = e["t1"].as_f64().zip(e["t0"].as_f64()).map_or(-1.0, |(b, a)| (b - a).max(0.0));
+            let total = timing["responseEnd"]
+                .as_f64()
+                .filter(|t| *t >= 0.0)
+                .unwrap_or(elapsed);
+            let content_type = e["mime"].as_str().unwrap_or_default();
+            let mut content = json!({
+                "size": e["bodySize"].as_i64().unwrap_or(-1),
+                "mimeType": content_type,
+            });
+            if let Some(text) = e["body"].as_str() {
+                match har_body(text, content_type) {
+                    Some(text) => {
+                        bodies += 1;
+                        content["text"] = Value::String(text);
+                        if e["trunc"].as_bool() == Some(true) {
+                            content["comment"] = "cut off at 256 KiB".into();
+                        }
+                    }
+                    None => content["comment"] = "JSON body left out: it could not be parsed to mask secrets".into(),
+                }
+            }
+            let redirect = e["resH"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|h| h["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case("location")))
+                .and_then(|h| h["value"].as_str())
+                .map(|l| mask_url(l).0)
+                .unwrap_or_default();
+            let mut request = json!({
+                "method": e["method"],
+                "url": url,
+                "httpVersion": "unknown",
+                "cookies": req_cookies,
+                "headers": req_headers,
+                "queryString": query,
+                "headersSize": e["sizes"]["requestHeadersSize"].as_i64().unwrap_or(-1),
+                "bodySize": e["sizes"]["requestBodySize"].as_i64().unwrap_or_else(|| e["post"].as_i64().unwrap_or(0)),
+            });
+            if e["post"].as_i64().unwrap_or(0) > 0 {
+                let mime = e["reqH"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|h| h["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case("content-type")))
+                    .and_then(|h| h["value"].as_str())
+                    .unwrap_or_default();
+                // The posted text is not kept: it is where passwords go.
+                request["postData"] = json!({ "mimeType": mime, "text": "", "comment": "body not recorded" });
+            }
+            let mut entry = json!({
+                "startedDateTime": e["start"],
+                "time": total,
+                "request": request,
+                "response": {
+                    "status": e["status"].as_i64().unwrap_or(0),
+                    "statusText": e["statusText"].as_str().unwrap_or_default(),
+                    "httpVersion": "unknown",
+                    "cookies": res_cookies,
+                    "headers": res_headers,
+                    "content": content,
+                    "redirectURL": redirect,
+                    "headersSize": e["sizes"]["responseHeadersSize"].as_i64().unwrap_or(-1),
+                    "bodySize": e["sizes"]["responseBodySize"].as_i64().unwrap_or(-1),
+                },
+                "cache": {},
+                "timings": {
+                    "blocked": -1,
+                    "dns": span(timing, "domainLookupStart", "domainLookupEnd"),
+                    "connect": span(timing, "connectStart", "connectEnd"),
+                    "ssl": span(timing, "secureConnectionStart", "connectEnd"),
+                    "send": 0,
+                    "wait": span(timing, "requestStart", "responseStart"),
+                    "receive": span(timing, "responseStart", "responseEnd"),
+                },
+                "_resourceType": e["type"],
+            });
+            if let Some(error) = e["error"].as_str() {
+                entry["_error"] = error.into();
+            }
+            entry
+        })
+        .collect();
+    (
+        json!({ "log": {
+            "version": "1.2",
+            "creator": { "name": "browser-daemon", "version": env!("CARGO_PKG_VERSION") },
+            "pages": [],
+            "entries": entries,
+        }}),
+        bodies,
+    )
+}
+
+/// `20261111T093005Z` for a time in seconds since the epoch.
+fn utc_stamp(secs: u64) -> String {
+    let (days, rest) = ((secs / 86400) as i64, secs % 86400);
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}{month:02}{day:02}T{:02}{:02}{:02}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
+}
+
+impl State {
+    // ------------------------------------------------------- bot walls
+
+    /// Whether the page shows a bot wall: Some(vendor) if it does, None if it
+    /// does not or the check failed (it never errors: a check that cannot run says nothing).
+    async fn wall_vendor(&self, child: &Child) -> Option<&'static str> {
+        let result = child
+            .request(
+                "tools/call",
+                json!({ "name": "browser_run_code_unsafe", "arguments": { "code": WALL_JS } }),
+                Duration::from_secs(5),
+            )
+            .await
+            .ok()?;
+        if result["isError"].as_bool() == Some(true) {
+            return None;
+        }
+        classify_wall(&parse_wall_facts(&result)?)
+    }
+
+    /// After a navigation: waits up to `--challenge-wait` seconds for a bot wall
+    /// to clear and says what is left. Never blocks longer than that wait.
+    async fn watch_challenge(&self, child: &Child, result: &mut Value) {
+        let Some(vendor) = self.wall_vendor(child).await else {
+            return;
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(self.challenge_wait);
+        let mut cleared = false;
+        while tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            // A check that cannot run also says None: ask once more after a moment.
+            if self.wall_vendor(child).await.is_none() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if self.wall_vendor(child).await.is_none() {
+                    cleared = true;
+                    break;
+                }
+            }
+        }
+        let note = challenge_note(vendor, cleared, self.ask_human_cmd.is_some());
+        if let Some(content) = result.get_mut("content").and_then(Value::as_array_mut) {
+            content.push(json!({ "type": "text", "text": note }));
+        }
+    }
+
+    // -------------------------------------------------------------- HAR
+
+    async fn network_har(&self, args: &Value) -> Result<String, String> {
+        let action = args["action"].as_str().unwrap_or("status");
+        if !["start", "stop", "status", "cancel"].contains(&action) {
+            return Err("`action` is start, stop, status or cancel".into());
+        }
+        let child = self.child_or_default().await?;
+        let code = HAR_JS.replace("__ACT__", action);
+        let result = child
+            .request(
+                "tools/call",
+                json!({ "name": "browser_run_code_unsafe", "arguments": { "code": code } }),
+                Duration::from_secs(60),
+            )
+            .await
+            .map_err(|(_, e)| format!("Could not reach the browser: {e}"))?;
+        let Some(data) = parse_marked(&result, "BDHAR") else {
+            let text = answer_text(&result);
+            return Err(format!(
+                "The browser did not answer as expected (is a page open?): {}",
+                text.lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("no answer")
+            ));
+        };
+        let count = |d: &Value| d["entries"].as_u64().unwrap_or(0);
+        match action {
+            "start" if data["already"] == true => Ok(format!(
+                "Already recording since {} ({} requests so far).",
+                data["since"].as_str().unwrap_or("?"),
+                count(&data)
+            )),
+            "start" => Ok("Recording the network traffic of this browser (all its tabs). Call browser_network_har with action stop to write the HAR file. Switching browsers (browser_use) loses the recording.".into()),
+            "cancel" => Ok("Recording discarded.".into()),
+            "status" if data["active"] == true => Ok(format!(
+                "Recording since {}: {} requests{}.",
+                data["since"].as_str().unwrap_or("?"),
+                count(&data),
+                match data["dropped"].as_u64().unwrap_or(0) {
+                    0 => String::new(),
+                    n => format!(" ({n} more not kept: entry cap)"),
+                }
+            )),
+            "status" => Ok("Not recording.".into()),
+            _ => {
+                if data["none"] == true {
+                    return Err("Not recording: nothing to stop (start first).".into());
+                }
+                let (mut har, bodies) = build_har(&data);
+                let entries = har["log"]["entries"].as_array().map_or(0, Vec::len);
+                let filled = self.filled.lock().unwrap().clone();
+                secrets::redact(&mut har, &filled);
+                let path = self.write_har(&har.to_string())?;
+                Ok(format!(
+                    "Wrote {entries} requests ({bodies} with a text body) to {}{}. Credentials in headers, cookies and secret-looking query parameters or JSON fields are replaced with {REDACTED}; posted bodies are not recorded.",
+                    path.display(),
+                    match data["dropped"].as_u64().unwrap_or(0) {
+                        0 => String::new(),
+                        n => format!(" ({n} more requests were not kept: entry cap)"),
+                    }
+                ))
+            }
+        }
+    }
+
+    /// Writes a HAR file under the output directory, readable by this user only.
+    fn write_har(&self, content: &str) -> Result<PathBuf, String> {
+        use std::io::Write as _;
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let dir = self.out_dir.join("har");
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let path = dir.join(format!(
+            "{}-{}.har",
+            utc_stamp(secs),
+            &uuid::Uuid::new_v4().simple().to_string()[..6]
+        ));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+        Ok(path)
+    }
+
+    // -------------------------------------------------- flight recorder
+
+    async fn flight_recorder(&self, args: &Value) -> Result<String, String> {
+        let action = args["action"].as_str().unwrap_or("status");
+        if !["start", "stop", "status", "save"].contains(&action) {
+            return Err("`action` is start, stop, status or save".into());
+        }
+        let (child, page_id, _, _) = self.current_page().await?;
+        let session = self
+            .page_session(&child.target.url, &page_id)
+            .await
+            .ok_or("Could not tell which session the page is in")?;
+        let node_url = child.target.url.trim_end_matches('/');
+        let mut body = json!({ "action": action });
+        if action == "start" {
+            if let Some(seconds) = args["seconds"].as_u64() {
+                body["seconds"] = seconds.into();
+            }
+        }
+        let mut req = self
+            .http
+            .post(format!("{node_url}/api/sessions/{session}/flight-recorder"))
+            .json(&body);
+        if let Some(ref s) = self.secret {
+            req = req.header("X-Browser-Cluster-Secret", s);
+        }
+        let res = req
+            .send()
+            .await
+            .map_err(|e| format!("{}: {e}", child.target.node))?;
+        let status = res.status();
+        let answer: Value = res.json().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!(
+                "{} refused: {}",
+                child.target.node,
+                answer["error"].as_str().unwrap_or(status.as_str())
+            ));
+        }
+        let active = answer["active"].as_bool().unwrap_or(false);
+        let window = answer["seconds"].as_u64().unwrap_or(0);
+        let buffered = answer["buffered_secs"].as_f64().unwrap_or(0.0);
+        Ok(match (action, answer["recording_id"].as_str()) {
+            ("save", Some(id)) => format!(
+                "Saved the last {buffered:.0} s of the browser as recording {id}. The user can watch it in the dashboard of {} ({node_url}/#recordings/{}).",
+                child.target.node,
+                url_component(id)
+            ),
+            ("save", None) => "The node did not return a recording id: nothing was saved (is the flight recorder running? start it first).".into(),
+            _ if active => format!(
+                "The flight recorder is running: it keeps the last {window} s of this browser ({buffered:.0} s buffered). Call it with action save to keep them as a recording."
+            ),
+            _ => "The flight recorder is not running.".into(),
+        })
+    }
+}
+
+// ------------------------------------------- conversation, links, sharing
+
+/// The agent's conversation id, as its harness puts it in the environment.
+fn conversation_id(get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    [
+        "CLAUDE_CODE_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+    ]
+    .iter()
+    .find_map(|k| {
+        get(k)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
+/// The live view of a page on its node.
+fn handoff_url(node_url: &str, page_id: &str) -> String {
+    format!(
+        "{}/handoff/?page={}",
+        node_url.trim_end_matches('/'),
+        url_component(page_id)
+    )
+}
+
+/// The dashboard's player for a recording.
+fn recording_url(node_url: &str, id: &str) -> String {
+    format!(
+        "{}/#recordings/{}",
+        node_url.trim_end_matches('/'),
+        url_component(id)
+    )
+}
+
+const SHARE_DEFAULT_SECS: u64 = 3600;
+const SHARE_MAX_SECS: u64 = 7 * 86400;
+
+/// How long a public link lives, in seconds: `30m`, `1h`, `2d`, `90s` or a
+/// number of seconds. One hour by default, at most 7 days, never unlimited.
+fn parse_expiry(text: Option<&str>) -> Result<u64, String> {
+    let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Ok(SHARE_DEFAULT_SECS);
+    };
+    let split = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    let (digits, unit) = text.split_at(split);
+    let n: u64 = digits
+        .parse()
+        .map_err(|_| format!("`expires` is a duration like 30m, 1h or 2d, not '{text}'"))?;
+    let factor = match unit.trim().to_ascii_lowercase().as_str() {
+        "" | "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86400,
+        _ => {
+            return Err(format!(
+                "`expires` is a duration like 30m, 1h or 2d, not '{text}'"
+            ))
+        }
+    };
+    let secs = n.saturating_mul(factor);
+    if secs < 60 {
+        return Err("`expires` must be at least one minute".into());
+    }
+    if secs > SHARE_MAX_SECS {
+        return Err(
+            "Public links last at most 7 days (7d); there are no links without an end".into(),
+        );
+    }
+    Ok(secs)
+}
+
+/// The id of the recording in progress for a session, if there is one.
+fn active_recording(ov: &MeshOverview, session: &str) -> Option<(String, String)> {
+    ov.recordings
+        .iter()
+        .find(|r| {
+            r.recording.session_id.to_string() == session && r.recording.status == "recording"
+        })
+        .map(|r| (r.recording.id.to_string(), r.node_url.clone()))
+}
+
+/// Adds the behaviour hints MCP clients use to decide what needs confirming:
+/// (name, read only, destructive, idempotent, open world). Tools not listed keep what they have.
+fn apply_hints(tools: &mut [Value]) {
+    const HINTS: [(&str, bool, bool, bool, bool); 19] = [
+        ("browser_status", true, false, true, false),
+        ("browser_profile_tabs", true, false, true, false),
+        ("browser_use", false, true, false, false),
+        ("browser_shared_nodes", true, false, true, false),
+        ("browser_shared_command", false, true, false, true),
+        ("browser_network_har", false, false, false, false),
+        ("browser_flight_recorder", false, false, false, false),
+        ("browser_set_topic", false, false, true, false),
+        ("browser_live_link", true, false, true, false),
+        ("browser_screenshot_censored", true, false, true, false),
+        ("browser_recording", false, false, false, false),
+        ("browser_share", false, false, false, true),
+        ("browser_unshare", false, true, true, true),
+        ("browser_fill_secret", false, false, false, true),
+        ("browser_fill_card", false, false, false, true),
+        ("browser_passkey", false, false, true, true),
+        ("browser_export_auth", false, false, false, false),
+        ("browser_fetch", false, true, false, true),
+        ("browser_ask_human", false, false, false, true),
+    ];
+    for tool in tools {
+        let Some(name) = tool["name"].as_str() else {
+            continue;
+        };
+        if let Some((_, ro, destructive, idempotent, open)) = HINTS.iter().find(|h| h.0 == name) {
+            let a = &mut tool["annotations"];
+            a["readOnlyHint"] = (*ro).into();
+            // The spec reads these two only for tools that change something.
+            if !ro {
+                a["destructiveHint"] = (*destructive).into();
+                a["idempotentHint"] = (*idempotent).into();
+            }
+            a["openWorldHint"] = (*open).into();
+        }
+    }
+}
+
+impl State {
+    /// The agent's page: (child, page id, session id on its node).
+    async fn current_session(&self) -> Result<(Arc<Child>, String, String), String> {
+        let (child, page_id, _, _) = self.current_page().await?;
+        let session = self
+            .page_session(&child.target.url, &page_id)
+            .await
+            .ok_or("Could not tell which session the page is in")?;
+        Ok((child, page_id, session))
+    }
+
+    /// One request to a node's API with the cluster secret; the answer, or what the node refused with.
+    async fn node_call(
+        &self,
+        method: reqwest::Method,
+        node: &str,
+        url: String,
+        body: Option<Value>,
+    ) -> Result<Value, String> {
+        let mut req = self.http.request(method, url);
+        if let Some(body) = body {
+            req = req.json(&body);
+        }
+        if let Some(ref s) = self.secret {
+            req = req.header("X-Browser-Cluster-Secret", s);
+        }
+        let res = req.send().await.map_err(|e| format!("{node}: {e}"))?;
+        let status = res.status();
+        let answer: Value = res.json().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!(
+                "{node} refused: {}",
+                answer["error"].as_str().unwrap_or(status.as_str())
+            ));
+        }
+        Ok(answer)
+    }
+
+    // ------------------------------------------------------------ topic
+
+    /// Labels the agent's connections on these nodes; how many were labelled.
+    async fn post_topic(&self, urls: &[String], conversation: &str, topic: &str) -> usize {
+        let mut set = tokio::task::JoinSet::new();
+        for url in urls {
+            let req = self
+                .http
+                .post(format!("{}/api/agent-topic", url.trim_end_matches('/')))
+                .timeout(Duration::from_secs(3))
+                .json(&json!({ "conversation": conversation, "topic": topic }));
+            set.spawn(async move {
+                let res = req.send().await.ok()?;
+                res.json::<Value>().await.ok()?["clients"].as_u64()
+            });
+        }
+        let mut labelled = 0;
+        while let Some(n) = set.join_next().await {
+            labelled += n.ok().flatten().unwrap_or(0) as usize;
+        }
+        labelled
+    }
+
+    async fn set_topic(&self, args: &Value) -> Result<String, String> {
+        let topic = args["topic"]
+            .as_str()
+            .ok_or("Say what you are doing (`topic`)")?
+            .trim()
+            .to_string();
+        let conversation = self.conversation.as_deref().ok_or(
+            "Your conversation id is not in this server's environment (CLAUDE_CODE_SESSION_ID, CODEX_THREAD_ID or CODEX_SESSION_ID), so the dashboard cannot tell which connections are yours.",
+        )?;
+        *self.topic.lock().unwrap() = Some(topic.clone());
+        self.topic_applied.store(false, Ordering::SeqCst);
+        let urls: Vec<String> = match self.overview().await {
+            Ok(ov) => Self::nodes(&ov).into_iter().map(|n| n.1).collect(),
+            Err(_) => self
+                .child
+                .lock()
+                .await
+                .as_ref()
+                .map(|c| c.target.url.clone())
+                .into_iter()
+                .collect(),
+        };
+        let labelled = self.post_topic(&urls, conversation, &topic).await;
+        if labelled > 0 {
+            self.topic_applied.store(true, Ordering::SeqCst);
+            Ok(format!(
+                "Labelled {labelled} browser connection(s) of this conversation: {topic}."
+            ))
+        } else {
+            Ok("Noted. No browser of this conversation is connected yet; the label is applied when it connects.".into())
+        }
+    }
+
+    /// Applies a topic that was set before the browser connected, once it has.
+    async fn apply_pending_topic(&self, child: &Child) {
+        if self.topic_applied.load(Ordering::SeqCst) {
+            return;
+        }
+        let (Some(conversation), Some(topic)) = (
+            self.conversation.clone(),
+            self.topic.lock().unwrap().clone(),
+        ) else {
+            return;
+        };
+        let urls = [child.target.url.clone()];
+        let labelled = tokio::time::timeout(
+            Duration::from_secs(3),
+            self.post_topic(&urls, &conversation, &topic),
+        )
+        .await
+        .unwrap_or(0);
+        if labelled > 0 {
+            self.topic_applied.store(true, Ordering::SeqCst);
+        }
+    }
+
+    // ------------------------------------------- live link, recording
+
+    async fn live_link(&self) -> Result<String, String> {
+        let (child, page_id, _, host) = self.current_page().await?;
+        Ok(format!(
+            "Live view of your current page ({host}): {}. Whoever opens it can watch and, if they are signed in to the dashboard, also click and type.",
+            handoff_url(&child.target.url, &page_id)
+        ))
+    }
+
+    async fn recording(&self, args: &Value) -> Result<String, String> {
+        let action = args["action"].as_str().unwrap_or("status");
+        if !["start", "stop", "status"].contains(&action) {
+            return Err("`action` is start, stop or status".into());
+        }
+        let (child, _, session) = self.current_session().await?;
+        let node = child.target.node.clone();
+        let base = child.target.url.trim_end_matches('/').to_string();
+        let running = || async {
+            self.overview()
+                .await
+                .ok()
+                .and_then(|ov| active_recording(&ov, &session))
+        };
+        match action {
+            "start" => {
+                let answer = self
+                    .node_call(
+                        reqwest::Method::POST,
+                        &node,
+                        format!("{base}/api/sessions/{session}/record"),
+                        None,
+                    )
+                    .await?;
+                let id = match answer["recording_id"].as_str() {
+                    Some(id) => Some(id.to_string()),
+                    None => running().await.map(|r| r.0),
+                };
+                let id = id.map(|id| format!(" Recording {id}.")).unwrap_or_default();
+                Ok(if answer["status"] == "already_recording" {
+                    format!("Your session is already being recorded.{id}")
+                } else {
+                    format!("Recording your session.{id} Stop it with action stop.")
+                })
+            }
+            "stop" => {
+                let answer = self
+                    .node_call(
+                        reqwest::Method::POST,
+                        &node,
+                        format!("{base}/api/sessions/{session}/stop-record"),
+                        None,
+                    )
+                    .await?;
+                let id = answer["recording_id"].as_str().unwrap_or_default();
+                Ok(format!(
+                    "Stopped recording {id}. The user can watch it at {}.",
+                    recording_url(&base, id)
+                ))
+            }
+            _ => Ok(match running().await {
+                Some((id, url)) => format!(
+                    "Your session is being recorded: recording {id} ({}).",
+                    recording_url(&url, &id)
+                ),
+                None => "Your session is not being recorded right now.".into(),
+            }),
+        }
+    }
+
+    // ---------------------------------------------------------- sharing
+
+    async fn share(&self, args: &Value) -> Result<String, String> {
+        let secs = parse_expiry(args["expires"].as_str())?;
+        let control = args["control"].as_bool().unwrap_or(false);
+        let (kind, id, node, base) = match args["recording_id"].as_str().map(str::trim) {
+            Some(id) if !id.is_empty() => {
+                let ov = self.overview().await?;
+                let r = ov
+                    .recordings
+                    .iter()
+                    .find(|r| r.recording.id.to_string() == id)
+                    .ok_or_else(|| format!("No recording '{id}' (see the dashboard for ids)"))?;
+                (
+                    "recording",
+                    id.to_string(),
+                    r.node_name.clone(),
+                    r.node_url.clone(),
+                )
+            }
+            _ => {
+                let (child, _, session) = self.current_session().await?;
+                (
+                    "session",
+                    session,
+                    child.target.node.clone(),
+                    child.target.url.clone(),
+                )
+            }
+        };
+        let body = json!({
+            "kind": kind,
+            "id": id,
+            "expires_in_secs": secs,
+            "control": kind == "session" && control,
+        });
+        let answer = self
+            .node_call(
+                reqwest::Method::POST,
+                &node,
+                format!("{}/api/shares", base.trim_end_matches('/')),
+                Some(body),
+            )
+            .await?;
+        let url = answer["url"].as_str().ok_or("The node returned no link")?;
+        let share_id = answer["id"].as_str().unwrap_or_default();
+        self.shares
+            .lock()
+            .unwrap()
+            .push((share_id.to_string(), node.clone(), base));
+        Ok(format!(
+            "PUBLIC link, anyone who has it can {} until it expires in {}: {url}\nShare id {share_id} (browser_unshare ends it). Give it only to the person the user wants it shared with.",
+            if kind == "session" && control { "watch and control your browser session" } else if kind == "session" { "watch your browser session (view only)" } else { "watch the recording" },
+            describe_secs(secs),
+        ))
+    }
+
+    async fn unshare(&self, args: &Value) -> Result<String, String> {
+        let id = args["share_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or("Give the `share_id` browser_share returned")?;
+        let (node, base) = self
+            .shares
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.0 == id)
+            .map(|s| (s.1.clone(), s.2.clone()))
+            .ok_or("Only links made with browser_share in this server can be ended here")?;
+        self.node_call(
+            reqwest::Method::DELETE,
+            &node,
+            format!("{}/api/shares/{id}", base.trim_end_matches('/')),
+            None,
+        )
+        .await?;
+        self.shares.lock().unwrap().retain(|s| s.0 != id);
+        Ok("The link no longer works.".into())
+    }
+}
+
+fn describe_secs(secs: u64) -> String {
+    match secs {
+        s if s % 86400 == 0 => format!("{} day(s)", s / 86400),
+        s if s % 3600 == 0 => format!("{} hour(s)", s / 3600),
+        s => format!("{} minute(s)", s.div_ceil(60)),
+    }
+}
+
+// ------------------------------------------------- censored screenshots
+
+/// What a censored screenshot blacks out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Censor {
+    Passwords,
+    Cards,
+    Otp,
+    Secrets,
+    Inputs,
+    Emails,
+}
+
+impl Censor {
+    const DEFAULT: [Censor; 5] = [
+        Censor::Passwords,
+        Censor::Cards,
+        Censor::Otp,
+        Censor::Secrets,
+        Censor::Inputs,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            Censor::Passwords => "passwords",
+            Censor::Cards => "cards",
+            Censor::Otp => "otp",
+            Censor::Secrets => "secrets",
+            Censor::Inputs => "inputs",
+            Censor::Emails => "emails",
+        }
+    }
+
+    fn parse(name: &str) -> Option<Censor> {
+        Some(match name {
+            "passwords" => Censor::Passwords,
+            "cards" => Censor::Cards,
+            "otp" => Censor::Otp,
+            "secrets" => Censor::Secrets,
+            "inputs" => Censor::Inputs,
+            "emails" => Censor::Emails,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct CensorArgs {
+    cats: Vec<Censor>,
+    full_page: bool,
+    target: Option<String>,
+    png: bool,
+}
+
+/// The arguments of browser_screenshot_censored, or of Playwright MCP's
+/// browser_take_screenshot when `--censor-screenshots` answers that one.
+fn parse_censor_args(args: &Value) -> Result<CensorArgs, String> {
+    let cats = match args.get("censor") {
+        None | Some(Value::Null) => Censor::DEFAULT.to_vec(),
+        Some(Value::Array(names)) => {
+            let mut cats = Vec::new();
+            for name in names {
+                let name = name.as_str().unwrap_or_default();
+                let cat = Censor::parse(name).ok_or_else(|| {
+                    format!("Unknown `censor` category '{name}': use passwords, cards, otp, secrets, inputs or emails")
+                })?;
+                if !cats.contains(&cat) {
+                    cats.push(cat);
+                }
+            }
+            if cats.is_empty() {
+                return Err("`censor` is empty: name at least one category, or leave it out for the defaults".into());
+            }
+            cats
+        }
+        Some(_) => return Err("`censor` is a list of category names".into()),
+    };
+    let target = ["target", "ref"]
+        .iter()
+        .find_map(|k| args[*k].as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+    Ok(CensorArgs {
+        cats,
+        full_page: args["fullPage"].as_bool().unwrap_or(false) && target.is_none(),
+        target,
+        png: args["type"].as_str() != Some("jpeg"),
+    })
+}
+
+/// Text-like inputs, textareas and editable elements.
+const TEXT_INPUTS: &str = "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]):not([type=file]):not([type=range]):not([type=color]), textarea, [contenteditable=''], [contenteditable=true]";
+
+fn name_hints(hints: &[&str]) -> Vec<String> {
+    hints
+        .iter()
+        .flat_map(|h| {
+            [
+                format!("input[name*=\"{h}\" i]"),
+                format!("input[id*=\"{h}\" i]"),
+            ]
+        })
+        .collect()
+}
+
+/// CSS selectors of the elements a category blacks out always (the inputs
+/// category only those with a value, the secrets and emails by their text).
+fn censor_selectors(cats: &[Censor]) -> Vec<String> {
+    let mut sels = Vec::new();
+    for cat in cats {
+        match cat {
+            Censor::Passwords => sels.push("input[type=password]".to_string()),
+            Censor::Cards => {
+                sels.push("[autocomplete^=cc-]".to_string());
+                sels.extend(name_hints(&[
+                    "card",
+                    "ccnum",
+                    "cc-num",
+                    "cvc",
+                    "cvv",
+                    "expir",
+                    "expdate",
+                    "exp-date",
+                    "securitycode",
+                    "security-code",
+                ]));
+            }
+            Censor::Otp => {
+                sels.push("[autocomplete=one-time-code]".to_string());
+                sels.extend(name_hints(&["otp", "totp", "2fa", "mfa", "one-time"]));
+                sels.push("input[name=code i]".to_string());
+                sels.push("input[id=code i]".to_string());
+            }
+            Censor::Secrets | Censor::Inputs | Censor::Emails => {}
+        }
+    }
+    sels
+}
+
+/// What `SHOT_JS` is told: no secret in it, as Playwright MCP echoes scripts.
+fn censor_plan(a: &CensorArgs, ids: &[u64]) -> Value {
+    json!({
+        "sels": censor_selectors(&a.cats),
+        "filled": a.cats.contains(&Censor::Inputs).then_some(TEXT_INPUTS),
+        "emails": a.cats.contains(&Censor::Emails),
+        "frames": a.cats.contains(&Censor::Cards),
+        "ids": ids,
+        "full": a.full_page,
+        "target": a.target,
+        "type": if a.png { "png" } else { "jpeg" },
+    })
+}
+
+/// Tags every element that has text of its own, or a value, with a number and
+/// returns the texts, so that the secrets can be looked for here and not in
+/// a script (which Playwright MCP echoes).
+const TEXTS_JS: &str = "async (page) => { const out = []; let next = 0; \
+for (const f of page.frames()) { if (f.isDetached() || out.length > 20000) continue; \
+const rows = await f.evaluate((start) => { const rows = []; let id = start; \
+document.querySelectorAll('*').forEach((el) => { \
+if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') return; \
+let t = ''; for (const c of el.childNodes) if (c.nodeType === 3) t += c.nodeValue; \
+if (typeof el.value === 'string' && el.value) t += ' ' + el.value; \
+t = t.trim(); if (t.length < 4) return; \
+el.setAttribute('data-bd-i', String(id)); rows.push([id, t.slice(0, 2000)]); id++; }); \
+return rows; }, next); \
+for (const r of rows) out.push(r); if (rows.length) next = rows[rows.length - 1][0] + 1; } \
+return 'BDTXT:' + JSON.stringify(out) + ':BDEND'; }";
+
+/// Marks what is to be blacked out, takes the screenshot with those elements
+/// masked and removes the marks again. Any failure throws: no screenshot
+/// without the mask.
+const SHOT_JS: &str = "async (page) => { const P = __PLAN__; \
+const MARK = (p) => { let n = 0; \
+const mk = (el) => { if (el && el.setAttribute) { el.setAttribute('data-bd-censor', '1'); n++; } }; \
+if (p.sels.length) document.querySelectorAll(p.sels.join(',')).forEach(mk); \
+if (p.filled) document.querySelectorAll(p.filled).forEach((el) => { const v = typeof el.value === 'string' ? el.value : el.textContent; if (v && v.trim()) mk(el); }); \
+if (p.ids.length) { const s = new Set(p.ids.map(String)); document.querySelectorAll('[data-bd-i]').forEach((el) => { if (s.has(el.getAttribute('data-bd-i'))) mk(el); }); } \
+if (p.emails) { const re = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i; \
+document.querySelectorAll('input,textarea').forEach((el) => { if (re.test(el.value || '')) mk(el); }); \
+const w = document.createTreeWalker(document.body || document, NodeFilter.SHOW_TEXT); \
+for (let t = w.nextNode(); t; t = w.nextNode()) { if (re.test(t.nodeValue) && t.parentElement) mk(t.parentElement); } } \
+if (p.frames) document.querySelectorAll('iframe,frame').forEach((f) => { let blocked = false; try { blocked = !f.contentDocument; } catch (e) { blocked = true; } if (blocked) mk(f); }); \
+return n; }; \
+const frames = page.frames().filter((f) => !f.isDetached()); \
+try { let masked = 0; \
+for (const f of frames) masked += await f.evaluate(MARK, P); \
+const opts = { mask: frames.map((f) => f.locator('[data-bd-censor]')), maskColor: '#000000', type: P.type }; \
+if (P.type === 'jpeg') opts.quality = 80; \
+let buf; \
+if (P.target) { const loc = page.locator(/^(f\\d+)?e\\d+$/.test(P.target) ? 'aria-ref=' + P.target : P.target); buf = await loc.screenshot(opts); } \
+else { opts.fullPage = P.full; buf = await page.screenshot(opts); } \
+return 'BDSHOT:' + JSON.stringify({ mime: P.type === 'png' ? 'image/png' : 'image/jpeg', data: buf.toString('base64'), masked }) + ':BDEND'; \
+} finally { for (const f of frames) { if (f.isDetached()) continue; try { await f.evaluate(() => document.querySelectorAll('[data-bd-censor],[data-bd-i]').forEach((e) => { e.removeAttribute('data-bd-censor'); e.removeAttribute('data-bd-i'); })); } catch (e) {} } } }";
+
+/// The numbers of the elements (from `TEXTS_JS`) whose text holds a secret.
+/// What a shared tab's screenshot is asked to hide: the categories (`given`,
+/// plus all defaults when `force`) and, with `secrets` among them, the values
+/// filled in this session. None: no censoring asked for.
+/// Categories and the secrets to hide, for a shared tab's screenshot.
+type SharedCensor = (Vec<&'static str>, Option<Vec<String>>);
+
+fn shared_censor(
+    given: Option<&Value>,
+    force: bool,
+    filled: &[String],
+) -> Result<Option<SharedCensor>, String> {
+    let mut cats = match given {
+        None => Vec::new(),
+        Some(Value::Array(a)) if a.is_empty() => Vec::new(),
+        Some(v) => {
+            parse_censor_args(&json!({ "censor": v }))
+                .map_err(|e| e.replace("`censor`", "`censor` of a screenshot"))?
+                .cats
+        }
+    };
+    if cats.is_empty() && !force {
+        return Ok(None);
+    }
+    if force {
+        for c in Censor::DEFAULT {
+            if !cats.contains(&c) {
+                cats.push(c);
+            }
+        }
+    }
+    let secrets = cats.contains(&Censor::Secrets).then(|| {
+        filled
+            .iter()
+            .filter(|s| s.len() >= 4)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    Ok(Some((cats.iter().map(|c| c.name()).collect(), secrets)))
+}
+
+fn secret_element_ids(rows: &Value, filled: &[String]) -> Vec<u64> {
+    let secrets: Vec<String> = filled.iter().filter(|s| s.len() >= 4).cloned().collect();
+    if secrets.is_empty() {
+        return Vec::new();
+    }
+    rows.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let text = row[1].as_str()?;
+            (secrets::redact_str(text, &secrets) != text).then(|| row[0].as_u64())?
+        })
+        .collect()
+}
+
+impl State {
+    /// A screenshot of the agent's page with passwords, card and one-time-code
+    /// fields, filled inputs and the secrets of this session blacked out. Fails
+    /// closed: if the mask cannot be built there is no screenshot.
+    async fn censored_answer(&self, args: &Value) -> Value {
+        match self.screenshot_censored(args).await {
+            Ok(result) => result,
+            Err(e) => text_result(format!("No screenshot taken: {e}"), true),
+        }
+    }
+
+    async fn screenshot_censored(&self, args: &Value) -> Result<Value, String> {
+        let a = parse_censor_args(args)?;
+        let child = self.child_or_default().await?;
+        let run = |code: String| {
+            let child = child.clone();
+            async move {
+                let result = child
+                    .request(
+                        "tools/call",
+                        json!({ "name": "browser_run_code_unsafe", "arguments": { "code": code } }),
+                        Duration::from_secs(90),
+                    )
+                    .await
+                    .map_err(|(_, e)| format!("The browser did not answer: {e}"))?;
+                if result["isError"].as_bool() == Some(true) {
+                    let text = answer_text(&result);
+                    let line = text
+                        .lines()
+                        .find(|l| !l.trim().is_empty() && !l.starts_with('#'))
+                        .unwrap_or("the script failed");
+                    return Err(format!("Could not build the mask: {line}"));
+                }
+                Ok(result)
+            }
+        };
+        let filled = self.filled.lock().unwrap().clone();
+        let mut ids = Vec::new();
+        if a.cats.contains(&Censor::Secrets) && filled.iter().any(|s| s.len() >= 4) {
+            let result = run(TEXTS_JS.to_string()).await?;
+            let rows = parse_marked(&result, "BDTXT")
+                .ok_or("Could not read the page's text to find secrets in it")?;
+            ids = secret_element_ids(&rows, &filled);
+        }
+        let code = SHOT_JS.replace("__PLAN__", &censor_plan(&a, &ids).to_string());
+        let result = run(code).await?;
+        let shot = parse_marked(&result, "BDSHOT").ok_or("The browser returned no screenshot")?;
+        let (Some(data), Some(mime)) = (shot["data"].as_str(), shot["mime"].as_str()) else {
+            return Err("The browser returned no screenshot".into());
+        };
+        let names: Vec<&str> = a.cats.iter().map(|c| c.name()).collect();
+        Ok(json!({ "content": [
+            { "type": "image", "data": data, "mimeType": mime },
+            { "type": "text", "text": format!(
+                "Censored screenshot: {} region(s) blacked out ({}). Shadow DOM and canvas content are not covered.",
+                shot["masked"].as_u64().unwrap_or(0),
+                names.join(", ")
+            ) },
+        ], "isError": false }))
     }
 }
 
@@ -2468,24 +4085,448 @@ mod tests {
             profile: profile.map(str::to_string),
             session_id: None,
         };
-        assert_eq!(cdp_endpoint(&t(None), None), "wss://b.test/chromium");
+        assert_eq!(cdp_endpoint(&t(None), None, false), "wss://b.test/chromium");
         assert_eq!(
-            cdp_endpoint(&t(None), Some("123.abc")),
+            cdp_endpoint(&t(None), Some("123.abc"), false),
             "wss://b.test/chromium?auth=123.abc"
         );
         assert_eq!(
-            cdp_endpoint(&t(Some("my work")), Some("123.abc")),
+            cdp_endpoint(&t(Some("my work")), Some("123.abc"), false),
             "wss://b.test/chromium?profile=my+work&auth=123.abc"
         );
         assert_eq!(
-            cdp_endpoint(&t(Some("work")), None),
+            cdp_endpoint(&t(Some("work")), None, false),
             "wss://b.test/chromium?profile=work"
         );
         let mut ephemeral = t(None);
         ephemeral.session_id = Some("session-1".into());
         assert_eq!(
-            cdp_endpoint(&ephemeral, Some("123.abc")),
+            cdp_endpoint(&ephemeral, Some("123.abc"), false),
             "wss://b.test/chromium?session_id=session-1&auth=123.abc"
         );
+        assert_eq!(
+            cdp_endpoint(&t(Some("work")), Some("123.abc"), true),
+            "wss://b.test/chromium?profile=work&auth=123.abc&human_input=1"
+        );
+        assert_eq!(
+            cdp_endpoint(&t(None), None, true),
+            "wss://b.test/chromium?human_input=1"
+        );
+    }
+
+    fn facts(title: &str, body_len: usize, inputs: usize, marks: &[&str], text: &str) -> WallFacts {
+        WallFacts {
+            title: title.into(),
+            body_len,
+            inputs,
+            marks: marks.iter().map(|m| m.to_string()).collect(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn bot_walls_are_told_from_pages_that_embed_a_captcha() {
+        let wall = |f: WallFacts| classify_wall(&f);
+        assert_eq!(
+            wall(facts("Just a moment...", 120, 0, &[], "")),
+            Some("Cloudflare")
+        );
+        assert_eq!(wall(facts("x", 5000, 0, &["cf"], "")), Some("Cloudflare"));
+        assert_eq!(
+            wall(facts("x", 80, 0, &["cf-weak"], "")),
+            Some("Cloudflare")
+        );
+        // A login form with a Turnstile widget is no wall.
+        assert_eq!(
+            wall(facts("Sign in", 1500, 3, &["cf-weak"], "sign in")),
+            None
+        );
+        assert_eq!(
+            wall(facts("Sign in", 200, 2, &["recaptcha"], "sign in")),
+            None
+        );
+        assert_eq!(
+            wall(facts("", 30, 0, &["recaptcha"], "")),
+            Some("reCAPTCHA")
+        );
+        assert_eq!(wall(facts("", 30, 0, &["hcaptcha"], "")), Some("hCaptcha"));
+        assert_eq!(wall(facts("", 10, 0, &["dd"], "")), Some("DataDome"));
+        assert_eq!(wall(facts("Shop", 9000, 1, &["dd-weak"], "")), None);
+        assert_eq!(
+            wall(facts("", 50, 0, &["px"], "")),
+            Some("PerimeterX (HUMAN)")
+        );
+        assert_eq!(
+            wall(facts("", 50, 0, &["imperva"], "")),
+            Some("Imperva (Incapsula)")
+        );
+        assert_eq!(
+            wall(facts("Access Denied", 200, 0, &["akamai"], "access denied")),
+            Some("Akamai")
+        );
+        assert_eq!(wall(facts("", 50, 0, &["awswaf"], "")), Some("AWS WAF"));
+        assert_eq!(
+            wall(facts("403 Forbidden", 40, 0, &[], "403 forbidden")),
+            Some("an unidentified bot filter or block page")
+        );
+        // A long article about access denied pages is no block page.
+        assert_eq!(
+            wall(facts("Access denied errors explained", 8000, 0, &[], "")),
+            None
+        );
+        assert_eq!(wall(facts("Home", 3000, 1, &[], "welcome")), None);
+    }
+
+    #[test]
+    fn wall_facts_are_read_from_the_page_answer() {
+        let answer = |text: &str| json!({ "content": [{ "type": "text", "text": text }] });
+        let escaped = r#"### Result
+"BDWALL:{\"t\":\"Just a moment...\",\"n\":40,\"i\":0,\"m\":[\"cf-weak\"],\"x\":\"\"}:BDEND"
+### Ran Playwright code"#;
+        let f = parse_wall_facts(&answer(escaped)).unwrap();
+        assert_eq!(f.title, "Just a moment...");
+        assert_eq!(f.marks, vec!["cf-weak".to_string()]);
+        assert_eq!(classify_wall(&f), Some("Cloudflare"));
+        assert!(parse_wall_facts(&answer("\"BDWALL:null:BDEND\"")).is_none());
+        assert!(parse_wall_facts(&answer("Error: boom")).is_none());
+    }
+
+    #[test]
+    fn the_wall_note_names_the_vendor_and_the_human_option() {
+        let with = challenge_note("Cloudflare", false, true);
+        assert!(with.contains("Cloudflare") && with.contains("browser_ask_human"));
+        let without = challenge_note("Cloudflare", false, false);
+        assert!(!without.contains("browser_ask_human"));
+        assert!(challenge_note("Cloudflare", true, true).contains("cleared by itself"));
+        assert!(may_hit_wall("browser_navigate") && !may_hit_wall("browser_snapshot"));
+    }
+
+    #[test]
+    fn har_secrets_are_masked() {
+        assert!(
+            secret_header("Authorization")
+                && secret_header("X-Api-Key")
+                && secret_header("Set-Cookie")
+        );
+        assert!(secret_header("x-amz-security-token") && secret_header("X-Client-Secret"));
+        assert!(!secret_header("Content-Type") && !secret_header(":authority"));
+        assert!(
+            secret_param("access_token") && secret_param("code") && secret_param("X-Amz-Signature")
+        );
+        assert!(!secret_param("page") && !secret_param("q"));
+        let (url, query) = mask_url("https://a.test/cb?code=abc123&state=ok&token=t#frag");
+        assert_eq!(
+            url,
+            "https://a.test/cb?code=%5Bredacted%5D&state=ok&token=%5Bredacted%5D"
+        );
+        assert_eq!(query[0], json!({ "name": "code", "value": "[redacted]" }));
+        assert_eq!(query[1], json!({ "name": "state", "value": "ok" }));
+        assert_eq!(mask_url("https://a.test/x").1.len(), 0);
+        let (headers, cookies) = har_headers(&json!([
+            { "name": "Cookie", "value": "sid=abc; theme=dark" },
+            { "name": "Accept", "value": "*/*" },
+            { "name": ":path", "value": "/?token=x" },
+            { "name": "Set-Cookie", "value": "a=1; Path=/\nb=2; HttpOnly" },
+        ]));
+        assert_eq!(headers[0]["value"], "[redacted]");
+        assert_eq!(headers.len(), 3);
+        assert_eq!(headers[1]["value"], "*/*");
+        let names: Vec<_> = cookies
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["sid", "theme", "a", "b"]);
+        assert!(cookies.iter().all(|c| c["value"] == "[redacted]"));
+        assert_eq!(
+            har_body(
+                r#"{"access_token":"x","code":404,"n":{"password":"p"}}"#,
+                "application/json"
+            )
+            .unwrap(),
+            r#"{"access_token":"[redacted]","code":404,"n":{"password":"[redacted]"}}"#
+        );
+        assert!(har_body(r#"{"access_token":"x"#, "application/json").is_none());
+        assert_eq!(har_body("<p>hi</p>", "text/html").unwrap(), "<p>hi</p>");
+    }
+
+    #[test]
+    fn a_har_is_built_from_the_collected_entries() {
+        let raw = json!({ "entries": [{
+            "url": "https://a.test/api?key=k1&x=1", "method": "GET", "type": "fetch",
+            "start": "2026-11-11T09:30:05.000Z", "t0": 1000.0, "t1": 1100.0, "post": 0, "status": 200,
+            "statusText": "OK", "mime": "application/json",
+            "reqH": [{ "name": "Authorization", "value": "Bearer s3cr3t" }],
+            "resH": [{ "name": "Content-Type", "value": "application/json" }, { "name": "Set-Cookie", "value": "sid=zzz" }],
+            "timing": { "startTime": 1.0, "domainLookupStart": -1, "domainLookupEnd": -1, "connectStart": 5, "connectEnd": 9,
+                "secureConnectionStart": 6, "requestStart": 10, "responseStart": 30, "responseEnd": 40 },
+            "body": "{\"ok\":true,\"token\":\"t\"}", "bodySize": 24
+        }, {
+            "url": "https://b.test/", "method": "POST", "type": "document", "start": "x", "t0": 1.0, "t1": 3.0,
+            "post": 10, "status": 0, "error": "net::ERR_FAILED",
+            "reqH": [{ "name": "Content-Type", "value": "application/x-www-form-urlencoded" }]
+        }]});
+        let (har, bodies) = build_har(&raw);
+        assert_eq!(bodies, 1);
+        let entries = har["log"]["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        let e = &entries[0];
+        assert_eq!(
+            e["request"]["url"],
+            "https://a.test/api?key=%5Bredacted%5D&x=1"
+        );
+        assert_eq!(e["request"]["headers"][0]["value"], "[redacted]");
+        assert_eq!(
+            e["response"]["content"]["text"],
+            r#"{"ok":true,"token":"[redacted]"}"#
+        );
+        assert_eq!(
+            e["response"]["cookies"][0],
+            json!({ "name": "sid", "value": "[redacted]" })
+        );
+        assert_eq!(e["time"], 40.0);
+        assert_eq!(e["timings"]["wait"], 20.0);
+        assert_eq!(e["timings"]["connect"], 4.0);
+        assert_eq!(e["timings"]["dns"], -1.0);
+        let failed = &entries[1];
+        assert_eq!(failed["_error"], "net::ERR_FAILED");
+        assert_eq!(failed["time"], 2.0);
+        assert_eq!(failed["request"]["postData"]["text"], "");
+        assert!(!har.to_string().contains("s3cr3t") && !har.to_string().contains("zzz"));
+    }
+
+    #[test]
+    fn marked_answers_survive_the_escaping_of_the_result() {
+        let answer = |text: &str| json!({ "content": [{ "type": "text", "text": text }] });
+        // As JSON string, followed by the echoed script, which contains the marker again.
+        let a = answer(
+            "\"BDHAR:{\\\"a\\\":\\\"q\\\\n\\\"}:BDEND\"\n```js\n'BDHAR:' + x + ':BDEND'\n```",
+        );
+        assert_eq!(parse_marked(&a, "BDHAR").unwrap(), json!({ "a": "q\n" }));
+        // Printed raw.
+        assert_eq!(
+            parse_marked(&answer("BDHAR:{\"b\":1}:BDEND"), "BDHAR").unwrap(),
+            json!({ "b": 1 })
+        );
+        assert!(parse_marked(&answer("nothing"), "BDHAR").is_none());
+    }
+
+    #[test]
+    fn timestamps_are_utc() {
+        assert_eq!(utc_stamp(0), "19700101T000000Z");
+        assert_eq!(utc_stamp(1_794_389_405), "20261111T093005Z");
+        assert_eq!(utc_stamp(951_782_400 + 86_399), "20000229T235959Z");
+    }
+
+    #[test]
+    fn network_har_and_flight_recorder_tools_are_always_offered() {
+        let names: Vec<String> = own_tools(&[], &[], false, &[])
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"browser_network_har".to_string()));
+        assert!(names.contains(&"browser_flight_recorder".to_string()));
+    }
+
+    #[test]
+    fn the_conversation_id_comes_from_the_agents_environment() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| pairs.iter().find(|p| p.0 == k).map(|p| p.1.to_string())
+        };
+        assert_eq!(conversation_id(env(&[])), None);
+        assert_eq!(
+            conversation_id(env(&[
+                ("CODEX_SESSION_ID", "c3"),
+                ("CODEX_THREAD_ID", "c2")
+            ])),
+            Some("c2".into())
+        );
+        assert_eq!(
+            conversation_id(env(&[
+                ("CODEX_THREAD_ID", "c2"),
+                ("CLAUDE_CODE_SESSION_ID", " c1 ")
+            ])),
+            Some("c1".into())
+        );
+        assert_eq!(
+            conversation_id(env(&[
+                ("CLAUDE_CODE_SESSION_ID", " "),
+                ("CODEX_THREAD_ID", "c2")
+            ])),
+            Some("c2".into())
+        );
+    }
+
+    #[test]
+    fn links_are_built_from_the_node_address() {
+        assert_eq!(
+            handoff_url("https://b.test/", "AB12"),
+            "https://b.test/handoff/?page=AB12"
+        );
+        assert_eq!(
+            recording_url("https://b.test", "1b2c"),
+            "https://b.test/#recordings/1b2c"
+        );
+    }
+
+    #[test]
+    fn public_links_expire_and_never_last_forever() {
+        assert_eq!(parse_expiry(None), Ok(3600));
+        assert_eq!(parse_expiry(Some("")), Ok(3600));
+        assert_eq!(parse_expiry(Some("30m")), Ok(1800));
+        assert_eq!(parse_expiry(Some("2H")), Ok(7200));
+        assert_eq!(parse_expiry(Some("7d")), Ok(7 * 86400));
+        assert_eq!(parse_expiry(Some("90")), Ok(90));
+        assert!(parse_expiry(Some("8d")).is_err());
+        assert!(parse_expiry(Some("never")).is_err());
+        assert!(parse_expiry(Some("0")).is_err());
+        assert!(parse_expiry(Some("10s")).is_err());
+        assert!(parse_expiry(Some("1w")).is_err());
+        assert_eq!(describe_secs(3600), "1 hour(s)");
+        assert_eq!(describe_secs(1800), "30 minute(s)");
+    }
+
+    #[test]
+    fn sharing_tools_need_the_flag_and_every_tool_is_annotated() {
+        let all = |share: bool| {
+            own_tools_with(
+                &["e".into()],
+                &["x.test".into()],
+                true,
+                &["x.test".into()],
+                true,
+                share,
+            )
+        };
+        let name = |t: &Value| t["name"].as_str().unwrap().to_string();
+        let off: Vec<String> = all(false).iter().map(name).collect();
+        assert!(!off.contains(&"browser_share".to_string()));
+        assert!(!off.contains(&"browser_unshare".to_string()));
+        let on = all(true);
+        let names: Vec<String> = on.iter().map(name).collect();
+        for want in [
+            "browser_share",
+            "browser_unshare",
+            "browser_set_topic",
+            "browser_live_link",
+            "browser_recording",
+            "browser_fill_card",
+        ] {
+            assert!(names.contains(&want.to_string()), "{want}");
+        }
+        for tool in &on {
+            let n = name(tool);
+            let a = &tool["annotations"];
+            assert!(a["title"].is_string(), "{n} title");
+            assert!(a["readOnlyHint"].is_boolean(), "{n} readOnlyHint");
+            assert!(a["openWorldHint"].is_boolean(), "{n} openWorldHint");
+            if a["readOnlyHint"] == false {
+                assert!(a["destructiveHint"].is_boolean(), "{n} destructiveHint");
+                assert!(a["idempotentHint"].is_boolean(), "{n} idempotentHint");
+            }
+            assert_eq!(tool["inputSchema"]["additionalProperties"], false, "{n}");
+            assert!(tool["description"].as_str().unwrap().len() > 20, "{n}");
+        }
+        let share = on.iter().find(|t| name(t) == "browser_share").unwrap();
+        assert!(share["description"].as_str().unwrap().contains("PUBLIC"));
+        assert_eq!(
+            on.iter().find(|t| name(t) == "browser_live_link").unwrap()["annotations"]
+                ["readOnlyHint"],
+            true
+        );
+    }
+
+    #[test]
+    fn censor_arguments_default_to_everything_but_emails() {
+        let a = parse_censor_args(&json!({})).unwrap();
+        assert_eq!(a.cats, Censor::DEFAULT.to_vec());
+        assert!(!a.cats.contains(&Censor::Emails));
+        assert!(a.png && !a.full_page && a.target.is_none());
+        let a = parse_censor_args(&json!({
+            "censor": ["emails", "passwords", "emails"], "fullPage": true, "type": "jpeg"
+        }))
+        .unwrap();
+        assert_eq!(a.cats, vec![Censor::Emails, Censor::Passwords]);
+        assert!(a.full_page && !a.png);
+        // An element screenshot is never full page; `ref` is the old name of `target`.
+        let a = parse_censor_args(&json!({ "ref": " e12 ", "fullPage": true })).unwrap();
+        assert_eq!(a.target.as_deref(), Some("e12"));
+        assert!(!a.full_page);
+        assert!(parse_censor_args(&json!({ "censor": [] })).is_err());
+        assert!(parse_censor_args(&json!({ "censor": ["faces"] })).is_err());
+        assert!(parse_censor_args(&json!({ "censor": "passwords" })).is_err());
+    }
+
+    #[test]
+    fn censor_categories_become_selectors() {
+        let pw = censor_selectors(&[Censor::Passwords]);
+        assert_eq!(pw, vec!["input[type=password]".to_string()]);
+        let cards = censor_selectors(&[Censor::Cards]);
+        assert!(cards.contains(&"[autocomplete^=cc-]".to_string()));
+        assert!(cards.contains(&"input[name*=\"cvc\" i]".to_string()));
+        let otp = censor_selectors(&[Censor::Otp]);
+        assert!(otp.contains(&"[autocomplete=one-time-code]".to_string()));
+        assert!(otp.contains(&"input[id*=\"totp\" i]".to_string()));
+        // Secrets, inputs and emails are found by their content, not by selector.
+        assert!(censor_selectors(&[Censor::Secrets, Censor::Inputs, Censor::Emails]).is_empty());
+        let a = parse_censor_args(&json!({ "censor": ["inputs", "emails", "cards"] })).unwrap();
+        let plan = censor_plan(&a, &[3, 9]);
+        assert_eq!(plan["emails"], true);
+        assert_eq!(plan["frames"], true);
+        assert_eq!(plan["ids"], json!([3, 9]));
+        assert!(plan["filled"].as_str().unwrap().contains("textarea"));
+        let plan = censor_plan(
+            &parse_censor_args(&json!({ "censor": ["passwords"] })).unwrap(),
+            &[],
+        );
+        assert!(plan["filled"].is_null() && plan["frames"] == false);
+    }
+
+    #[test]
+    fn elements_holding_a_secret_are_found_by_their_text() {
+        let rows = json!([
+            [0, "Welcome"],
+            [1, "the code is SuperSecret123 ok"],
+            [2, "x"],
+            [5, "c3VwZXJzZWNyZXQxMjM="]
+        ]);
+        let filled = vec!["SuperSecret123".to_string(), "ab".to_string()];
+        assert_eq!(secret_element_ids(&rows, &filled), vec![1]);
+        assert!(secret_element_ids(&rows, &["ab".to_string()]).is_empty());
+        assert!(secret_element_ids(&rows, &[]).is_empty());
+    }
+
+    #[test]
+    fn the_censored_screenshot_tool_is_always_offered() {
+        let tools = own_tools(&[], &[], false, &[]);
+        let t = tools
+            .iter()
+            .find(|t| t["name"] == "browser_screenshot_censored")
+            .unwrap();
+        assert_eq!(t["annotations"]["readOnlyHint"], true);
+        assert!(t["inputSchema"]["properties"]["censor"].is_object());
+    }
+
+    #[test]
+    fn shared_screenshots_are_censored_when_asked_or_forced() {
+        let filled = vec!["SuperSecret123".to_string(), "ab".to_string()];
+        assert_eq!(shared_censor(None, false, &filled), Ok(None));
+        let (cats, secrets) = shared_censor(None, true, &filled).unwrap().unwrap();
+        assert_eq!(cats, ["passwords", "cards", "otp", "secrets", "inputs"]);
+        assert_eq!(secrets, Some(vec!["SuperSecret123".to_string()]));
+        // An empty list cannot turn it off when forced, nor asks for it when not.
+        assert!(shared_censor(Some(&json!([])), true, &filled)
+            .unwrap()
+            .is_some());
+        assert_eq!(shared_censor(Some(&json!([])), false, &filled), Ok(None));
+        let (cats, secrets) = shared_censor(Some(&json!(["emails"])), false, &filled)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cats, ["emails"]);
+        assert_eq!(secrets, None);
+        let (cats, _) = shared_censor(Some(&json!(["emails"])), true, &filled)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cats.len(), 6);
+        assert!(shared_censor(Some(&json!(["faces"])), true, &filled).is_err());
     }
 }

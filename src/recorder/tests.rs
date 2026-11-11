@@ -417,3 +417,116 @@ async fn proxied_frames_are_stamped_thinned_and_bounded() {
     *sender.last.lock().unwrap() = None;
     assert!(sender.send(frame("z")).is_err());
 }
+
+fn flight_frame(t: u64, size: usize) -> RecordingFrame {
+    RecordingFrame {
+        t,
+        url: Some("https://example.org/".to_string()),
+        title: Some("Page".to_string()),
+        data: "x".repeat(size),
+    }
+}
+
+#[test]
+fn the_flight_ring_drops_frames_older_than_its_window() {
+    let mut ring = FlightRing::new(10, usize::MAX);
+    for t in [0, 3000, 6000, 9000, 12_000, 15_000] {
+        ring.push(flight_frame(t, 10), t);
+    }
+    // The window starts at 5000: the frame at 3000 stays as the base, 0 is gone.
+    let snap = ring.snapshot(15_000).unwrap();
+    let times: Vec<u64> = snap.frames.iter().map(|f| f.t).collect();
+    assert_eq!(times, vec![0, 1000, 4000, 7000, 10_000]);
+    assert_eq!(snap.duration_ms, 10_000);
+    assert_eq!(ring.len(), 5);
+}
+
+#[test]
+fn a_quiet_page_keeps_its_last_frame_as_the_base() {
+    let mut ring = FlightRing::new(10, usize::MAX);
+    ring.push(flight_frame(1000, 10), 1000);
+    // Minutes later, nothing changed: the one frame still shows the screen.
+    let snap = ring.snapshot(600_000).unwrap();
+    assert_eq!(snap.frames.len(), 1);
+    assert_eq!(snap.frames[0].t, 0);
+    assert_eq!(snap.duration_ms, 10_000);
+    assert_eq!(ring.buffered_ms(600_000), 10_000);
+}
+
+#[test]
+fn the_flight_ring_is_bounded_in_bytes_and_drops_the_oldest_first() {
+    let one = frame_bytes_for_test();
+    let mut ring = FlightRing::new(300, one * 3);
+    for i in 0..10u64 {
+        ring.push(flight_frame(i * 1000, 1000), i * 1000);
+    }
+    assert!(ring.bytes() <= one * 3);
+    assert_eq!(ring.len(), 3);
+    let snap = ring.snapshot(9000).unwrap();
+    // The newest three stay; the save starts where the buffer starts.
+    assert_eq!(
+        snap.frames.iter().map(|f| f.t).collect::<Vec<_>>(),
+        vec![0, 1000, 2000]
+    );
+    assert_eq!(snap.duration_ms, 2000);
+}
+
+fn frame_bytes_for_test() -> usize {
+    let mut ring = FlightRing::new(60, usize::MAX);
+    ring.push(flight_frame(0, 1000), 0);
+    ring.bytes()
+}
+
+#[test]
+fn a_frame_over_the_cap_alone_is_kept() {
+    let mut ring = FlightRing::new(60, 10);
+    ring.push(flight_frame(0, 1000), 0);
+    assert_eq!(ring.len(), 1);
+    assert!(ring.snapshot(0).is_some());
+}
+
+#[test]
+fn an_empty_flight_ring_has_nothing_to_save() {
+    let mut ring = FlightRing::new(60, 1000);
+    assert!(ring.snapshot(5000).is_none());
+    assert_eq!(ring.buffered_ms(5000), 0);
+}
+
+#[tokio::test]
+async fn a_saved_flight_buffer_is_an_ordinary_recording() {
+    let dir = std::env::temp_dir().join(format!("bd-flight-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let config = RecorderConfig {
+        enabled: true,
+        recordings_dir: dir.clone(),
+        max_storage_bytes: u64::MAX,
+        max_age_secs: u64::MAX / 2,
+        max_count: 1000,
+        audio: false,
+        ffmpeg: None,
+    };
+    let mut ring = FlightRing::new(60, usize::MAX);
+    ring.push(flight_frame(500, 100), 500);
+    ring.push(flight_frame(2500, 100), 2500);
+    let snap = ring.snapshot(4000).unwrap();
+    let session = Uuid::new_v4();
+    let id = write_flight_recording(&config, session, Some("p".into()), "n".into(), &snap)
+        .await
+        .unwrap();
+    let meta = get_recording(&config, id).await.unwrap();
+    assert_eq!(meta.session_id, session);
+    assert_eq!(meta.status, "completed");
+    assert_eq!(meta.frame_count, 2);
+    assert_eq!(meta.duration_ms, 4000);
+    assert_eq!(meta.initial_url.as_deref(), Some("https://example.org/"));
+    assert_eq!(meta.title.as_deref(), Some("Flight recorder: Page"));
+    let text = std::fs::read_to_string(dir.join(id.to_string()).join("frames.jsonl")).unwrap();
+    let frames: Vec<RecordingFrame> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[1].t, 2500);
+    assert_eq!(meta.size_bytes, text.len() as u64);
+    let _ = std::fs::remove_dir_all(&dir);
+}

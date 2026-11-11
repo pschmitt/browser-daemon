@@ -22,6 +22,25 @@ Runs Chromium with native CDP and Firefox with WebDriver BiDi (`/firefox`). Fire
 
 Runs headful Chromium inside an X11 virtual display (`Xvfb`) with `--disable-blink-features=AutomationControlled` natively. Cleanly passes Google Botguard, Cloudflare Turnstile, and other bot detection systems.
 
+## Human-like input
+
+`/chromium?human_input=1` makes the node reshape that client's input so it looks
+less like a bot (the MCP server has a flag for it; `--human-input-default` or the
+NixOS option `humanInput` turn it on for all clients, `human_input=0` opts out):
+
+- A click, or a pointer jump of more than a few pixels, is preceded by a curved
+  path of `mouseMoved` events (15 to 40 steps over 150 to 600 ms) from the last
+  pointer position of that CDP session.
+- `Input.insertText` becomes one insertion per character, 30 to 140 ms apart,
+  with an occasional longer pause (very long text goes in chunks, at most 100).
+- `Input.dispatchKeyEvent` gets a small random gap.
+- A big mouse wheel delta is split into steps of about 100 with short gaps.
+
+The node's own messages use ids that clients never use, and their answers are
+not forwarded. The order of the client's messages is kept: later ones wait for a
+delayed one. Typing and clicking are slower this way. Chromium only: Firefox
+(`/firefox`, BiDi) is not reshaped.
+
 ## Without Playwright on the client
 
 [`POST /api/run`](run.md) runs a Playwright script or a list of steps on the

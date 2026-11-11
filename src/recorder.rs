@@ -11,7 +11,14 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+mod flight;
 mod playback;
+pub use flight::{
+    flight_save, flight_start, flight_status, flight_stop, flight_summary, FlightError,
+    FlightSummary, FLIGHT_DEFAULT_SECS, FLIGHT_MAX_SECS,
+};
+#[cfg(test)]
+use flight::{write_flight_recording, FlightRing};
 pub use playback::{playback_window, RecordingFrame, RecordingMeta};
 
 #[derive(Clone, Debug)]
@@ -346,7 +353,8 @@ pub fn start_recording(
             frame_rx,
             grab,
             audio.zip(sound_task),
-            active,
+            Some(active),
+            None,
         )
         .await;
     });
@@ -362,7 +370,9 @@ pub fn start_recording(
 
 #[allow(clippy::too_many_arguments)]
 async fn write_single_frame(
-    writer: &mut tokio::fs::File,
+    writer: &mut Option<tokio::fs::File>,
+    // The flight recorder's buffer: the frame goes there instead of the file.
+    ring: Option<&Arc<Mutex<flight::FlightRing>>>,
     meta: &mut RecordingMeta,
     meta_file: &Path,
     rec_dir: &Path,
@@ -418,6 +428,15 @@ async fn write_single_frame(
         data,
     };
 
+    if let Some(ring) = ring {
+        ring.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(frame, duration_ms(clock.elapsed()));
+        return;
+    }
+    let Some(writer) = writer.as_mut() else {
+        return;
+    };
     if let Ok(line) = serde_json::to_string(&frame) {
         let _ = writer.write_all(line.as_bytes()).await;
         let _ = writer.write_all(b"\n").await;
@@ -490,12 +509,16 @@ async fn record_session_loop(
     grab: Option<DisplayGrab>,
     audio: Option<(crate::rec_audio::Source, Arc<AtomicBool>)>,
     // Registered until the recording is final.
-    active: ActiveGuard,
+    active: Option<ActiveGuard>,
+    // The flight recorder: frames go to this buffer, nothing to the disk.
+    ring: Option<Arc<Mutex<flight::FlightRing>>>,
 ) {
     let rec_dir = config.recordings_dir.join(recording_id.to_string());
-    if let Err(e) = make_rec_dir(&config, &rec_dir).await {
-        error!(recording_id = %recording_id, error = %e, "Failed to create recording directory");
-        return;
+    if ring.is_none() {
+        if let Err(e) = make_rec_dir(&config, &rec_dir).await {
+            error!(recording_id = %recording_id, error = %e, "Failed to create recording directory");
+            return;
+        }
     }
 
     let started_at_secs = SystemTime::now()
@@ -529,7 +552,9 @@ async fn record_session_loop(
         merged_at_secs: None,
     };
 
-    let _ = write_meta(&meta_file, &meta).await;
+    if ring.is_none() {
+        let _ = write_meta(&meta_file, &meta).await;
+    }
 
     // The sound, on the same clock; stopped once the frames are done (the loop
     // also ends without the stop flag, when the session goes away).
@@ -557,13 +582,17 @@ async fn record_session_loop(
         .unwrap_or_default();
 
     // Open frames file
-    let mut frames_writer = match crate::persist::private_append(&frames_file).await {
-        Ok(f) => f,
-        Err(e) => {
-            error!(recording_id = %recording_id, error = %e, "Failed to open frames file");
-            meta.status = "interrupted".to_string();
-            let _ = write_meta(&meta_file, &meta).await;
-            return;
+    let mut frames_writer = if ring.is_some() {
+        None
+    } else {
+        match crate::persist::private_append(&frames_file).await {
+            Ok(f) => Some(f),
+            Err(e) => {
+                error!(recording_id = %recording_id, error = %e, "Failed to open frames file");
+                meta.status = "interrupted".to_string();
+                let _ = write_meta(&meta_file, &meta).await;
+                return;
+            }
         }
     };
 
@@ -592,6 +621,7 @@ async fn record_session_loop(
             last_proxy_frame = Some(Instant::now());
             write_single_frame(
                 &mut frames_writer,
+                ring.as_ref(),
                 &mut meta,
                 &meta_file,
                 &rec_dir,
@@ -619,6 +649,7 @@ async fn record_session_loop(
                     last_proxy_frame = Some(Instant::now());
                     write_single_frame(
                         &mut frames_writer,
+                        ring.as_ref(),
                         &mut meta,
                         &meta_file,
                         &rec_dir,
@@ -779,6 +810,7 @@ async fn record_session_loop(
                             last_proxy_frame = Some(Instant::now());
                             write_single_frame(
                                 &mut frames_writer,
+                                ring.as_ref(),
                                 &mut meta,
                                 &meta_file,
                                 &rec_dir,
@@ -844,6 +876,7 @@ async fn record_session_loop(
                             last_bg_frame_time = Instant::now();
                             write_single_frame(
                                 &mut frames_writer,
+                                ring.as_ref(),
                                 &mut meta,
                                 &meta_file,
                                 &rec_dir,
@@ -885,6 +918,7 @@ async fn record_session_loop(
                                             last_shot = data.to_string();
                                             write_single_frame(
                                                 &mut frames_writer,
+                                                ring.as_ref(),
                                                 &mut meta,
                                                 &meta_file,
                                                 &rec_dir,
@@ -909,7 +943,7 @@ async fn record_session_loop(
                                         .and_then(|v| v.as_str())
                                         .and_then(parse_data_url)
                                     {
-                                        if fs::write(rec_dir.join("favicon.bin"), &bytes).await.is_ok() {
+                                        if ring.is_none() && fs::write(rec_dir.join("favicon.bin"), &bytes).await.is_ok() {
                                             meta.favicon_type = Some(mime);
                                         }
                                     }
@@ -1033,8 +1067,14 @@ async fn record_session_loop(
         }
     }
 
-    let _ = frames_writer.flush().await;
+    if let Some(w) = frames_writer.as_mut() {
+        let _ = w.flush().await;
+    }
     drop(frames_writer);
+    if ring.is_some() {
+        // Nothing to finalize: the buffer is saved on request.
+        return;
+    }
 
     // Before the audio is joined, which takes a moment of the clock.
     let length = clock.elapsed();

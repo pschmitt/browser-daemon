@@ -101,6 +101,19 @@ function favicon(tab) {
   return box;
 }
 
+// The tab in front, on or off in one click (even where "Share all tabs" locks the list).
+function renderThisTab() {
+  const tab = state.currentTab;
+  $('thisTab').hidden = !tab;
+  if (!tab) return;
+  $('thisTab').classList.toggle('on', tab.shared);
+  $('thisTabTitle').textContent = tab.title || tab.url;
+  $('thisTabHost').textContent = new URL(tab.url).host + (tab.shared ? (tab.control ? ' · shared with control' : ' · shared, view only') : ' · not shared');
+  $('thisTabToggle').textContent = tab.shared ? 'Stop sharing' : 'Share this tab';
+  $('thisTabToggle').classList.toggle('primary', !tab.shared);
+  $('thisTabToggle').dataset.id = tab.id;
+  $('thisTabToggle').dataset.shared = tab.shared ? '1' : '';
+}
 function renderTabs() {
   const signature = JSON.stringify(state.tabs);
   if (signature === renderedTabs) return;
@@ -303,6 +316,10 @@ async function refresh() {
     // Not on Firefox for Android: it has no history or bookmarks to suggest from.
     $('addressSuggestions').closest('label').hidden = state.android === true;
     $('autoShareRow').hidden = state.sharing.all;
+    if (document.activeElement !== $('agentGroup')) $('agentGroup').checked = state.sharing.agentGroup;
+    $('agentGroupRow').hidden = !state.groupsSupported;
+    if (document.activeElement !== $('agentIdle')) $('agentIdle').value = String(state.sharing.agentIdle);
+    renderThisTab();
     $('dashboard').href = `${reg.server}/#nodes`;
     $('dashboard').title = `Open dashboard (${new URL(reg.server).host})`;
     renderTabs();
@@ -382,6 +399,20 @@ $('shareAllTabs').addEventListener('click', event => {
   event.stopPropagation();
   const all = sharedIds().length === state.tabs.length;
   void (all ? Promise.resolve() : capturePermission()).then(() => share(all ? [] : state.tabs.map(t => t.id)), showError);
+});
+$('thisTabToggle').addEventListener('click', () => {
+  const button = $('thisTabToggle'), enable = !button.dataset.shared;
+  clearError();
+  void (enable ? capturePermission() : Promise.resolve())
+    .then(() => message({type: 'shareTab', tab: Number(button.dataset.id), enabled: enable}))
+    .then(() => { renderedTabs = ''; return refresh(); }, showError);
+});
+$('agentGroup').addEventListener('change', () => {
+  const enabled = $('agentGroup').checked;
+  void message({type: 'agentGroup', enabled}).then(refresh, error => { $('agentGroup').checked = !enabled; showError(error); });
+});
+$('agentIdle').addEventListener('change', () => {
+  void message({type: 'agentIdle', minutes: Number($('agentIdle').value)}).then(refresh, showError);
 });
 $('control').addEventListener('change', () => {
   clearError();

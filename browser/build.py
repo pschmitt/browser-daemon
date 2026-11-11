@@ -34,16 +34,22 @@ def main():
             "name": "Browser Daemon Node",
             "version": VERSION,
             "description": "Temporarily share selected tabs with your browser daemon, with optional remote control.",
-            "permissions": ["tabs", "storage", "scripting", "alarms", "webNavigation"],
+            "permissions": ["tabs", "tabGroups", "storage", "scripting", "alarms", "webNavigation"],
             "host_permissions": ["http://*/*", "https://*/*"],
             "action": {"default_popup": "popup.html", "default_title": "Browser node", "default_icon": {
                 str(size): f"toolbar-{size}.png" for size in (16, 32, 48)
             }},
             "icons": {"192": "icon.png"},
-            "commands": {"stop-sharing": {
-                "suggested_key": {"default": "Ctrl+Shift+Period"},
-                "description": "Immediately disconnect and stop sharing all tabs",
-            }},
+            "commands": {
+                "stop-sharing": {
+                    "suggested_key": {"default": "Ctrl+Shift+Period"},
+                    "description": "Immediately disconnect and stop sharing all tabs",
+                },
+                "toggle-share-tab": {
+                    "suggested_key": {"default": "Ctrl+Shift+Comma"},
+                    "description": "Share or stop sharing the current tab",
+                },
+            },
             "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"},
             "incognito": "not_allowed",
         }
@@ -55,7 +61,7 @@ def main():
             manifest["optional_permissions"] = ["history", "bookmarks", "proxy", "webRequest", "webRequestAuthProvider"]
             # Chrome excludes debugger from optional permissions. Installation
             # permits the API; actual tab/control grants remain explicit.
-            manifest["permissions"].append("debugger")
+            manifest["permissions"].extend(["debugger", "contextMenus"])
             manifest["background"] = {"service_worker": "background.js"}
         else:
             # These are core node features, so managed installs should not
@@ -68,7 +74,7 @@ def main():
             ])
             manifest["host_permissions"] = ["<all_urls>"]
             manifest["optional_permissions"] = ["proxy"]
-            manifest["background"] = {"scripts": ["policy.js", "proxy.js", "audio.js", "files-page.js", "files.js", "favicon.js", "background.js"]}
+            manifest["background"] = {"scripts": ["policy.js", "proxy.js", "audio.js", "files-page.js", "files.js", "favicon.js", "censor.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
                 "id": "browser-daemon-node@pschmitt.dev",
                 "strict_min_version": "142.0",

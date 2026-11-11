@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### Added
+
+* Flight recorder: a session can keep its last seconds of video (60 by
+  default, up to 300) in memory and save them as an ordinary recording when
+  something goes wrong. Video only. `POST /api/sessions/{id}/flight-recorder`,
+  `browser-daemon session flight-recorder`, the session sheet, and the MCP's
+  `browser_flight_recorder`.
+* Human-like input for Chromium clients that ask for it (`human_input=1` on
+  `/chromium`, NixOS `humanInput` for a node-wide default, MCP
+  `--human-input`): curved mouse paths before clicks, paced typing, and large
+  scrolls split into steps.
+* MCP: bot walls (Cloudflare, DataDome, PerimeterX, Imperva, Akamai, AWS WAF,
+  captcha and block pages) are reported after navigations and clicks; the MCP
+  waits up to `--challenge-wait` seconds (15) for them to clear and otherwise
+  points to `browser_ask_human`.
+* MCP: `browser_network_har` records the page's traffic to a HAR file with
+  credentials, cookies and secret-looking parameters redacted.
+* MCP: `browser_screenshot_censored` blacks out passwords, card and one-time-code
+  fields, filled inputs and filled vault secrets; `--censor-screenshots` makes
+  every screenshot censored, shared desktop-browser tabs included.
+* MCP: `browser_set_topic` (replaces the `browser-agent-topic` script),
+  `browser_live_link`, `browser_recording`, and with `--allow-share`
+  `browser_share` and `browser_unshare` for public links. Every own tool has
+  full annotations.
+* Browser extension: tabs that clients open go to a collapsed "Agents" tab
+  group in the background (Firefox 139+), close after 10 minutes idle
+  (configurable), show ON/RUN on the toolbar badge, and can be shared or taken
+  back from the context menu, a keyboard shortcut or the popup. Shared-tab
+  screenshots can be censored (`censor` parameter); censoring fails closed.
+
 ## [0.16.0] - 2026-11-10
 
 ### Changed

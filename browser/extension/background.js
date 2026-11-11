@@ -1,5 +1,5 @@
 /* Local extension code only; dashboard bridge requires explicit daemon approval. */
-if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js');
+if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js', 'censor.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
 // Firefox for Android has no history or bookmarks, and asking for those permissions
@@ -32,10 +32,13 @@ function castState(tab) {
 // By default every tab is shared (all: true), with the remote control choice.
 // Without that, chosen tabs are, and new ones join if autoShare.
 // follow: the tab a live view switches to comes to the front here as well.
-let sharing = {all: true, autoShare: true, control: false, follow: false, audio: true, files: false, public: false};
+// agentGroup/agentIdle: where tabs a client opened go, and when they close by themselves (minutes, 0 = never).
+let sharing = {all: true, autoShare: true, control: false, follow: false, audio: true, files: false, public: false, agentGroup: true, agentIdle: 10};
+const AGENT_IDLE_CHOICES = [10, 30, 60, 0];
 let publicGrant = crypto.randomUUID();
-const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio', 'shareFiles', 'sharePublic']).then(async saved => {
-  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView === true, audio: saved.shareAudio !== false, files: saved.shareFiles === true, public: saved.sharePublic === true};
+const sharingReady = api.storage.local.get(['shareAll', 'autoShare', 'shareControl', 'followView', 'shareAudio', 'shareFiles', 'sharePublic', 'agentGroup', 'agentIdle']).then(async saved => {
+  sharing = {all: saved.shareAll !== false, autoShare: saved.autoShare !== false, control: saved.shareControl === true, follow: saved.followView === true, audio: saved.shareAudio !== false, files: saved.shareFiles === true, public: saved.sharePublic === true,
+    agentGroup: saved.agentGroup !== false, agentIdle: AGENT_IDLE_CHOICES.includes(saved.agentIdle) ? saved.agentIdle : 10};
   if (sharing.files && !(await api.permissions.contains({origins: chromium ? ['http://*/*', 'https://*/*'] : ['<all_urls>'],
       ...(!chromium ? {permissions: ['webRequest', 'webRequestBlocking', 'webRequestFilterResponse']} : {})}))) {
     sharing.files = false;
@@ -54,10 +57,137 @@ async function shareEverything() {
 }
 async function openTab(url, windowId) {
   if (!safeURL(url)) throw new ShimError('Local services and daemon pages cannot be opened remotely.');
-  const created = await api.tabs.create({url, active: true, ...(windowId ? {windowId} : {})});
+  // Opened in the background: a client never takes the owner's focus.
+  const created = await api.tabs.create({url, active: false, ...(windowId ? {windowId} : {})});
   shared.set(created.id, {origin: null, control: true, paused: true});
+  await claimAgentTab(created.id);
   publishSoon();
   return {tab: created.id};
+}
+// Tabs a client opened (tab 0 "open", or a popup of such a tab) belong to the
+// agent, not the owner: they go into one collapsed "Agents" group per window and
+// close by themselves once nobody has touched them for a while. They are kept in
+// storage.session (the worker sleeps) as tab id -> {touch: ms, group: id}.
+// A tab the owner moves out of the group, unshares or takes over stops being one.
+const AGENT_GROUP_TITLE = 'Agents';
+const agentTabs = new Map();
+const agentReady = api.storage.session.get('agentTabs').then(({agentTabs: saved}) => {
+  for (const [id, entry] of Object.entries(saved || {})) if (!agentTabs.has(Number(id))) agentTabs.set(Number(id), entry);
+}).catch(() => {});
+const saveAgentTabs = () => api.storage.session.set({agentTabs: Object.fromEntries(agentTabs)}).catch(() => {});
+// Client commands running now: {tab, id, connection, cancelled}.
+const runs = new Set();
+function touchAgentTab(id) {
+  const entry = agentTabs.get(id);
+  if (!entry) return;
+  entry.touch = Date.now();
+  void saveAgentTabs();
+}
+async function claimAgentTab(id) {
+  await agentReady;
+  agentTabs.set(id, {touch: Date.now(), group: null});
+  void saveAgentTabs();
+  groupAgentTab(id);
+}
+async function claimOpenedTab(tab) {
+  await agentReady;
+  // The creation event can come before the opener is known.
+  const opener = tab.openerTabId ?? (await api.tabs.get(tab.id).catch(() => null))?.openerTabId;
+  if (opener !== undefined && agentTabs.has(opener)) await claimAgentTab(tab.id);
+}
+function releaseAgentTab(id, ungroup = false) {
+  const entry = agentTabs.get(id);
+  if (!entry) return;
+  agentTabs.delete(id);
+  void saveAgentTabs();
+  if (ungroup && entry.group !== null && api.tabs.ungroup) void Promise.resolve(api.tabs.ungroup(id)).catch(() => {});
+}
+// The owner dragged a tab out of the group (or ungrouped it): it is theirs now.
+function agentGroupChanged(id, groupId) {
+  const entry = agentTabs.get(id);
+  if (entry && entry.group !== null && entry.group !== groupId) releaseAgentTab(id);
+}
+// Tab groups: Chromium 89+ and Firefox 139+ (the manifest needs 142). Where the
+// API is missing (Firefox for Android) tabs stay ungrouped, and still close when idle.
+const groupsSupported = () => !!(api.tabs.group && api.tabGroups);
+let groupChain = Promise.resolve();
+function groupAgentTab(id) {
+  if (!sharing.agentGroup || !groupsSupported()) return;
+  groupChain = groupChain.then(() => placeInAgentGroup(id)).catch(() => {});
+}
+async function placeInAgentGroup(id) {
+  await Promise.all([agentReady, sharingReady]);
+  const entry = agentTabs.get(id);
+  if (!entry || !sharing.agentGroup) return;
+  const tab = await api.tabs.get(id);
+  const [ours] = await api.tabGroups.query({windowId: tab.windowId, title: AGENT_GROUP_TITLE});
+  if (typeof tab.groupId === 'number' && tab.groupId !== -1) {
+    // A popup joins its opener's group on its own; any other group is the owner's.
+    if (ours && tab.groupId === ours.id) { entry.group = ours.id; void saveAgentTabs(); }
+    return;
+  }
+  const group = await api.tabs.group({tabIds: [id], ...(ours ? {groupId: ours.id} : {})});
+  if (!ours) {
+    // Collapsed (unless the tab is in front: that would pull it away), at the start of the strip, after pinned tabs.
+    await api.tabGroups.update(group, {title: AGENT_GROUP_TITLE, color: 'purple', collapsed: !tab.active});
+    const pinned = (await api.tabs.query({windowId: tab.windowId, pinned: true})).length;
+    await api.tabGroups.move(group, {index: pinned}).catch(() => {});
+  }
+  if (agentTabs.get(id) === entry) { entry.group = group; void saveAgentTabs(); }
+}
+const tabInUse = id => [...runs].some(run => run.tab === id) || [...channels.values()].includes(id) || mediaAudio.has(id);
+async function sweepAgentTabs() {
+  await Promise.all([agentReady, sharingReady]);
+  const open = new Map((await api.tabs.query({})).map(tab => [tab.id, tab]));
+  const now = Date.now();
+  const {agentSweepAt} = await api.storage.session.get('agentSweepAt');
+  await api.storage.session.set({agentSweepAt: now});
+  // After a suspend the clock jumped: the idle time was the machine's, not the agent's.
+  const resumed = typeof agentSweepAt === 'number' && now - agentSweepAt > 5 * 60000;
+  const limit = sharing.agentIdle * 60000;
+  for (const [id, entry] of [...agentTabs]) {
+    const tab = open.get(id);
+    if (!tab) { agentTabs.delete(id); continue; }
+    // In front, running a command or watched (live view, recording, sound): in use.
+    if (resumed || tab.active || tabInUse(id)) entry.touch = now;
+    else if (limit && now - entry.touch >= limit) { agentTabs.delete(id); await Promise.resolve(api.tabs.remove(id)).catch(() => {}); }
+  }
+  await saveAgentTabs();
+}
+// Taking a tab back (or closing it) ends the commands still running on it: the
+// daemon is told at once, and what the command does next finds no grant.
+function cancelTabCommands(tab) {
+  for (const run of runs) {
+    if (run.tab !== tab || run.cancelled) continue;
+    run.cancelled = true;
+    if (socket === run.connection && run.connection.readyState === WebSocket.OPEN) run.connection.send(JSON.stringify({type: 'result', id: run.id, error: 'Sharing ended.'}));
+  }
+}
+function tabTakenBack(id) {
+  cancelTabCommands(id);
+  releaseAgentTab(id, true);
+}
+// One tab, on or off, for the menu, the shortcut and the popup.
+async function setTabShared(tab, on) {
+  if (!registration) throw new Error('Connect this browser first.');
+  if (on) {
+    if (!safeTab(tab)) throw new Error('This tab cannot be shared.');
+    if (!shared.has(tab.id)) shared.set(tab.id, {origin: new URL(tab.url).origin, control: sharing.control, paused: false});
+    if (chromium) void attach(tab.id).catch(() => {});
+    else void hookPasskeys(tab.id).catch(() => hooked.delete(tab.id));
+  } else {
+    shared.delete(tab.id);
+    tabTakenBack(tab.id);
+    await detach(tab.id);
+  }
+  await publish();
+}
+async function toggleTab(tab) {
+  try {
+    tab ||= (await api.tabs.query({active: true, lastFocusedWindow: true}))[0];
+    if (!tab) return;
+    await setTabShared(tab, !shared.has(tab.id));
+  } catch (error) { record(`Share toggle failed: ${error.message}`); }
 }
 // Every allowed daemon origin, so no shared tab can ever show a daemon page.
 let daemons = new Set();
@@ -454,6 +584,35 @@ async function syncTabIcons() {
     } catch { iconTabs.delete(id); }
   }
 }
+// The connection state is the icon's mark. The badge text is per tab: ON while the
+// tab is shared (red if a client may control it, green if view only), RUN while a
+// client command runs on it. (There is no WAIT: the daemon never tells the
+// extension that a client waits for a person.)
+const tabBadges = new Map();
+function badgeFor(id) {
+  const grant = shared.get(id);
+  if (!registration || !grant || grant.paused) return null;
+  if ([...runs].some(run => run.tab === id && !run.cancelled)) return {text: 'RUN', color: '#2563eb'};
+  return {text: 'ON', color: grant.control ? '#e11d48' : '#16a34a'};
+}
+async function syncTabBadges() {
+  const want = new Map();
+  for (const id of shared.keys()) { const badge = badgeFor(id); if (badge) want.set(id, badge); }
+  const jobs = [];
+  for (const id of [...tabBadges.keys()]) {
+    if (want.has(id)) continue;
+    tabBadges.delete(id);
+    jobs.push(api.action.setBadgeText({text: '', tabId: id}).catch(() => {}));
+  }
+  for (const [id, badge] of want) {
+    const old = tabBadges.get(id);
+    if (old?.text === badge.text && old.color === badge.color) continue;
+    tabBadges.set(id, badge);
+    jobs.push(Promise.all([api.action.setBadgeText({text: badge.text, tabId: id}),
+      api.action.setBadgeBackgroundColor({color: badge.color, tabId: id})]).catch(() => tabBadges.delete(id)));
+  }
+  await Promise.all(jobs);
+}
 async function badge() {
   const state = toolbarState(), proxied = proxiedBy(proxyChoice);
   await api.action.setBadgeText({text: ''});
@@ -461,6 +620,8 @@ async function badge() {
   await drawToolbarIcon(state, proxied);
   await api.action.setTitle({title: toolbarTitles[state] + (proxied ? ' — traffic goes through a proxy' : '')});
   await syncTabIcons();
+  await syncTabBadges();
+  void syncShareMenu();
 }
 
 async function detach(tab) {
@@ -584,7 +745,20 @@ async function restoreTabProxies() {
 
 // The tab's context menu (Firefox), on the tab and on its page: share it, and pick
 // its proxy.
-const MENU_CONTEXTS = ['tab', 'page'];
+const menus = api.menus || api.contextMenus;
+const MENU_CONTEXTS = chromium ? ['page'] : ['tab', 'page'];
+// The toolbar button's own menu has the entry too.
+const SHARE_CONTEXTS = [...MENU_CONTEXTS, 'action'];
+function shareMenuState(tab) {
+  const on = !!tab && shared.has(tab.id);
+  return {title: on ? 'Stop sharing this tab' : 'Share this tab with browser-daemon', enabled: !!registration && !!tab && (on || safeTab(tab))};
+}
+// Chromium has no menu-shown event: the entry follows the tab in front instead.
+async function syncShareMenu() {
+  if (!menus || menus.onShown) return;
+  const [tab] = await api.tabs.query({active: true, lastFocusedWindow: true});
+  await menus.update('bd-share', shareMenuState(tab)).catch(() => {});
+}
 const menuProxies = [];
 function proxyLabel(pick) {
   if (!pick) return 'No proxy';
@@ -592,40 +766,36 @@ function proxyLabel(pick) {
   return proxyOffer?.proxies.find(p => p.id === pick)?.name || pick;
 }
 function buildTabMenu() {
-  if (!api.menus) return;
-  api.menus.removeAll().then(() => {
+  if (!menus) return;
+  menus.removeAll().then(() => {
     menuProxies.length = 0;
-    api.menus.create({id: 'bd-share', title: 'Share tab', contexts: MENU_CONTEXTS, type: 'checkbox', enabled: false});
-    if (!proxyOffer) return;
-    api.menus.create({id: 'bd-proxy', title: 'Proxy for this tab', contexts: MENU_CONTEXTS});
+    menus.create({id: 'bd-share', ...shareMenuState(null), contexts: SHARE_CONTEXTS});
+    void syncShareMenu();
+    // The per-tab proxy is Firefox's (Chromium has one browser-wide setting).
+    if (!proxyOffer || chromium) return;
+    menus.create({id: 'bd-proxy', title: 'Proxy for this tab', contexts: MENU_CONTEXTS});
     const entries = [['follow', 'Default'], ['none', 'No proxy'], [NodeProxy.DIRECT, proxyLabel(NodeProxy.DIRECT)],
       ...proxyOffer.proxies.map(p => [p.id, p.name])];
     for (const [id, title] of entries) {
       menuProxies.push(id);
-      api.menus.create({id: `bd-proxy:${id}`, parentId: 'bd-proxy', title, contexts: MENU_CONTEXTS, type: 'radio'});
+      menus.create({id: `bd-proxy:${id}`, parentId: 'bd-proxy', title, contexts: MENU_CONTEXTS, type: 'radio'});
     }
   }).catch(() => {});
 }
 function tabMenuShown(info, tab) {
-  if (!tab || !(info.contexts || []).some(c => MENU_CONTEXTS.includes(c))) return;
-  const ready = !!registration && safeTab(tab);
-  void api.menus.update('bd-share', {checked: shared.has(tab.id), enabled: ready});
+  if (!tab || !(info.contexts || []).some(c => SHARE_CONTEXTS.includes(c))) return;
+  void menus.update('bd-share', shareMenuState(tab));
   if (menuProxies.length) {
     const own = tabProxies.has(tab.id) ? (tabProxies.get(tab.id) ?? 'none') : 'follow';
-    void api.menus.update('bd-proxy:follow', {title: `Default (${proxyLabel(proxyChoice)})`});
-    for (const id of menuProxies) void api.menus.update(`bd-proxy:${id}`, {checked: id === own});
+    void menus.update('bd-proxy:follow', {title: `Default (${proxyLabel(proxyChoice)})`});
+    for (const id of menuProxies) void menus.update(`bd-proxy:${id}`, {checked: id === own});
   }
-  void api.menus.refresh();
+  void menus.refresh?.();
 }
 async function tabMenuClicked(info, tab) {
   if (!tab) return;
   if (info.menuItemId === 'bd-share') {
-    if (!registration) return;
-    const ids = new Set(shared.keys());
-    if (ids.has(tab.id)) ids.delete(tab.id); else ids.add(tab.id);
-    const urls = {};
-    for (const id of ids) urls[id] = (await api.tabs.get(id)).url;
-    await applyShare({tabs: [...ids], urls, control: sharing.control});
+    await setTabShared(tab, !shared.has(tab.id));
   } else if (typeof info.menuItemId === 'string' && info.menuItemId.startsWith('bd-proxy:')) {
     const id = info.menuItemId.slice('bd-proxy:'.length);
     // The browser gives requests to the extension only with this permission, which
@@ -677,6 +847,7 @@ async function stop(reason = 'Disconnected', retry = false) {
   void clearBrowserProxy().catch(() => {});
   clearInterval(heartbeat);
   clearTimeout(expiryTimer);
+  for (const id of shared.keys()) cancelTabCommands(id);
   shared.clear();
   published = [];
   for (const channel of casts.keys()) stopCast(channel);
@@ -1486,6 +1657,7 @@ async function execute(command) {
   const {tab, action} = command;
   let {params} = command;
   if (action === 'suggest') return addressSuggestions(params.query);
+  if (action === 'screenshot' && params.censor !== undefined && params.censor !== null) return censoredScreenshot(command);
   if (action === 'publicAudio') {
     if (!command.public_grant || !sharing.audio) throw new Error('Audio sharing is disabled.');
     let state = mediaAudio.get(tab);
@@ -1767,6 +1939,7 @@ function closeChannel(channel) {
   stopFileChannel(channel);
   const tab = channels.get(channel);
   channels.delete(channel);
+  touchAgentTab(tab);
   if (automations.delete(channel) && ![...automations.values()].includes(tab)) void resetAutomation(tab);
   stopCast(channel);
   screencasts.delete(tab);
@@ -1847,6 +2020,45 @@ function relayMediaAudio(message, sender) {
 }
 
 class ShimError extends Error {}
+// What a screenshot with params.censor needs: black boxes over what matches, in
+// every frame, then the capture, then the boxes gone. Anything that goes wrong
+// before the capture is an error, never an uncensored image. Neither the
+// secrets nor page content ever reach an error, a record or an event.
+class CensorError extends Error {}
+const censorLocks = new Map();
+function censoredScreenshot(command) {
+  // One at a time per tab: a second run must not remove the first one's boxes mid-capture.
+  const run = (censorLocks.get(command.tab) || Promise.resolve()).then(() => censorOnce(command));
+  const done = run.catch(() => {});
+  censorLocks.set(command.tab, done);
+  void done.then(() => { if (censorLocks.get(command.tab) === done) censorLocks.delete(command.tab); });
+  return run;
+}
+async function censorOnce({tab, params}) {
+  let plan;
+  try { plan = NodeCensor.plan(params.censor, params.secrets); } catch { throw new CensorError('Unknown censor category; no screenshot taken.'); }
+  if (!plan) return execute({tab, action: 'screenshot', params: {}});
+  const target = {tabId: tab, allFrames: true};
+  let drawn = false, masked = 0;
+  try {
+    try {
+      await api.scripting.executeScript({target, files: ['censor.js']});
+      drawn = true;
+      const results = await api.scripting.executeScript({target, func: config => NodeCensor.apply(config), args: [{categories: plan.categories, secrets: plan.secrets}]});
+      const covered = new Set();
+      for (const r of results || []) {
+        if (r && !r.error && Number.isSafeInteger(r.result?.n)) { covered.add(r.frameId); masked += r.result.n; }
+      }
+      // Every frame that can show content must have been reached.
+      const frames = (await api.webNavigation.getAllFrames({tabId: tab})) || [];
+      if (!covered.has(0) || frames.some(f => /^(https?:|about:blank|about:srcdoc)/.test(f.url || '') && !f.errorOccurred && !covered.has(f.frameId))) throw new Error('frame');
+    } catch { throw new CensorError('Could not censor this page; no screenshot taken.'); }
+    const shot = await execute({tab, action: 'screenshot', params: {}});
+    return {...shot, censored: true, masked};
+  } finally {
+    if (drawn) await api.scripting.executeScript({target, func: () => NodeCensor.remove()}).catch(() => {});
+  }
+}
 // Firefox has no tab debugger for extensions. Frames are captured on change and
 // pushed like a screencast (two in flight at most); input goes through the
 // companion's trusted input when it runs, else DOM actions.
@@ -2104,20 +2316,24 @@ async function pump(channel) {
 async function handleCommand(command, connection, currentGeneration) {
   if (busy >= 16) return;
   busy++;
+  // While it runs the tab shows RUN and counts as touched; taking the tab back cancels it.
+  const run = {tab: command.tab, id: command.id, connection, cancelled: false};
+  const answer = text => { if (!run.cancelled) connection.send(text); };
+  if (command.tab) { runs.add(run); touchAgentTab(command.tab); void syncTabBadges(); }
   try {
     if (command.public_grant && (!sharing.public || command.public_grant !== publicGrant)) throw new Error('Public sharing ended.');
     if (command.tab === 0 && command.action === 'follow') {
       sharing.follow = command.params?.enabled === true;
       await api.storage.local.set({followView: sharing.follow});
       await publish();
-      if (socket === connection && currentGeneration === generation) connection.send(JSON.stringify({type: 'result', id: command.id, result: {ok: true}}));
+      if (socket === connection && currentGeneration === generation) answer(JSON.stringify({type: 'result', id: command.id, result: {ok: true}}));
       return;
     }
     // Tab 0: the browser's first tab, where the owner lets controllers open tabs.
     if (command.tab === 0 && command.action === 'open') {
       if (!registration || !canOpen() || !NodePolicy.pageURL(command.params?.url)) throw new Error('Opening tabs is not allowed.');
       const result = await openTab(command.params.url);
-      if (socket === connection && currentGeneration === generation) connection.send(JSON.stringify({type: 'result', id: command.id, result}));
+      if (socket === connection && currentGeneration === generation) answer(JSON.stringify({type: 'result', id: command.id, result}));
       return;
     }
     const grant = await grantFor(command);
@@ -2130,12 +2346,15 @@ async function handleCommand(command, connection, currentGeneration) {
     }
     if (socket === connection && currentGeneration === generation) {
       const response = JSON.stringify({type: 'result', id: command.id, result: result ?? {}});
-      connection.send(response.length < 8 * 1024 * 1024 ? response : JSON.stringify({type: 'result', id: command.id, error: 'Response is too large.'}));
+      answer(response.length < 8 * 1024 * 1024 ? response : JSON.stringify({type: 'result', id: command.id, error: 'Response is too large.'}));
     }
-  } catch {
+  } catch (error) {
     // Browser/CDP errors can embed page content, input text or script source.
-    if (socket === connection && connection.readyState === WebSocket.OPEN) connection.send(JSON.stringify({type: 'result', id: command.id, error: 'Action failed, permission was denied, or tab grant ended.'}));
-  } finally { busy--; }
+    if (socket === connection && connection.readyState === WebSocket.OPEN) answer(JSON.stringify({type: 'result', id: command.id, error: error instanceof CensorError ? error.message : 'Action failed, permission was denied, or tab grant ended.'}));
+  } finally {
+    busy--;
+    if (command.tab) { runs.delete(run); touchAgentTab(command.tab); void syncTabBadges(); }
+  }
 }
 
 async function connect({server, code = '', key = '', name, remember = false}) {
@@ -2270,6 +2489,8 @@ async function applyShare(message) {
     const previous = shared.get(id);
     next.set(id, previous?.control === (message.control === true) ? previous : {origin: new URL(tab.url).origin, control: message.control === true, paused: false});
   }
+  // Tabs that leave the set are taken back: their commands end, the debugger goes.
+  for (const id of shared.keys()) if (!next.has(id)) tabTakenBack(id);
   shared = next;
   sharing.control = message.control === true;
   await api.storage.local.set({shareControl: sharing.control});
@@ -2384,9 +2605,11 @@ async function localMessage(message, sender) {
     const permissions = await hasHistoryAccess();
     const savedSuggestions = await api.storage.local.get('addressSuggestions');
     const addressSuggestions = permissions && savedSuggestions.addressSuggestions === true;
+    const [current] = await api.tabs.query({active: true, lastFocusedWindow: true});
+    const currentTab = current && safeTab(current) ? {id: current.id, title: current.title || '', url: current.url, shared: shared.has(current.id), control: shared.get(current.id)?.control || false, agent: agentTabs.has(current.id)} : null;
     const [activeTab] = proxyOffer ? await api.tabs.query({active: true, lastFocusedWindow: true}) : [];
     const proxy = proxyOffer ? {perTab: !chromium, tab: activeTab ? (tabProxies.has(activeTab.id) ? {own: true, pick: tabProxies.get(activeTab.id)} : {own: false}) : null, choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, blocked: proxyBlocked, permitted: await api.permissions.contains(proxyPermissions())} : null;
-    return {proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions, android};
+    return {currentTab, groupsSupported: groupsSupported(), proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions, android};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -2413,6 +2636,22 @@ async function localMessage(message, sender) {
     sharing.autoShare = message.enabled === true;
     await api.storage.local.set({autoShare: sharing.autoShare});
     publishSoon();
+    return {ok: true};
+  }
+  if (message.type === 'shareTab') {
+    // The tab in front, on or off: the popup's one-click toggle.
+    await setTabShared(await api.tabs.get(message.tab), message.enabled === true);
+    return {ok: true};
+  }
+  if (message.type === 'agentGroup') {
+    sharing.agentGroup = message.enabled === true;
+    await api.storage.local.set({agentGroup: sharing.agentGroup});
+    return {ok: true};
+  }
+  if (message.type === 'agentIdle') {
+    if (!AGENT_IDLE_CHOICES.includes(message.minutes)) throw new Error('Choose 10, 30 or 60 minutes, or never.');
+    sharing.agentIdle = message.minutes;
+    await api.storage.local.set({agentIdle: sharing.agentIdle});
     return {ok: true};
   }
   if (message.type === 'shareFiles') {
@@ -2520,7 +2759,7 @@ api.runtime.onMessage.addListener((message, sender, respond) => {
     value => respond(value), error => respond({error: error.message}));
   return true;
 });
-api.tabs.onRemoved.addListener(id => { tabProxies.delete(id); iconTabs.delete(id); protectedNavigations.delete(id); shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
+api.tabs.onRemoved.addListener(id => { cancelTabCommands(id); releaseAgentTab(id); tabBadges.delete(id); tabProxies.delete(id); iconTabs.delete(id); protectedNavigations.delete(id); shared.delete(id); hooked.delete(id); void detach(id); publishSafely(); });
 let publishTimer = null;
 function publishSoon() { clearTimeout(publishTimer); publishTimer = setTimeout(publishSafely, 150); }
 // Stop interception and other debugger overrides before a protected document
@@ -2540,6 +2779,9 @@ const finishProtectedNavigation = ({tabId, frameId}) => {
 api.webNavigation.onCommitted.addListener(finishProtectedNavigation);
 api.webNavigation.onErrorOccurred.addListener(finishProtectedNavigation);
 api.tabs.onUpdated.addListener((id, change, tab) => {
+  if (change.groupId !== undefined) agentGroupChanged(id, change.groupId);
+  // Browsers drop a tab's own badge when it navigates: put it back.
+  if (tabBadges.has(id) && (change.status || change.url)) { tabBadges.delete(id); void syncTabBadges(); }
   const grant = shared.get(id);
   if (!grant) return;
   if (change.url) {
@@ -2560,10 +2802,16 @@ api.tabs.onUpdated.addListener((id, change, tab) => {
 });
 api.tabs.onMoved.addListener(() => { if (registration) publishSoon(); });
 // Which shared tab is in front: recordings follow it.
-api.tabs.onActivated.addListener(() => { if (registration) publishSoon(); });
+api.tabs.onActivated.addListener(({tabId} = {}) => {
+  touchAgentTab(tabId);
+  void syncShareMenu();
+  if (registration) publishSoon();
+});
 api.tabs.onCreated.addListener(tab => {
   // A restored tab gets its stored pick back once the session store has filled it in.
   setTimeout(() => { void loadTabProxy(tab.id); }, 400);
+  // A popup or new tab of an agent's tab is the agent's too.
+  void claimOpenedTab(tab).catch(() => {});
   if (!registration || !(sharing.all || sharing.autoShare) || tab.incognito) return;
   // Paused until it shows a shareable page; then listed like any other shared tab.
   shared.set(tab.id, {origin: null, control: sharing.control, paused: true});
@@ -2609,21 +2857,24 @@ if (chromium) api.debugger.onDetach.addListener((source, reason) => {
 });
 api.permissions.onAdded.addListener(() => { ensureProxyListeners(); void historyReady.then(async () => { await connectPrepared(); await installDashboardBridge(); }).catch(() => stop('Could not start connection after permission grant')); });
 api.permissions.onRemoved.addListener(() => { void stop('Permissions removed'); });
-api.commands?.onCommand.addListener(command => { if (command === 'stop-sharing') {
-  void api.storage.local.get('rememberedNode').then(async ({rememberedNode}) => {
-    if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
-    await stop('Sharing stopped by keyboard shortcut — automatic reconnect paused');
-  });
-} });
+api.commands?.onCommand.addListener((command, tab) => {
+  if (command === 'toggle-share-tab') void toggleTab(tab);
+  if (command === 'stop-sharing') {
+    void api.storage.local.get('rememberedNode').then(async ({rememberedNode}) => {
+      if (rememberedNode) await api.storage.local.set({rememberedNode: {...rememberedNode, paused: true}});
+      await stop('Sharing stopped by keyboard shortcut — automatic reconnect paused');
+    });
+  }
+});
 void badge();
 // Whatever the last run left in the browser's proxy settings is stale: this
 // worker holds no connection yet (the proxy returns once it has one).
 void proxyReady.then(() => { ensureProxyListeners(); return clearBrowserProxy(); }).catch(() => {});
 buildTabMenu();
 // (Firefox for Android has the menus API without the tab menu's events.)
-if (api.menus?.onShown && api.menus?.onClicked) {
-  api.menus.onShown.addListener(tabMenuShown);
-  api.menus.onClicked.addListener((info, tab) => { void tabMenuClicked(info, tab).catch(error => record(`Tab menu failed: ${error.message}`)); });
+if (menus?.onShown) menus.onShown.addListener(tabMenuShown);
+if (menus?.onClicked) {
+  menus.onClicked.addListener((info, tab) => { void tabMenuClicked(info, tab).catch(error => record(`Tab menu failed: ${error.message}`)); });
 }
 
 // An update waits until the extension is idle, which a connected browser never
@@ -2639,7 +2890,10 @@ void historyReady.then(installDashboardBridge).catch(() => record('Dashboard int
 // restart, a failed attempt that scheduled nothing), try again every minute.
 api.alarms.onAlarm.addListener(alarm => {
   if (alarm.name === 'node-reconnect' || alarm.name === 'node-keepalive') void historyReady.then(() => restoreRemembered());
+  if (alarm.name === 'agent-sweep') void sweepAgentTabs().catch(() => {});
 });
+// Agent tabs nobody touched for the chosen time close here (the worker sleeps, alarms do not).
+void api.alarms.create('agent-sweep', {delayInMinutes: 1, periodInMinutes: 1});
 void api.alarms.create('node-keepalive', {delayInMinutes: 1, periodInMinutes: 1});
 void api.alarms.clear('daemon-policy-refresh');
 void historyReady.then(() => restoreRemembered());

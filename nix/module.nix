@@ -327,6 +327,12 @@ in
       description = "Maximum memory per Chromium browser process in MB (sets --js-flags=--max-old-space-size=N).";
     };
 
+    humanInput = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Reshape the mouse and keyboard input of Chromium automation clients to look human (curved pointer paths, typed characters, stepped wheel), unless a client opts out with `human_input=0`.";
+    };
+
     adblock = {
       enable = lib.mkOption {
         type = lib.types.bool;
@@ -803,6 +809,8 @@ in
                 (toString cfg.idleTimeoutMinutes)
                 "--adblock-default"
                 (lib.boolToString cfg.adblock.default)
+                "--human-input-default"
+                (lib.boolToString cfg.humanInput)
               ]
               ++ lib.concatMap (group: [
                 "--node-group"

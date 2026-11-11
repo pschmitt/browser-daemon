@@ -477,3 +477,88 @@ pub(crate) async fn api_seek_recording(
         .map_err(|_| api::api_error(StatusCode::NOT_FOUND, "Recording frames unavailable"))?;
     Ok(Json(serde_json::json!({ "frames": frames, "eof": eof })))
 }
+
+#[derive(Deserialize)]
+pub(crate) struct FlightRequest {
+    action: String,
+    /// The window to keep, for `start` (default 60, at most 300).
+    #[serde(default)]
+    seconds: Option<u64>,
+}
+
+/// The flight recorder: the last seconds of the session's video in memory, saved
+/// as a recording on request (`{"action": "start"|"stop"|"status"|"save", "seconds": N}`).
+pub(crate) async fn api_session_flight_recorder(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<FlightRequest>,
+) -> Result<impl IntoResponse, api::ApiError> {
+    use recorder::{FlightError, FLIGHT_DEFAULT_SECS, FLIGHT_MAX_SECS};
+    state.check_auth(&headers)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api::api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    let status = match req.action.as_str() {
+        "status" => recorder::flight_status(id),
+        "stop" => {
+            recorder::flight_stop(id);
+            recorder::flight_status(id)
+        }
+        "start" => {
+            let seconds = req.seconds.unwrap_or(FLIGHT_DEFAULT_SECS);
+            if !(1..=FLIGHT_MAX_SECS).contains(&seconds) {
+                return Err(api::api_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("seconds must be between 1 and {FLIGHT_MAX_SECS}"),
+                ));
+            }
+            let (status, started) = recorder::flight_start(
+                id,
+                Some(session.port),
+                session.profile.clone(),
+                state.node_name.clone(),
+                (*state.recorder_config).clone(),
+                state.display_grab(&session),
+                seconds,
+            );
+            // Firefox has no screencast: feed the buffer with BiDi screenshots.
+            if let (Some(handle), Some(hub)) = (started, session.bidi.as_ref()) {
+                sessions::spawn_bidi_frame_feeder(hub.clone(), handle);
+            }
+            status
+        }
+        "save" => {
+            let recording_id = recorder::flight_save(&state.recorder_config, id)
+                .await
+                .map_err(|e| match e {
+                    FlightError::NotActive => api::api_error(
+                        StatusCode::CONFLICT,
+                        "The flight recorder is not running for this session",
+                    ),
+                    FlightError::Empty => api::api_error(
+                        StatusCode::CONFLICT,
+                        "The flight recorder has no frames yet",
+                    ),
+                    FlightError::Io(e) => api::api_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Could not save the recording: {e}"),
+                    ),
+                })?;
+            let mut status = recorder::flight_status(id);
+            status.recording_id = Some(recording_id);
+            status
+        }
+        other => {
+            return Err(api::api_error(
+                StatusCode::BAD_REQUEST,
+                format!("Unknown action '{other}' (start, stop, status or save)"),
+            ));
+        }
+    };
+    Ok(Json(status))
+}

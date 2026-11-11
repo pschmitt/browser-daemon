@@ -74,6 +74,17 @@ pub enum SessionCmd {
         #[arg(long)]
         node: Option<String>,
     },
+    /// Keep the last seconds of a session's video in memory (flight recorder) and
+    /// save them as a recording when something broke.
+    FlightRecorder {
+        session: String,
+        action: FlightAction,
+        /// Seconds to keep, with `start` (default 60, at most 300).
+        #[arg(long)]
+        seconds: Option<u64>,
+        #[arg(long)]
+        node: Option<String>,
+    },
     /// Share a session publicly: anyone with the printed link watches its front tab
     /// (view only, no sign-in) until it stops or is unshared.
     Share {
@@ -178,6 +189,14 @@ pub enum RecordAction {
     Stop,
     Pause,
     Resume,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum FlightAction {
+    Start,
+    Stop,
+    Status,
+    Save,
 }
 
 #[derive(Args, Debug)]

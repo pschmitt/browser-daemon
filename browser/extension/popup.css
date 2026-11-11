@@ -182,3 +182,6 @@ body.asking #advanced { display: none; }
 .proxy-card b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proxy-card .tag { margin-left: auto; padding: 3px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .proxy-card .tag.mute { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+.this-tab { display: flex; align-items: center; gap: 12px; }
+.this-tab.on { border-color: var(--good); }
+.row select { width: auto; flex: none; }

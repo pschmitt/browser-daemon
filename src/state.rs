@@ -124,6 +124,7 @@ impl ManagedSession {
             recording_paused: recording.is_some_and(SessionRecorderHandle::is_paused),
             recording_audio: recording.is_some_and(SessionRecorderHandle::audio_on),
             record_audio: self.record_audio,
+            flight_recorder: crate::recorder::flight_summary(self.id),
         }
     }
 }
@@ -199,6 +200,9 @@ pub struct SessionSummary {
     /// A recording started without saying would take the sound.
     #[serde(default)]
     pub record_audio: bool,
+    /// The flight recorder is buffering the last seconds of video (absent: off).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flight_recorder: Option<crate::recorder::FlightSummary>,
 }
 
 #[derive(Clone)]
@@ -242,6 +246,8 @@ pub struct AppState {
     pub active_recordings: Arc<RwLock<HashMap<Uuid, SessionRecorderHandle>>>,
     pub idle_timeout_secs: u64,
     pub adblock_default: bool,
+    /// Human-like input for `/chromium` clients that do not say (--human-input-default).
+    pub human_input_default: bool,
     /// Serializes profile creation and renames so names stay unique.
     pub profiles_lock: Arc<Mutex<()>>,
     /// First-seen order of tabs: Chromium lists them most recently used first,

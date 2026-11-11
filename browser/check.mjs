@@ -65,7 +65,7 @@ test('malformed and oversized commands are rejected', () => {
 });
 
 // Manual sharing unless a test says otherwise: most check per-tab grants.
-function harness(firefox = false, stored = {shareAll: false}, userAgent = '') {
+function harness(firefox = false, stored = {shareAll: false}, userAgent = '', session = {}, contextMenus = false) {
   const listeners = {};
   const calls = [];
   const sockets = [];
@@ -92,10 +92,11 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '') {
     debugger: {attach: async target => { calls.push(['attach', target]); }, detach: async target => { calls.push(['detach', target]); },
       sendCommand: async (...args) => { calls.push(['cdp', ...args]); return {data: 'image'}; }, onDetach: event('detach'), onEvent: event('cdpEvent')},
     alarms: {clear: async () => false, create: async () => {}, onAlarm: event('alarm')},
-    webNavigation: {onBeforeNavigate: event('beforeNavigate'), onCommitted: event('committed'), onErrorOccurred: event('navigationError')},
+    webNavigation: {getAllFrames: async () => [{frameId: 0, url: 'https://one.example/'}], onBeforeNavigate: event('beforeNavigate'), onCommitted: event('committed'), onErrorOccurred: event('navigationError')},
     action: {setBadgeText: async () => {}, setBadgeBackgroundColor: async () => {}, setBadgeTextColor: async () => {}, setTitle: async () => {}, setIcon: async () => {}},
     storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true, ...stored}), remove: async () => {}},
-      session: {get: async () => ({}), set: async () => {}, remove: async () => {}},
+      session: {get: async keys => Object.fromEntries([keys].flat().filter(k => k in session).map(k => [k, structuredClone(session[k])])),
+        set: async data => { Object.assign(session, structuredClone(data)); }, remove: async keys => { for (const k of [keys].flat()) delete session[k]; }},
       managed: {get: async () => ({allowedDaemonOrigins: ['https://daemon.example']})}, onChanged: event('storage')},
     scripting: {executeScript: async args => {
       calls.push(['script', args]);
@@ -115,6 +116,9 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '') {
   const menu = {created: [], updated: []};
   if (firefox) api.menus = {removeAll: async () => { menu.created.length = 0; }, create: o => { menu.created.push(o); }, update: async (id, o) => { menu.updated.push([id, o]); }, refresh: async () => {},
     onShown: event('menuShown'), onClicked: event('menuClicked')};
+  // Chromium's menus: no tab context and no menu-shown event.
+  if (contextMenus) api.contextMenus = {removeAll: async () => { menu.created.length = 0; }, create: o => { menu.created.push(o); }, update: async (id, o) => { menu.updated.push([id, o]); },
+    onClicked: event('menuClicked')};
   if (firefox) api.runtime.getBrowserInfo = async () => ({name: 'Firefox'});
   // A canvas that remembers what was drawn on it, for the toolbar icon.
   class FakeCanvas {
@@ -133,6 +137,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '') {
   vm.runInContext(source('files-page.js'), context);
   vm.runInContext(source('files.js'), context);
   vm.runInContext(source('favicon.js'), context);
+  vm.runInContext(source('censor.js'), context);
   vm.runInContext(source('background.js'), context);
   const ui = {id: 'test', url: 'chrome-extension://test/popup.html'};
   async function message(value, sender = ui) {
@@ -672,8 +677,8 @@ test('Firefox routes each tab by its own pick, and the tab menu sets it and shar
   assert.ok(h.menu.updated.some(([id, o]) => id === 'bd-proxy:node:b' && o.checked === true));
   assert.ok(h.menu.updated.some(([id, o]) => id === 'bd-proxy:follow' && o.checked === false));
   // Sharing and unsharing the tab.
-  const shareChecked = () => h.menu.updated.filter(([id]) => id === 'bd-share').map(([, o]) => o.checked).at(-1);
-  assert.equal(h.menu.created.find(o => o.id === 'bd-share').title, 'Share tab');
+  const shareChecked = () => h.menu.updated.filter(([id]) => id === 'bd-share').map(([, o]) => o.title === 'Stop sharing this tab').at(-1);
+  assert.equal(h.menu.created.find(o => o.id === 'bd-share').title, 'Share this tab with browser-daemon');
   h.menu.updated.length = 0;
   h.listeners.menuShown({contexts: ['tab']}, {id: 1, url: 'https://one.example/', incognito: false});
   assert.equal(shareChecked(), false);
@@ -690,6 +695,7 @@ test('Firefox routes each tab by its own pick, and the tab menu sets it and shar
   h.listeners.menuShown({contexts: ['page']}, {id: 1, url: 'https://one.example/', incognito: false});
   assert.ok(h.menu.updated.some(([id]) => id === 'bd-share'));
   assert.ok(h.menu.created.every(o => o.contexts.includes('page') && o.contexts.includes('tab')));
+  assert.ok(h.menu.created.find(o => o.id === 'bd-share').contexts.includes('action'));
   // The popup says which proxy the tab in front uses.
   h.tabs.get(1).active = true;
   const state = plain((await h.message({type: 'state'})).proxy);
@@ -825,3 +831,253 @@ test('Connect in the popup is the approval; a dashboard-started pairing still as
   assert.equal(socket.sent[0].remember, false);
   assert.equal(socket.sent[0].code, 'b'.repeat(64));
 });
+
+// Tab hygiene: tabs a client opens are grouped, badged and cleaned up.
+function groupMocks(h) {
+  const log = {group: [], update: [], move: [], groups: []};
+  h.api.tabs.group = async arg => { log.group.push(arg); const id = arg.groupId ?? 70 + log.groups.length; if (arg.groupId === undefined) log.groups.push({id, title: ''}); h.tabs.get(arg.tabIds[0]).groupId = id; return id; };
+  h.api.tabs.ungroup = async id => { log.ungroup = id; };
+  const query = h.api.tabs.query;
+  h.api.tabs.query = async filter => (await query(filter)).filter(t => filter?.pinned === undefined || !!t.pinned === filter.pinned);
+  h.api.tabGroups = {query: async ({title}) => log.groups.filter(g => g.title === title),
+    update: async (id, props) => { log.update.push([id, props]); Object.assign(log.groups.find(g => g.id === id), props); },
+    move: async (id, props) => { log.move.push([id, props]); }};
+  return log;
+}
+function badgeMocks(h) {
+  const badges = new Map();
+  h.api.action.setBadgeText = async ({text, tabId}) => { if (tabId !== undefined) badges.set(tabId, text); };
+  return badges;
+}
+for (const firefox of [false, true]) {
+  test(`${firefox ? 'Firefox' : 'Chromium'}: a client's tabs open in the background, in one collapsed group that popups join`, async () => {
+    const h = harness(firefox, {}); const groups = groupMocks(h); const s = await h.pair();
+    h.tabs.get(4).pinned = true;
+    await h.message({type: 'setControl', control: true});
+    s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
+    await h.flush(); await h.flush();
+    assert.equal(h.calls.find(c => c[0] === 'create')[1].active, false);
+    const first = s.sent.find(m => m.id === 'a').result.tab;
+    assert.equal(JSON.stringify(groups.group.map(g => g.tabIds)), JSON.stringify([[first]]));
+    assert.ok(groups.update.some(([, p]) => p.title === 'Agents' && p.collapsed === true));
+    assert.equal(groups.move.length, 1);
+    assert.equal(groups.move[0][1].index, 1, 'at the start, after the pinned tabs');
+    // A second tab joins the existing group instead of starting another.
+    s.receive({type: 'command', id: 'b', tab: 0, action: 'open', params: {url: 'https://other.example/'}});
+    await h.flush(); await h.flush();
+    assert.equal(groups.group.length, 2);
+    assert.equal(groups.group[1].groupId, groups.groups[0].id);
+    assert.equal(groups.groups.length, 1);
+    // A popup of an agent tab is the agent's too; one of a tab of the owner's is not.
+    const popup = {id: 300, title: '', url: 'https://pop.example/', incognito: false, windowId: 1, openerTabId: first};
+    const owned = {id: 301, title: '', url: 'https://pop2.example/', incognito: false, windowId: 1, openerTabId: 4};
+    for (const tab of [popup, owned]) { h.tabs.set(tab.id, tab); h.listeners.created(tab); }
+    await h.flush(); await h.flush();
+    assert.ok(groups.group.some(g => g.tabIds[0] === 300));
+    assert.ok(!groups.group.some(g => g.tabIds[0] === 301));
+    // The owner drags a tab out of the group: it stays out.
+    h.listeners.updated(first, {groupId: -1}, h.tabs.get(first));
+    groups.group.length = 0;
+    s.receive({type: 'command', id: 'c', tab: first, action: 'reload', params: {}});
+    await h.flush();
+    assert.equal(groups.group.length, 0);
+  });
+}
+test('without the tab group API tabs still open, ungrouped', async () => {
+  const h = harness(false, {}); const s = await h.pair();
+  await h.message({type: 'setControl', control: true});
+  s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
+  await h.flush(); await h.flush();
+  assert.ok(s.sent.find(m => m.id === 'a').result.tab);
+});
+test('the group setting turns grouping off', async () => {
+  const h = harness(false, {agentGroup: false}); const groups = groupMocks(h); const s = await h.pair();
+  await h.message({type: 'setControl', control: true});
+  s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
+  await h.flush(); await h.flush();
+  assert.equal(groups.group.length, 0);
+  const state = await h.message({type: 'state'});
+  assert.equal(state.sharing.agentGroup, false);
+  assert.equal(state.sharing.agentIdle, 10);
+  await h.message({type: 'agentIdle', minutes: 30});
+  assert.equal((await h.message({type: 'state'})).sharing.agentIdle, 30);
+  assert.ok((await h.message({type: 'agentIdle', minutes: 7})).error);
+});
+test('idle agent tabs close; tabs in use, the owner\'s and "never" stay', async () => {
+  const session = {agentTabs: {1: {touch: 1, group: null}, 4: {touch: 1, group: null}, 99: {touch: 1, group: null}}};
+  const h = harness(false, {}, '', session);
+  h.tabs.set(5, {id: 5, title: 'Owner', url: 'https://five.example/', incognito: false});
+  h.tabs.get(4).active = true;
+  const sweep = async () => { h.listeners.alarm({name: 'agent-sweep'}); await h.flush(); await h.flush(); };
+  await h.message({type: 'agentIdle', minutes: 0});
+  await sweep();
+  assert.ok(h.tabs.has(1), 'never closes');
+  await h.message({type: 'agentIdle', minutes: 10});
+  await sweep();
+  assert.ok(!h.tabs.has(1), 'idle tab closes');
+  assert.ok(h.tabs.has(4), 'a tab in front stays');
+  assert.ok(h.tabs.has(5), 'the owner\'s tab stays');
+  assert.equal(Object.keys(session.agentTabs).join(), '4', 'closed and vanished tabs are forgotten');
+});
+test('a tab with a running command, a live view or a recording is not idle', async () => {
+  const session = {agentTabs: {1: {touch: 1, group: null}, 4: {touch: 1, group: null}}};
+  const h = harness(false, {}, '', session); const s = await h.pair();
+  await h.message({type: 'share', tabs: [1, 4], control: true});
+  h.api.debugger.sendCommand = () => new Promise(() => {});
+  s.receive({type: 'command', id: 'long', tab: 1, action: 'screenshot', params: {}});
+  s.receive({type: 'cdp', channel: 'view', tab: 4, id: 1, method: 'Page.enable', params: {}});
+  await h.flush(); await h.flush();
+  h.listeners.alarm({name: 'agent-sweep'}); await h.flush(); await h.flush();
+  assert.ok(h.tabs.has(1) && h.tabs.has(4));
+});
+test('the badge says ON (red with control, green view only) and RUN, and clears when unshared', async () => {
+  const h = harness(false, {}); const badges = badgeMocks(h); const colors = new Map();
+  h.api.action.setBadgeBackgroundColor = async ({color, tabId}) => { if (tabId !== undefined) colors.set(tabId, color); };
+  const s = await h.pair();
+  await h.message({type: 'share', tabs: [1], control: false});
+  await h.flush();
+  assert.equal(badges.get(1), 'ON'); assert.equal(colors.get(1), '#16a34a');
+  await h.message({type: 'setControl', control: true});
+  assert.equal(colors.get(1), '#e11d48');
+  h.api.debugger.sendCommand = () => new Promise(() => {});
+  s.receive({type: 'command', id: 'long', tab: 1, action: 'screenshot', params: {}});
+  await h.flush(); await h.flush();
+  assert.equal(badges.get(1), 'RUN');
+  // Taking the tab back ends the command at once and clears the badge.
+  await h.message({type: 'share', tabs: [], control: true});
+  assert.equal(badges.get(1), '');
+  assert.equal(s.sent.filter(m => m.id === 'long').length, 1);
+  assert.ok(s.sent.find(m => m.id === 'long').error);
+  assert.ok(h.calls.some(c => c[0] === 'detach' && c[1].tabId === 1));
+});
+test('a navigation that resets the tab\'s badge gets it back', async () => {
+  const h = harness(false, {}); const badges = badgeMocks(h); await h.pair();
+  await h.message({type: 'share', tabs: [1], control: false}); await h.flush();
+  badges.set(1, '');
+  h.listeners.updated(1, {status: 'loading'}, h.tabs.get(1)); await h.flush();
+  assert.equal(badges.get(1), 'ON');
+});
+for (const firefox of [false, true]) {
+  test(`${firefox ? 'Firefox' : 'Chromium'}: the shortcut and the menu share and take back the tab in front`, async () => {
+    const h = harness(firefox, {shareAll: false}); const groups = groupMocks(h); const s = await h.pair();
+    h.tabs.get(1).active = true;
+    await h.message({type: 'setControl', control: true});
+    h.listeners.shortcut('toggle-share-tab', h.tabs.get(1)); await h.flush(); await h.flush();
+    assert.equal((await h.message({type: 'state'})).currentTab.shared, true);
+    assert.equal(s.sent.filter(m => m.type === 'tabs').at(-1).tabs.some(t => t.id === 1 && t.control), true);
+    // A command in flight ends with the share.
+    h.api.debugger.sendCommand = () => new Promise(() => {});
+    h.api.scripting.executeScript = () => new Promise(() => {});
+    s.receive({type: 'command', id: 'long', tab: 1, action: firefox ? 'snapshot' : 'screenshot', params: {}});
+    await h.flush(); await h.flush();
+    h.listeners.shortcut('toggle-share-tab', h.tabs.get(1)); await h.flush(); await h.flush();
+    assert.equal((await h.message({type: 'state'})).currentTab.shared, false);
+    assert.ok(s.sent.find(m => m.id === 'long').error);
+    if (!firefox) assert.ok(h.calls.some(c => c[0] === 'detach' && c[1].tabId === 1));
+    // The popup's toggle does the same.
+    await h.message({type: 'shareTab', tab: 1, enabled: true});
+    assert.equal((await h.message({type: 'state'})).currentTab.shared, true);
+    await h.message({type: 'shareTab', tab: 1, enabled: false});
+    assert.equal((await h.message({type: 'state'})).currentTab.shared, false);
+    // Not paired: nothing to toggle, and the shortcut says so instead of throwing.
+    assert.equal(groups.group.length, 0);
+  });
+}
+test('Chromium has a share entry in the page and toolbar menus that follows the tab in front', async () => {
+  const h = harness(false, {shareAll: false}, '', {}, true);
+  await h.flush();
+  const entry = h.menu.created.find(o => o.id === 'bd-share');
+  assert.equal(entry.title, 'Share this tab with browser-daemon');
+  assert.equal(entry.enabled, false, 'nothing to share before pairing');
+  assert.equal(entry.contexts.join(), 'page,action');
+  assert.ok(!h.menu.created.some(o => o.id.startsWith('bd-proxy')), 'the per-tab proxy menu stays Firefox only');
+  await h.pair();
+  h.tabs.get(1).active = true;
+  h.menu.updated.length = 0;
+  h.listeners.activated({tabId: 1}); await h.flush(); await h.flush();
+  assert.deepEqual(JSON.parse(JSON.stringify(h.menu.updated.at(-1))), ['bd-share', {title: 'Share this tab with browser-daemon', enabled: true}]);
+  h.listeners.menuClicked({menuItemId: 'bd-share'}, h.tabs.get(1)); await h.flush(); await h.flush();
+  assert.equal((await h.message({type: 'state'})).currentTab.shared, true);
+  assert.equal(h.menu.updated.at(-1)[1].title, 'Stop sharing this tab');
+  h.listeners.menuClicked({menuItemId: 'bd-share'}, h.tabs.get(1)); await h.flush(); await h.flush();
+  assert.equal((await h.message({type: 'state'})).currentTab.shared, false);
+});
+
+// Censored screenshots: the pure parts, then the worker's handling.
+const censorContext = vm.createContext({});
+vm.runInContext(source('censor.js'), censorContext);
+const {NodeCensor: censor} = censorContext;
+const plain2 = value => JSON.parse(JSON.stringify(value));
+test('censor categories turn into selectors and hints', () => {
+  assert.equal(censor.plan(undefined), null);
+  assert.equal(censor.plan([]), null);
+  for (const bad of [['password'], 'passwords', [1], ['passwords', 'x']]) assert.throws(() => censor.plan(bad));
+  assert.deepEqual(plain2(censor.plan(['emails', 'passwords', 'passwords']).categories), ['passwords', 'emails']);
+  assert.deepEqual(plain2(censor.selectors(['passwords'])), ['input[type=password]']);
+  assert.deepEqual(plain2(censor.selectors(['cards', 'otp'])), ['[autocomplete^=cc-]', '[autocomplete=one-time-code]']);
+  assert.deepEqual(plain2(censor.selectors(['inputs', 'secrets', 'emails'])), []);
+  for (const hint of ['cardnumber', 'card_number', 'cc-number', 'ccnum', 'cvc', 'CVV2', 'expiry', 'exp-date', 'security code', 'credit card']) assert.ok(censor.cardHint(hint), hint);
+  for (const hint of ['username', 'search', 'accept', 'description', '']) assert.ok(!censor.cardHint(hint), hint);
+  for (const hint of ['otp', 'totp_code', 'code', 'verification code', '2fa', 'mfa-token', 'sms-code']) assert.ok(censor.otpHint(hint), hint);
+  for (const hint of ['zipcode', 'username', 'barcode', '']) assert.ok(!censor.otpHint(hint), hint);
+});
+test('censor secrets: only strings of four or more characters, matched anywhere in the text', () => {
+  const secrets = censor.plan(['secrets'], ['abc', 'hunter2!', 7, null, '', 'hunter2!', 'x'.repeat(2000), 'tokentoken']).secrets;
+  assert.deepEqual(plain2(secrets), ['hunter2!', 'tokentoken']);
+  assert.equal(censor.plan(['secrets']).secrets.length, 0);
+  assert.ok(censor.hasSecret('my password is hunter2! ok', secrets));
+  assert.ok(!censor.hasSecret('my password is hunter2', secrets));
+  assert.ok(!censor.hasSecret('abc', secrets) && !censor.hasSecret('', secrets) && !censor.hasSecret(null, secrets));
+  assert.ok(!censor.hasSecret('anything', []));
+  for (const text of ['a@b.co', 'Mail Jane.Doe+x@example.org now', 'x@sub.example.co.uk']) assert.ok(censor.hasEmail(text), text);
+  for (const text of ['at@', '@example.org', 'a@b', 'no email here', '']) assert.ok(!censor.hasEmail(text), text);
+});
+for (const firefox of [false, true]) {
+  test(`${firefox ? 'Firefox' : 'Chromium'}: a censored screenshot draws, captures and cleans up, or fails closed`, async () => {
+    const h = harness(firefox, {shareAll: false});
+    if (firefox) { h.api.tabs.captureTab = async () => { h.calls.push(['capture']); return 'data:image/jpeg;base64,/9jframe'; }; }
+    const s = await h.pair();
+    await h.message({type: 'share', tabs: [1], control: false});
+    const order = []; let frames = [{frameId: 0, result: {n: 3}}, {frameId: 7, result: {n: 2}}];
+    h.api.webNavigation.getAllFrames = async () => [{frameId: 0, url: 'https://one.example/'}, {frameId: 7, url: 'https://pay.example/'}, {frameId: 9, url: 'chrome-error://x'}];
+    h.api.scripting.executeScript = async args => {
+      order.push(args.files ? 'inject' : args.func.toString().includes('apply') ? 'apply' : 'remove');
+      if (args.files) return [];
+      if (args.func.toString().includes('apply')) { h.last = args; if (frames === 'throw') throw new Error('Cannot access contents of the page'); return frames; }
+      return [];
+    };
+    const originalSend = h.api.debugger.sendCommand;
+    h.api.debugger.sendCommand = async (...args) => { if (args[1] === 'Page.captureScreenshot') order.push('capture'); return originalSend(...args); };
+    if (firefox) { const capture = h.api.tabs.captureTab; h.api.tabs.captureTab = async (...args) => { order.push('capture'); return capture(...args); }; }
+    const run = async (id, params) => { s.receive({type: 'command', id, tab: 1, action: 'screenshot', params}); await h.flush(); await h.flush(); await h.flush(); return s.sent.find(m => m.id === id); };
+    const ok = await run('ok', {censor: ['passwords', 'secrets'], secrets: ['hunter2!', 'abc']});
+    assert.equal(ok.error, undefined);
+    assert.equal(ok.result.censored, true);
+    assert.equal(ok.result.masked, 5);
+    assert.equal(order.join(), 'inject,apply,capture,remove');
+    assert.equal(JSON.stringify(plain2(h.last.args)), JSON.stringify([{categories: ['passwords', 'secrets'], secrets: ['hunter2!']}]));
+    assert.ok(!JSON.stringify(ok).includes('hunter2'));
+    // No censor, or an empty list: the plain screenshot.
+    for (const [id, params] of [['plain', {}], ['empty', {censor: []}]]) {
+      order.length = 0;
+      const r = await run(id, params);
+      assert.equal(r.result.censored, undefined);
+      assert.equal(order.join(), 'capture');
+    }
+    // A frame the extension could not reach: no picture, and the boxes still come off.
+    for (const [id, result] of [['missing', [{frameId: 0, result: {n: 1}}]], ['error', [{frameId: 0, result: {n: 1}}, {frameId: 7, error: {message: 'secret hunter2!'}}]], ['none', 'throw']]) {
+      order.length = 0; frames = result;
+      const r = await run(id, {censor: ['inputs'], secrets: ['hunter2!']});
+      assert.equal(r.result, undefined);
+      assert.equal(r.error, 'Could not censor this page; no screenshot taken.');
+      assert.ok(!order.includes('capture'), id);
+      assert.equal(order.at(-1), 'remove');
+    }
+    order.length = 0;
+    const bad = await run('bad', {censor: ['everything']});
+    assert.match(bad.error, /no screenshot taken/);
+    assert.equal(order.length, 0);
+    // The reply never carries the secrets, whatever happened.
+    assert.ok(!JSON.stringify(s.sent).includes('hunter2'));
+  });
+}

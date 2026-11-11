@@ -20,6 +20,7 @@ mod extension;
 mod favicon;
 mod history;
 mod httpproxy;
+mod human_input;
 mod idle;
 mod json_api;
 mod labels;
@@ -292,6 +293,14 @@ pub struct Args {
         help = "Block ads in new sessions unless they opt out"
     )]
     pub adblock_default: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        action = clap::ArgAction::Set,
+        help = "Reshape the input of /chromium clients to look human unless they opt out (human_input=0)"
+    )]
+    pub human_input_default: bool,
 
     #[arg(
         long,
@@ -870,6 +879,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         active_recordings,
         idle_timeout_secs: idle::minutes_to_secs(args.idle_timeout_minutes),
         adblock_default: args.adblock_default,
+        human_input_default: args.human_input_default,
         profiles_lock: Arc::new(Mutex::new(())),
         tab_order: Arc::new(std::sync::Mutex::new(TabOrder::default())),
         audible_pages: Arc::default(),
@@ -1232,6 +1242,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/sessions/{id}/record-audio",
             post(api_session_record_audio),
+        )
+        .route(
+            "/api/sessions/{id}/flight-recorder",
+            post(api_session_flight_recorder),
         )
         .route(
             "/api/sessions/{id}/pause-record",

@@ -219,6 +219,7 @@ pub(crate) async fn handle_chromium_ws(
                     session.profile_id.is_some(),
                     Some(crate::downloads::Claim::new(sd)),
                     slot.client.map(|id| (session.clients.clone(), id)),
+                    params.human_input.unwrap_or(state.human_input_default),
                 )
                 .await;
             }
@@ -373,6 +374,7 @@ pub(crate) async fn handle_page_ws(
                         false,
                         None,
                         None,
+                        false,
                     )
                     .await;
                 }

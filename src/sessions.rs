@@ -526,6 +526,23 @@ impl AppState {
             .unwrap_or(self.recorder_config.audio)
     }
 
+    /// Chromium with a display of its own: frames grabbed from the display, since
+    /// screenshots repaint the window the live video shows (flicker).
+    pub(crate) fn display_grab(&self, session: &ManagedSession) -> Option<recorder::DisplayGrab> {
+        match (&session.display, session.display_size, &self.config.video) {
+            (Some(display), Some(size), Some(video))
+                if session.engine == BrowserEngine::Chromium =>
+            {
+                Some(recorder::DisplayGrab {
+                    ffmpeg: video.ffmpeg.clone(),
+                    display: display.clone(),
+                    size,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// `audio`: take the session's sound too (default: the session's, see
     /// `ManagedSession::record_audio`). A session records once: when it already does,
     /// that recording's id comes back with `false`. `None`: the session is gone.
@@ -544,20 +561,7 @@ impl AppState {
         if !self.sessions.read().await.contains_key(&session.id) {
             return None;
         }
-        // Chromium with a display of its own: frames grabbed from the display, since
-        // screenshots repaint the window the live video shows (flicker).
-        let grab = match (&session.display, session.display_size, &self.config.video) {
-            (Some(display), Some(size), Some(video))
-                if session.engine == BrowserEngine::Chromium =>
-            {
-                Some(recorder::DisplayGrab {
-                    ffmpeg: video.ffmpeg.clone(),
-                    display: display.clone(),
-                    size,
-                })
-            }
-            _ => None,
-        };
+        let grab = self.display_grab(session);
         let handle = recorder::start_recording(
             session.id,
             Some(session.port),
@@ -590,6 +594,8 @@ impl AppState {
         if let Some(handle) = self.active_recordings.write().await.remove(id) {
             handle.stop();
         }
+        // The flight recorder ends with the session.
+        recorder::flight_stop(*id);
 
         let removed = {
             let mut guard = self.sessions.write().await;
@@ -660,6 +666,10 @@ pub struct LaunchParams {
     pub conversation: Option<String>,
     pub cwd: Option<String>,
     pub machine: Option<String>,
+    /// Chromium clients: reshape the client's mouse and keyboard input to look
+    /// less like a bot (human_input.rs). Defaults to the node's --human-input-default.
+    #[serde(default, deserialize_with = "crate::human_input::lenient_bool")]
+    pub human_input: Option<bool>,
 }
 
 /// How a session's live views size the page, as the view's Screen menu: the

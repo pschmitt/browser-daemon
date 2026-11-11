@@ -183,7 +183,7 @@ pub(crate) fn peer_target(method: &axum::http::Method, rest: &str) -> Option<Pee
         (
             "POST",
             ["sessions", _, "record" | "stop-record" | "pause-record" | "resume-record" | "record-audio"
-            | "idle-timeout" | "name" | "proxy"],
+            | "idle-timeout" | "name" | "proxy" | "flight-recorder"],
         ) => (false, Short),
         ("PATCH", ["settings"]) => (false, Short),
         ("POST", ["profiles"]) => (false, Long),
