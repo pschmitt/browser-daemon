@@ -36,6 +36,12 @@
   back from the context menu, a keyboard shortcut or the popup. Shared-tab
   screenshots can be censored (`censor` parameter); censoring fails closed.
 
+### Changed
+
+* Shared-tab screenshots through the MCP are censored by default, which needs
+  this version of the browser extension: with an older one they fail with a
+  request to update it, unless the agent passes `unsafe: true`.
+
 ## [0.16.0] - 2026-11-10
 
 ### Changed
