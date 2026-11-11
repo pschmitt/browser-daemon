@@ -124,7 +124,8 @@ Never type a password, token or TOTP code yourself: use browser_fill_secret when
 For a passkey sign-in call browser_passkey first; for a CAPTCHA, an approval on another device or \
 anything else only a person may do, call browser_ask_human when it is listed. \
 Label your session with browser_set_topic when you start and when the task changes. \
-Take screenshots with browser_screenshot_censored when the page may show secrets.";
+Prefer browser_screenshot_censored for screenshots; use browser_take_screenshot only when the \
+censored one gets in the way of the task, as it may show credentials.";
 
 /// A node and profile the browser runs on.
 #[derive(Clone)]
