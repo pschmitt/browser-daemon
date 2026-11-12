@@ -9,6 +9,12 @@
   dialog's backdrop, heading and close-button form styled the dialog itself
   (since the keyboard-shortcuts dialog). A click outside the settings and
   shortcuts dialogs now closes them too.
+* Web UI: the close buttons of dialogs are ghost buttons (a background only on
+  hover and keyboard focus, and not right as a dialog opens), and every dialog
+  has one in the same place: the live view's last-tab, question, downloads,
+  share and notes dialogs and the dashboard's question, prune, merge, record,
+  share and public-links dialogs had none. A click outside a dialog closes it
+  in both pages, unless something was typed into it.
 
 ## [0.17.0] - 2026-11-12
 

@@ -162,7 +162,8 @@
   #settingsDialog::backdrop, #shortcutsDialog::backdrop { background: #0008; backdrop-filter: blur(3px); }
   #settingsDialog h2, #shortcutsDialog h2 { margin: 0 0 10px; font: 700 17px system-ui, sans-serif; }
   #settingsDialog form, #shortcutsDialog form { position: sticky; top: 0; float: right; margin: -4px -4px 0 0; }
-  #settingsDialog .settings-close, #shortcutsDialog .settings-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: var(--btn); color: var(--fg); }
+  /* The close button of every dialog: top right, ghost until hovered or focused with the keyboard. */
+  dialog .settings-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
   #settingsDialog .sm-item { min-height: 44px; }
   #shortcutsDialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(660px, calc(100vw - 24px)); max-height: min(84vh, 760px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bar); color: var(--fg); box-shadow: 0 16px 60px #0008; }
   #settingsDialog .sm-search { display: flex; }
@@ -614,8 +615,14 @@
   .dl-list a.btn-xs { text-decoration: none; }
   .dl-list .btn-xs.quiet { background: var(--btn); color: var(--fg); }
   .btn-xs { padding: 6px 12px; border-radius: 999px; border: 0; background: var(--accent-btn); color: #fff; font-size: 12px; font-weight: 600; cursor: pointer; }
-  .btn-close { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(239, 68, 68, 0.3); background: rgba(239, 68, 68, 0.15); color: #ef4444; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; }
-  .btn-close:hover { background: #ef4444; color: #fff; border-color: #ef4444; }
+  .btn-close { width: 32px; height: 32px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease; }
+  .btn-close:hover, .btn-close:focus-visible { background: var(--btn); color: var(--fg); }
+  dialog .settings-close:hover, dialog .settings-close:focus-visible { background: var(--btn); color: var(--fg); }
+  /* Dialogs whose content is a form (or a header row) cannot hold the settings form: a plain button floats instead. */
+  dialog > .settings-close, dialog > form > .settings-close { float: right; margin: -4px -4px 0 8px; }
+  dialog .sh-head .settings-close { float: none; margin: -4px -4px 0 0; flex: none; }
+  #ownerSheet .os-x { margin-left: auto; }
+  dialog:focus, dialog:focus-visible { outline: none; }
 
   /* Phone layout: one top row (session chip, address with the tab count), a toolbar at the
      bottom and the session sheet. Elements marked .ph exist only here. The query is the same
@@ -755,8 +762,9 @@
   .ask-actions button, #shareDialog .sh-actions button, #shareDialog .sh-link button, .sm-rec button, .sm-rec button.sm-rec-pill { height: 44px; border-radius: 12px; font-size: 14px; }
   .sm-rec button { width: 44px; }
   .sm-rec button.sm-rec-pill { width: auto; border-radius: 999px; }
-  #settingsDialog .settings-close, #shortcutsDialog .settings-close, .btn-close { width: 44px; height: 44px; border-radius: 12px; border: 0; background: var(--btn); color: var(--muted); }
-  .btn-close:hover, #settingsDialog .settings-close:hover, #shortcutsDialog .settings-close:hover { color: var(--fg); }
+  dialog .settings-close, .btn-close { width: 44px; height: 44px; border-radius: 12px; border: 0; background: transparent; color: var(--muted); }
+  .btn-close:hover, dialog .settings-close:hover,
+  .btn-close:focus-visible, dialog .settings-close:focus-visible { background: var(--btn); color: var(--fg); }
   .sm-seg button { height: 40px; font-size: 13.5px; }
   .thm-actions .sm-item { height: 40px; font-size: 13.5px; }
   .fd-btn { min-height: 44px; }
@@ -843,12 +851,12 @@
 </div>
 <div id="sheetScrim" class="ph"></div>
 <dialog id="shortcutsDialog" aria-label="Keyboard shortcuts">
-  <form method="dialog"><button class="settings-close" aria-label="Close shortcuts">✕</button></form>
+  <form method="dialog"><button class="settings-close" aria-label="Close" title="Close">✕</button></form>
   <h2>Keyboard shortcuts</h2>
   <div id="shortcutsBody"></div>
 </dialog>
 <dialog id="settingsDialog" aria-label="Handoff settings">
-  <form method="dialog"><button class="settings-close" aria-label="Close settings">✕</button></form>
+  <form method="dialog"><button class="settings-close" aria-label="Close" title="Close">✕</button></form>
   <h2>Settings</h2>
   <div class="sm-label">Browser</div>
   <button class="sm-item" id="followBtn" role="menuitemcheckbox" aria-checked="false" hidden title="The tab you switch to here comes to the front in the owner's browser"></button>
@@ -944,9 +952,10 @@
 </nav>
 <div id="bottom"></div>
 <input id="kb" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-hidden="true" tabindex="-1">
-<dialog id="lastTabDialog">
+<dialog id="lastTabDialog" aria-labelledby="ltdTitle">
   <form method="dialog">
-    <h2>Close the last tab?</h2>
+    <button type="button" class="settings-close" data-close aria-label="Close" title="Close">✕</button>
+    <h2 id="ltdTitle">Close the last tab?</h2>
     <p>This is the session's only tab.</p>
     <div class="ltd-actions">
       <button value="stop" class="danger">Stop the session</button>
@@ -957,6 +966,7 @@
 </dialog>
 <dialog id="askDialog" aria-labelledby="askTitle">
   <form method="dialog">
+    <button type="button" class="settings-close" data-close aria-label="Close" title="Close">✕</button>
     <h2 id="askTitle"></h2>
     <p id="askText" hidden></p>
     <input id="askInput" class="ask-field" autocomplete="off" spellcheck="false" hidden>
@@ -980,6 +990,7 @@
 </div>
 <dialog id="downloadsDialog" aria-labelledby="downloadsTitle">
   <form method="dialog">
+    <button type="button" class="settings-close" data-close aria-label="Close" title="Close">✕</button>
     <h2 id="downloadsTitle">Downloads of this session</h2>
     <ul class="dl-list" id="dlList"></ul>
     <div class="ltd-actions"><button value="close" autofocus>Close</button></div>
@@ -990,6 +1001,7 @@
     <span class="sh-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span>
     <h2 id="shTitle">Share</h2>
     <span class="sh-state" id="shState" hidden></span>
+    <button type="button" class="settings-close" data-close aria-label="Close" title="Close">✕</button>
   </div>
   <p class="sh-lead" id="shLead"></p>
   <div class="sh-link" id="shLinkRow" hidden>
@@ -1024,6 +1036,7 @@
   </div>
 </dialog>
 <dialog id="notesDialog" aria-labelledby="notesTitle">
+  <button type="button" class="settings-close" data-close aria-label="Close" title="Close">✕</button>
   <h2 id="notesTitle">Notes</h2>
   <ol class="nt-list" id="ntList"></ol>
   <form id="ntForm" class="nt-add">
@@ -1040,7 +1053,7 @@
       </div>
       <div style="display:flex;align-items:center;gap:8px;">
         <button class="btn-xs" id="newTabBtn" title="Open new tab in this browser">+ New Tab</button>
-        <button class="btn-close" id="closeTabsBtn" title="Close">✕</button>
+        <button class="btn-close" id="closeTabsBtn" aria-label="Close" title="Close">✕</button>
       </div>
     </div>
     <input id="tabsSearch" class="tabs-search" type="search" placeholder="Search tabs" aria-label="Search tabs">
@@ -4258,14 +4271,14 @@ function showOwnerSheet(tab) {
   const brand = AGENT_TITLE[agentBrand(o)] || o.integration || o.agent_name || "Agent";
   const row = (k, v, mono) => v ? `<div class="pm-context-row"><span>${k}</span><strong${mono ? ' class="mono"' : ""}>${esc(v)}</strong></div>` : "";
   const sheet = $("ownerSheet");
-  sheet.firstElementChild.innerHTML = `<div class="os-head">${agentSvg(o)}<span>${esc(brand)}</span></div>`
+  sheet.firstElementChild.innerHTML = `<div class="os-head">${agentSvg(o)}<span>${esc(brand)}</span><button type="button" class="btn-close os-x" aria-label="Close" title="Close">✕</button></div>`
     + row("Topic", o.topic) + row("Conversation", o.conversation, true)
     + row("Machine", o.machine || o.from) + row("Directory", o.cwd, true) + row("Automation", o.kind)
     + `<button type="button" class="os-close">Close</button>`;
   sheet.hidden = false;
 }
 function closeOwnerSheet() { $("ownerSheet").hidden = true; }
-$("ownerSheet").addEventListener("click", (e) => { if (e.target === $("ownerSheet") || e.target.closest(".os-close")) closeOwnerSheet(); });
+$("ownerSheet").addEventListener("click", (e) => { if (e.target === $("ownerSheet") || e.target.closest(".os-close, .os-x")) closeOwnerSheet(); });
 
 // Phones: a grid of previews. A tab's last picture comes from frameCache (the shown tab: its canvas).
 function tabPreview(p) {
@@ -6695,13 +6708,32 @@ function disarmStop() {
 }
 
 E.sessBtn.onclick = (e) => { e.stopPropagation(); toggleSessMenu(); };
-// A click on the backdrop (outside the dialog's box) closes it.
-for (const id of ["settingsDialog", "shortcutsDialog"]) {
-  $(id).addEventListener("click", (e) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    if (e.target === e.currentTarget && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) e.currentTarget.close("cancel");
-  });
-}
+// Every dialog: a click on the backdrop (outside the dialog's box) closes it, unless the press
+// began inside (selecting text) or the user typed into it (a note, an answer): Escape and the
+// close button still close those. The passkey prompt is the extension's own.
+let pressOnBackdrop = null;
+document.addEventListener("pointerdown", (e) => { pressOnBackdrop = e.target instanceof HTMLDialogElement ? e.target : null; }, true);
+document.addEventListener("click", (e) => {
+  const d = e.target;
+  if (d.closest?.("[data-close]")) { d.closest("dialog")?.close("cancel"); return; }
+  if (!(d instanceof HTMLDialogElement) || !d.open || pressOnBackdrop !== d || d.classList.contains("ext-dialog") || d.dataset.dirty) return;
+  const r = d.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close("cancel");
+});
+document.addEventListener("input", (e) => {
+  if (e.isTrusted && e.target.matches?.("textarea, input:not([type=checkbox], [type=radio], [type=range], [type=file])")) e.target.closest("dialog")?.setAttribute("data-dirty", "1");
+}, true);
+document.addEventListener("close", (e) => e.target.removeAttribute?.("data-dirty"), true);
+// showModal() focuses the first focusable element, the close button, and the browser then draws it
+// as keyboard-focused. Start on the dialog itself instead (a field the dialog focuses itself
+// afterwards wins; Tab still reaches the close button first).
+const showModalNative = HTMLDialogElement.prototype.showModal;
+HTMLDialogElement.prototype.showModal = function () {
+  showModalNative.call(this);
+  if (this.matches(".ext-dialog")) return;
+  const a = document.activeElement;
+  if (a && this.contains(a) && a.matches(".settings-close")) { this.tabIndex = -1; this.focus({ preventScroll: true }); }
+};
 $("settingsBtn").onclick = (e) => {
   e.stopPropagation();
   toggleSessMenu(false);

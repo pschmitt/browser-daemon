@@ -665,8 +665,8 @@ svg.i.star-on, #favOnlyBtn[aria-pressed="true"] .i { fill: currentColor; }
 #askTitle { white-space: normal; }
 .sheet-body { padding: 4px 18px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .sheet-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }
-.x-btn { width: 32px; height: 32px; border-radius: 9px; border: 0; background: var(--hover); color: var(--muted); display: grid; place-items: center; flex: none; }
-.x-btn:hover { background: var(--line-strong); color: var(--fg); }
+.x-btn { width: 32px; height: 32px; border-radius: 9px; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; flex: none; }
+.x-btn:hover, .x-btn:focus-visible { background: var(--hover); color: var(--fg); }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field > label, .field-label { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .hint { font-size: 12px; color: var(--faint); }
@@ -1828,14 +1828,14 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 
 <dialog class="modal" id="shortcutsModal" aria-labelledby="shortcutsTitle">
   <div class="sheet wide">
-    <div class="sheet-head"><h2 id="shortcutsTitle">Keyboard shortcuts</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="shortcutsTitle">Keyboard shortcuts</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body" id="shortcutsBody"></div>
   </div>
 </dialog>
 
 <dialog class="modal" id="addNodeModal" aria-labelledby="addNodeTitle">
   <div class="sheet">
-    <div class="sheet-head"><h2 id="addNodeTitle">Add a node</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="addNodeTitle">Add a node</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="seg" role="tablist" aria-label="Kind of node">
         <button type="button" role="tab" id="addTabBrowser" class="on" aria-selected="true" aria-controls="addPaneBrowser" data-add-tab="browser"><svg class="i sm"><use href="#i-globe"/></svg> Browser</button>
@@ -1871,14 +1871,14 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- A node's, a browser's or an engine's settings (see openSettings) -->
 <dialog class="modal" id="settingsModal" aria-labelledby="settingsTitle">
   <div class="sheet">
-    <div class="sheet-head"><h2 id="settingsTitle">Settings</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="settingsTitle">Settings</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body" id="settingsBody"></div>
   </div>
 </dialog>
 
 <dialog class="modal" id="newSessionModal" aria-label="New browser session">
   <form class="sheet" id="newSessionForm">
-    <div class="sheet-head"><h2>New session</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2>New session</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <!-- The two questions: what to open, and with which profile. The profile brings its
            node and engine; everything else has a default and sits under Options. -->
@@ -1953,7 +1953,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- New profile -->
 <dialog class="modal" id="tabsModal" aria-labelledby="tabsTitle">
   <form class="sheet" id="tabsForm">
-    <div class="sheet-head"><h2 id="tabsTitle">Default tabs</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="tabsTitle">Default tabs</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <span class="hint" id="tabsIntro"></span>
       <div class="te" id="tabsEditor"></div>
@@ -1965,7 +1965,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Labels: edit one (name, icon), pick an icon, put labels on an item -->
 <dialog class="modal" id="labelModal" aria-labelledby="labelTitle">
   <form class="sheet" id="labelForm">
-    <div class="sheet-head"><h2 id="labelTitle">Label</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="labelTitle">Label</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <label class="field"><span>Name</span><input class="input" id="labelName" maxlength="32" autocomplete="off" spellcheck="false" placeholder="ha"></label>
       <div class="field"><span>Icon</span>
@@ -1988,7 +1988,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 
 <dialog class="modal" id="mdiModal" aria-labelledby="mdiTitle">
   <div class="sheet">
-    <div class="sheet-head"><h2 id="mdiTitle">Choose an icon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="mdiTitle">Choose an icon</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <label class="rec-search"><svg class="i sm"><use href="#i-search"/></svg><input type="search" id="mdiSearch" placeholder="Search icons: home, server, robot…" autocomplete="off" spellcheck="false" aria-label="Search icons"></label>
       <div class="mdi-grid" id="mdiGrid"></div>
@@ -1999,7 +1999,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 
 <dialog class="modal" id="itemLabelsModal" aria-labelledby="itemLabelsTitle">
   <form class="sheet" id="itemLabelsForm">
-    <div class="sheet-head"><h2 id="itemLabelsTitle">Labels</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="itemLabelsTitle">Labels</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <span class="hint" id="itemLabelsIntro"></span>
       <div id="itemLabelsEditor"></div>
@@ -2010,7 +2010,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 
 <dialog class="modal" id="downloadsModal" aria-labelledby="downloadsTitle">
   <div class="sheet">
-    <div class="sheet-head"><h2 id="downloadsTitle">Downloads</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="downloadsTitle">Downloads</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body"><span class="hint">What the session's pages downloaded, kept on its node until the session ends.</span><div id="downloadsList"></div></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Close</button></div>
   </div>
@@ -2018,7 +2018,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 
 <dialog class="modal" id="newProfileModal" aria-label="New profile">
   <form class="sheet" id="newProfileForm">
-    <div class="sheet-head"><h2>New profile</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2>New profile</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="field"><span class="field-label">Node</span><div class="seg" id="profileNodes"></div></div>
       <div class="field"><label for="profileName">Name</label><input class="input" id="profileName" required maxlength="128" placeholder="e.g. Google (me@example.com)" autocomplete="off" spellcheck="false"></div>
@@ -2034,7 +2034,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Transfer profile -->
 <dialog class="modal" id="transferModal" aria-labelledby="transferTitle">
   <form class="sheet" id="transferForm">
-    <div class="sheet-head"><h2 id="transferTitle">Move profile</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="transferTitle">Move profile</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="field"><span class="field-label">Destination</span><div class="seg" id="transferNodes"></div></div>
       <div class="field"><label for="transferName">Name on destination</label><input class="input" id="transferName" maxlength="128" autocomplete="off" spellcheck="false"></div>
@@ -2049,7 +2049,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- About -->
 <dialog class="modal" id="aboutModal" aria-labelledby="aboutTitle">
   <div class="sheet wide">
-    <div class="sheet-head"><h2 id="aboutTitle">About Browser Daemon</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="aboutTitle">About Browser Daemon</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="about-hero">
         <img src="/favicon.svg" alt="" width="84" height="84">
@@ -2071,7 +2071,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Backups & data -->
 <dialog class="modal" id="backupsModal" aria-labelledby="backupsTitle">
   <form class="sheet" id="backupsForm" autocomplete="off">
-    <div class="sheet-head"><h2 id="backupsTitle">Backups</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="backupsTitle">Backups</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="hint" id="backupsNote" hidden></div>
       <div class="bk-new"><input class="input" id="backupLabel" maxlength="60" placeholder="Label (optional), e.g. logged in" spellcheck="false"><button type="submit" class="btn primary" id="backupNow"><svg class="i"><use href="#i-archive"/></svg>Back up now</button></div>
@@ -2091,7 +2091,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Details -->
 <dialog class="modal" id="detailsModal" aria-labelledby="detailsTitle">
   <div class="sheet wide">
-    <div class="sheet-head"><h2 id="detailsTitle">Details</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="detailsTitle">Details</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="session-detail" id="sessionDetails" hidden></div>
       <dl class="kv" id="detailsGrid"></dl>
@@ -2103,7 +2103,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Session settings -->
 <dialog class="modal" id="sessSettingsModal" aria-labelledby="sessSettingsTitle">
   <form class="sheet" id="sessSettingsForm" style="max-width:440px">
-    <div class="sheet-head"><h2 id="sessSettingsTitle">Settings</h2><button type="button" class="x-btn" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="sessSettingsTitle">Settings</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="field"><label for="sessIdle">Auto-stop when idle</label><select class="input" id="sessIdle"></select><span class="hint">Time without any use (automation commands, or input in a live view) before this browser is stopped.</span></div>
       <div class="field" id="sessProxyField"><label for="sessProxy">Proxy</label><select class="input" id="sessProxy"></select><span class="hint">Takes effect right away.</span></div>
@@ -2115,7 +2115,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Confirm / prompt -->
 <dialog class="modal" id="askModal" aria-labelledby="askTitle">
   <form class="sheet" id="askForm" style="max-width:420px">
-    <div class="sheet-head"><h2 id="askTitle"></h2></div>
+    <div class="sheet-head"><h2 id="askTitle"></h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body"><div id="askText" class="muted" style="font-size:13.5px"></div><div id="askExtra" class="ask-extra" hidden></div><input class="input" id="askInput" autocomplete="off" spellcheck="false"></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn primary" id="askOk">OK</button></div>
   </form>
@@ -2124,7 +2124,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Prune: the sessions it stops, as live cards (their actions work, and confirms stack on top) -->
 <dialog class="modal" id="pruneModal" aria-labelledby="pruneTitle">
   <form class="sheet" id="pruneForm" style="max-width:760px">
-    <div class="sheet-head"><h2 id="pruneTitle"></h2></div>
+    <div class="sheet-head"><h2 id="pruneTitle"></h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body"><div id="pruneText" class="muted" style="font-size:13.5px"></div><div id="pruneGrid" class="session-grid"></div></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn danger" id="pruneOk"><svg class="i"><use href="#i-trash"/></svg>Prune sessions</button></div>
   </form>
@@ -2133,7 +2133,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Prune recordings: what the retention policy removes now, as the list's rows -->
 <dialog class="modal" id="pruneRecModal" aria-labelledby="pruneRecTitle">
   <form class="sheet" id="pruneRecForm" style="max-width:760px">
-    <div class="sheet-head"><h2 id="pruneRecTitle"></h2></div>
+    <div class="sheet-head"><h2 id="pruneRecTitle"></h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body"><div id="pruneRecText" class="muted" style="font-size:13.5px"></div><div id="pruneRecList" class="list recordings" hidden><div class="rows"></div></div></div>
     <div class="sheet-foot"><button type="button" class="btn" data-close>Cancel</button><button type="submit" class="btn danger" id="pruneRecOk"><svg class="i"><use href="#i-trash"/></svg>Prune recordings</button></div>
   </form>
@@ -2146,6 +2146,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
       <span class="share-icon" aria-hidden="true"><svg class="i"><use href="#i-globe"/></svg></span>
       <div class="share-titles"><h2 id="shareTitle">Share</h2><span id="shareWhat"></span></div>
       <span class="share-state" id="shareState" hidden></span>
+      <button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="sheet-body">
       <p class="share-lead" id="shareLead"></p>
@@ -2184,7 +2185,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
      stop it and switch its sound while it runs -->
 <dialog class="modal" id="recordModal" aria-labelledby="recordTitle">
   <div class="sheet" style="max-width:420px">
-    <div class="sheet-head"><h2 id="recordTitle">Start recording</h2><span class="rec-state" id="recordState" hidden></span></div>
+    <div class="sheet-head"><h2 id="recordTitle">Start recording</h2><span class="rec-state" id="recordState" hidden></span><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="muted" style="font-size:13.5px" id="recordLead"></div>
       <div class="share-rows" id="recordSoundRow">
@@ -2207,7 +2208,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Notes of a session, profile or recording -->
 <dialog class="modal" id="notesModal" aria-labelledby="notesTitle">
   <div class="sheet" style="max-width:520px">
-    <div class="sheet-head"><h2 id="notesTitle">Notes</h2><button type="button" class="btn icon sm ghost" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="sheet-head"><h2 id="notesTitle">Notes</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <ol class="notes-list" id="notesList"></ol>
       <form class="notes-add" id="notesForm">
@@ -2223,7 +2224,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Everything shared publicly -->
 <dialog class="modal" id="publicModal" aria-labelledby="publicTitle">
   <div class="sheet" style="max-width:600px">
-    <div class="sheet-head"><h2 id="publicTitle">Public links</h2></div>
+    <div class="sheet-head"><h2 id="publicTitle">Public links</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="muted" style="font-size:13.5px">Anyone with one of these links sees what it shows, without signing in. Stop sharing to make a link stop working at once.</div>
       <ul class="public-list" id="publicList"></ul>
@@ -2235,7 +2236,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
 <!-- Merge recordings -->
 <dialog class="modal" id="mergeModal" aria-label="Merge recordings">
   <form class="sheet" id="mergeForm" style="max-width:520px">
-    <div class="sheet-head"><h2>Merge recordings</h2></div>
+    <div class="sheet-head"><h2>Merge recordings</h2><button type="button" class="x-btn" data-close aria-label="Close" title="Close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="sheet-body">
       <div class="muted" style="font-size:13.5px">They play one after the other, in this order, as one new recording (sound included). Drag them, or use the arrows, to change the order.</div>
       <ol class="merge-list" id="mergeList"></ol>
@@ -2253,7 +2254,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
       <div class="site"><span class="site-fav" id="playerFav"></span><div class="t"><b id="playerPageTitle">Ready</b><span id="playerPageUrl" title="Address of the page in the frame shown">about:blank</span></div></div>
       <span class="chip node" id="playerNodeBadge">local</span>
       <button class="btn ghost icon" id="playerMoreBtn" onclick="openPlayerMenu(this)" title="More: details, copy, save, delete" aria-label="More" aria-haspopup="menu"><svg class="i"><use href="#i-more"/></svg></button>
-      <button class="x-btn" onclick="closePlayerModal()" title="Close (Esc)"><svg class="i"><use href="#i-x"/></svg></button>
+      <button class="x-btn" onclick="closePlayerModal()" aria-label="Close" title="Close (Esc)"><svg class="i"><use href="#i-x"/></svg></button>
     </div>
     <div class="player-viewport-wrap" id="playerViewportContainer">
       <canvas id="playerCanvas" onclick="if (!playerZoomTookClick()) togglePlayPause()"></canvas>
@@ -2670,6 +2671,9 @@ function openModal(id) {
   const d = $(id);
   closeMenu();
   if (!d.open) d.showModal();
+  // showModal() focuses the first focusable element, the ✕, which the browser then draws as
+  // keyboard-focused. Start on the dialog instead; a field the opener focuses afterwards wins.
+  if (d.contains(document.activeElement) && document.activeElement.closest('.x-btn')) { d.tabIndex = -1; d.focus({ preventScroll: true }); }
   d.classList.add('open');
   const at = modalStack.indexOf(d);
   if (at >= 0) modalStack.splice(at, 1);
@@ -2734,12 +2738,17 @@ document.addEventListener('close', (e) => {
   closeModal(d.id);
 }, true);
 // A click on the backdrop closes the dialog, unless the press began inside it (text selection).
+// Not once the user typed into it (a label, a note, an answer): Escape and the ✕ still close it.
 let pressOnBackdrop = false;
 document.addEventListener('pointerdown', (e) => { pressOnBackdrop = e.target instanceof HTMLDialogElement; }, true);
+document.addEventListener('input', (e) => {
+  if (e.isTrusted && e.target.matches?.('textarea, input:not([type=checkbox], [type=radio], [type=range], [type=file]):not(#palInput):not(#mdiSearch)')) e.target.closest('dialog')?.setAttribute('data-dirty', '1');
+}, true);
+document.addEventListener('close', (e) => e.target.removeAttribute?.('data-dirty'), true);
 document.addEventListener('click', (e) => {
   const closer = e.target.closest('[data-close]');
   if (closer) { const m = closer.closest('dialog.modal'); if (m) closeModal(m.id); return; }
-  if (e.target instanceof HTMLDialogElement && e.target.classList.contains('modal') && pressOnBackdrop) {
+  if (e.target instanceof HTMLDialogElement && e.target.classList.contains('modal') && pressOnBackdrop && !e.target.dataset.dirty) {
     if (e.target.id === 'playerModal') closePlayerModal();
     else { closeModal(e.target.id); if (e.target.id === 'askModal') askResolve?.(null); }
   }
