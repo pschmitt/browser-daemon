@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Live view: the settings dialog was pushed off the top of the screen, with
+  its close button, and drawn translucent: a selector list meant for the
+  dialog's backdrop, heading and close-button form styled the dialog itself
+  (since the keyboard-shortcuts dialog). A click outside the settings and
+  shortcuts dialogs now closes them too.
+
 ## [0.17.0] - 2026-11-12
 
 ### Added

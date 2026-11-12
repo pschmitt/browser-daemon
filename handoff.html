@@ -159,9 +159,9 @@
     background: var(--bar); color: var(--fg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,.4); }
   #sessMenu[hidden], #profMenu[hidden] { display: none; }
   #settingsDialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 24px)); max-height: min(80vh, 720px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bar); color: var(--fg); box-shadow: 0 16px 60px #0008; }
-  #settingsDialog, #shortcutsDialog::backdrop { background: #0008; backdrop-filter: blur(3px); }
-  #settingsDialog, #shortcutsDialog h2 { margin: 0 0 10px; font: 700 17px system-ui, sans-serif; }
-  #settingsDialog, #shortcutsDialog form { position: sticky; top: 0; float: right; margin: -4px -4px 0 0; }
+  #settingsDialog::backdrop, #shortcutsDialog::backdrop { background: #0008; backdrop-filter: blur(3px); }
+  #settingsDialog h2, #shortcutsDialog h2 { margin: 0 0 10px; font: 700 17px system-ui, sans-serif; }
+  #settingsDialog form, #shortcutsDialog form { position: sticky; top: 0; float: right; margin: -4px -4px 0 0; }
   #settingsDialog .settings-close, #shortcutsDialog .settings-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: var(--btn); color: var(--fg); }
   #settingsDialog .sm-item { min-height: 44px; }
   #shortcutsDialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(660px, calc(100vw - 24px)); max-height: min(84vh, 760px); overflow: auto; padding: 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--bar); color: var(--fg); box-shadow: 0 16px 60px #0008; }
@@ -6695,6 +6695,13 @@ function disarmStop() {
 }
 
 E.sessBtn.onclick = (e) => { e.stopPropagation(); toggleSessMenu(); };
+// A click on the backdrop (outside the dialog's box) closes it.
+for (const id of ["settingsDialog", "shortcutsDialog"]) {
+  $(id).addEventListener("click", (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    if (e.target === e.currentTarget && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) e.currentTarget.close("cancel");
+  });
+}
 $("settingsBtn").onclick = (e) => {
   e.stopPropagation();
   toggleSessMenu(false);
