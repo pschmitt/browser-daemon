@@ -27,6 +27,7 @@ def main():
         # The icons live with the daemon's other logo assets (assets/icons).
         icons = ROOT.parent / "assets" / "icons"
         shutil.copyfile(icons / "icon-192.png", destination / "icon.png")
+        shutil.copyfile(icons / "icon-128.png", destination / "icon-128.png")
         for size in (16, 32, 48):
             shutil.copyfile(icons / f"toolbar-{size}.png", destination / f"toolbar-{size}.png")
         manifest = {
@@ -39,7 +40,13 @@ def main():
             "action": {"default_popup": "popup.html", "default_title": "Browser node", "default_icon": {
                 str(size): f"toolbar-{size}.png" for size in (16, 32, 48)
             }},
-            "icons": {"192": "icon.png"},
+            # Chrome's extensions page and Web Store want 128 (and 16/32/48);
+            # with only 192 it shows a letter placeholder.
+            "icons": {
+                **{str(size): f"toolbar-{size}.png" for size in (16, 32, 48)},
+                "128": "icon-128.png",
+                "192": "icon.png",
+            },
             "commands": {
                 "stop-sharing": {
                     "suggested_key": {"default": "Ctrl+Shift+Period"},
