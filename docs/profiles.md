@@ -103,7 +103,7 @@ Requests sent to another mesh node are forwarded to an online provider; nodes
 advertise the capability as `ephemeral_provider` in mesh inventory.
 
 The commands run as the daemon's service user under its systemd restrictions.
-An rworker adapter can use a dedicated browser-worker image; see the rworker
+An rworker adapter can use a dedicated `rworker-browser-daemon` image; see the rworker
 profile configuration for its startup and controller access. Start a disposable
 node with `--ephemeral-node`: it allows one session over its lifetime and forces
 that session to be non-persistent, even if a caller requests persistence.
