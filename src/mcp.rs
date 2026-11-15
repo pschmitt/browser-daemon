@@ -806,7 +806,12 @@ fn evaluate_value(result: &Value) -> Result<String, String> {
         .filter_map(|c| c["text"].as_str())
         .collect();
     if result["isError"].as_bool() == Some(true) {
-        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        // Playwright heads an error with "### Error"; the reason is the next line.
+        let first = text
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty() && !l.starts_with("###"))
+            .unwrap_or("");
         return Err(format!(
             "Could not read the element: {}",
             first.chars().take(200).collect::<String>()
@@ -4282,9 +4287,9 @@ mod tests {
         let number = json!({ "content": [{ "type": "text", "text": "### Result\n42" }] });
         assert!(evaluate_value(&number).is_err());
         let err = json!({ "isError": true, "content": [{ "type": "text", "text": "### Error\nError: element not found" }] });
-        assert!(evaluate_value(&err)
-            .unwrap_err()
-            .starts_with("Could not read the element"));
+        let message = evaluate_value(&err).unwrap_err();
+        assert!(message.starts_with("Could not read the element"));
+        assert!(message.contains("element not found"), "{message}");
         assert!(evaluate_value(&json!({ "content": [] })).is_err());
     }
 
