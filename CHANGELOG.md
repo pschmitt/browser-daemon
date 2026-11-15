@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+* MCP: `browser_secret_to_file` takes a secret that a page shows (a client
+  secret or API key displayed once, a recovery code, a token in a field) into
+  a private file without the agent seeing it: one element's value or text,
+  optionally cut out with a regular expression, written like
+  `browser_export_auth`'s files (`$XDG_RUNTIME_DIR/browser-daemon-mcp/`, mode
+  0600, deleted after `minutes`) and masked in all later results. The answer
+  gives the path, the length, a short hash and whether `expect_prefix`
+  matched, never the value. Open on the sites of `--allow-export`.
+
 ### Fixed
 
 * Live view: the settings dialog was pushed off the top of the screen, with

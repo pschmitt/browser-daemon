@@ -689,6 +689,21 @@ fn own_tools_with(
             "inputSchema": { "type": "object", "properties": fetch_props, "required": ["url"], "additionalProperties": false },
             "annotations": { "title": "Request with a page's login", "readOnlyHint": false }
         }));
+        tools.push(json!({
+            "name": "browser_secret_to_file",
+            "description": format!(
+                "Take a secret that is shown on a page (a client secret or API key displayed once, a recovery code, a token in a text field) into a private file without seeing it: read from one element, optionally cut out with a regular expression, written to a file only the user can read that is deleted after a while, and masked in all later results. Use the file from your shell by path (e.g. `\"$(cat FILE)\"` into a secrets tool), never print, cat or copy it into the conversation. The answer gives the path, the length, a short hash and whether `expect_prefix` matched, never the value. The page must be on one of these sites: {sites}."
+            ),
+            "inputSchema": { "type": "object", "properties": {
+                "target": { "type": "string", "description": "The element that shows the value: an exact element reference from the page snapshot, or a unique element selector (e.g. `[role=dialog]`)." },
+                "element": { "type": "string", "description": "Human-readable description of that element." },
+                "source": { "type": "string", "description": "What to read: auto (default: the value of an input, else the visible text), text, value, or the name of an attribute." },
+                "regex": { "type": "string", "description": "JavaScript regular expression to cut the secret out of the text, e.g. `Client secret\\s+(\\S+)`; the first capture group, else the whole match. Without it the whole text, trimmed." },
+                "expect_prefix": { "type": "string", "description": "Fail unless the value starts with this (e.g. `tskey-client-`); the answer only says whether it matched." },
+                "minutes": { "type": "integer", "minimum": 1, "maximum": 120, "description": "When the file is deleted (default 15)." }
+            }, "required": ["target"], "additionalProperties": false },
+            "annotations": { "title": "Take a page's secret into a file", "readOnlyHint": false }
+        }));
     }
     if ask_human {
         tools.push(json!({
@@ -750,6 +765,65 @@ const { targetInfo } = await s.send('Target.getTargetInfo'); await s.detach(); \
 return 'BDPAGE:' + targetInfo.targetId + ':' + page.url() + ':BDEND'; }";
 
 /// (target id, address, host) from the answer to PAGE_INFO.
+/// The page script `browser_secret_to_file` runs on the element: its value
+/// (`auto`: an input's value, else its text; `text`; `value`; or an attribute),
+/// cut out by `regex` (first group, else the whole match), as a string or null.
+/// Both parameters travel as JSON string literals, never as code.
+fn secret_reader(source: &str, regex: Option<&str>) -> String {
+    let literal = |s: Option<&str>| match s {
+        Some(s) => serde_json::to_string(s).unwrap_or_else(|_| "null".into()),
+        None => "null".into(),
+    };
+    format!(
+        r#"(el) => {{
+  const source = {source};
+  const pattern = {regex};
+  let v;
+  if (source === 'text') v = el.innerText ?? el.textContent;
+  else if (source === 'value') v = el.value;
+  else if (source === 'auto') v = ('value' in el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) ? el.value : (el.innerText ?? el.textContent);
+  else v = el.getAttribute(source);
+  if (typeof v !== 'string') return null;
+  if (pattern !== null) {{
+    const m = new RegExp(pattern).exec(v);
+    if (!m) return null;
+    v = m[1] !== undefined ? m[1] : m[0];
+  }}
+  return v;
+}}"#,
+        source = literal(Some(source)),
+        regex = literal(regex),
+    )
+}
+
+/// The string a `browser_evaluate` call returned, from Playwright's
+/// `### Result` block (JSON). An error if there is none or it is not a string.
+fn evaluate_value(result: &Value) -> Result<String, String> {
+    let text: String = result["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c["text"].as_str())
+        .collect();
+    if result["isError"].as_bool() == Some(true) {
+        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        return Err(format!(
+            "Could not read the element: {}",
+            first.chars().take(200).collect::<String>()
+        ));
+    }
+    let start = text.find("### Result").ok_or("The page gave no result")? + "### Result".len();
+    let rest = text[start..].trim_start_matches('\n');
+    let json = rest.split("\n### ").next().unwrap_or(rest).trim();
+    match serde_json::from_str::<Value>(json) {
+        Ok(Value::String(s)) => Ok(s),
+        Ok(Value::Null) => Err(
+            "The element shows nothing to take (no such value, or the regex did not match)".into(),
+        ),
+        _ => Err("The element did not give a text value".into()),
+    }
+}
+
 fn parse_page_info(result: &Value) -> Option<(String, String, String)> {
     let text: String = result["content"]
         .as_array()?
@@ -1067,6 +1141,12 @@ impl State {
                 Ok(match self.fetch(&args).await {
                     Ok(text) => text_result(text, false),
                     Err(e) => text_result(e, true),
+                })
+            }
+            "browser_secret_to_file" if !self.allow_exports.is_empty() => {
+                Ok(match self.secret_to_file(&args).await {
+                    Ok(text) => text_result(text, false),
+                    Err(e) => text_result(self.mask(&e), true),
                 })
             }
             "browser_network_har" => Ok(match self.network_har(&args).await {
@@ -1558,7 +1638,7 @@ impl State {
                 )
             }
         };
-        let path = self.write_private(&content, ext, minutes)?;
+        let path = self.write_private("login", &content, ext, minutes)?;
         let names: Vec<String> = cookies
             .iter()
             .map(|c| {
@@ -1598,7 +1678,13 @@ impl State {
 
     /// Writes `content` to a new file only this user can read, in the runtime
     /// directory (memory, not disk, where there is one), removed after `minutes`.
-    fn write_private(&self, content: &str, ext: &str, minutes: u64) -> Result<PathBuf, String> {
+    fn write_private(
+        &self,
+        stem: &str,
+        content: &str,
+        ext: &str,
+        minutes: u64,
+    ) -> Result<PathBuf, String> {
         use std::io::Write as _;
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
         let base = std::env::var_os("XDG_RUNTIME_DIR")
@@ -1610,7 +1696,7 @@ impl State {
             .mode(0o700)
             .create(&base)
             .map_err(|e| format!("Could not create {}: {e}", base.display()))?;
-        let path = base.join(format!("login-{}.{ext}", uuid::Uuid::new_v4().simple()));
+        let path = base.join(format!("{stem}-{}.{ext}", uuid::Uuid::new_v4().simple()));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1626,6 +1712,78 @@ impl State {
             let _ = tokio::fs::remove_file(gone).await;
         });
         Ok(path)
+    }
+
+    /// `browser_secret_to_file`: one value shown on the page goes into a private
+    /// file and into the mask, and never into the answer.
+    async fn secret_to_file(&self, args: &Value) -> Result<String, String> {
+        let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let target = arg("target").ok_or("Name the element that shows the value (`target`)")?;
+        let minutes = args["minutes"].as_u64().unwrap_or(15).clamp(1, 120);
+        let (child, _page, _address, host) = self.current_page().await?;
+        if !crate::agent_passkeys::site_allowed(&self.allow_exports, &host) {
+            return Err(format!(
+                "The page is on {host}, which is not open to agents here. Allowed: {}.",
+                allowed(&self.allow_exports)
+            ));
+        }
+        let function = secret_reader(arg("source").unwrap_or("auto"), arg("regex"));
+        let mut call = json!({ "function": function, "target": target });
+        if let Some(element) = arg("element") {
+            call["element"] = json!(element);
+        }
+        let result = child
+            .request(
+                "tools/call",
+                json!({ "name": "browser_evaluate", "arguments": call }),
+                Duration::from_secs(60),
+            )
+            .await
+            .map_err(|(_, e)| format!("Could not read the element: {e}"))?;
+        let raw = evaluate_value(&result)?;
+        let value = raw.trim().to_string();
+        if value.is_empty() {
+            return Err(
+                "The element shows nothing to take (empty, or the regex did not match)".into(),
+            );
+        }
+        if value.chars().count() < 4 {
+            return Err("The value is under 4 characters: masking it would hide ordinary text, so it is not taken this way".into());
+        }
+        if value.len() > 16 * 1024 {
+            return Err("The value is over 16 KiB: not a secret to take this way".into());
+        }
+        // Masked from here on, whatever fails later: as read and as written.
+        {
+            let mut filled = self.filled.lock().unwrap();
+            for v in [&raw, &value] {
+                if !filled.contains(v) {
+                    filled.push(v.clone());
+                }
+            }
+        }
+        let prefix = match arg("expect_prefix") {
+            Some(p) if !value.starts_with(p) => {
+                return Err("The value does not start with `expect_prefix`: nothing written".into())
+            }
+            Some(_) => ", starts with `expect_prefix`",
+            None => "",
+        };
+        let path = self.write_private("secret", &value, "txt", minutes)?;
+        let hash = {
+            use sha2::{Digest as _, Sha256};
+            let digest = Sha256::digest(value.as_bytes());
+            digest[..4]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        Ok(format!(
+            "Wrote a secret of {} characters (sha256 {hash}…{prefix}) from {} on {host} to {} (mode 0600; deleted in {minutes} minutes; no trailing newline). Never print, cat or copy it into the conversation; read it by path from your shell. It is masked in all later results.",
+            value.chars().count(),
+            arg("element").unwrap_or(target),
+            path.display(),
+        ))
     }
 
     async fn fetch(&self, args: &Value) -> Result<String, String> {
@@ -3217,7 +3375,7 @@ fn active_recording(ov: &MeshOverview, session: &str) -> Option<(String, String)
 /// Adds the behaviour hints MCP clients use to decide what needs confirming:
 /// (name, read only, destructive, idempotent, open world). Tools not listed keep what they have.
 fn apply_hints(tools: &mut [Value]) {
-    const HINTS: [(&str, bool, bool, bool, bool); 19] = [
+    const HINTS: [(&str, bool, bool, bool, bool); 20] = [
         ("browser_status", true, false, true, false),
         ("browser_profile_tabs", true, false, true, false),
         ("browser_use", false, true, false, false),
@@ -3236,6 +3394,7 @@ fn apply_hints(tools: &mut [Value]) {
         ("browser_passkey", false, false, true, true),
         ("browser_export_auth", false, false, false, false),
         ("browser_fetch", false, true, false, true),
+        ("browser_secret_to_file", false, false, false, false),
         ("browser_ask_human", false, false, false, true),
     ];
     for tool in tools {
@@ -4092,7 +4251,41 @@ mod tests {
         assert!(
             on.contains(&"browser_export_auth".to_string())
                 && on.contains(&"browser_fetch".to_string())
+                && on.contains(&"browser_secret_to_file".to_string())
         );
+        assert!(
+            !names(own_tools(&[], &[], false, &[])).contains(&"browser_secret_to_file".to_string())
+        );
+    }
+
+    #[test]
+    fn secret_reader_embeds_its_parameters_as_literals() {
+        let f = secret_reader("auto", Some(r#"Client secret\s+(\S+)"; alert(1); ""#));
+        assert!(f.contains(r#"const source = "auto";"#));
+        // The quote in the pattern is escaped: it cannot end the string literal.
+        assert!(
+            f.contains(r#"const pattern = "Client secret\\s+(\\S+)\"; alert(1); \"";"#),
+            "{f}"
+        );
+        assert!(secret_reader("text", None).contains("const pattern = null;"));
+        assert!(secret_reader("data-token", None).contains(r#"const source = "data-token";"#));
+    }
+
+    #[test]
+    fn evaluate_value_reads_playwrights_result_block() {
+        let ok = json!({ "content": [{ "type": "text", "text": "### Result\n\"s3cr3t-value\"\n### Ran Playwright code\n```js\nawait page.evaluate(...)\n```" }] });
+        assert_eq!(evaluate_value(&ok).unwrap(), "s3cr3t-value");
+        let none = json!({ "content": [{ "type": "text", "text": "### Result\nnull\n### Ran Playwright code" }] });
+        assert!(evaluate_value(&none)
+            .unwrap_err()
+            .contains("nothing to take"));
+        let number = json!({ "content": [{ "type": "text", "text": "### Result\n42" }] });
+        assert!(evaluate_value(&number).is_err());
+        let err = json!({ "isError": true, "content": [{ "type": "text", "text": "### Error\nError: element not found" }] });
+        assert!(evaluate_value(&err)
+            .unwrap_err()
+            .starts_with("Could not read the element"));
+        assert!(evaluate_value(&json!({ "content": [] })).is_err());
     }
 
     #[test]

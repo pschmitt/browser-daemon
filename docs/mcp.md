@@ -9,6 +9,7 @@
 - `browser_passkey` (only with `--allow-passkey`): sign in with a passkey from the vault. See [Passkeys](#passkeys-browser_passkey).
 - `browser_ask_human` (only with `--ask-human-cmd`): ask the user to do something only a person may do, in the live view of the agent's own page. See [Asking the user](#asking-the-user-browser_ask_human).
 - `browser_export_auth` and `browser_fetch` (only with `--allow-export`): hand the login of a page (cookies, storage values) to the agent's other tools, or use it for one HTTP request, without the agent seeing it. See [Logins](#logins-browser_export_auth-and-browser_fetch).
+- `browser_secret_to_file` (only with `--allow-export`): take a secret a page shows (a client secret displayed once, an API key, a recovery code) into a private file, without the agent seeing it. See [A secret shown on a page](#a-secret-shown-on-a-page-browser_secret_to_file).
 - `browser_network_har`: record the traffic of the browser and save it as a HAR file. See [Network recording](#network-recording-browser_network_har).
 - `browser_flight_recorder`: keep a rolling video of the last seconds of the browser and save it as a recording. See [Flight recorder](#flight-recorder-browser_flight_recorder).
 - `browser_take_screenshot`: the safe screenshot, with passwords, card fields, one-time codes, filled inputs and filled secrets blacked out; it replaces Playwright MCP's tool of that name. See [Screenshots](#screenshots-browser_take_screenshot-and-browser_take_screenshot_unsafe).
@@ -91,6 +92,17 @@ Either works on the agent's own page, or on a shared browser's tab (`browser`, `
 The node serves this as `POST /api/pages/{page}/auth` (a session's page; Chromium over CDP, Firefox over BiDi) and `POST /api/extension/nodes/{id}/tabs/{tab}/auth` (a shared tab with control; the browser extension reads them, Firefox with its `cookies` permission), with `{urls, storage}`; both need the cluster secret and log nothing of the values. The shared-browser command route never takes the extension's `authExport` action, so `browser_shared_command` cannot read them.
 
 What this does not protect: a file the agent's shell can read, it can also print. An exported session cookie is the account, often without a second factor: allow only sites agents need, keep the files short-lived, and treat one that reaches a transcript as leaked (sign that session out).
+
+## A secret shown on a page: `browser_secret_to_file`
+
+Some secrets only exist on a screen: an OAuth client secret or API key that a console shows once, a recovery code, a token in a read-only field. Reading it with a snapshot, `browser_evaluate` or a screenshot would put it into the transcript, and the page's own network sandbox (a browser behind a proxy has no route to the agent's loopback, and `browser_run_code_unsafe` has no file access) leaves no other way out. `browser_secret_to_file` is that way:
+
+- `target` is the element that shows the value (an exact reference from the snapshot, or a unique selector such as `[role=dialog]`). `source` says what to read: `auto` (default: an input's value, else the visible text), `text`, `value` or an attribute name. `regex` is a JavaScript regular expression that cuts the secret out of the text, e.g. `Client secret\s+(\S+)`: the first capture group, else the whole match. It runs in the page; the pattern and `source` are passed as string literals, never as code.
+- The value is written to a new file only the user can read, in `$XDG_RUNTIME_DIR/browser-daemon-mcp/` (memory) and deleted after `minutes` (default 15) or when the server exits, without a trailing newline. It is trimmed of surrounding whitespace, at least 4 characters (a shorter value in the mask would hide ordinary text) and at most 16 KiB.
+- The answer gives the path, the length, the first 8 hex digits of the value's SHA-256 and, with `expect_prefix` (e.g. `tskey-client-`), whether the value starts with it; a mismatch writes nothing. It never shows the value, and the value is masked in all later results and in the snapshot files Playwright writes, as filled secrets are.
+- The page must be on a site named with `--allow-export`, like `browser_export_auth`.
+
+The agent then uses the file by path from its shell, for example `sops set FILE KEY "$(jq -Rn --rawfile v SECRET '$v')"`, and removes it. What this does not protect: a file the agent's shell can read, it can also print. It reads the page of the agent's own browser; a shared browser's tab is not supported.
 
 ## Bot walls
 
