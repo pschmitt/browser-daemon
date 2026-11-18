@@ -71,8 +71,16 @@ When a lifetime is requested, the up command also receives
 `BROWSER_DAEMON_EPHEMERAL_TTL_SECONDS` as a decimal number of seconds. Providers
 can use it to set their own maximum lifetime.
 
+While it runs, the up command can say what it is doing: the daemon keeps the
+last line it writes to stderr (colour codes and control characters removed,
+at most 120 characters) as `progress` of the node, which is `starting` until
+the command is done. The dashboard shows it while a session on a new ephemeral
+node is launched.
+
 To provision a node ahead of a session, choose **Add a node → Ephemeral** in
-the dashboard, or call `POST /api/ephemeral/nodes` with optional `ttl_seconds`.
+the dashboard, or call `POST /api/ephemeral/nodes` with optional `ttl_seconds`
+and `lease_id` (an id of your own choosing, to follow the node in the node list
+while it starts).
 The default is two hours; the API accepts 60 seconds through 24 hours. The
 node remains available until its lifetime expires or its single session ends.
 The lifetime is a maximum even while a session is active. Ready nodes appear in

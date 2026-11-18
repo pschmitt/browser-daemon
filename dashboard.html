@@ -2595,14 +2595,27 @@ function createProgressToast(id, title, initialDesc) {
     $('toastContainer').appendChild(item);
   }
   item.className = 'toast-item toast-info';
-  // pct null: no honest number, so the bar just moves.
+  // pct null: no honest number, so the bar just moves. The markup is built once
+  // per kind of bar and only its text and width change after that: replacing it
+  // on every update restarts the bar's animation (it jittered once a second).
+  let kind = null;
   const render = (pct, desc, sub) => {
-    item.innerHTML = `<div class="toast-header"><div class="toast-title"><span class="spinner"></span><span class="ellipsis">${esc(title)}</span></div>${pct == null ? '' : `<span class="toast-pct">${pct}%</span>`}</div>
-      <div class="toast-desc">${esc(desc || '')}${sub ? ` · ${esc(sub)}` : ''}</div>
-      <div class="toast-progress-wrap"><div class="toast-progress-bar${pct == null ? ' indeterminate' : ''}"${pct == null ? '' : ` style="width:${pct}%"`}></div></div>`;
+    const k = pct == null ? 'indeterminate' : 'determinate';
+    if (kind !== k) {
+      kind = k;
+      item.innerHTML = `<div class="toast-header"><div class="toast-title"><span class="spinner"></span><span class="ellipsis">${esc(title)}</span></div>${pct == null ? '' : '<span class="toast-pct"></span>'}</div>
+        <div class="toast-desc"></div>
+        <div class="toast-progress-wrap"><div class="toast-progress-bar${pct == null ? ' indeterminate' : ''}"></div></div>`;
+    }
+    if (pct != null) {
+      item.querySelector('.toast-pct').textContent = `${pct}%`;
+      item.querySelector('.toast-progress-bar').style.width = `${pct}%`;
+    }
+    item.querySelector('.toast-desc').textContent = `${desc || ''}${sub ? ` · ${sub}` : ''}`;
   };
   render(null, initialDesc, '');
   const finish = (type, t, d, action, ms) => {
+    kind = null;
     item.className = `toast-item toast-${type}`;
     item.innerHTML = toastShell(type, t, (d ? `<div class="toast-desc">${esc(d)}</div>` : '') + actionHtml(action));
     setTimeout(() => dismissToast(item), ms);
@@ -5377,13 +5390,21 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     if (dedicated) {
       let lease = sessionProvisioned ? { node_name: sessionProvisioned.provider, lease_id: sessionProvisioned.lease_id } : null;
       if (!lease) {
-        // The provider's own script does the work and reports nothing along the way:
-        // two honest stages and a clock, not a made-up percentage.
-        t.update(null, 'Provisioning the ephemeral node…', '0s');
+        // The provider's script does the work; all it reports is a line of text now
+        // and then (a worker's state, say), which the lease carries to the overview.
+        // So: the real stage, that line, and a clock; no made-up percentage.
+        const leaseId = newUuid();
+        const what = 'Provisioning the ephemeral node…';
+        t.update(null, what, '0s');
         const t0 = Date.now();
-        const tick = setInterval(() => t.update(null, 'Provisioning the ephemeral node…', `${Math.round((Date.now() - t0) / 1000)}s`), 1000);
+        let ticks = 0;
+        const tick = setInterval(() => {
+          const progress = ephemeralNodes().find((n) => n.lease_id === leaseId)?.progress;
+          t.update(null, progress || what, `${Math.round((Date.now() - t0) / 1000)}s`);
+          if (++ticks % 3 === 0) refreshData();
+        }, 1000);
         try {
-          lease = await request('POST', '/api/ephemeral/nodes', { ttl_seconds: Number($('sessionNodeTtl').value) });
+          lease = await request('POST', '/api/ephemeral/nodes', { ttl_seconds: Number($('sessionNodeTtl').value), lease_id: leaseId });
         } finally {
           clearInterval(tick);
         }
@@ -6498,6 +6519,13 @@ $('transferForm').addEventListener('submit', async (e) => {
 /* ---------------------------------------------------------------- nodes & endpoints */
 // A node's default proxy: for sessions that pick none and whose profile has none.
 const nodeDefaultProxy = (node) => nodes.find((n) => n.name === node)?.settings?.default_proxy || null;
+// crypto.randomUUID() only exists on secure origins; the dashboard is often served over plain http.
+const newUuid = () => {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
 const ephemeralNodes = () => nodes.flatMap((provider) => (provider.ephemeral_nodes || []).map((node) => ({ ...node, provider: provider.name })));
 // Time left until a Unix time, short: 45m, 7h, 3d.
 const untilShort = (at) => {

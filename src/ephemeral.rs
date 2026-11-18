@@ -33,6 +33,9 @@ struct Lease {
     expires_at: Option<u64>,
     #[serde(default)]
     session_created: Option<u64>,
+    /// What the up command last reported while the node was being created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    progress: Option<String>,
 }
 
 /// A provider-owned worker, without exposing its private URL.
@@ -45,6 +48,10 @@ pub struct EphemeralNode {
     pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<u64>,
+    /// While `starting`: the last line the up command wrote (for example a
+    /// worker's state), so a UI can show what is going on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
 }
 
 pub(crate) async fn nodes(state: &AppState) -> Vec<EphemeralNode> {
@@ -108,6 +115,11 @@ pub(crate) async fn nodes(state: &AppState) -> Vec<EphemeralNode> {
             status: status.into(),
             created_at: lease.created,
             expires_at: lease.expires_at,
+            progress: if status == "starting" {
+                lease.progress
+            } else {
+                None
+            },
         }
     }))
     .await
@@ -486,13 +498,91 @@ pub(crate) async fn recover(state: &AppState) {
     }
 }
 
+/// A progress line as the lease keeps it: no colour codes or other control
+/// characters, and short enough for a toast.
+fn clean_progress(raw: &[u8]) -> String {
+    let text = String::from_utf8_lossy(raw);
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // A colour or cursor sequence: ESC [ ... final letter.
+            if chars.next() == Some('[') {
+                for next in chars.by_ref() {
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else if !c.is_control() {
+            out.push(c);
+        }
+    }
+    out.trim().chars().take(120).collect()
+}
+
+/// Run the up command: its stdout is the node descriptor; its stderr is
+/// progress, and the last line of it is kept on the lease for the UI.
+async fn run_up(
+    state: &AppState,
+    key: Uuid,
+    lease: &Lease,
+    mut command: tokio::process::Command,
+) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt;
+    let mut child = command.spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let mut stderr = child.stderr.take()?;
+    let read_stdout = async {
+        let mut buf = Vec::new();
+        stdout.take(1 << 20).read_to_end(&mut buf).await.ok()?;
+        Some(buf)
+    };
+    let relay_stderr = async {
+        let mut current = lease.clone();
+        let (mut chunk, mut line) = ([0u8; 4096], Vec::new());
+        loop {
+            let n = stderr.read(&mut chunk).await.unwrap_or(0);
+            // Progress meters redraw with a carriage return, so it ends a line too.
+            // The end of the stream ends the last one.
+            for b in chunk[..n]
+                .iter()
+                .copied()
+                .map(Some)
+                .chain((n == 0).then_some(None))
+            {
+                match b {
+                    Some(b'\n' | b'\r') | None => {
+                        let text = clean_progress(&line);
+                        line.clear();
+                        if !text.is_empty() && current.progress.as_deref() != Some(&text) {
+                            current.progress = Some(text);
+                            if let Err(e) = save(state, key, &current).await {
+                                warn!(error = %e, "Could not save ephemeral node progress");
+                            }
+                        }
+                    }
+                    Some(b) if line.len() < 4096 => line.push(b),
+                    Some(_) => {}
+                }
+            }
+            if n == 0 {
+                break;
+            }
+        }
+    };
+    let (out, (), status) = tokio::join!(read_stdout, relay_stderr, child.wait());
+    status.ok().filter(|s| s.success()).and(out)
+}
+
 async fn provision(
     state: &AppState,
     up: PathBuf,
     ttl: Option<u64>,
     standalone: bool,
+    key: Option<Uuid>,
 ) -> Result<(Uuid, Lease), ApiError> {
-    let key = Uuid::new_v4();
+    let key = key.unwrap_or_else(Uuid::new_v4);
     let now = clients::now_secs();
     let mut lease = Lease {
         id: key.to_string(),
@@ -503,6 +593,7 @@ async fn provision(
         standalone,
         expires_at: ttl.map(|seconds| now.saturating_add(seconds)),
         session_created: None,
+        progress: None,
     };
     save(state, key, &lease).await.map_err(|_| {
         api_error(
@@ -514,18 +605,19 @@ async fn provision(
     command
         .arg(&lease.id)
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     if let Some(ttl) = ttl {
         command.env("BROWSER_DAEMON_EPHEMERAL_TTL_SECONDS", ttl.to_string());
     }
     let output = tokio::time::timeout(
         Duration::from_secs(ttl.unwrap_or(1500).min(1500)),
-        command.output(),
+        run_up(state, key, &lease, command),
     )
     .await;
     let output = match output {
-        Ok(Ok(output)) if output.status.success() => output,
+        Ok(Some(output)) => output,
         _ => {
             let state = state.clone();
             tokio::spawn(async move {
@@ -537,7 +629,7 @@ async fn provision(
             ));
         }
     };
-    let descriptor = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+    let descriptor = serde_json::from_slice::<serde_json::Value>(&output).ok();
     let url = descriptor.as_ref().and_then(|d| d["url"].as_str());
     let valid = url.and_then(|s| url::Url::parse(s).ok()).is_some_and(|u| {
         matches!(u.scheme(), "http" | "https")
@@ -575,6 +667,10 @@ async fn provision(
 pub(crate) struct CreateNodeRequest {
     #[serde(default = "default_node_ttl")]
     ttl_seconds: u64,
+    /// The caller's own id for the node, so it can follow its progress (the
+    /// lease shows up in the node list while the node starts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lease_id: Option<Uuid>,
 }
 
 fn default_node_ttl() -> u64 {
@@ -624,8 +720,16 @@ pub(crate) async fn create_node(
             )
         });
     };
+    if let Some(id) = req.lease_id {
+        if load_lease(&state, id).await.is_some() {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                "Ephemeral node id is already in use",
+            ));
+        }
+    }
     tokio::spawn(async move {
-        let (key, lease) = provision(&state, up, Some(req.ttl_seconds), true).await?;
+        let (key, lease) = provision(&state, up, Some(req.ttl_seconds), true, req.lease_id).await?;
         let node_name = state.node_name.clone();
         let expires_at = lease.expires_at;
         tokio::spawn(watch(state, key, lease));
@@ -766,7 +870,8 @@ pub(crate) async fn create(
     // Keep provisioning alive if the HTTP caller disconnects; the unused-session
     // timeout will destroy the resulting node.
     let task = tokio::spawn(async move {
-        let (key, mut lease) = provision(&state, up, req.ephemeral_ttl_seconds, false).await?;
+        let (key, mut lease) =
+            provision(&state, up, req.ephemeral_ttl_seconds, false, None).await?;
         let response = state
             .peer_request(
                 state
@@ -822,6 +927,16 @@ pub(crate) async fn create(
 #[cfg(test)]
 mod ui_tests {
     use super::*;
+
+    #[test]
+    fn progress_lines_lose_colours_and_controls() {
+        assert_eq!(
+            clean_progress(b"\x1b[36m\xe2\xa0\x8b\x1b[0m \x1b[1;33mBUILD\x1b[0m \x07(12s)\t"),
+            "\u{280b} BUILD (12s)"
+        );
+        assert_eq!(clean_progress(b"  \x1b[K "), "");
+        assert_eq!(clean_progress(&[b'x'; 500]).len(), 120);
+    }
 
     #[test]
     fn relay_is_scoped_to_the_lease_and_excludes_secrets() {
