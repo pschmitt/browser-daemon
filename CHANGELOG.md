@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-18
+
 ### Changed
 
 * **Breaking:** ephemeral nodes always get a secret of their own now (the
