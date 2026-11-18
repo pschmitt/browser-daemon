@@ -28,6 +28,28 @@ use crate::AppState;
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// The secret of the ephemeral node of `lease`, derived from the cluster secret.
+/// The node is provisioned with it instead of the cluster secret, so it can
+/// only authenticate to itself: the coordinator, the mesh and every other node
+/// know nothing it could present, and nothing it saw (a client's request, its
+/// own files) works anywhere else. Deterministic, so a restarted coordinator
+/// still has it.
+pub fn ephemeral_node_secret(cluster_secret: &str, lease: uuid::Uuid) -> String {
+    let mut mac = HmacSha256::new_from_slice(cluster_secret.as_bytes()).expect("any key length");
+    mac.update(b"browser-daemon ephemeral node secret v1 ");
+    mac.update(lease.as_bytes());
+    hex(&mac.finalize().into_bytes())
+}
+
+/// A token for a node whose secret is `secret` (see `Auth::issue`).
+pub fn token_for_secret(secret: &str, now: u64) -> Option<(String, u64)> {
+    Auth::new(
+        Some(secret.to_string()),
+        HostPolicy::new("http://localhost", &[], 0),
+    )
+    .issue(now)
+}
+
 pub const COOKIE: &str = "bd_auth";
 /// How long a token (and its cookie) stays valid.
 pub const TOKEN_TTL_SECS: u64 = 30 * 24 * 3600;
@@ -726,6 +748,31 @@ mod tests {
         assert!(!a.is_secret("s3cret "));
         assert!(!a.is_secret(""));
         assert!(!auth(None).is_secret(""));
+    }
+
+    #[test]
+    fn an_ephemeral_node_has_a_secret_that_works_nowhere_else() {
+        let lease = uuid::Uuid::new_v4();
+        let node = ephemeral_node_secret("cluster-secret", lease);
+        assert_eq!(node, ephemeral_node_secret("cluster-secret", lease));
+        assert_ne!(node, "cluster-secret");
+        assert_ne!(
+            node,
+            ephemeral_node_secret("cluster-secret", uuid::Uuid::new_v4())
+        );
+        assert_ne!(node, ephemeral_node_secret("other-secret", lease));
+        let hosts = || HostPolicy::new("http://localhost", &[], 3001);
+        let on_node = Auth::new(Some(node.clone()), hosts());
+        let cluster = Auth::new(Some("cluster-secret".into()), hosts());
+        assert!(on_node.is_secret(&node));
+        assert!(!on_node.is_secret("cluster-secret"));
+        assert!(!cluster.is_secret(&node));
+        // A token for the node is no token anywhere else, the mesh included.
+        let (token, _) = token_for_secret(&node, 1000).unwrap();
+        assert!(on_node.verify_token(&token, 1001));
+        assert!(!cluster.verify_token(&token, 1001));
+        let (mesh_token, _) = cluster.issue(1000).unwrap();
+        assert!(!on_node.verify_token(&mesh_token, 1001));
     }
 
     #[test]

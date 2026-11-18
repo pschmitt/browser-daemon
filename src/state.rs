@@ -228,6 +228,8 @@ pub struct AppState {
     pub ephemeral_node: bool,
     pub ephemeral_up: Option<PathBuf>,
     pub ephemeral_down: Option<PathBuf>,
+    /// Ephemeral nodes have secrets of their own (see `auth::ephemeral_node_secret`).
+    pub ephemeral_node_secrets: bool,
     /// Serializes lifecycle changes to each provider lease.
     pub ephemeral_locks: Arc<Mutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
     pub public_url: String,
@@ -446,6 +448,32 @@ impl AppState {
                 StatusCode::BAD_REQUEST,
                 format!("Unknown proxy '{key}' on this node"),
             ))
+        }
+    }
+
+    /// The secret the ephemeral node of `lease` accepts: its own when the nodes
+    /// have them, else the cluster secret.
+    pub fn lease_secret(&self, lease: Uuid) -> Option<String> {
+        let secret = self.cluster_secret.as_deref()?;
+        Some(if self.ephemeral_node_secrets {
+            auth::ephemeral_node_secret(secret, lease)
+        } else {
+            secret.to_string()
+        })
+    }
+
+    /// Like `peer_request`, for a request to the ephemeral node of `lease`: the
+    /// cluster secret never goes to such a node when it has a secret of its own.
+    pub fn lease_request(
+        &self,
+        lease: Uuid,
+        builder: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        match self.lease_secret(lease) {
+            Some(sec) => builder
+                .bearer_auth(&sec)
+                .header("X-Browser-Cluster-Secret", sec),
+            None => builder,
         }
     }
 

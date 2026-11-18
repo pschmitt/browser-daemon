@@ -213,6 +213,13 @@ pub struct Args {
     #[arg(long, requires = "ephemeral_up")]
     pub ephemeral_down: Option<PathBuf>,
 
+    /// Give each ephemeral node a secret of its own, derived from the cluster
+    /// secret and the node's id, instead of the cluster secret: the up command
+    /// gets it in `BROWSER_DAEMON_EPHEMERAL_SECRET` and must install it as the
+    /// node's cluster secret. Everything this node sends to the node uses it.
+    #[arg(long, requires = "ephemeral_up")]
+    pub ephemeral_node_secrets: bool,
+
     #[arg(long)]
     pub public_url: Option<String>,
 
@@ -864,6 +871,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ephemeral_node: args.ephemeral_node,
         ephemeral_up: args.ephemeral_up,
         ephemeral_down: args.ephemeral_down,
+        ephemeral_node_secrets: args.ephemeral_node_secrets,
         ephemeral_locks: Arc::new(Mutex::new(HashMap::new())),
         public_url,
         extension_origins,

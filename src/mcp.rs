@@ -269,6 +269,10 @@ struct State {
     rbw_api: Vec<crate::rbw_api::Client>,
     /// Secrets filled in this session, masked in every tool result.
     filled: std::sync::Mutex<Vec<String>>,
+    /// The credential of each ephemeral node (its base address, its secret or
+    /// token) when the nodes have secrets of their own: such a node never sees
+    /// the cluster secret.
+    node_secrets: std::sync::Mutex<Vec<(String, String)>>,
     cmd: PathBuf,
     out_dir: PathBuf,
     /// Seconds to wait for a bot wall to clear (0: only report it).
@@ -350,6 +354,7 @@ pub async fn run(args: McpArgs) -> R<()> {
         exports: std::sync::Mutex::new(Vec::new()),
         rbw_api,
         filled: std::sync::Mutex::new(Vec::new()),
+        node_secrets: std::sync::Mutex::new(Vec::new()),
         cmd: args.playwright_cmd,
         out_dir,
         challenge_wait: args.challenge_wait,
@@ -927,6 +932,19 @@ fn unique_session(list: &Value, page_id: &str) -> Option<String> {
 }
 
 impl State {
+    /// What to present to the node at `url`: the credential its ephemeral node
+    /// was handed out with, else the cluster secret.
+    fn secret_for(&self, url: &str) -> Option<String> {
+        let url = url.trim_end_matches('/');
+        self.node_secrets
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(base, _)| url == base || url.starts_with(&format!("{base}/")))
+            .map(|(_, secret)| secret.clone())
+            .or_else(|| self.secret.clone())
+    }
+
     async fn send(&self, msg: Value) {
         let mut line = msg.to_string();
         line.push('\n');
@@ -1364,7 +1382,7 @@ impl State {
                 "enter": submit,
                 "session_id": session_id,
             }));
-        if let Some(ref s) = self.secret {
+        if let Some(s) = self.secret_for(&child.target.url) {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
         let res = req
@@ -1437,7 +1455,7 @@ impl State {
                 "sites": if minutes == 0 { Vec::new() } else { sites.clone() },
                 "seconds": minutes * 60,
             }));
-        if let Some(ref s) = self.secret {
+        if let Some(s) = self.secret_for(&child.target.url) {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
         let res = req
@@ -1938,7 +1956,7 @@ impl State {
         let mut req = self
             .http
             .get(format!("{}/json/list", base.trim_end_matches('/')));
-        if let Some(ref s) = self.secret {
+        if let Some(s) = self.secret_for(base) {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
         let list: Value = req.send().await.ok()?.json().await.ok()?;
@@ -2088,7 +2106,7 @@ impl State {
         let mut req = self
             .http
             .get(format!("{}/api/sessions", target.url.trim_end_matches('/')));
-        if let Some(secret) = &self.secret {
+        if let Some(secret) = self.secret_for(&target.url) {
             req = req.header("X-Browser-Cluster-Secret", secret);
         }
         let sessions = req
@@ -2127,7 +2145,7 @@ impl State {
         let mut req = self
             .http
             .get(format!("{}/json/list", target.url.trim_end_matches('/')));
-        if let Some(secret) = &self.secret {
+        if let Some(secret) = self.secret_for(&target.url) {
             req = req.header("X-Browser-Cluster-Secret", secret);
         }
         let tabs = req
@@ -2331,6 +2349,15 @@ impl State {
                 .as_str()
                 .ok_or("Missing ephemeral node URL")?
                 .to_string();
+            // A node with a secret of its own is told that one, never ours.
+            if let Some(credential) = body["node_secret"].as_str().or(body["node_token"].as_str()) {
+                let mut known = self.node_secrets.lock().unwrap();
+                known.retain(|(base, _)| base != url.trim_end_matches('/'));
+                known.push((
+                    url.trim_end_matches('/').to_string(),
+                    credential.to_string(),
+                ));
+            }
             let id = body["session"]["id"]
                 .as_str()
                 .ok_or("Missing ephemeral session ID")?
@@ -2490,7 +2517,7 @@ impl State {
 
     /// A token for `target`'s node, from the node (it is valid on the whole mesh).
     async fn auth_token(&self, target: &Target) -> Option<String> {
-        let secret = self.secret.as_ref()?;
+        let secret = self.secret_for(&target.url)?;
         let res = self
             .http
             .get(format!(
@@ -3259,7 +3286,7 @@ impl State {
             .http
             .post(format!("{node_url}/api/sessions/{session}/flight-recorder"))
             .json(&body);
-        if let Some(ref s) = self.secret {
+        if let Some(s) = self.secret_for(node_url) {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
         let res = req
@@ -3438,11 +3465,12 @@ impl State {
         url: String,
         body: Option<Value>,
     ) -> Result<Value, String> {
+        let secret = self.secret_for(&url);
         let mut req = self.http.request(method, url);
         if let Some(body) = body {
             req = req.json(&body);
         }
-        if let Some(ref s) = self.secret {
+        if let Some(s) = secret {
             req = req.header("X-Browser-Cluster-Secret", s);
         }
         let res = req.send().await.map_err(|e| format!("{node}: {e}"))?;

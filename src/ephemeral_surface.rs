@@ -55,7 +55,6 @@ const MESH_TREES: &[&str] = &[
     "/api/label-sync",
     "/api/secret-agent",
     "/api/extension",
-    "/api/auth/token",
     "/api/shares",
 ];
 
@@ -108,6 +107,8 @@ mod tests {
             "/json/list",
             "/video",
             "/api/pages/ABC/auth",
+            // The MCP server asks the node for a token for its browser child.
+            "/api/auth/token",
         ] {
             assert!(allowed(&get, ok), "{ok}");
         }
@@ -131,7 +132,6 @@ mod tests {
             "/api/profiles/work/transfer",
             "/api/secret-agent/next",
             "/api/extension/pair",
-            "/api/auth/token",
         ] {
             assert!(!allowed(&get, no), "{no}");
         }

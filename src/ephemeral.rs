@@ -85,10 +85,13 @@ pub(crate) async fn nodes(state: &AppState) -> Vec<EphemeralNode> {
             None
         } else {
             match state
-                .peer_request(state.http_client.get(format!(
-                    "{}/api/mesh/node?without_ephemeral=1",
-                    lease.url.trim_end_matches('/')
-                )))
+                .lease_request(
+                    id,
+                    state.http_client.get(format!(
+                        "{}/api/mesh/node?without_ephemeral=1",
+                        lease.url.trim_end_matches('/')
+                    )),
+                )
                 .timeout(Duration::from_millis(1000))
                 .send()
                 .await
@@ -196,7 +199,7 @@ pub(crate) async fn ui_proxy(
         url.push_str(&query);
     }
     let mut req = state
-        .peer_request(state.peer_client.request(method, url))
+        .lease_request(id, state.peer_client.request(method, url))
         .timeout(Duration::from_secs(120));
     if let Some(ct) = headers.get(header::CONTENT_TYPE) {
         req = req.header(header::CONTENT_TYPE, ct.clone());
@@ -262,7 +265,7 @@ pub(crate) async fn ui_ws(
     let Ok(mut request) = url.into_client_request() else {
         return StatusCode::BAD_GATEWAY.into_response();
     };
-    if let Some(secret) = &state.cluster_secret {
+    if let Some(secret) = &state.lease_secret(id) {
         let Ok(value) = HeaderValue::from_str(secret) else {
             return StatusCode::BAD_GATEWAY.into_response();
         };
@@ -298,7 +301,7 @@ pub(crate) async fn ui_ws(
         let Ok(mut req) = hold_url.into_client_request() else {
             return StatusCode::BAD_GATEWAY.into_response();
         };
-        if let Some(secret) = &state.cluster_secret {
+        if let Some(secret) = &state.lease_secret(id) {
             let Ok(value) = HeaderValue::from_str(secret) else {
                 return StatusCode::BAD_GATEWAY.into_response();
             };
@@ -436,7 +439,10 @@ async fn watch(state: AppState, key: Uuid, initial: Lease) {
             continue;
         };
         let url = format!("{}/api/sessions/{id}", lease.url.trim_end_matches('/'));
-        let response = state.peer_request(state.http_client.get(&url)).send().await;
+        let response = state
+            .lease_request(key, state.http_client.get(&url))
+            .send()
+            .await;
         match response {
             Ok(response) if response.status() == StatusCode::NOT_FOUND => break,
             Ok(response) if response.status().is_success() => {
@@ -457,7 +463,8 @@ async fn watch(state: AppState, key: Uuid, initial: Lease) {
                             .saturating_sub(lease.session_created.unwrap_or(lease.created))
                             > 120
                         && state
-                            .peer_request(
+                            .lease_request(
+                                key,
                                 state.peer_client.post(format!("{url}/expire-unattached")),
                             )
                             .timeout(Duration::from_secs(60))
@@ -615,6 +622,12 @@ async fn provision(
     if let Some(ttl) = ttl {
         command.env("BROWSER_DAEMON_EPHEMERAL_TTL_SECONDS", ttl.to_string());
     }
+    // The node's own secret, to install as its cluster secret instead of ours.
+    if state.ephemeral_node_secrets {
+        if let Some(secret) = state.lease_secret(key) {
+            command.env("BROWSER_DAEMON_EPHEMERAL_SECRET", secret);
+        }
+    }
     let output = tokio::time::timeout(
         Duration::from_secs(ttl.unwrap_or(1500).min(1500)),
         run_up(state, key, &lease, command),
@@ -750,6 +763,39 @@ pub(crate) async fn create_node(
     })?
 }
 
+/// What the caller presents to the ephemeral node of `lease` instead of the
+/// cluster secret, when the nodes have secrets of their own: that secret for a
+/// caller that holds the cluster secret, a token of the node for a viewer.
+/// Nothing when the node still takes the cluster secret.
+fn node_credential(state: &AppState, headers: &HeaderMap, lease: Uuid) -> serde_json::Value {
+    if !state.ephemeral_node_secrets {
+        return serde_json::json!({});
+    }
+    let Some(secret) = state.lease_secret(lease) else {
+        return serde_json::json!({});
+    };
+    match state.auth.credential(headers, None, auth::now()) {
+        Some(auth::Credential::Secret) => serde_json::json!({ "node_secret": secret }),
+        Some(auth::Credential::Token) => auth::token_for_secret(&secret, auth::now())
+            .map(|(token, expires_at)| {
+                serde_json::json!({ "node_token": token, "node_token_expires_at": expires_at })
+            })
+            .unwrap_or_else(|| serde_json::json!({})),
+        _ => serde_json::json!({}),
+    }
+}
+
+/// `body` with the node's credential added.
+fn with_node_credential(
+    mut body: serde_json::Value,
+    credential: serde_json::Value,
+) -> serde_json::Value {
+    if let (Some(body), Some(extra)) = (body.as_object_mut(), credential.as_object()) {
+        body.extend(extra.clone());
+    }
+    body
+}
+
 pub(crate) async fn create_node_session(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -757,6 +803,7 @@ pub(crate) async fn create_node_session(
     Json(mut req): Json<CreateSessionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     state.check_auth(&headers)?;
+    let credential = node_credential(&state, &headers, key);
     if req.profile.is_some() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -775,7 +822,7 @@ pub(crate) async fn create_node_session(
         if lease.expires_at.is_some_and(|at| clients::now_secs() >= at) {
             return Err(api_error(StatusCode::GONE, "Ephemeral node has expired"));
         }
-        let response = state.peer_request(state.peer_client.post(format!("{}/api/sessions", lease.url.trim_end_matches('/'))))
+        let response = state.lease_request(key, state.peer_client.post(format!("{}/api/sessions", lease.url.trim_end_matches('/'))))
             .json(&req).timeout(Duration::from_secs(120)).send().await;
         let session = match response { Ok(r) if r.status().is_success() => r.json::<SessionSummary>().await.ok(), _ => None };
         let Some(session) = session else {
@@ -792,7 +839,7 @@ pub(crate) async fn create_node_session(
             tokio::spawn(async move { destroy_owned(&state, key).await; });
             return Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save ephemeral session lease"));
         }
-        Ok(Json(serde_json::json!({"node_url": lease.url, "node_name": state.node_name, "lease_id": key, "session": session})))
+        Ok(Json(with_node_credential(serde_json::json!({"node_url": lease.url, "node_name": state.node_name, "lease_id": key, "session": session}), credential)))
     }).await.map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "Ephemeral session task failed"))?
 }
 
@@ -823,6 +870,7 @@ pub(crate) async fn create(
     Json(mut req): Json<CreateSessionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     state.check_auth(&headers)?;
+    let credential_headers = headers.clone();
     if req.profile.is_some() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -877,7 +925,8 @@ pub(crate) async fn create(
         let (key, mut lease) =
             provision(&state, up, req.ephemeral_ttl_seconds, false, None).await?;
         let response = state
-            .peer_request(
+            .lease_request(
+                key,
                 state
                     .peer_client
                     .post(format!("{}/api/sessions", lease.url.trim_end_matches('/'))),
@@ -915,10 +964,12 @@ pub(crate) async fn create(
         }
         let url = lease.url.clone();
         let node_name = state.node_name.clone();
+        let credential = node_credential(&state, &credential_headers, key);
         tokio::spawn(watch(state, key, lease));
-        Ok(Json(
+        Ok(Json(with_node_credential(
             serde_json::json!({ "node_url": url, "node_name": node_name, "lease_id": key, "session": session }),
-        ))
+            credential,
+        )))
     });
     task.await.map_err(|_| {
         api_error(

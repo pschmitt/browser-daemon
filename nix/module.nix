@@ -205,6 +205,17 @@ in
       description = "Executable called with an ephemeral node id to decommission it.";
     };
 
+    ephemeralNodeSecrets = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Give each ephemeral node a secret of its own (derived from the cluster
+        secret and the node's id) instead of the cluster secret. `ephemeralUp`
+        gets it in `BROWSER_DAEMON_EPHEMERAL_SECRET` and must install it as the
+        node's cluster secret; turn this on together with that change.
+      '';
+    };
+
     publicUrl = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -822,6 +833,7 @@ in
                 "--ephemeral-down"
                 cfg.ephemeralDown
               ]
+              ++ lib.optional (cfg.ephemeralNodeSecrets && cfg.ephemeralUp != null) "--ephemeral-node-secrets"
               ++ lib.optionals cfg.adblock.enable [
                 "--chromium-adblock"
                 "${cfg.adblock.chromiumExtension}"

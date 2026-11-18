@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+* `--ephemeral-node-secrets` (NixOS: `ephemeralNodeSecrets`): each ephemeral node
+  gets a secret of its own, derived from the cluster secret and its id, instead
+  of the cluster secret. The up command receives it in
+  `BROWSER_DAEMON_EPHEMERAL_SECRET` and installs it as the node's cluster secret;
+  the coordinator and the MCP server use it for that node, and the create
+  responses carry it as `node_secret` (`node_token` for a viewer). A node that
+  is compromised then holds nothing that works on the mesh or on another node.
+  Off by default: the up command has to be changed first.
+
 ### Changed
 
 * An ephemeral node (`--ephemeral-node`) serves its browser and session only:
