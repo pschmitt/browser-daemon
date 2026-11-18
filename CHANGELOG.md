@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+* An ephemeral node (`--ephemeral-node`) serves its browser and session only:
+  no dashboard, live-view, share or extension pages, no `--peer`s, and 404 on
+  the mesh's routes (peers, overview, placement, ephemeral nodes, runs,
+  profiles, the secret agent's routes, shared browsers). Its settings and
+  labels are read-only over the API, so it cannot promote itself (the vault
+  switch, a proxy, labels); the dashboard's relay can read them but no longer
+  change them.
+
 ### Added
 
 * Vault access (rbw logins, passkeys and cards) can be switched off per

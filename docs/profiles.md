@@ -116,6 +116,24 @@ profile configuration for its startup and controller access. Start a disposable
 node with `--ephemeral-node`: it allows one session over its lifetime and forces
 that session to be non-persistent, even if a caller requests persistence.
 
+### What an ephemeral node serves
+
+A node started with `--ephemeral-node` is for one session and runs untrusted pages, so it
+serves its browser and that session and nothing else. It has no web UI (the
+dashboard, the live view's page, share pages, the extension page: the
+coordinator serves those and relays the live view), ignores `--peer`, and
+answers 404 on the mesh's routes (`/api/peers`, the mesh overview and
+placement, `/api/ephemeral`, `/api/run`, profiles, the secret agent's routes,
+shared browsers). Its sessions have no vault access unless the node's `vault`
+setting is switched on (see [rbw](rbw.md)). Its settings and labels are
+read-only over the API (`PATCH /api/settings` answers 404), so the node cannot
+promote itself, for example to vault access: set them in the node's settings file
+where it is provisioned.
+
+It still needs the cluster secret to accept the coordinator's requests, so a
+browser exploit that reaches the node's files can read it. Keep the secret out
+of the image if the provider can give each node a secret of its own.
+
 ## Upstream proxies
 
 Route a session through a SOCKS or HTTP proxy configured on its node (`services.browser-daemon.proxies`). Pick one per session (`"proxy": "<id>"` when creating it, `?proxy=<id>` on `/chromium` and `/firefox`, `none` for direct) or store a default on a profile (`PATCH /api/profiles/<name> {"proxy": "<id>"}`). A running session switches on the fly (`POST /api/sessions/<id>/proxy {"proxy": "<id>"}`, the session menu in the dashboard and handoff, `p` in the TUI): browsers always talk to a per-session SOCKS5 relay in the daemon, which forwards directly or through the chosen proxy and drops open connections when the route changes. DNS goes through SOCKS5 proxies, and WebRTC is kept from bypassing them. `GET /api/proxies` lists a node's proxies. A proxy URL may carry a login (`socks5://user:password@host:1080`, percent-encoded; HTTP proxies get Basic; keep it in a file with `url_file` instead of `url`); the API never shows it. A node can be such a proxy for the others, and they pick it up by themselves as `node:<name>`: see [SOCKS5 egress](nixos.md#socks5-egress).

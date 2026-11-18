@@ -16,6 +16,7 @@ mod display;
 mod downloads;
 mod egress;
 mod ephemeral;
+mod ephemeral_surface;
 mod extension;
 mod favicon;
 mod history;
@@ -561,7 +562,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| format!("https://browser.{}.ts.brkn.lol", node_name));
 
     let mut peer_map = HashMap::new();
-    for p in args.peers {
+    // An ephemeral node has no peers: it must not reach, or be told about, the mesh.
+    for p in args.peers.into_iter().filter(|_| !args.ephemeral_node) {
         let trimmed = p.trim().trim_end_matches('/').to_string();
         if trimmed.is_empty() || trimmed == public_url.trim_end_matches('/') {
             continue;
@@ -1352,6 +1354,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state.clone(),
             auth::layer,
         ));
+
+    // An ephemeral node serves its browser and session only: no web UI, no mesh.
+    let app = if state.ephemeral_node {
+        app.layer(axum::middleware::from_fn(ephemeral_surface::restrict))
+    } else {
+        app
+    };
 
     tokio::spawn(shutdown_on_signal(state));
     let listener = tokio::net::TcpListener::bind(args.bind).await?;

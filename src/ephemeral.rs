@@ -162,10 +162,14 @@ fn ui_path_allowed(method: &axum::http::Method, path: &str, session: Uuid) -> bo
             .iter()
             .any(|p| path.contains(p));
     }
-    matches!(
-        path,
-        "json/list" | "json/new" | "api/settings" | "api/proxies" | "api/favicon" | "api/qr"
-    ) || path.starts_with("json/close/")
+    // The node's settings are read, never changed through the relay: its vault
+    // access, for one, stays as the node was started.
+    (path == "api/settings" && *method == axum::http::Method::GET)
+        || matches!(
+            path,
+            "json/list" | "json/new" | "api/proxies" | "api/favicon" | "api/qr"
+        )
+        || path.starts_with("json/close/")
         || path.starts_with("json/activate/")
 }
 
@@ -949,6 +953,16 @@ mod ui_tests {
         assert!(!ui_path_allowed(
             &axum::http::Method::GET,
             &format!("api/sessions/{}", Uuid::new_v4()),
+            id
+        ));
+        assert!(ui_path_allowed(
+            &axum::http::Method::GET,
+            "api/settings",
+            id
+        ));
+        assert!(!ui_path_allowed(
+            &axum::http::Method::PATCH,
+            "api/settings",
             id
         ));
         assert!(!ui_path_allowed(

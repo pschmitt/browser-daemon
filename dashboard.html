@@ -3079,6 +3079,9 @@ function sessionSheetSpec(s) {
       { icon: 'tabs', label: 'Tabs and details', meta: plural(pagesOf(s).length, 'tab'), more: true, run: () => showSessionDetails(s) },
       { icon: 'gear', label: 'Settings', meta: settingsMeta, more: true, run: () => openSessionSettings(s) },
       { icon: 'edit', label: 'Rename', run: () => renameSession(s) },
+      nodeVaultOn(s.node_name)
+        ? { icon: 'lock', label: s.vault === false ? 'Vault access off' : 'Vault access on', sub: s.vault === false ? 'Logins, passkeys and cards cannot be filled in. Tap to allow' : 'Logins, passkeys and cards can be filled in. Tap to switch off', run: () => toggleSessionVault(s) }
+        : { icon: 'lock', label: 'Vault access off', sub: `Switched off on ${s.node_name}: see the node's settings` },
       { icon: 'tag', label: 'Labels', meta: s.labels?.join(', ') || '', more: true, run: () => openItemLabels('session', s) },
       !s.profile && { icon: 'saved', label: 'Save as profile', sub: 'Keep its logins, cookies and storage', run: () => saveSessionAsProfile(s) },
       '-',
@@ -5968,6 +5971,14 @@ $('notesList').addEventListener('click', async (e) => {
 });
 $('notesModal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) { notesCtx = null; closeModal('notesModal'); } });
 
+// The node's own vault switch is a ceiling the session's cannot lift.
+const nodeVaultOn = (node) => nodes.find((n) => n.name === node)?.vault_enabled !== false;
+function toggleSessionVault(s) {
+  const on = s.vault === false;
+  act(on ? 'Allowing vault access' : 'Switching vault access off',
+    () => request('POST', api(s.node_name, `/sessions/${enc(s.id)}/vault`), { enabled: on }),
+    on ? 'Vault access on' : 'Vault access off');
+}
 async function renameSession(s) {
   const v = await ask({ title: 'Rename session', text: 'Leave empty for a made-up name.', input: s.name || '', ok: 'Rename' });
   if (v === null || v === undefined) return;

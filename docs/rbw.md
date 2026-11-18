@@ -64,6 +64,18 @@ browser-daemon secret-agent --node https://browser.example.org --cluster-secret-
 
 It must run as the vault's user, with rbw configured and able to reach that user's rbw-agent (in `$XDG_RUNTIME_DIR`). On NixOS use the module's `services.browser-daemon.secretAgent` ([NixOS](nixos.md#secret-agent)). One agent can serve several nodes; without an agent a node has no vault (the vault button and passkey dialog say so). `RUST_LOG` sets its log level (default `browser_daemon=info`).
 
+## Switching vault access off
+
+Vault access (logins, passkeys, cards, and what an agent fills with `browser_fill_secret`, `browser_fill_card` and `browser_passkey`) is on by default and can be switched off per session and per node. Either one off is off: the node's setting is a ceiling that no session lifts.
+
+| | Session | Node |
+|---|---|---|
+| Set | `"vault": false` when creating it, `session new --no-vault`, the new-session dialog's Vault access option | `PATCH /api/settings {"vault": false}` (`{"reset_vault": true}` for the default), `node set --vault false`, the node's settings in the dashboard |
+| Change while running | `POST /api/sessions/<id>/vault {"enabled": false}`, `session vault <id> off`, the session menu in the dashboard | the same node settings |
+| Default | on | on; **off on an ephemeral node** |
+
+The passkey, agent-passkey, autofill, login and text-insert routes answer 403 for a session without vault access, the passkey hook is not put on its browser, and signing an agent had armed stops. A node without vault access also refuses the routes of shared browsers. The session's switch is kept across daemon restarts.
+
 ## Styling
 
 The live view's vault popover and passkey prompt are rbw's [live-view extension](extensions.md), from rbw's repository (`browser/browser-daemon`), which shares the rbw browser extension's theme, icons and logo. Nodes deployed from this flake load it from the `rbw` flake input (`packages.rbw-extension`); after `nix flake update rbw` they get rbw's current look. Elsewhere pass `--extension-dir` (see [Live-view extensions](extensions.md#rbws)).
