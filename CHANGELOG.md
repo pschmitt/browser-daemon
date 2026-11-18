@@ -12,6 +12,17 @@
   0600, deleted after `minutes`) and masked in all later results. The answer
   gives the path, the length, a short hash and whether `expect_prefix`
   matched, never the value. Open on the sites of `--allow-export`.
+* Dashboard: launching a session on a new ephemeral node shows what the node is
+  doing (an rworker's BUILD, ACTIVE and so on) with a clock in the launch toast,
+  and in the Nodes view while it starts. The last line the up command writes to
+  stderr is kept as the node's `progress`; `POST /api/ephemeral/nodes` takes an
+  optional `lease_id` to follow a node by. The launch now provisions the node
+  and starts the session in two steps, and removes the node again when the
+  session cannot be created.
+* Dashboard: nodes that provide something carry a badge in the Nodes view:
+  rworker for those that provision ephemeral nodes, rbw for the one the vault
+  agent runs on (the agent tells the nodes where it runs, `X-Vault-Host`; the
+  others say "served by" it). Node info has `vault_agent` and `vault_host`.
 
 ### Fixed
 
@@ -26,6 +37,11 @@
   share and notes dialogs and the dashboard's question, prune, merge, record,
   share and public-links dialogs had none. A click outside a dialog closes it
   in both pages, unless something was typed into it.
+* Dashboard: the launch toast named the node that was picked before
+  "Ephemeral node", and its progress bar restarted its animation on every
+  update.
+* Browser extension: declares the standard icon sizes (16, 32, 48 and 128 px);
+  Chrome showed the toolbar icon on its extensions page.
 
 ## [0.17.0] - 2026-11-12
 
