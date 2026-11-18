@@ -13,6 +13,9 @@ pub struct PeerState {
     pub groups: Vec<String>,
     #[serde(default)]
     pub ephemeral_provider: bool,
+    /// The rbw version of the vault agent serving this node, when one is attached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ephemeral_nodes: Vec<ephemeral::EphemeralNode>,
     pub url: String,

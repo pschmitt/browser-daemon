@@ -6562,6 +6562,12 @@ const compactLabels = (labels) => {
   return list.slice(0, 2).map(lblChip).join('') + (list.length > 2 ? `<span class="chip">+${list.length - 2}</span>` : '');
 };
 const facts = (...parts) => parts.filter(Boolean).map((x) => `<span class="nf">${x}</span>`).join('');
+// What else a node does for the mesh: provisions ephemeral nodes (rworker), serves the vault (rbw).
+const providerBadges = (n) => [
+  n.ephemeral_provider && { icon: 'clock', name: 'rworker', title: 'Provides ephemeral nodes: new sessions can get a node of their own here' },
+  n.vault_agent != null && { icon: 'lock', name: 'rbw', title: `Serves the vault to live views${n.vault_agent ? ` (rbw ${n.vault_agent})` : ''}` },
+].filter(Boolean);
+const providerChips = (n) => providerBadges(n).map((b) => `<span class="chip accent" title="${esc(b.title)}">${icon(b.icon, 'sm')}${esc(b.name)}</span>`).join('');
 function daemonRow(n, odd) {
   const online = n.status === 'online';
   const pct = n.max_sessions ? Math.min(100, (n.active_sessions / n.max_sessions) * 100) : 0;
@@ -6571,7 +6577,7 @@ function daemonRow(n, odd) {
     : facts(`<span class="bad">unreachable</span>`, esc(shortHost(n.url)));
   return nodeRow({
     kind: 'node', key: n.name, ico: icon('server'), color: nodeColor(n.name), state: online ? 'ok' : 'bad', name: n.name, off: !online,
-    chips: (n.isLocal ? '<span class="chip accent">local</span>' : '') + compactLabels(n.labels?.length ? n.labels : n.groups)
+    chips: (n.isLocal ? '<span class="chip accent">local</span>' : '') + providerChips(n) + compactLabels(n.labels?.length ? n.labels : n.groups)
       + (odd.has(n.name) ? `<span class="chip warn" title="Runs another version than the other nodes">${icon('alert', 'sm')}v${esc(n.version)}</span>` : ''),
     sub,
     action: online ? `<button class="round-go" data-node-launch="${esc(n.name)}" title="New session on ${esc(n.name)}" aria-label="New session on ${esc(n.name)}">${icon('plus')}</button>` : '',
@@ -6674,6 +6680,7 @@ function daemonSheetSpec(n) {
       { label: 'Node' },
       /^https?:\/\//.test(n.url) ? { icon: 'link', label: 'Address', meta: shortHost(n.url), href: n.url, attrs: ' target="_blank" rel="noopener"' } : { icon: 'link', label: 'Address', meta: n.url || '' },
       n.version && { icon: 'info-c', label: 'Version', meta: `v${n.version}${n.revision ? ` · ${n.revision.slice(0, 7)}` : ''}` },
+      providerBadges(n).length && { icon: 'layers', label: 'Provides', meta: providerBadges(n).map((b) => b.name).join(', ') },
       n.supported_engines?.length && { icon: 'globe', label: 'Engines', meta: n.supported_engines.map(engineLabel).join(', ') },
       { icon: 'gear', label: 'Settings', sub: 'Default proxy, labels' + (n.isLocal ? '' : ', remove from the mesh'), more: true, run: () => openSettings('node', n.name) },
     ],
