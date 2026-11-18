@@ -6580,7 +6580,8 @@ function daemonRow(n, odd) {
 const ephemeralUrl = (n) => (n.session_id ? `${nodeBase(n.provider)}/handoff/?ephemeral=${enc(n.lease_id)}&session=${enc(n.session_id)}` : '');
 function ephemeralRow(n) {
   const online = n.status === 'online' || n.status === 'ready';
-  const state = n.session_id ? 'session running' : n.status === 'ready' ? 'ready for a session' : n.status;
+  // While it starts, the provider's own words (an rworker's BUILD, ACTIVE, ...) when it has any.
+  const state = n.session_id ? 'session running' : n.status === 'ready' ? 'ready for a session' : n.status === 'starting' && n.progress ? `starting · ${n.progress}` : n.status;
   return nodeRow({
     kind: 'ephemeral', key: n.lease_id, ico: icon('clock'), color: nodeColor(n.name), state: online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad', name: n.name, off: !online,
     sub: facts(esc(state), `via ${esc(n.provider)}`, n.expires_at ? `<b>${esc(untilShort(n.expires_at))}</b> left` : ''),
@@ -6682,7 +6683,7 @@ function ephemeralSheetSpec(n) {
   const online = n.status === 'online' || n.status === 'ready';
   return {
     head: sheetHead(nodeAvatar(icon('clock'), nodeColor(n.name), online ? 'ok' : n.status === 'starting' ? 'warn' : 'bad'), esc(n.name),
-      subLine('Ephemeral node', `via ${esc(n.provider)}`, esc(n.session_id ? 'session running' : n.status))),
+      subLine('Ephemeral node', `via ${esc(n.provider)}`, esc(n.session_id ? 'session running' : n.status === 'starting' && n.progress ? `starting · ${n.progress}` : n.status))),
     primary: online && n.session_id ? `<a class="btn primary big" href="${esc(ephemeralUrl(n))}">${icon('takeover')}Take over</a>`
       : n.status === 'ready' ? `<button class="btn primary big" data-ephemeral-launch="${esc(n.lease_id)}" data-provider="${esc(n.provider)}">${icon('plus')}New session</button>` : '',
     items: [
