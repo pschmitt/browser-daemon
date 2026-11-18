@@ -62,7 +62,13 @@ browser-daemon secret-agent --node https://browser.example.org --cluster-secret-
   [--rbw rbw] [--unlock-webhook URL] [--unlock-host HOST] [--notify-webhook URL]
 ```
 
-It must run as the vault's user, with rbw configured and able to reach that user's rbw-agent (in `$XDG_RUNTIME_DIR`). On NixOS use the module's `services.browser-daemon.secretAgent` ([NixOS](nixos.md#secret-agent)). One agent can serve several nodes; without an agent a node has no vault (the vault button and passkey dialog say so). `RUST_LOG` sets its log level (default `browser_daemon=info`).
+It must run as the vault's user, with rbw configured and able to reach that user's rbw-agent (in `$XDG_RUNTIME_DIR`). On NixOS use the module's `services.browser-daemon.secretAgent` ([NixOS](nixos.md#secret-agent)).
+
+### rbw's remote API
+
+With `--rbw-api-url https://vault.example:PORT --rbw-api-ca ca.pem --rbw-api-cert client.pem --rbw-api-key client-key.pem` (cert and key repeated in matching order, one client per rbw account; on NixOS `secretAgent.rbwApi`), the agent reads fills and copies through rbw-agent's [remote API](https://github.com/pschmitt/rbw/blob/main/docs/remote-api.md) instead of `rbw get` and `rbw code`, takes the lock state from `/v1/status` and unlocks with the typed master password through `/v1/unlock`. It reads only the fields a request names, and rbw hands out only those granted to the client: grant `username`, `password`, `totp` and `uri_all` (or the single `uri/N`) on the entries to fill, a status grant, and an unlock grant if the view's password unlock should work. A fill checks the page against the entry's granted URIs and their saved match types. Custom fields do not go along yet: the API cannot list an entry's custom fields.
+
+The logins list (`rbw search --url`) and passkeys (`rbw passkey find`, `assert`) still run the `rbw` command, so for now the agent still runs next to the vault's rbw-agent; they move to the API once rbw serves them. One agent can serve several nodes; without an agent a node has no vault (the vault button and passkey dialog say so). `RUST_LOG` sets its log level (default `browser_daemon=info`).
 
 ## Switching vault access off
 

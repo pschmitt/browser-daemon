@@ -12,6 +12,38 @@ use zeroize::Zeroizing;
 pub struct Client {
     base: url::Url,
     http: reqwest::Client,
+    consumer: &'static str,
+}
+
+impl std::fmt::Debug for Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Client")
+            .field("base", &self.base.as_str())
+            .finish()
+    }
+}
+
+/// The lock state of the accounts this client may see (`GET /v1/status`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    pub agent_version: Option<String>,
+    pub accounts: Vec<AccountState>,
+}
+#[derive(Deserialize)]
+pub struct AccountState {
+    pub account: String,
+    pub state: String,
+}
+
+/// A login read by item id: only the fields this client was granted. The TOTP
+/// is the current code, never the seed.
+pub struct Login {
+    pub name: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub totp: Option<String>,
+    pub uris: Vec<Uri>,
 }
 
 #[derive(Deserialize)]
@@ -74,32 +106,87 @@ impl Client {
             .timeout(Duration::from_secs(60))
             .build()
             .map_err(|_| "Cannot configure RBW API client")?;
-        Ok(Self { base, http })
+        Ok(Self {
+            base,
+            http,
+            consumer: "browser-daemon-mcp",
+        })
     }
 
-    async fn get<T: serde::de::DeserializeOwned>(&self, segments: &[&str]) -> Result<T, String> {
+    /// The name this client gives itself in `X-Rbw-Consumer` (rbw's audit log).
+    pub fn consumer(mut self, consumer: &'static str) -> Self {
+        self.consumer = consumer;
+        self
+    }
+
+    fn url(&self, segments: &[&str]) -> Result<url::Url, String> {
         let mut url = self.base.clone();
         url.path_segments_mut()
             .map_err(|_| "Invalid RBW API origin")?
             .clear()
             .extend(segments);
-        let response = self
-            .http
-            .get(url)
-            .header("X-Rbw-Consumer", "browser-daemon-mcp")
-            .send()
-            .await
-            .map_err(|_| "RBW API request failed")?;
-        if !response.status().is_success() {
+        Ok(url)
+    }
+
+    async fn answer<T: serde::de::DeserializeOwned>(
+        response: reqwest::Response,
+    ) -> Result<T, String> {
+        let status = response.status();
+        if status == reqwest::StatusCode::LOCKED {
+            return Err("The vault is locked".into());
+        }
+        if !status.is_success() {
             return Err(format!(
                 "RBW API refused the request (HTTP {})",
-                response.status().as_u16()
+                status.as_u16()
             ));
         }
         response
             .json()
             .await
             .map_err(|_| "Invalid RBW API response".into())
+    }
+
+    async fn get<T: serde::de::DeserializeOwned>(&self, segments: &[&str]) -> Result<T, String> {
+        let response = self
+            .http
+            .get(self.url(segments)?)
+            .header("X-Rbw-Consumer", self.consumer)
+            .send()
+            .await
+            .map_err(|_| "RBW API request failed")?;
+        Self::answer(response).await
+    }
+
+    /// The lock state of the accounts granted to this client.
+    pub async fn status(&self) -> Result<Status, String> {
+        self.get(&["v1", "status"]).await
+    }
+
+    /// Unlocks one account with its master password (needs an unlock grant).
+    /// The password goes in the request body only, never in a log or an error.
+    pub async fn unlock(&self, account: &str, password: &str) -> Result<(), String> {
+        let body = Zeroizing::new(
+            serde_json::to_vec(&json!({ "account": account, "password": password }))
+                .map_err(|_| "Cannot encode the unlock request")?,
+        );
+        let response = self
+            .http
+            .post(self.url(&["v1", "unlock"])?)
+            .header("X-Rbw-Consumer", self.consumer)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_vec())
+            .send()
+            .await
+            .map_err(|_| "RBW API request failed")?;
+        match response.status() {
+            s if s.is_success() => Ok(()),
+            reqwest::StatusCode::FORBIDDEN => {
+                Err(format!("This client may not unlock the account {account}"))
+            }
+            reqwest::StatusCode::UNPROCESSABLE_ENTITY => Err("rbw refused the password".into()),
+            s => Err(format!("RBW API refused the unlock (HTTP {})", s.as_u16())),
+        }
     }
 
     async fn field(&self, id: &str, field: &[&str]) -> Result<String, String> {
@@ -142,29 +229,53 @@ impl Client {
         Ok(matched)
     }
 
-    async fn read_item(&self, item: &Item, field: &str, card: bool) -> Result<Secret, String> {
+    /// The item's granted URIs with their saved match types.
+    async fn uris(&self, item: &Item) -> Result<Vec<Uri>, String> {
+        if item.fields.iter().any(|field| field == "uri_all") {
+            let value = self.field(&item.id, &["uri_all"]).await?;
+            return decode_uris(&value);
+        }
         let mut uris = Vec::new();
-        if !card {
-            let all_uris = item.fields.iter().any(|field| field == "uri_all");
-            if all_uris {
-                let value = self.field(&item.id, &["uri_all"]).await?;
-                uris = decode_uris(&value)?;
-            }
-            for token in &item.fields {
-                if all_uris {
-                    break;
-                }
-                if let Some(index) = token.strip_prefix("uri/") {
-                    let index: usize = index.parse().map_err(|_| "Invalid RBW API URI grant")?;
-                    let index = index.to_string();
-                    let uri = self.field(&item.id, &["uri", &index]).await?;
-                    let policy = self.field(&item.id, &["uri_match", &index]).await?;
-                    let match_type: Option<u64> = serde_json::from_str(&policy)
-                        .map_err(|_| "Invalid RBW API URI match type")?;
-                    uris.push(Uri { uri, match_type });
-                }
+        for token in &item.fields {
+            if let Some(index) = token.strip_prefix("uri/") {
+                let index: usize = index.parse().map_err(|_| "Invalid RBW API URI grant")?;
+                let index = index.to_string();
+                let uri = self.field(&item.id, &["uri", &index]).await?;
+                let policy = self.field(&item.id, &["uri_match", &index]).await?;
+                let match_type: Option<u64> =
+                    serde_json::from_str(&policy).map_err(|_| "Invalid RBW API URI match type")?;
+                uris.push(Uri { uri, match_type });
             }
         }
+        Ok(uris)
+    }
+
+    /// The wanted login fields of an item; a field not wanted or not granted is
+    /// None (and never read).
+    async fn read_login(&self, item: &Item, want: &[String]) -> Result<Login, String> {
+        let granted = |f: &str| want.iter().any(|w| w == f) && item.fields.iter().any(|g| g == f);
+        let read = |f: &'static str| async move {
+            if granted(f) {
+                self.optional_field(&item.id, &[f]).await
+            } else {
+                Ok(None)
+            }
+        };
+        Ok(Login {
+            name: item.name.clone(),
+            username: read("username").await?,
+            password: read("password").await?,
+            totp: read("totp").await?,
+            uris: self.uris(item).await?,
+        })
+    }
+
+    async fn read_item(&self, item: &Item, field: &str, card: bool) -> Result<Secret, String> {
+        let uris = if card {
+            Vec::new()
+        } else {
+            self.uris(item).await?
+        };
         let value = if card {
             if field == "exp_date" {
                 let month = self.field(&item.id, &["card_exp_month"]).await?;
@@ -221,6 +332,59 @@ pub async fn lookup(
     }
     let (client, item) = matched.ok_or("RBW API item is not granted or was not found")?;
     client.read_item(&item, field, card).await
+}
+
+/// Whether every account the clients may see is unlocked (accounts no longer
+/// configured do not count). False when none can be seen or rbw is unreachable.
+pub async fn unlocked(clients: &[Client]) -> bool {
+    let mut any = false;
+    for client in clients {
+        let Ok(status) = client.status().await else {
+            return false;
+        };
+        for account in &status.accounts {
+            match account.state.as_str() {
+                "unlocked" => any = true,
+                "unconfigured" => {}
+                _ => return false,
+            }
+        }
+    }
+    any
+}
+
+/// The rbw-agent's version, as the first client's status reports it.
+pub async fn agent_version(clients: &[Client]) -> Option<String> {
+    clients.first()?.status().await.ok()?.agent_version
+}
+
+/// Unlocks every locked account the clients may unlock with the password.
+pub async fn unlock(clients: &[Client], password: &str) -> Result<(), String> {
+    let mut tried = false;
+    for client in clients {
+        for account in client.status().await?.accounts {
+            if account.state == "locked" {
+                tried = true;
+                client.unlock(&account.account, password).await?;
+            }
+        }
+    }
+    if !tried && !unlocked(clients).await {
+        return Err("No locked account to unlock".into());
+    }
+    Ok(())
+}
+
+/// The wanted fields (`username`, `password`, `totp`) and the URIs of the
+/// login with this item id, from whichever client was granted it.
+pub async fn login(clients: &[Client], id: &str, want: &[String]) -> Result<Login, String> {
+    for client in clients {
+        let items: Items = client.get(&["v1", "items"]).await?;
+        if let Some(item) = items.items.into_iter().find(|item| item.id == id) {
+            return client.read_login(&item, want).await;
+        }
+    }
+    Err("RBW API item is not granted or was not found".into())
 }
 
 #[cfg(test)]

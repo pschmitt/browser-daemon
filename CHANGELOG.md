@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+* The secret agent can use rbw-agent's remote API (`--rbw-api-url`,
+  `--rbw-api-ca`, `--rbw-api-cert`, `--rbw-api-key`; NixOS
+  `secretAgent.rbwApi`): fills, copies, the lock state and the master-password
+  unlock then read only the fields granted to its client. Logins and passkeys
+  still run the `rbw` command until rbw serves them.
+
 ## [0.19.0] - 2026-11-18
 
 ### Changed

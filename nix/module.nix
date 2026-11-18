@@ -33,19 +33,34 @@ let
       --cluster-secret-file "$CREDENTIALS_DIRECTORY/cluster-secret" \
       --rbw ${lib.getExe' sa.rbwPackage "rbw"} \
       --unlock-host ${lib.escapeShellArg sa.unlockHost} \
-      ${lib.escapeShellArgs (
-        lib.concatMap (n: [
-          "--node"
-          n
-        ]) sa.nodes
-        ++ lib.optionals (sa.unlockWebhook != null) [
-          "--unlock-webhook"
-          sa.unlockWebhook
-        ]
-        ++ lib.optionals (sa.notifyWebhook != null) [
-          "--notify-webhook"
-          sa.notifyWebhook
-        ]
+      ${
+        lib.escapeShellArgs (
+          lib.concatMap (n: [
+            "--node"
+            n
+          ]) sa.nodes
+          ++ lib.optionals (sa.unlockWebhook != null) [
+            "--unlock-webhook"
+            sa.unlockWebhook
+          ]
+          ++ lib.optionals (sa.notifyWebhook != null) [
+            "--notify-webhook"
+            sa.notifyWebhook
+          ]
+          ++ lib.optionals (sa.rbwApi.url != null) [
+            "--rbw-api-url"
+            sa.rbwApi.url
+          ]
+        )
+      } \
+      ${lib.optionalString (sa.rbwApi.url != null) (
+        lib.concatStringsSep " " (
+          [ ''--rbw-api-ca "$CREDENTIALS_DIRECTORY/rbw-api-ca"'' ]
+          ++ lib.imap0 (
+            i: _:
+            ''--rbw-api-cert "$CREDENTIALS_DIRECTORY/rbw-api-cert-${toString i}" --rbw-api-key "$CREDENTIALS_DIRECTORY/rbw-api-key-${toString i}"''
+          ) sa.rbwApi.clients
+        )
       )}
   '';
   parkPointer = pkgs.writeShellScript "browser-daemon-park-pointer" ''
@@ -600,6 +615,42 @@ in
           its vault entry is not saved for. The fill goes ahead; this is the notice.
         '';
       };
+      rbwApi = {
+        url = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          example = "https://vault.example.org:24871";
+          description = ''
+            HTTPS origin of rbw-agent's remote API. With it, fills, copies, the
+            lock state and the master-password unlock go through the API (only
+            the fields granted to the clients); logins and passkeys still use
+            the rbw command.
+          '';
+        };
+        caFile = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = "CA certificate of the rbw API (`rbw api client create` prints it).";
+        };
+        clients = lib.mkOption {
+          type = lib.types.listOf (
+            lib.types.submodule {
+              options = {
+                certFile = lib.mkOption {
+                  type = lib.types.str;
+                  description = "Client certificate.";
+                };
+                keyFile = lib.mkOption {
+                  type = lib.types.str;
+                  description = "Client private key, outside the Nix store; handed over as a systemd credential.";
+                };
+              };
+            }
+          );
+          default = [ ];
+          description = "One client identity per rbw account served.";
+        };
+      };
     };
   };
 
@@ -1010,6 +1061,10 @@ in
           assertion = sa.nodes != [ ];
           message = "services.browser-daemon.secretAgent.nodes is empty: there is no node to serve.";
         }
+        {
+          assertion = sa.rbwApi.url == null || (sa.rbwApi.caFile != null && sa.rbwApi.clients != [ ]);
+          message = "services.browser-daemon.secretAgent.rbwApi needs caFile and at least one client.";
+        }
       ];
 
       systemd.services.browser-daemon-secret-agent = {
@@ -1022,7 +1077,18 @@ in
         serviceConfig = {
           User = sa.user;
           ExecStart = secretAgentStart;
-          LoadCredential = "cluster-secret:${sa.clusterSecretFile}";
+          LoadCredential = [
+            "cluster-secret:${sa.clusterSecretFile}"
+          ]
+          ++ lib.optionals (sa.rbwApi.url != null) (
+            [ "rbw-api-ca:${sa.rbwApi.caFile}" ]
+            ++ lib.concatLists (
+              lib.imap0 (i: c: [
+                "rbw-api-cert-${toString i}:${c.certFile}"
+                "rbw-api-key-${toString i}:${c.keyFile}"
+              ]) sa.rbwApi.clients
+            )
+          );
           Restart = "always";
           RestartSec = 10;
         };

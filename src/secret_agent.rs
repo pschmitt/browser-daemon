@@ -35,6 +35,23 @@ pub struct SecretAgentArgs {
     /// for (POST {"message": "..."}). The fill goes ahead; this is the notice.
     #[arg(long)]
     pub notify_webhook: Option<String>,
+    /// rbw-agent HTTPS API origin. With it, fills, copies, the lock state and
+    /// the master-password unlock go through rbw's remote API (only the granted
+    /// fields); logins and passkeys still use the rbw command.
+    #[arg(long, requires_all = ["rbw_api_ca", "rbw_api_cert", "rbw_api_key"])]
+    pub rbw_api_url: Option<String>,
+    /// CA certificate of the rbw API.
+    #[arg(long, requires = "rbw_api_url")]
+    pub rbw_api_ca: Option<PathBuf>,
+    /// Client certificate for the rbw API (repeat for several accounts, in the
+    /// order of --rbw-api-key).
+    #[arg(long, requires = "rbw_api_url")]
+    pub rbw_api_cert: Vec<PathBuf>,
+    /// Private key (mode 0600) of each --rbw-api-cert.
+    #[arg(long, requires = "rbw_api_url")]
+    pub rbw_api_key: Vec<PathBuf>,
+    #[arg(skip)]
+    api: Vec<crate::rbw_api::Client>,
     #[arg(skip)]
     seen: std::sync::Mutex<std::collections::VecDeque<uuid::Uuid>>,
     /// The rbw account of each entry a lookup listed (with several accounts,
@@ -127,7 +144,22 @@ impl SecretAgentArgs {
     }
 }
 
-pub async fn run(args: SecretAgentArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(mut args: SecretAgentArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if let (Some(url), Some(ca)) = (&args.rbw_api_url, &args.rbw_api_ca) {
+        if args.rbw_api_cert.len() != args.rbw_api_key.len() {
+            return Err("Give one --rbw-api-key for each --rbw-api-cert".into());
+        }
+        args.api = args
+            .rbw_api_cert
+            .iter()
+            .zip(&args.rbw_api_key)
+            .map(|(cert, key)| {
+                crate::rbw_api::Client::new(url, ca, cert, key)
+                    .map(|c| c.consumer("browser-daemon-secret-agent"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        info!(clients = args.api.len(), "Using the rbw API for fills");
+    }
     let secret = tokio::fs::read_to_string(&args.cluster_secret_file)
         .await?
         .trim()
@@ -168,7 +200,7 @@ async fn poll(
             // Where the vault is: the nodes it serves show it.
             .header("X-Vault-Host", &args.unlock_host);
         // Which rbw this is, for the live view's version warning.
-        if let Some(version) = rbw_version(&args.rbw).await {
+        if let Some(version) = rbw_version(&args).await {
             poll = poll.header("X-Rbw-Version", version);
         }
         let res = poll.send().await;
@@ -242,29 +274,33 @@ async fn poll(
     }
 }
 
-/// The version of the rbw binary ("rbw 2.36.0" gives "2.36.0"), looked up once
-/// a minute.
-async fn rbw_version(rbw: &PathBuf) -> Option<String> {
+/// The version of rbw ("rbw 2.36.0" gives "2.36.0"; with the API, the
+/// rbw-agent's), looked up once a minute.
+async fn rbw_version(args: &SecretAgentArgs) -> Option<String> {
     static SEEN: std::sync::Mutex<Option<(Instant, Option<String>)>> = std::sync::Mutex::new(None);
     if let Some((at, version)) = SEEN.lock().unwrap().as_ref() {
         if at.elapsed() < Duration::from_secs(60) {
             return version.clone();
         }
     }
-    let out = tokio::time::timeout(
-        Duration::from_secs(10),
-        Command::new(rbw)
-            .arg("--version")
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let version = String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .nth(1)
-        .map(str::to_string);
+    let version = if args.api.is_empty() {
+        let out = tokio::time::timeout(
+            Duration::from_secs(10),
+            Command::new(&args.rbw)
+                .arg("--version")
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .nth(1)
+            .map(str::to_string)
+    } else {
+        crate::rbw_api::agent_version(&args.api).await
+    };
     *SEEN.lock().unwrap() = Some((Instant::now(), version.clone()));
     version
 }
@@ -272,7 +308,7 @@ async fn rbw_version(rbw: &PathBuf) -> Option<String> {
 /// Which vault entry would serve `rp_id` (name and user only), or that the vault
 /// is locked. Never asks for an unlock: that only happens once the user approves.
 async fn find(req: &Request, args: &SecretAgentArgs) -> Result<serde_json::Value, String> {
-    if !unlocked(&args.rbw).await {
+    if !unlocked(args).await {
         return Ok(serde_json::json!({ "locked": true }));
     }
     let out = tokio::time::timeout(
@@ -298,10 +334,15 @@ async fn find(req: &Request, args: &SecretAgentArgs) -> Result<serde_json::Value
     serde_json::from_slice(&out.stdout).map_err(|e| format!("Unexpected rbw output: {e}"))
 }
 
-async fn unlocked(rbw: &PathBuf) -> bool {
+async fn unlocked(args: &SecretAgentArgs) -> bool {
+    if !args.api.is_empty() {
+        return tokio::time::timeout(Duration::from_secs(10), crate::rbw_api::unlocked(&args.api))
+            .await
+            .unwrap_or(false);
+    }
     tokio::time::timeout(
         Duration::from_secs(10),
-        Command::new(rbw)
+        Command::new(&args.rbw)
             .arg("unlocked")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -322,7 +363,7 @@ async fn ensure_unlocked(
     client: &reqwest::Client,
     args: &SecretAgentArgs,
 ) -> Result<(), String> {
-    if !unlocked(&args.rbw).await {
+    if !unlocked(args).await {
         let hook = args.unlock_webhook.as_ref().ok_or("The vault is locked")?;
         client
             .post(hook)
@@ -340,7 +381,7 @@ async fn ensure_unlocked(
         let mut ok = false;
         for _ in 0..60 {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            if unlocked(&args.rbw).await {
+            if unlocked(args).await {
                 ok = true;
                 break;
             }
@@ -527,6 +568,9 @@ async fn unlock_with_password(
     password: &crate::passkeys::Secret,
 ) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
+    if !args.api.is_empty() {
+        return crate::rbw_api::unlock(&args.api, &password.0).await;
+    }
     let mut child = Command::new(&args.rbw)
         .args(["unlock", "--stdin"])
         .stdin(Stdio::piped())
@@ -572,7 +616,7 @@ async fn logins(
         unlock_with_password(args, password).await?;
     } else if req.unlock {
         ensure_unlocked(node, secret, req, client, args).await?;
-    } else if !unlocked(&args.rbw).await {
+    } else if !unlocked(args).await {
         return Ok(serde_json::json!({ "locked": true }));
     }
     let found = rbw_logins(args, req, req.query.as_deref()).await?;
@@ -611,6 +655,9 @@ async fn fill(
         return Err("Not a vault entry id".into());
     }
     ensure_unlocked(node, secret, req, client, args).await?;
+    if !args.api.is_empty() {
+        return fill_from_api(node, secret, req, client, args, entry).await;
+    }
     // Saved for the page's site? rbw decides, as for its browser extension
     // (the lookup also notes the entry's account).
     let saved = rbw_logins(args, req, None)
@@ -673,10 +720,67 @@ async fn fill(
     {
         return Err("The entry has nothing to fill".into());
     }
+    send_fill(node, secret, req, client, &body).await
+}
+
+/// A fill from rbw's API: only the granted fields, checked against the entry's
+/// granted URIs and their saved match types. The API cannot list an entry's
+/// custom fields yet, so none go along.
+async fn fill_from_api(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    args: &SecretAgentArgs,
+    entry: &str,
+) -> Result<serde_json::Value, String> {
+    let login = crate::rbw_api::login(&args.api, entry, &req.fields).await?;
+    let page = req
+        .url
+        .clone()
+        .unwrap_or_else(|| format!("https://{}/", req.rp_id));
+    let mut uris = login.uris;
+    let mut any_site = false;
+    if !secrets::url_matches(&page, &uris) {
+        if !req.any_site {
+            return Err(format!("This entry is not saved for {}", req.rp_id));
+        }
+        warn!(host = %req.rp_id, "Filling an entry not saved for the site, as confirmed");
+        uris = Vec::new();
+        any_site = true;
+        let raw = serde_json::json!({ "name": login.name });
+        notify_any_site(client, args, node, &raw, req).await;
+    }
+    let want = |f: &str| req.fields.iter().any(|x| x == f);
+    let keep = |v: Option<String>, f: &str| v.filter(|v| want(f) && !v.is_empty());
+    let body = serde_json::json!({
+        "request": req.id,
+        "host": req.rp_id,
+        "uris": uris,
+        "any_site": any_site,
+        "username": keep(login.username, "username"),
+        "password": keep(login.password, "password"),
+        "totp": keep(login.totp, "totp"),
+        "custom": [],
+    });
+    if body["username"].is_null() && body["password"].is_null() && body["totp"].is_null() {
+        return Err("The entry has nothing to fill".into());
+    }
+    send_fill(node, secret, req, client, &body).await
+}
+
+/// Hands the values to the node, which fills them into the page.
+async fn send_fill(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let res = client
         .post(format!("{node}/api/pages/{}/autofill", req.page_id))
         .header("X-Browser-Cluster-Secret", secret)
-        .json(&body)
+        .json(body)
         .send()
         .await
         .map_err(|e| format!("Could not reach the node: {}", e.without_url()))?;
@@ -708,6 +812,22 @@ async fn copy(
         return Err("Not a vault entry id".into());
     }
     ensure_unlocked(node, secret, req, client, args).await?;
+    if !args.api.is_empty() {
+        let login = crate::rbw_api::login(&args.api, entry, &req.fields).await?;
+        for field in &req.fields {
+            let value = match field.as_str() {
+                "username" => login.username.as_ref(),
+                "password" => login.password.as_ref(),
+                "totp" => login.totp.as_ref(),
+                _ => None,
+            };
+            if let Some(value) = value.filter(|v| !v.is_empty()) {
+                info!(host = %req.rp_id, field = %field, "Vault value copied");
+                return Ok(serde_json::json!({ "field": field, "value": value }));
+            }
+        }
+        return Err("The entry has nothing to copy".into());
+    }
     let get = for_entry(args, &["get", "--raw"], entry);
     let get: Vec<&str> = get.iter().map(String::as_str).collect();
     let raw: serde_json::Value = serde_json::from_str(&secrets::rbw(&args.rbw, &get).await?)
@@ -896,6 +1016,11 @@ mod tests {
             unlock_webhook: None,
             unlock_host: "x".into(),
             notify_webhook: None,
+            rbw_api_url: None,
+            rbw_api_ca: None,
+            rbw_api_cert: vec![],
+            rbw_api_key: vec![],
+            api: vec![],
             seen: Default::default(),
             accounts: Default::default(),
         };
