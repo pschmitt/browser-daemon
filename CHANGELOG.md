@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-18
+
 ### Added
 
 * Vault access (rbw logins, passkeys and cards) can be switched off per
