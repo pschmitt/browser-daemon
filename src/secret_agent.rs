@@ -164,7 +164,9 @@ async fn poll(
     loop {
         let mut poll = client
             .get(format!("{node}/api/secret-agent/next"))
-            .header("X-Browser-Cluster-Secret", &secret);
+            .header("X-Browser-Cluster-Secret", &secret)
+            // Where the vault is: the nodes it serves show it.
+            .header("X-Vault-Host", &args.unlock_host);
         // Which rbw this is, for the live view's version warning.
         if let Some(version) = rbw_version(&args.rbw).await {
             poll = poll.header("X-Rbw-Version", version);

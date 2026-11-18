@@ -145,6 +145,8 @@ pub struct Broker {
     agent_seen: Mutex<Option<Instant>>,
     /// The rbw version the agent reports with each poll.
     agent_rbw: Mutex<Option<String>>,
+    /// The host the agent says it runs on (the vault's host), as it last reported it.
+    agent_host: Mutex<Option<String>>,
     wake: Notify,
 }
 
@@ -256,6 +258,15 @@ impl Broker {
     /// The version of the rbw the agent uses, as it last reported it.
     pub fn agent_rbw(&self) -> Option<String> {
         self.agent_rbw.lock().unwrap().clone()
+    }
+
+    /// The host the agent runs on, when it said (it serves other nodes too).
+    pub fn agent_host(&self) -> Option<String> {
+        self.agent_host.lock().unwrap().clone()
+    }
+
+    pub fn set_agent_host(&self, host: String) {
+        *self.agent_host.lock().unwrap() = Some(host);
     }
 
     pub fn status(&self, id: Uuid) -> Option<Status> {

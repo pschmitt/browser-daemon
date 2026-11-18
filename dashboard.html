@@ -6565,7 +6565,8 @@ const facts = (...parts) => parts.filter(Boolean).map((x) => `<span class="nf">$
 // What else a node does for the mesh: provisions ephemeral nodes (rworker), serves the vault (rbw).
 const providerBadges = (n) => [
   n.ephemeral_provider && { icon: 'clock', name: 'rworker', title: 'Provides ephemeral nodes: new sessions can get a node of their own here' },
-  n.vault_agent != null && { icon: 'lock', name: 'rbw', title: `Serves the vault to live views${n.vault_agent ? ` (rbw ${n.vault_agent})` : ''}` },
+  // The agent serves other nodes than its own: only the host it runs on (where rbw is) gets the badge.
+  n.vault_host && n.vault_host === n.name && { icon: 'lock', name: 'rbw', title: `Runs the vault agent${n.vault_agent ? ` (rbw ${n.vault_agent})` : ''}: serves the vault of ${plural(nodes.filter((x) => x.vault_agent != null).length || 1, 'node')} to live views` },
 ].filter(Boolean);
 const providerChips = (n) => providerBadges(n).map((b) => `<span class="chip accent" title="${esc(b.title)}">${icon(b.icon, 'sm')}${esc(b.name)}</span>`).join('');
 function daemonRow(n, odd) {
@@ -6681,6 +6682,7 @@ function daemonSheetSpec(n) {
       /^https?:\/\//.test(n.url) ? { icon: 'link', label: 'Address', meta: shortHost(n.url), href: n.url, attrs: ' target="_blank" rel="noopener"' } : { icon: 'link', label: 'Address', meta: n.url || '' },
       n.version && { icon: 'info-c', label: 'Version', meta: `v${n.version}${n.revision ? ` · ${n.revision.slice(0, 7)}` : ''}` },
       providerBadges(n).length && { icon: 'layers', label: 'Provides', meta: providerBadges(n).map((b) => b.name).join(', ') },
+      n.vault_host && n.vault_host !== n.name && { icon: 'lock', label: 'Vault', meta: `served by ${n.vault_host}` },
       n.supported_engines?.length && { icon: 'globe', label: 'Engines', meta: n.supported_engines.map(engineLabel).join(', ') },
       { icon: 'gear', label: 'Settings', sub: 'Default proxy, labels' + (n.isLocal ? '' : ', remove from the mesh'), more: true, run: () => openSettings('node', n.name) },
     ],

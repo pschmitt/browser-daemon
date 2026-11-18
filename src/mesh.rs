@@ -17,6 +17,9 @@ pub struct NodeInfo {
     /// The rbw version of the vault agent serving this node, when one is attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_agent: Option<String>,
+    /// The host that agent runs on (it can serve several nodes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_host: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ephemeral_nodes: Vec<ephemeral::EphemeralNode>,
     pub url: String,
@@ -150,6 +153,10 @@ pub(crate) async fn api_mesh_node(
 
     Ok(Json(NodeInfo {
         ephemeral_provider: state.ephemeral_up.is_some() && state.ephemeral_down.is_some(),
+        vault_host: state
+            .passkeys
+            .agent_host()
+            .filter(|_| state.passkeys.agent_running()),
         vault_agent: state
             .passkeys
             .agent_running()
@@ -261,6 +268,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         state: PeerState {
             ephemeral_provider: false,
             vault_agent: None,
+            vault_host: None,
             ephemeral_nodes: Vec::new(),
             name: name.clone(),
             labels: Vec::new(),
@@ -330,6 +338,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
             PeerState {
                 ephemeral_provider: info.ephemeral_provider,
                 vault_agent: info.vault_agent,
+                vault_host: info.vault_host,
                 ephemeral_nodes: info.ephemeral_nodes,
                 name: info.name.clone(),
                 labels: if info.labels.is_empty() {
@@ -366,6 +375,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
             PeerState {
                 ephemeral_provider: false,
                 vault_agent: None,
+                vault_host: None,
                 ephemeral_nodes: Vec::new(),
                 name: name.clone(),
                 labels: Vec::new(),
@@ -469,6 +479,10 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     }
     let local_node = NodeInfo {
         ephemeral_provider: state.ephemeral_up.is_some() && state.ephemeral_down.is_some(),
+        vault_host: state
+            .passkeys
+            .agent_host()
+            .filter(|_| state.passkeys.agent_running()),
         vault_agent: state
             .passkeys
             .agent_running()

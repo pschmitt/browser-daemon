@@ -493,6 +493,19 @@ pub(crate) async fn api_secret_agent_next(
                     .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
         })
         .map(str::to_string);
+    // Where the agent runs: it serves other nodes than its own as well.
+    if let Some(host) = headers
+        .get("X-Vault-Host")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| {
+            !v.is_empty()
+                && v.len() <= 64
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c))
+        })
+    {
+        state.passkeys.set_agent_host(host.to_string());
+    }
     Ok(
         match state.passkeys.next(Duration::from_secs(25), rbw).await {
             Some(req) => Json(req).into_response(),
@@ -511,6 +524,7 @@ pub(crate) async fn api_secret_agent_info(
     Ok(Json(serde_json::json!({
         "running": state.passkeys.agent_running(),
         "rbw": state.passkeys.agent_rbw(),
+        "host": state.passkeys.agent_host(),
     })))
 }
 
