@@ -35,9 +35,9 @@ pub struct SecretAgentArgs {
     /// for (POST {"message": "..."}). The fill goes ahead; this is the notice.
     #[arg(long)]
     pub notify_webhook: Option<String>,
-    /// rbw-agent HTTPS API origin. With it, fills, copies, the lock state and
-    /// the master-password unlock go through rbw's remote API (only the granted
-    /// fields); logins and passkeys still use the rbw command.
+    /// rbw-agent HTTPS API origin. With it, everything goes through rbw's
+    /// remote API (only what is granted to the clients) and the rbw command is
+    /// not needed.
     #[arg(long, requires_all = ["rbw_api_ca", "rbw_api_cert", "rbw_api_key"])]
     pub rbw_api_url: Option<String>,
     /// CA certificate of the rbw API.
@@ -311,6 +311,11 @@ async fn find(req: &Request, args: &SecretAgentArgs) -> Result<serde_json::Value
     if !unlocked(args).await {
         return Ok(serde_json::json!({ "locked": true }));
     }
+    if !args.api.is_empty() {
+        return crate::rbw_api::passkeys(&args.api, &req.rp_id)
+            .await
+            .map(serde_json::Value::Array);
+    }
     let out = tokio::time::timeout(
         RBW_WAIT,
         Command::new(&args.rbw)
@@ -405,6 +410,19 @@ async fn assert(
     let origin = req.origin.as_deref().ok_or("No page origin")?;
     let challenge = req.challenge.as_deref().ok_or("No challenge")?;
     ensure_unlocked(node, secret, req, client, args).await?;
+    if !args.api.is_empty() {
+        let assertion = crate::rbw_api::assert(
+            &args.api,
+            req.entry.as_deref(),
+            &req.rp_id,
+            origin,
+            challenge,
+            &req.allow,
+        )
+        .await?;
+        info!(rp_id = %req.rp_id, "Passkey assertion signed");
+        return Ok(assertion);
+    }
     let mut cmd = Command::new(&args.rbw);
     cmd.args([
         "passkey", "assert", "--rp-id", &req.rp_id, "--origin", origin,
@@ -445,6 +463,9 @@ async fn serve(
     client: &reqwest::Client,
     args: &SecretAgentArgs,
 ) -> Result<(), String> {
+    if !args.api.is_empty() {
+        return Err("Passkey injection needs the rbw command; use a passkey sign-in".into());
+    }
     ensure_unlocked(node, secret, req, client, args).await?;
     // A picked entry (its vault id) narrows the search; otherwise rbw finds the one
     // entry holding a passkey for the site.
@@ -516,7 +537,7 @@ async fn serve(
 /// At most this many logins are listed.
 const MAX_RESULTS: usize = 50;
 
-/// rbw's answer for the page's site (`rbw search --url`, rbw's URI matching,
+/// rbw's answer for the page's site (`rbw search --url` or the API's search, rbw's URI matching,
 /// as its browser extension offers logins): the logins saved for it or, with
 /// a query, those matching it, the site's first. Metadata only, no secrets;
 /// one batched decrypt in rbw-agent.
@@ -530,6 +551,25 @@ async fn rbw_logins(
         .url
         .clone()
         .unwrap_or_else(|| format!("https://{}/", req.rp_id));
+    if !args.api.is_empty() {
+        // rbw's API answer, in the shape of `rbw search --json`.
+        let found = crate::rbw_api::search(&args.api, &url, query, MAX_RESULTS).await?;
+        return Ok(found
+            .into_iter()
+            .map(|e| {
+                serde_json::json!({
+                    "id": e.id,
+                    "name": e.name,
+                    "user": e.username,
+                    "folder": e.folder,
+                    "has_password": e.has_password,
+                    "has_totp": e.has_totp,
+                    "site": e.site,
+                    "uris": e.favicon_host.map(|h| vec![format!("https://{h}/")]).unwrap_or_default(),
+                })
+            })
+            .collect());
+    }
     let mut cmd = vec!["search", "--url", url.as_str(), "--json"];
     if let Some(query) = query {
         cmd.extend(["--", query]);
@@ -723,9 +763,8 @@ async fn fill(
     send_fill(node, secret, req, client, &body).await
 }
 
-/// A fill from rbw's API: only the granted fields, checked against the entry's
-/// granted URIs and their saved match types. The API cannot list an entry's
-/// custom fields yet, so none go along.
+/// A fill from rbw's API: only the granted fields of an entry rbw matches for
+/// the page (as its search does), the custom fields along with a login fill.
 async fn fill_from_api(
     node: &str,
     secret: &str,
@@ -734,14 +773,19 @@ async fn fill_from_api(
     args: &SecretAgentArgs,
     entry: &str,
 ) -> Result<serde_json::Value, String> {
-    let login = crate::rbw_api::login(&args.api, entry, &req.fields).await?;
-    let page = req
-        .url
-        .clone()
-        .unwrap_or_else(|| format!("https://{}/", req.rp_id));
+    let saved = rbw_logins(args, req, None)
+        .await?
+        .iter()
+        .any(|e| e["id"] == entry && e["site"] == true);
+    let mut want = req.fields.clone();
+    // Custom fields go along with a login fill, not a one-time-code-only one.
+    if want.iter().any(|f| f == "username" || f == "password") {
+        want.push("custom".into());
+    }
+    let login = crate::rbw_api::login(&args.api, entry, &want).await?;
     let mut uris = login.uris;
     let mut any_site = false;
-    if !secrets::url_matches(&page, &uris) {
+    if !saved {
         if !req.any_site {
             return Err(format!("This entry is not saved for {}", req.rp_id));
         }
@@ -761,9 +805,13 @@ async fn fill_from_api(
         "username": keep(login.username, "username"),
         "password": keep(login.password, "password"),
         "totp": keep(login.totp, "totp"),
-        "custom": [],
+        "custom": login.custom,
     });
-    if body["username"].is_null() && body["password"].is_null() && body["totp"].is_null() {
+    if body["username"].is_null()
+        && body["password"].is_null()
+        && body["totp"].is_null()
+        && body["custom"].as_array().is_none_or(Vec::is_empty)
+    {
         return Err("The entry has nothing to fill".into());
     }
     send_fill(node, secret, req, client, &body).await

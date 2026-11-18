@@ -621,10 +621,9 @@ in
           default = null;
           example = "https://vault.example.org:24871";
           description = ''
-            HTTPS origin of rbw-agent's remote API. With it, fills, copies, the
-            lock state and the master-password unlock go through the API (only
-            the fields granted to the clients); logins and passkeys still use
-            the rbw command.
+            HTTPS origin of rbw-agent's remote API (rbw 2.47 and later). With
+            it, the agent uses only the API (what is granted to its clients),
+            not the rbw command, so rbw-agent may be on another host.
           '';
         };
         caFile = lib.mkOption {

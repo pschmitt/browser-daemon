@@ -44,6 +44,42 @@ pub struct Login {
     pub password: Option<String>,
     pub totp: Option<String>,
     pub uris: Vec<Uri>,
+    /// Custom fields worth filling (text ones, linked ones as the login field
+    /// they stand for), as `{"name", "value"}`; only with a `custom_all` grant.
+    pub custom: Vec<serde_json::Value>,
+}
+
+/// A login of a URL search (`GET /v1/items?url=`): metadata only, as far as
+/// the client's grants reach.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchItem {
+    pub id: String,
+    pub name: String,
+    pub username: Option<String>,
+    pub folder: Option<String>,
+    pub favicon_host: Option<String>,
+    pub site: bool,
+    pub has_password: bool,
+    pub has_totp: bool,
+}
+#[derive(Deserialize)]
+struct SearchItems {
+    items: Vec<SearchItem>,
+}
+#[derive(Deserialize)]
+struct Passkeys {
+    items: Vec<serde_json::Value>,
+}
+/// A custom field as `custom_all` lists it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CustomField {
+    name: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<u64>,
+    linked_id: Option<u64>,
+    value: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -148,14 +184,108 @@ impl Client {
     }
 
     async fn get<T: serde::de::DeserializeOwned>(&self, segments: &[&str]) -> Result<T, String> {
+        self.get_query(segments, &[]).await
+    }
+
+    async fn get_query<T: serde::de::DeserializeOwned>(
+        &self,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<T, String> {
+        let mut url = self.url(segments)?;
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
         let response = self
             .http
-            .get(self.url(segments)?)
+            .get(url)
             .header("X-Rbw-Consumer", self.consumer)
             .send()
             .await
             .map_err(|_| "RBW API request failed")?;
         Self::answer(response).await
+    }
+
+    /// The logins rbw matches for the page (its URI rules and its
+    /// `defaultUriMatch`), or with words those matching them, the site's first.
+    pub async fn search(&self, url: &str, query: Option<&str>) -> Result<Vec<SearchItem>, String> {
+        let mut params = vec![("url", url)];
+        if let Some(query) = query {
+            params.push(("q", query));
+        }
+        let found: SearchItems = self.get_query(&["v1", "items"], &params).await?;
+        Ok(found.items)
+    }
+
+    /// The passkeys for the relying party, as `rbw passkey find` lists them.
+    pub async fn passkeys(&self, rp_id: &str) -> Result<Vec<serde_json::Value>, String> {
+        let found: Passkeys = self
+            .get_query(&["v1", "passkeys"], &[("rp_id", rp_id)])
+            .await?;
+        Ok(found.items)
+    }
+
+    /// Has rbw sign one WebAuthn assertion with a granted passkey; the key
+    /// never leaves rbw. None when this client has no such passkey (or may not
+    /// use it), so another account's client can be asked.
+    async fn assert(&self, body: &serde_json::Value) -> Result<Option<serde_json::Value>, String> {
+        let response = self
+            .http
+            .post(self.url(&["v1", "passkeys", "assert"])?)
+            .header("X-Rbw-Consumer", self.consumer)
+            .json(body)
+            .send()
+            .await
+            .map_err(|_| "RBW API request failed")?;
+        match response.status() {
+            reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::FORBIDDEN => Ok(None),
+            _ => Self::answer(response).await.map(Some),
+        }
+    }
+
+    /// The custom fields of an item worth filling, from its `custom_all` grant:
+    /// text ones as they are, a linked one as the username (100) or password
+    /// (101) it stands for, read through that field's own grant.
+    async fn custom_fields(
+        &self,
+        item: &Item,
+        login: &Login,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        if !item.fields.iter().any(|f| f == "custom_all") {
+            return Ok(Vec::new());
+        }
+        let value = self.field(&item.id, &["custom_all"]).await?;
+        let fields: Vec<CustomField> =
+            serde_json::from_str(&value).map_err(|_| "Invalid RBW API custom field list")?;
+        let granted = |f: &str| item.fields.iter().any(|g| g == f);
+        let mut out = Vec::new();
+        for field in fields {
+            let Some(name) = field.name.filter(|n| !n.is_empty()) else {
+                continue;
+            };
+            let value = match (field.kind, field.linked_id) {
+                (Some(0) | None, _) => field.value,
+                (Some(3), Some(100)) => match &login.username {
+                    Some(v) => Some(v.clone()),
+                    None if granted("username") => {
+                        self.optional_field(&item.id, &["username"]).await?
+                    }
+                    None => None,
+                },
+                (Some(3), Some(101)) => match &login.password {
+                    Some(v) => Some(v.clone()),
+                    None if granted("password") => {
+                        self.optional_field(&item.id, &["password"]).await?
+                    }
+                    None => None,
+                },
+                _ => None,
+            };
+            if let Some(value) = value.filter(|v| !v.is_empty()) {
+                out.push(json!({ "name": name, "value": value }));
+            }
+        }
+        Ok(out)
     }
 
     /// The lock state of the accounts granted to this client.
@@ -261,13 +391,18 @@ impl Client {
                 Ok(None)
             }
         };
-        Ok(Login {
+        let mut login = Login {
             name: item.name.clone(),
             username: read("username").await?,
             password: read("password").await?,
             totp: read("totp").await?,
             uris: self.uris(item).await?,
-        })
+            custom: Vec::new(),
+        };
+        if want.iter().any(|w| w == "custom") {
+            login.custom = self.custom_fields(item, &login).await?;
+        }
+        Ok(login)
     }
 
     async fn read_item(&self, item: &Item, field: &str, card: bool) -> Result<Secret, String> {
@@ -375,7 +510,65 @@ pub async fn unlock(clients: &[Client], password: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The wanted fields (`username`, `password`, `totp`) and the URIs of the
+/// The logins of every client for the page (see [`Client::search`]), the
+/// site's first, at most `max`.
+pub async fn search(
+    clients: &[Client],
+    url: &str,
+    query: Option<&str>,
+    max: usize,
+) -> Result<Vec<SearchItem>, String> {
+    let mut found = Vec::new();
+    for client in clients {
+        found.extend(client.search(url, query).await?);
+    }
+    // Stable: each client's own order stays within the site and other matches.
+    found.sort_by_key(|item| !item.site);
+    found.truncate(max);
+    Ok(found)
+}
+
+/// The passkeys of every client for the relying party.
+pub async fn passkeys(clients: &[Client], rp_id: &str) -> Result<Vec<serde_json::Value>, String> {
+    let mut found = Vec::new();
+    for client in clients {
+        found.extend(client.passkeys(rp_id).await?);
+    }
+    Ok(found)
+}
+
+/// An assertion signed by whichever client holds a matching passkey. The user
+/// approved the sign-in (in the live view, or an agent's armed sign-in), so it
+/// counts as verified, as `rbw passkey assert` does.
+pub async fn assert(
+    clients: &[Client],
+    item: Option<&str>,
+    rp_id: &str,
+    origin: &str,
+    challenge: &str,
+    allow: &[String],
+) -> Result<serde_json::Value, String> {
+    let mut body = json!({
+        "rpId": rp_id,
+        "origin": origin,
+        "challenge": challenge,
+        "allowCredentials": allow,
+        "userVerified": true,
+    });
+    if let Some(item) = item {
+        body["itemId"] = json!(item);
+    }
+    for client in clients {
+        if let Some(assertion) = client.assert(&body).await? {
+            return Ok(assertion);
+        }
+    }
+    Err(format!(
+        "No passkey for {rp_id} is granted to the secret agent"
+    ))
+}
+
+/// The wanted fields (`username`, `password`, `totp`, `custom`) and the URIs of the
 /// login with this item id, from whichever client was granted it.
 pub async fn login(clients: &[Client], id: &str, want: &[String]) -> Result<Login, String> {
     for client in clients {
@@ -401,6 +594,24 @@ mod tests {
         assert!(
             decode_uris(r#"[{"uri":"https://login.example","match_type":"unexpected"}]"#).is_err()
         );
+    }
+
+    #[test]
+    fn search_and_custom_field_answers_decode() {
+        let found: SearchItems = serde_json::from_str(
+            r#"{"items":[{"id":"i","name":"Bank","fields":["username"],"username":"me","folder":null,"faviconHost":"bank.example","site":true,"hasPassword":true,"hasTotp":false}]}"#,
+        )
+        .unwrap();
+        let item = &found.items[0];
+        assert!(item.site && item.has_password && !item.has_totp);
+        assert_eq!(item.favicon_host.as_deref(), Some("bank.example"));
+        let fields: Vec<CustomField> = serde_json::from_str(
+            r#"[{"name":"pin","type":0,"linkedId":null,"value":"1234"},{"name":"u","type":3,"linkedId":100,"value":null}]"#,
+        )
+        .unwrap();
+        assert_eq!(fields[0].kind, Some(0));
+        assert_eq!(fields[1].linked_id, Some(100));
+        assert!(fields[1].value.is_none());
     }
 
     #[test]
