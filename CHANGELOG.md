@@ -4,6 +4,17 @@
 
 ### Added
 
+* Vault access (rbw logins, passkeys and cards) can be switched off per
+  session and per node. A session takes `vault: false` at creation
+  (`session new --no-vault`, the dashboard's "Vault access" option) or is
+  switched later (`POST /api/sessions/{id}/vault`, `session vault ID on|off`,
+  the session sheet in the dashboard); a node has the `vault` setting
+  (`PATCH /api/settings`, `node set --vault`, the node's settings in the
+  dashboard). Either one off is off: the live-view passkey, agent passkey,
+  autofill and login routes answer 403, the MCP fill tools get that refusal,
+  the passkey hook is not put on the browser and what an agent armed is
+  disarmed. A node's `vault_enabled` shows in `/api/mesh/node`. An ephemeral
+  node has no vault access unless it is switched on.
 * `--ephemeral-node-secrets` (NixOS: `ephemeralNodeSecrets`): each ephemeral node
   gets a secret of its own, derived from the cluster secret and its id, instead
   of the cluster secret. The up command receives it in
@@ -21,20 +32,7 @@
   profiles, the secret agent's routes, shared browsers). Its settings and
   labels are read-only over the API, so it cannot promote itself (the vault
   switch, a proxy, labels); the dashboard's relay can read them but no longer
-  change them.
-
-### Added
-
-* Vault access (rbw logins, passkeys and cards) can be switched off per
-  session and per node. A session takes `vault: false` at creation
-  (`session new --no-vault`, the dashboard's "Vault access" option) or is
-  switched later (`POST /api/sessions/{id}/vault`, `session vault ID on|off`);
-  a node has the `vault` setting (`PATCH /api/settings`, `node set --vault`,
-  the node's settings in the dashboard). Either one off is off: the live-view
-  passkey, agent passkey, autofill and login routes answer 403, the MCP fill
-  tools get that refusal, the passkey hook is not put on the browser and what
-  an agent armed is disarmed. A node's `vault_enabled` shows in `/api/node`.
-  An ephemeral node has no vault access unless it is switched on.
+  change them. A provider's readiness probe must use `/health`: `/` is gone.
 
 ## [0.17.1] - 2026-11-18
 
