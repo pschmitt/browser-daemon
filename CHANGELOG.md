@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-18
+
 ### Added
 
 * MCP: `browser_secret_to_file` takes a secret that a page shows (a client
