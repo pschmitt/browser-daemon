@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+* **Breaking:** ephemeral nodes always get a secret of their own now (the
+  `--ephemeral-node-secrets` flag and the NixOS option `ephemeralNodeSecrets`
+  are gone). The up command must install `BROWSER_DAEMON_EPHEMERAL_SECRET` as the
+  node's cluster secret instead of the cluster secret. `session new
+  --ephemeral-node` prints a WebSocket address with a token of the node, and the
+  Python client's `create_session(ephemeral_node=True)` returns `node_secret`
+  (`node_token` for a viewer).
+
 ## [0.18.0] - 2026-11-18
 
 ### Added

@@ -623,10 +623,8 @@ async fn provision(
         command.env("BROWSER_DAEMON_EPHEMERAL_TTL_SECONDS", ttl.to_string());
     }
     // The node's own secret, to install as its cluster secret instead of ours.
-    if state.ephemeral_node_secrets {
-        if let Some(secret) = state.lease_secret(key) {
-            command.env("BROWSER_DAEMON_EPHEMERAL_SECRET", secret);
-        }
+    if let Some(secret) = state.lease_secret(key) {
+        command.env("BROWSER_DAEMON_EPHEMERAL_SECRET", secret);
     }
     let output = tokio::time::timeout(
         Duration::from_secs(ttl.unwrap_or(1500).min(1500)),
@@ -764,13 +762,9 @@ pub(crate) async fn create_node(
 }
 
 /// What the caller presents to the ephemeral node of `lease` instead of the
-/// cluster secret, when the nodes have secrets of their own: that secret for a
-/// caller that holds the cluster secret, a token of the node for a viewer.
-/// Nothing when the node still takes the cluster secret.
+/// cluster secret: the node's own secret for a caller that holds the cluster
+/// secret, a token of the node for a viewer.
 fn node_credential(state: &AppState, headers: &HeaderMap, lease: Uuid) -> serde_json::Value {
-    if !state.ephemeral_node_secrets {
-        return serde_json::json!({});
-    }
     let Some(secret) = state.lease_secret(lease) else {
         return serde_json::json!({});
     };

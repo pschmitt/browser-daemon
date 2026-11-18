@@ -50,7 +50,9 @@ async with aiohttp.ClientSession() as http:
   See [profile placement](../docs/profiles.md#automatic-placement-and-node-labels)
   for transfer restrictions and failure behavior.
 - `create_session(ephemeral_node=True)` provisions a dedicated node and returns
-  its `node_url` alongside the session. Connect to that node with the session ID;
+  its `node_url` alongside the session, and `node_secret` (`node_token` for a
+  viewer's token): the node never gets the cluster secret, so present that to
+  it (header `X-Browser-Cluster-Secret`, or `?auth=` with a token). Connect to that node with the session ID;
   the session and node are removed after the last client disconnects.
 - `node=` sends a request to another node of the mesh through this one.
 - `read_secret()` reads the cluster secret from its file.

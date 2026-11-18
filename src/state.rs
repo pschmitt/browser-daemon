@@ -228,8 +228,6 @@ pub struct AppState {
     pub ephemeral_node: bool,
     pub ephemeral_up: Option<PathBuf>,
     pub ephemeral_down: Option<PathBuf>,
-    /// Ephemeral nodes have secrets of their own (see `auth::ephemeral_node_secret`).
-    pub ephemeral_node_secrets: bool,
     /// Serializes lifecycle changes to each provider lease.
     pub ephemeral_locks: Arc<Mutex<HashMap<Uuid, Arc<Mutex<()>>>>>,
     pub public_url: String,
@@ -451,19 +449,15 @@ impl AppState {
         }
     }
 
-    /// The secret the ephemeral node of `lease` accepts: its own when the nodes
-    /// have them, else the cluster secret.
+    /// The secret the ephemeral node of `lease` accepts: its own, derived from
+    /// the cluster secret (see `auth::ephemeral_node_secret`).
     pub fn lease_secret(&self, lease: Uuid) -> Option<String> {
         let secret = self.cluster_secret.as_deref()?;
-        Some(if self.ephemeral_node_secrets {
-            auth::ephemeral_node_secret(secret, lease)
-        } else {
-            secret.to_string()
-        })
+        Some(auth::ephemeral_node_secret(secret, lease))
     }
 
     /// Like `peer_request`, for a request to the ephemeral node of `lease`: the
-    /// cluster secret never goes to such a node when it has a secret of its own.
+    /// cluster secret never goes to such a node.
     pub fn lease_request(
         &self,
         lease: Uuid,

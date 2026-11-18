@@ -646,9 +646,27 @@ pub async fn session(args: SessionArgs) -> R<()> {
                         .map(|p| p.url.clone())
                         .unwrap_or_default()
                 };
+                // An ephemeral node has a secret of its own: the address carries a
+                // token of that node (valid there only), never the cluster secret.
+                let token = a
+                    .ephemeral_node
+                    .then(|| {
+                        response["node_secret"]
+                            .as_str()
+                            .and_then(|s| crate::auth::token_for_secret(s, crate::auth::now()))
+                            .map(|(token, _)| token)
+                            .or_else(|| response["node_token"].as_str().map(str::to_string))
+                    })
+                    .flatten();
+                let auth = token.map(|t| format!("&auth={t}")).unwrap_or_default();
+                let place = if a.ephemeral_node {
+                    "an ephemeral node"
+                } else {
+                    node.as_str()
+                };
                 println!("{id}");
                 eprintln!(
-                    "{} on {node}: {}/{engine}?session_id={id}",
+                    "{} on {place}: {}/{engine}?session_id={id}{auth}",
                     created["name"].as_str().unwrap_or(""),
                     base.trim_end_matches('/').replacen("http", "ws", 1)
                 );

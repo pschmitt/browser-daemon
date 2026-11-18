@@ -338,7 +338,10 @@ class BrowserDaemon:
             if self.client and "name" not in body:
                 body["name"] = self.client
             result = await self._json("POST", "/api/ephemeral/sessions", json=body, timeout=1800)
-            return {**result["session"], "node_url": result["node_url"]}
+            # The node has a secret of its own (never the cluster secret): present
+            # `node_secret` (or, for a viewer's token, `node_token`) to it.
+            credential = {k: result[k] for k in ("node_secret", "node_token") if k in result}
+            return {**result["session"], "node_url": result["node_url"], **credential}
         placed = None
         if group is not None or (profile is not None and node is not None):
             placed = await self.place_browser(

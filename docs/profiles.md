@@ -130,20 +130,16 @@ read-only over the API (`PATCH /api/settings` answers 404), so the node cannot
 promote itself, for example to vault access: set them in the node's settings file
 where it is provisioned.
 
-Without a secret of its own it needs the cluster secret to accept the
-coordinator's requests, and clients send it too, so a browser exploit on the node
-could read it from the node's files or from incoming requests and use it on the
-whole mesh. Start the coordinator with `--ephemeral-node-secrets`
-(`services.browser-daemon.ephemeralNodeSecrets`) to avoid that: each node then
-gets a secret derived from the cluster secret and its own id. The up command
-receives it in `BROWSER_DAEMON_EPHEMERAL_SECRET` and must install it as the
-node's cluster secret (`--cluster-secret-file`) instead of the cluster secret;
-the coordinator uses it for everything it sends to that node, and the create
-responses carry it as `node_secret` (a caller with a viewer token gets a
-`node_token` of the node instead), which the MCP server and other clients present to
-that node. Such a secret, and a token made from it, work on that one node and
-nowhere else. Turn the flag on together with the change of the up command: a node
-that was given the cluster secret would refuse the derived one.
+An ephemeral node never gets the cluster secret. The coordinator derives a
+secret for each node from the cluster secret and the node's id and hands it to the
+up command in `BROWSER_DAEMON_EPHEMERAL_SECRET`; the up command must install it as
+the node's cluster secret (`--cluster-secret-file`). The coordinator uses it for
+everything it sends to that node, and the create responses carry it as
+`node_secret` (a caller with a viewer token gets a `node_token` of the node
+instead), which the MCP server, the Python client and the CLI present to that
+node. Such a secret, and a token made from it, work on that one node and nowhere
+else, so a browser exploit that reaches the node's files or the requests it
+receives gets nothing that works on the mesh or on another node.
 
 ## Upstream proxies
 
