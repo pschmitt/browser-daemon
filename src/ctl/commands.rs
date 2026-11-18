@@ -60,6 +60,15 @@ pub enum SessionCmd {
         #[arg(long)]
         node: Option<String>,
     },
+    /// Switch a session's vault access (logins, passkeys, cards) on or off now.
+    /// Off on its node beats a session's switch.
+    Vault {
+        session: String,
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+        #[arg(long)]
+        node: Option<String>,
+    },
     /// Minutes of inactivity before a session stops (0: never).
     IdleTimeout {
         session: String,
@@ -224,6 +233,9 @@ pub struct NewSession {
     pub adblock: bool,
     #[arg(long)]
     pub no_adblock: bool,
+    /// No vault access (logins, passkeys, cards) for the session.
+    #[arg(long)]
+    pub no_vault: bool,
     /// Proxy id, or `none` for direct.
     #[arg(long)]
     pub proxy: Option<String>,
@@ -617,6 +629,12 @@ pub enum NodeCmd {
         /// Proxy id sessions use unless they choose another (`none`: direct).
         #[arg(long)]
         default_proxy: Option<String>,
+        /// Vault access of the node's sessions (an ephemeral node starts with it off).
+        #[arg(long)]
+        vault: Option<bool>,
+        /// Back to the default vault access (on; off on an ephemeral node).
+        #[arg(long, conflicts_with = "vault")]
+        reset_vault: bool,
         /// Engine the options below apply to.
         #[arg(long, value_enum)]
         engine: Option<Engine>,

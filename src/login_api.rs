@@ -193,6 +193,7 @@ pub(crate) async fn api_session_login(
         .get(&id)
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    state.vault_denied(&session)?;
     if session.bidi.is_some() {
         return Err(api_error(
             StatusCode::CONFLICT,

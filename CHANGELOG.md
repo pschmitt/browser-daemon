@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+* Vault access (rbw logins, passkeys and cards) can be switched off per
+  session and per node. A session takes `vault: false` at creation
+  (`session new --no-vault`, the dashboard's "Vault access" option) or is
+  switched later (`POST /api/sessions/{id}/vault`, `session vault ID on|off`);
+  a node has the `vault` setting (`PATCH /api/settings`, `node set --vault`,
+  the node's settings in the dashboard). Either one off is off: the live-view
+  passkey, agent passkey, autofill and login routes answer 403, the MCP fill
+  tools get that refusal, the passkey hook is not put on the browser and what
+  an agent armed is disarmed. A node's `vault_enabled` shows in `/api/node`.
+  An ephemeral node has no vault access unless it is switched on.
+
 ## [0.17.1] - 2026-11-18
 
 ### Added

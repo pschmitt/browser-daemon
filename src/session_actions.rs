@@ -305,6 +305,7 @@ pub(crate) async fn api_page_insert_text(
             "Page not found (Chromium sessions only)",
         )
     })?;
+    state.vault_denied(&session)?;
     let page_url = page.url.clone();
     let page_allowed = match &req.card_origins {
         Some(origins) => secrets::exact_https_origin(&page_url, &origins[0]),
@@ -371,6 +372,41 @@ pub(crate) async fn api_session_set_proxy(
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
     session.activity.touch();
     session.relay.set(proxy);
+    let rec = state.active_recordings.read().await.get(&id).cloned();
+    Ok(Json(
+        session.to_summary(&state.http_client, rec.as_ref()).await,
+    ))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct SetVaultRequest {
+    pub(crate) enabled: bool,
+}
+
+/// Switch a running session's vault access (logins, passkeys, cards) on or off.
+/// The node's setting is a ceiling: with it off, a session cannot be switched on.
+pub(crate) async fn api_session_set_vault(
+    AxumPath(id): AxumPath<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SetVaultRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.check_auth(&headers)?;
+    let session = state
+        .sessions
+        .read()
+        .await
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    if req.enabled {
+        state.node_vault_denied()?;
+    }
+    session.activity.touch();
+    session.vault.store(req.enabled, Ordering::Relaxed);
+    state.apply_vault(&session);
+    state.persist_session(&session).await;
+    info!(session_id = %id, enabled = req.enabled, "Vault access of a session changed");
     let rec = state.active_recordings.read().await.get(&id).cloned();
     Ok(Json(
         session.to_summary(&state.http_client, rec.as_ref()).await,

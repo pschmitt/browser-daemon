@@ -26,6 +26,9 @@ pub struct ManagedSession {
     pub viewer_count: Arc<AtomicUsize>,
     pub activity: Arc<idle::Activity>,
     pub adblock: bool,
+    /// Whether the session may use the vault (logins, passkeys, cards). The
+    /// node's setting comes on top: either one off is off (see `vault_allowed`).
+    pub vault: Arc<AtomicBool>,
     pub relay: Arc<relay::Relay>,
     /// PulseAudio sink the browser plays into.
     pub audio_sink: Option<String>,
@@ -108,6 +111,7 @@ impl ManagedSession {
             viewer_count: self.viewer_count.load(Ordering::SeqCst),
             tabs_count,
             adblock: self.adblock,
+            vault: self.vault.load(Ordering::Relaxed),
             proxy: self.relay.current(),
             audio: self.audio_sink.is_some(),
             display: self.display.clone(),
@@ -162,6 +166,9 @@ pub struct SessionSummary {
     pub tabs_count: usize,
     #[serde(default)]
     pub adblock: bool,
+    /// The session's own vault switch (the node's setting also has to allow it).
+    #[serde(default = "default_true")]
+    pub vault: bool,
     /// Id of the proxy the session's traffic goes through.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<String>,
@@ -324,6 +331,51 @@ impl DirSizes {
 }
 
 impl AppState {
+    /// Whether this node lets its sessions use the vault: its setting, else on,
+    /// except on an ephemeral node.
+    pub fn node_vault(&self) -> bool {
+        self.settings.get().vault.unwrap_or(!self.ephemeral_node)
+    }
+
+    /// Whether a session may use the vault: the node and the session both allow it.
+    pub fn vault_allowed(&self, session: &ManagedSession) -> bool {
+        self.node_vault() && session.vault.load(Ordering::Relaxed)
+    }
+
+    /// The answer of a vault route for a session without vault access.
+    pub fn vault_denied(&self, session: &ManagedSession) -> Result<(), ApiError> {
+        if self.vault_allowed(session) {
+            return Ok(());
+        }
+        Err(api_error(
+            StatusCode::FORBIDDEN,
+            if self.node_vault() {
+                "Vault access is switched off for this session"
+            } else {
+                "Vault access is switched off on this node"
+            },
+        ))
+    }
+
+    /// The answer of a vault route that has no managed session (a shared browser).
+    pub fn node_vault_denied(&self) -> Result<(), ApiError> {
+        if self.node_vault() {
+            return Ok(());
+        }
+        Err(api_error(
+            StatusCode::FORBIDDEN,
+            "Vault access is switched off on this node",
+        ))
+    }
+
+    /// Like `vault_denied`, for a session known by its id (it may be gone).
+    pub async fn vault_check(&self, id: Uuid) -> Result<(), ApiError> {
+        match self.sessions.read().await.get(&id) {
+            Some(session) => self.vault_denied(session),
+            None => Err(api_error(StatusCode::NOT_FOUND, "Session not found")),
+        }
+    }
+
     /// What a paired extension is told about routing its browser through this
     /// node: where, the login, and the proxies it may name (not where they lead).
     pub fn proxy_offer(&self) -> Option<serde_json::Value> {

@@ -36,6 +36,7 @@ pub(crate) async fn api_session_passkey(
         .get(&id)
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    state.vault_denied(&session)?;
     session.activity.touch();
     let kind = match (req.find, &req.challenge) {
         (true, _) => "find",
@@ -88,6 +89,7 @@ pub(crate) async fn api_extension_passkey(
     Json(req): Json<PasskeyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
+    state.node_vault_denied()?;
     let shared = crate::extension::controlled(&state, id, tab)?;
     let kind = match (req.find, &req.challenge) {
         (true, _) => "find",
@@ -183,6 +185,7 @@ pub(crate) async fn api_session_autofill(
     Json(req): Json<AutofillRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
+    state.vault_check(id).await?;
     let targets = get_local_targets(&state).await;
     let page = targets
         .iter()
@@ -246,6 +249,7 @@ pub(crate) async fn api_extension_autofill(
     Json(req): Json<AutofillRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
+    state.node_vault_denied()?;
     let shared = crate::extension::controlled(&state, id, tab)?;
     let (host, page_url) = page_address(&shared.url)?;
     if req.password.is_some() {
@@ -369,6 +373,7 @@ pub(crate) async fn api_page_autofill(
 ) -> Result<impl IntoResponse, ApiError> {
     state.check_auth(&headers)?;
     if let Some(shared) = crate::extension::parse_page_id(&page_id) {
+        state.node_vault_denied()?;
         let filled = extension_page_autofill(&state, &page_id, shared, req).await?;
         if filled.is_empty() {
             return Err(api_error(
@@ -428,6 +433,7 @@ pub(crate) async fn api_page_autofill(
         .get(&sid)
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    state.vault_denied(&session)?;
     session.activity.touch();
     let frame_ok = move |u: &str| secrets::url_matches(u, &uris);
     let filled = match session.bidi {
@@ -570,6 +576,7 @@ pub(crate) async fn api_session_agent_passkey(
         .get(&id)
         .cloned()
         .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "Session not found"))?;
+    state.vault_denied(&session)?;
     if session.bidi.is_some() {
         return Err(api_error(
             StatusCode::BAD_REQUEST,

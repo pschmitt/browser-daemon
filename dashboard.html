@@ -1940,6 +1940,7 @@ dialog.modal.player { touch-action: pan-x pan-y; }
               </div>
               <label class="switch"><input type="checkbox" id="sessionEphemeral" checked><span class="track"></span><svg class="i opt-ico"><use href="#i-clock"/></svg><span class="txt"><b>Stop with the last client</b><span id="sessionEphemeralHint">Stops when its last automation client (Playwright, CDP, BiDi) disconnects; the live view does not count</span></span></label>
               <label class="switch"><input type="checkbox" id="sessionAdblock" checked><span class="track"></span><svg class="i opt-ico"><use href="#i-shield"/></svg><span class="txt"><b>Block ads</b><span>uBlock Origin (Lite in Chromium)</span></span></label>
+              <label class="switch"><input type="checkbox" id="sessionVault" checked><span class="track"></span><svg class="i opt-ico"><use href="#i-lock"/></svg><span class="txt"><b>Vault access</b><span id="sessionVaultHint">Logins, passkeys and cards from the vault can be filled in</span></span></label>
               <label class="switch"><input type="checkbox" id="sessionTouches"><span class="track"></span><svg class="i opt-ico"><use href="#i-eye"/></svg><span class="txt"><b>Show touches</b><span>Live views mark taps and clicks</span></span></label>
             </div>
           </details>
@@ -5065,11 +5066,20 @@ function setEngine(engine) {
   $('sessionSubmit').disabled = !supported;
   // Ad blocking as the engine's default on that node (Engines tab), until changed here.
   if (!adblockTouched) $('sessionAdblock').checked = engineDefaults(sessionNode, engine).adblock ?? true;
+  // Vault access follows the node (off on an ephemeral node unless switched on there).
+  const vaultNode = nodes.find((n) => n.name === sessionNode);
+  const vaultOk = $('sessionDedicated').checked ? false : vaultNode?.vault_enabled !== false;
+  $('sessionVault').disabled = !vaultOk;
+  if (!vaultOk) $('sessionVault').checked = false; else if (!vaultTouched) $('sessionVault').checked = true;
+  $('sessionVaultHint').textContent = vaultOk ? 'Logins, passkeys and cards from the vault can be filled in'
+    : $('sessionDedicated').checked ? 'A dedicated node has no vault access until it is switched on in its settings' : `Switched off on ${sessionNode}: see the node's settings`;
   if (!touchesTouched) $('sessionTouches').checked = !!engineDefaults(sessionNode, engine).show_touches;
   renderProfilePicker();
 }
 let adblockTouched = false;
 let touchesTouched = false;
+let vaultTouched = false;
+$('sessionVault').addEventListener('change', () => { vaultTouched = true; });
 $('sessionTouches').addEventListener('change', () => { touchesTouched = true; });
 $('sessionAdblock').addEventListener('change', () => { adblockTouched = true; });
 const engineDefaults = (node, engine) => nodes.find((n) => n.name === node)?.settings?.engines?.[engine] || {};
@@ -5101,6 +5111,7 @@ function openNewSession(prefill = {}) {
   sessionScheme = null;
   adblockTouched = false;
   touchesTouched = false;
+  vaultTouched = false;
   setScreen(prefill.screen || 'window');
   $('sessionProfileName').value = '';
   $('sessionName').value = '';
@@ -5352,6 +5363,8 @@ $('newSessionForm').addEventListener('submit', async (e) => {
     // Untouched: the node applies the engine's default.
     adblock: adblockTouched ? $('sessionAdblock').checked : undefined,
     show_touches: touchesTouched ? $('sessionTouches').checked : undefined,
+    // Only said when switched off: the node's setting is a ceiling anyway.
+    vault: $('sessionVault').checked ? undefined : false,
     screen: sessionScreen,
     // Only said when there are tabs to leave out.
     default_tabs: $('sessionTabsField').hidden ? undefined : $('sessionDefaultTabs').checked,
@@ -6065,7 +6078,7 @@ function showSessionDetails(s) {
   const technical = [
     ['Session ID', `<span class="mono">${esc(s.id)}</span>`], ['WebSocket URL', `<span class="mono">${esc(sessionWsUrl(s))}</span>`],
     ['Lifetime', s.persistent ? 'Persistent' : 'Ends with its last client'], ['Auto-stop when idle', idleLabel(s.idle_timeout_seconds)],
-    ['Ad blocking', s.adblock ? 'On' : 'Off'], ['Appearance', schemeName(s.color_scheme)],
+    ['Ad blocking', s.adblock ? 'On' : 'Off'], ['Vault access', s.vault === false ? 'Off' : 'On'], ['Appearance', schemeName(s.color_scheme)],
     ['Screen', { native: 'Native', phone: 'Phone' }[s.screen] || 'Window'], ['Recording', s.is_recording ? (s.recording_paused ? 'Paused' : 'On') : 'Off'],
   ];
   showDetails(sessName(s), [], s);
@@ -6824,6 +6837,7 @@ function renderSettings() {
             ${proxies.map((x) => `<option value="${esc(x.id)}"${def === x.id ? ' selected' : ''}>${esc(x.name)} (${esc(x.host)}:${x.port})</option>`).join('')}
           </select>`
         : '<span class="muted">No proxies on this node</span>'}<span class="hint">For new sessions that pick no proxy and whose profile has none.</span></label>` : ''}
+      ${online ? `<label class="switch"><input type="checkbox" data-node-vault="${esc(n.name)}"${n.vault_enabled === false ? '' : ' checked'}><span class="track"></span><span class="txt"><b>Vault access</b><span>Sessions of this node may fill logins, passkeys and cards from the vault. Off here beats a session's own choice; an ephemeral node starts with it off.</span></span></label>` : ''}
       ${online && n.settings ? groupsEditor(n) : (n.labels?.length || n.groups?.length) ? `<div class="node-setting"><span>${icon('tag', 'sm')}Labels</span>${groupChips(n)}</div>` : ''}
       ${!n.isLocal ? `<div class="settings-danger"><button class="btn danger" data-node-remove="${esc(n.name)}">${icon('trash', 'sm')}Remove peer</button><span class="hint">Configured peers come back when this node restarts.</span></div>` : ''}
     </div>`;
@@ -6907,6 +6921,17 @@ $('settingsBody').addEventListener('click', async (e) => {
   renderEngines();
 });
 $('settingsBody').addEventListener('change', async (e) => {
+  const vault = e.target.closest('[data-node-vault]');
+  if (vault) {
+    const node = vault.dataset.nodeVault;
+    const r = await act(`Saving ${node}'s vault access`,
+      () => request('PATCH', api(node, '/settings'), { vault: vault.checked }),
+      `${node}: vault access ${vault.checked ? 'on' : 'off'}`);
+    if (r !== undefined) { const n = nodes.find((x) => x.name === node); if (n) { n.settings = r; n.vault_enabled = vault.checked; } }
+    else vault.checked = !vault.checked;
+    refreshData();
+    return;
+  }
   const sel = e.target.closest('[data-node-proxy]');
   if (!sel) return;
   const node = sel.dataset.nodeProxy;

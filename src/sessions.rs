@@ -140,6 +140,7 @@ impl AppState {
         start_tab: bool,
         default_tabs: bool,
         open: Vec<String>,
+        vault: Option<bool>,
     ) -> Result<ManagedSession, (StatusCode, &'static str)> {
         if self.ephemeral_node {
             fs::create_dir_all(self.config.state_dir())
@@ -291,6 +292,7 @@ impl AppState {
                 idle_timeout_minutes.map_or(self.idle_timeout_secs, idle::minutes_to_secs),
             )),
             adblock: browser.adblock,
+            vault: Arc::new(AtomicBool::new(vault.unwrap_or(true))),
             relay: browser.relay.clone(),
             audio_sink: browser.audio.as_ref().map(|s| s.name.clone()),
             display: browser
@@ -333,8 +335,10 @@ impl AppState {
 
     /// Puts the passkey hook on a Chromium session (agent_passkeys.rs): sites
     /// then see a platform authenticator on every page, armed or not.
-    fn hook_passkeys(&self, session: &ManagedSession) {
-        if session.bidi.is_some() {
+    pub(crate) fn hook_passkeys(&self, session: &ManagedSession) {
+        // No vault, no platform authenticator for the sites to see. Switching the
+        // vault on later hooks the session then (see `set_session_vault`).
+        if session.bidi.is_some() || !self.vault_allowed(session) {
             return;
         }
         self.agent_passkeys.hook(
@@ -346,6 +350,30 @@ impl AppState {
                 session.ws_path.trim_start_matches('/')
             ),
         );
+    }
+
+    /// Makes a session's browser match its vault access: the passkey hook goes on
+    /// when it may use the vault, and signing the agent armed is stopped when it
+    /// may not. Run after the session's or the node's switch changed.
+    pub(crate) fn apply_vault(&self, session: &ManagedSession) {
+        if session.bidi.is_some() {
+            return;
+        }
+        if self.vault_allowed(session) {
+            self.hook_passkeys(session);
+        } else {
+            self.agent_passkeys.arm(
+                self.passkeys.clone(),
+                session.id,
+                format!(
+                    "ws://127.0.0.1:{}/{}",
+                    session.port,
+                    session.ws_path.trim_start_matches('/')
+                ),
+                Vec::new(),
+                std::time::Instant::now(),
+            );
+        }
     }
 
     /// Claim a slot for a launch, or find the session the profile already has.
@@ -381,6 +409,7 @@ impl AppState {
             color_scheme: session.color_scheme,
             screen: *session.screen.read().unwrap(),
             show_touches: *session.show_touches.read().unwrap(),
+            vault: session.vault.load(Ordering::Relaxed),
             idle_timeout_secs: session.activity.timeout_secs(),
             shared_display: session
                 .display_size
@@ -418,6 +447,7 @@ impl AppState {
                         viewer_count: Arc::new(AtomicUsize::new(0)),
                         activity: Arc::new(idle::Activity::new(rec.idle_timeout_secs)),
                         adblock: browser.adblock,
+                        vault: Arc::new(AtomicBool::new(rec.vault.unwrap_or(true))),
                         relay: browser.relay.clone(),
                         audio_sink: browser.audio.as_ref().map(|s| s.name.clone()),
                         display: browser
@@ -717,6 +747,10 @@ pub struct CreateSessionRequest {
     pub screen: ScreenMode,
     /// Live views mark taps and clicks when they open; defaults to the engine's setting.
     pub show_touches: Option<bool>,
+    /// Whether the session may use the vault (logins, passkeys, cards); on by
+    /// default. The node's setting is a ceiling: off there, off here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<bool>,
     /// Labels for the session, on top of its profile's: a list, or words separated by
     /// spaces or commas.
     #[serde(default, deserialize_with = "profiles_api::tabs_field")]
@@ -868,6 +902,7 @@ pub(crate) async fn api_create_session(
             true,
             req.default_tabs.unwrap_or(true),
             Vec::new(),
+            req.vault,
         )
         .await
         .map_err(|(status, msg)| (status, Json(serde_json::json!({ "error": msg }))))?;
@@ -1013,6 +1048,7 @@ mod tests {
             viewer_count: Arc::new(AtomicUsize::new(0)),
             activity: Arc::new(idle::Activity::new(0)),
             adblock: false,
+            vault: Arc::new(AtomicBool::new(true)),
             relay: relay::Relay::start(None).await.unwrap(),
             audio_sink: None,
             display: None,

@@ -14,6 +14,14 @@ pub(crate) struct UpdateSettingsRequest {
     /// Engine defaults, each engine replaced as a whole. Absent: unchanged.
     #[serde(default)]
     pub(crate) engines: Option<EnginesPatch>,
+    /// Vault access of the node's sessions: true or false sets it, "default"
+    /// is not a value here (send `null` with `reset_vault` to go back to the
+    /// default). Absent: unchanged.
+    #[serde(default)]
+    pub(crate) vault: Option<bool>,
+    /// Back to the default (on; off on an ephemeral node).
+    #[serde(default)]
+    pub(crate) reset_vault: bool,
 }
 
 /// The engines of an `UpdateSettingsRequest` that change; one left out stays.
@@ -84,6 +92,11 @@ pub(crate) async fn api_update_settings(
             if let Some(ref labels) = req.labels {
                 settings.labels = normalize_groups(labels, &state.node_groups)?;
             }
+            if req.reset_vault {
+                settings.vault = None;
+            } else if let Some(vault) = req.vault {
+                settings.vault = Some(vault);
+            }
             if let Some(engines) = req.engines {
                 if let Some(chromium) = engines.chromium {
                     settings.engines.chromium = chromium;
@@ -102,6 +115,12 @@ pub(crate) async fn api_update_settings(
                 format!("Could not save the settings: {e}"),
             ),
         })?;
+    if req.vault.is_some() || req.reset_vault {
+        let sessions: Vec<_> = state.sessions.read().await.values().cloned().collect();
+        for session in &sessions {
+            state.apply_vault(session);
+        }
+    }
     info!(settings = ?settings, "Node settings changed");
     Ok(Json(settings))
 }

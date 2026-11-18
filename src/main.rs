@@ -467,7 +467,7 @@ pub enum Command {
     SecretAgent(secret_agent::SecretAgentArgs),
 }
 
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -1173,6 +1173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(api_get_settings).patch(api_update_settings),
         )
         .route("/api/sessions/{id}/proxy", post(api_session_set_proxy))
+        .route("/api/sessions/{id}/vault", post(api_session_set_vault))
         .route(
             "/api/sessions/{id}/expire-unattached",
             post(api_expire_unattached),

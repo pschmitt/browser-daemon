@@ -234,6 +234,7 @@ pub(crate) async fn json_new(
                 true,
                 true,
                 Vec::new(),
+                None,
             )
             .await
             .map_err(|(st, err)| json_err(st, err))?

@@ -229,6 +229,7 @@ pub(crate) async fn api_session_save_as_profile(
             true,
             false,
             urls,
+            None,
         )
         .await
         .map_err(|(status, msg)| api_error(status, msg))?;

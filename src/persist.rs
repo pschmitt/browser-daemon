@@ -48,6 +48,9 @@ pub struct SessionRecord {
     pub firefox_log: Option<PathBuf>,
     pub window_size: (u32, u32),
     pub adblock: bool,
+    /// The session's own vault switch (None: records of older versions, on).
+    #[serde(default)]
+    pub vault: Option<bool>,
     pub color_scheme: ColorScheme,
     pub screen: ScreenMode,
     pub show_touches: Option<bool>,

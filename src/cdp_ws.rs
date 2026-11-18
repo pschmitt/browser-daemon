@@ -171,6 +171,7 @@ pub(crate) async fn handle_chromium_ws(
                 // sit there. It can still ask (`default_tabs=true`).
                 params.default_tabs.unwrap_or(!agent_opens_own_tab),
                 Vec::new(),
+                None,
             )
             .await
         {
@@ -272,6 +273,7 @@ pub(crate) async fn handle_firefox_ws(
                 true,
                 params.default_tabs.unwrap_or(true),
                 Vec::new(),
+                None,
             )
             .await
         {

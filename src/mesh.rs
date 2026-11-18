@@ -15,6 +15,10 @@ pub struct NodeInfo {
     #[serde(default)]
     pub ephemeral_provider: bool,
     /// The rbw version of the vault agent serving this node, when one is attached.
+    /// Sessions of this node may use the vault (its setting; off by default on an
+    /// ephemeral node).
+    #[serde(default = "crate::default_true")]
+    pub vault_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_agent: Option<String>,
     /// The host that agent runs on (it can serve several nodes).
@@ -153,6 +157,7 @@ pub(crate) async fn api_mesh_node(
 
     Ok(Json(NodeInfo {
         ephemeral_provider: state.ephemeral_up.is_some() && state.ephemeral_down.is_some(),
+        vault_enabled: state.node_vault(),
         vault_host: state
             .passkeys
             .agent_host()
@@ -267,6 +272,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
     let unreachable = |latency_ms: Option<u64>, error: String| PeerReport {
         state: PeerState {
             ephemeral_provider: false,
+            vault_enabled: true,
             vault_agent: None,
             vault_host: None,
             ephemeral_nodes: Vec::new(),
@@ -337,6 +343,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         Some(info) => (
             PeerState {
                 ephemeral_provider: info.ephemeral_provider,
+                vault_enabled: info.vault_enabled,
                 vault_agent: info.vault_agent,
                 vault_host: info.vault_host,
                 ephemeral_nodes: info.ephemeral_nodes,
@@ -374,6 +381,7 @@ pub(crate) async fn fetch_peer(state: &AppState, name: String, url: String) -> P
         None => (
             PeerState {
                 ephemeral_provider: false,
+                vault_enabled: true,
                 vault_agent: None,
                 vault_host: None,
                 ephemeral_nodes: Vec::new(),
@@ -479,6 +487,7 @@ pub async fn fetch_mesh_overview(state: &AppState) -> MeshOverview {
     }
     let local_node = NodeInfo {
         ephemeral_provider: state.ephemeral_up.is_some() && state.ephemeral_down.is_some(),
+        vault_enabled: state.node_vault(),
         vault_host: state
             .passkeys
             .agent_host()

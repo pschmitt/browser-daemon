@@ -23,6 +23,11 @@ pub struct NodeSettings {
     /// Defaults per browser engine (Engines tab).
     #[serde(default)]
     pub engines: Engines,
+    /// Whether sessions of this node may use the vault (rbw: logins, passkeys,
+    /// cards). Off here is a ceiling no session can lift. Absent: on, except on
+    /// an ephemeral node, which has no vault access unless it is switched on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -175,6 +180,16 @@ mod tests {
         assert!(Store::load(&path).is_err());
         assert!(Store::load(&dir).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn vault_setting_is_absent_until_set() {
+        let s = NodeSettings::default();
+        assert!(!serde_json::to_string(&s).unwrap().contains("vault"));
+        let off: NodeSettings = serde_json::from_str(r#"{"vault": false}"#).unwrap();
+        assert_eq!(off.vault, Some(false));
+        let old: NodeSettings = serde_json::from_str(r#"{"labels": ["a"]}"#).unwrap();
+        assert_eq!(old.vault, None);
     }
 
     #[tokio::test]

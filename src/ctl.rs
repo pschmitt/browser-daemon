@@ -593,6 +593,9 @@ pub async fn session(args: SessionArgs) -> R<()> {
             if a.no_adblock {
                 set("adblock", json!(false))
             }
+            if a.no_vault {
+                set("vault", json!(false))
+            }
             if let Some(v) = a.proxy {
                 set("proxy", json!(v))
             }
@@ -776,6 +779,21 @@ pub async fn session(args: SessionArgs) -> R<()> {
                 .call(c.req(Method::POST, &path).json(&json!({ "proxy": proxy })))
                 .await?;
             done(&c, v, "proxy switched");
+        }
+        SessionCmd::Vault {
+            session,
+            enabled,
+            node,
+        } => {
+            let s = c.session(&session, node.as_deref())?;
+            let path = c.api(&s.node_name, &format!("/sessions/{}/vault", s.session.id));
+            let v = c
+                .call(
+                    c.req(Method::POST, &path)
+                        .json(&json!({ "enabled": enabled })),
+                )
+                .await?;
+            done(&c, v, if enabled { "vault on" } else { "vault off" });
         }
         SessionCmd::IdleTimeout {
             session,
@@ -2234,6 +2252,8 @@ pub async fn node(args: NodeArgs) -> R<()> {
         NodeCmd::Set {
             node,
             default_proxy,
+            vault,
+            reset_vault,
             engine,
             adblock,
             color_scheme,
@@ -2251,6 +2271,12 @@ pub async fn node(args: NodeArgs) -> R<()> {
             let mut body = json!({});
             if let Some(p) = default_proxy {
                 body["default_proxy"] = json!(if p == "none" { String::new() } else { p });
+            }
+            if let Some(v) = vault {
+                body["vault"] = json!(v);
+            }
+            if reset_vault {
+                body["reset_vault"] = json!(true);
             }
             if adblock.is_some() || color_scheme.is_some() || show_touches.is_some() {
                 let engine = engine.ok_or("--engine says which engine's defaults to change")?;

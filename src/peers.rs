@@ -14,6 +14,10 @@ pub struct PeerState {
     #[serde(default)]
     pub ephemeral_provider: bool,
     /// The rbw version of the vault agent serving this node, when one is attached.
+    /// Sessions of this node may use the vault (its setting; off by default on an
+    /// ephemeral node).
+    #[serde(default = "crate::default_true")]
+    pub vault_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vault_agent: Option<String>,
     /// The host that agent runs on (it can serve several nodes).
