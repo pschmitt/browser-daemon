@@ -101,6 +101,18 @@ fn decode_uris(value: &str) -> Result<Vec<Uri>, String> {
     serde_json::from_str(value).map_err(|_| "Invalid RBW API URI list".into())
 }
 
+/// The client key must be a file nobody else can read. systemd's credentials
+/// (LoadCredential, in `credentials_dir`) are private to the unit but show as
+/// 0440: their ACL mask lands in the group bits.
+fn private_key_check(key: &Path, credentials_dir: Option<&std::ffi::OsStr>) -> Result<(), String> {
+    let metadata = std::fs::metadata(key).map_err(|_| "Cannot read RBW API private key")?;
+    let credential = credentials_dir.is_some_and(|dir| !dir.is_empty() && key.starts_with(dir));
+    if !metadata.is_file() || (!credential && metadata.permissions().mode() & 0o077 != 0) {
+        return Err("RBW API private key must be a private file (mode 0600)".into());
+    }
+    Ok(())
+}
+
 impl Client {
     pub fn new(origin: &str, ca: &Path, cert: &Path, key: &Path) -> Result<Self, String> {
         let base = url::Url::parse(origin).map_err(|_| "Invalid RBW API origin")?;
@@ -117,14 +129,7 @@ impl Client {
                     .into(),
             );
         }
-        let metadata = std::fs::metadata(key).map_err(|_| "Cannot read RBW API private key")?;
-        // systemd's credentials (LoadCredential) are private to the unit but
-        // show as 0440: their ACL mask lands in the group bits.
-        let credential = std::env::var_os("CREDENTIALS_DIRECTORY")
-            .is_some_and(|dir| !dir.is_empty() && key.starts_with(&dir));
-        if !metadata.is_file() || (!credential && metadata.permissions().mode() & 0o077 != 0) {
-            return Err("RBW API private key must be a private file (mode 0600)".into());
-        }
+        private_key_check(key, std::env::var_os("CREDENTIALS_DIRECTORY").as_deref())?;
         let ca = std::fs::read(ca).map_err(|_| "Cannot read RBW API CA certificate")?;
         let ca =
             reqwest::Certificate::from_pem(&ca).map_err(|_| "Invalid RBW API CA certificate")?;
@@ -587,6 +592,34 @@ pub async fn login(clients: &[Client], id: &str, want: &[String]) -> Result<Logi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_key_accepts_0600_and_systemd_credentials_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let key = |name: &str, mode: u32| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, "key").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+            path
+        };
+        let private = key("private", 0o600);
+        // How a LoadCredential file looks to the service: its ACL mask shows as 0440.
+        let credential = key("credential", 0o440);
+        let shared = key("shared", 0o644);
+        let credentials = Some(dir.path().as_os_str());
+        let elsewhere = Some(std::ffi::OsStr::new("/run/credentials/other.service"));
+
+        assert!(private_key_check(&private, None).is_ok());
+        assert!(private_key_check(&credential, credentials).is_ok());
+        assert!(private_key_check(&credential, None).is_err());
+        assert!(private_key_check(&credential, elsewhere).is_err());
+        assert!(private_key_check(&credential, Some(std::ffi::OsStr::new(""))).is_err());
+        // Only the credential directory relaxes the mode, and only for files in it.
+        assert!(private_key_check(&shared, None).is_err());
+        assert!(private_key_check(&dir.path().join("missing"), credentials).is_err());
+        assert!(private_key_check(dir.path(), credentials).is_err());
+    }
 
     #[test]
     fn api_uris_retain_saved_matching_policy() {
