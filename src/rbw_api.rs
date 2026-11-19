@@ -118,7 +118,11 @@ impl Client {
             );
         }
         let metadata = std::fs::metadata(key).map_err(|_| "Cannot read RBW API private key")?;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        // systemd's credentials (LoadCredential) are private to the unit but
+        // show as 0440: their ACL mask lands in the group bits.
+        let credential = std::env::var_os("CREDENTIALS_DIRECTORY")
+            .is_some_and(|dir| !dir.is_empty() && key.starts_with(&dir));
+        if !metadata.is_file() || (!credential && metadata.permissions().mode() & 0o077 != 0) {
             return Err("RBW API private key must be a private file (mode 0600)".into());
         }
         let ca = std::fs::read(ca).map_err(|_| "Cannot read RBW API CA certificate")?;
