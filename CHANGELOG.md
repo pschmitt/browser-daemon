@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-19
+
 ### Added
 
 * The secret agent can use rbw-agent's remote API (rbw 2.47 and later;
