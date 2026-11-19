@@ -11,6 +11,10 @@
   master-password unlock, each limited to what is granted to its client. It
   then no longer has to run as the vault's user next to rbw-agent.
 
+### Changed
+
+* The live view's vault is rbw 2.47.0's.
+
 ## [0.19.0] - 2026-11-18
 
 ### Changed
