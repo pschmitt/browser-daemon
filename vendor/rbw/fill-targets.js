@@ -8,7 +8,7 @@
   const isOtpField = el => ["text", "tel", "number", ""].includes(el.type) && !el.autocomplete.split(/\s+/).includes("username") && (el.autocomplete.split(/\s+/).includes("one-time-code") || /(^|[^a-z])(otp|totp|mfa|2fa|tfa|authenticator|one[\s_-]*time|verification[\s_-]*code|auth(entication)?[\s_-]*code)([^a-z]|$)/i.test([el.id, el.name, el.getAttribute("aria-label"), el.placeholder].filter(Boolean).join(" ").replace(/([a-z])([A-Z])/g, "$1 $2")));
   /* The login form's targets among the fillable `fields`. Throws when several
      password fields leave no choice. `scoped` is the form's own fields. */
-  function loginTargets(fields) {
+  function loginTargets(fields, focusedSecret = null) {
     // Masked integration credentials are not login passwords, even on a
     // matching site. Include associated labels (Rails often labels API keys).
     const isIntegrationSecret = el => {
@@ -18,6 +18,10 @@
         .filter(Boolean).join(" ").replace(/([a-z])([A-Z])/g, "$1 $2");
       return /api[\s_-]*key|access[\s_-]*key|token|client[\s_-]*secret|private[\s_-]*key|secret[\s_-]*key/i.test(text);
     };
+    // Only an explicitly focused secret field may receive a login password.
+    if (fields.includes(focusedSecret) && ["text", "password"].includes(focusedSecret.type) && isIntegrationSecret(focusedSecret)) {
+      return { user: undefined, password: focusedSecret, newPasswords: [], otp: undefined, scoped: [focusedSecret] };
+    }
     const passwords = fields.filter(el => el.type === "password" && !el.autocomplete.split(/\s+/).includes("new-password") && !isIntegrationSecret(el));
     if (passwords.length > 1) throw new Error("Several password fields found. Select a login form.");
     const password = passwords[0];
