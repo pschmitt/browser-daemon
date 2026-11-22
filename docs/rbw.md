@@ -66,7 +66,12 @@ It must run as the vault's user, with rbw configured and able to reach that user
 
 ### rbw's remote API
 
-With `--rbw-api-url https://vault.example:PORT --rbw-api-ca ca.pem --rbw-api-cert client.pem --rbw-api-key client-key.pem` (cert and key repeated in matching order, one client per rbw account; on NixOS `secretAgent.rbwApi`), the agent does everything through rbw-agent's [remote API](https://github.com/pschmitt/rbw/blob/main/docs/remote-api.md) (rbw 2.47 and later) and needs neither the `rbw` command nor to run as the vault's user: it can run on any host that reaches rbw-agent, for example over Tailscale or NetBird (the name it connects to must be in rbw's server certificate, `api.hostnameAliases`).
+With `--rbw-api-url https://vault.example:PORT --rbw-api-ca ca.pem --rbw-api-cert client.pem --rbw-api-key client-key.pem` (on NixOS, `secretAgent.rbwApi`), the agent does everything through rbw-agent's [remote API](https://github.com/pschmitt/rbw/blob/main/docs/remote-api.md) (rbw 2.47 and later) and needs neither the `rbw` command nor to run as the vault's user: it can run on any host that reaches rbw-agent, for example over Tailscale or NetBird (the name it connects to must be in rbw's server certificate, `api.hostnameAliases`).
+
+A certificate assigned an account-scoped RBW policy can serve multiple
+accounts. The secret agent discovers and selects the policy's item scopes
+using the same certificate. Older single-account setups can repeat the
+certificate and key options in matching order.
 
 | Request | API |
 | --- | --- |

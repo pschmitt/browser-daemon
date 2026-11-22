@@ -9,10 +9,12 @@ use serde::Deserialize;
 use serde_json::json;
 use zeroize::Zeroizing;
 
+#[derive(Clone)]
 pub struct Client {
     base: url::Url,
     http: reqwest::Client,
     consumer: &'static str,
+    account: Option<String>,
 }
 
 impl std::fmt::Debug for Client {
@@ -155,6 +157,7 @@ impl Client {
             base,
             http,
             consumer: "browser-daemon-mcp",
+            account: None,
         })
     }
 
@@ -171,6 +174,45 @@ impl Client {
             .clear()
             .extend(segments);
         Ok(url)
+    }
+
+    fn request(&self, method: reqwest::Method, url: url::Url) -> reqwest::RequestBuilder {
+        let request = self
+            .http
+            .request(method, url)
+            .header("X-Rbw-Consumer", self.consumer);
+        if let Some(account) = &self.account {
+            request.header("X-Rbw-Account", account)
+        } else {
+            request
+        }
+    }
+
+    async fn item_scopes(&self) -> Result<Vec<Self>, String> {
+        #[derive(Deserialize)]
+        struct Accounts {
+            accounts: Vec<String>,
+        }
+
+        let response = self
+            .request(reqwest::Method::GET, self.url(&["v1", "accounts"])?)
+            .send()
+            .await
+            .map_err(|_| "RBW API request failed")?;
+        // Old agents bind one account to the certificate and have no
+        // discovery endpoint. Other failures must not change the scope.
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(vec![self.clone()]);
+        }
+        let accounts: Accounts = Self::answer(response).await?;
+        Ok(accounts
+            .accounts
+            .into_iter()
+            .map(|account| Self {
+                account: Some(account),
+                ..self.clone()
+            })
+            .collect())
     }
 
     async fn answer<T: serde::de::DeserializeOwned>(
@@ -206,9 +248,7 @@ impl Client {
             url.query_pairs_mut().extend_pairs(query);
         }
         let response = self
-            .http
-            .get(url)
-            .header("X-Rbw-Consumer", self.consumer)
+            .request(reqwest::Method::GET, url)
             .send()
             .await
             .map_err(|_| "RBW API request failed")?;
@@ -239,9 +279,10 @@ impl Client {
     /// use it), so another account's client can be asked.
     async fn assert(&self, body: &serde_json::Value) -> Result<Option<serde_json::Value>, String> {
         let response = self
-            .http
-            .post(self.url(&["v1", "passkeys", "assert"])?)
-            .header("X-Rbw-Consumer", self.consumer)
+            .request(
+                reqwest::Method::POST,
+                self.url(&["v1", "passkeys", "assert"])?,
+            )
             .json(body)
             .send()
             .await
@@ -458,6 +499,14 @@ impl Client {
     }
 }
 
+async fn scoped_clients(clients: &[Client]) -> Result<Vec<Client>, String> {
+    let mut scopes = Vec::new();
+    for client in clients {
+        scopes.extend(client.item_scopes().await?);
+    }
+    Ok(scopes)
+}
+
 pub async fn lookup(
     clients: &[Client],
     entry: &str,
@@ -466,7 +515,8 @@ pub async fn lookup(
     card: bool,
 ) -> Result<Secret, String> {
     let mut matched = None;
-    for client in clients {
+    let scopes = scoped_clients(clients).await?;
+    for client in &scopes {
         if let Some(item) = client.resolve(entry, user).await? {
             if matched.is_some() {
                 return Err("RBW API item is ambiguous across accounts; use the item ID".into());
@@ -528,7 +578,7 @@ pub async fn search(
     max: usize,
 ) -> Result<Vec<SearchItem>, String> {
     let mut found = Vec::new();
-    for client in clients {
+    for client in &scoped_clients(clients).await? {
         found.extend(client.search(url, query).await?);
     }
     // Stable: each client's own order stays within the site and other matches.
@@ -540,7 +590,7 @@ pub async fn search(
 /// The passkeys of every client for the relying party.
 pub async fn passkeys(clients: &[Client], rp_id: &str) -> Result<Vec<serde_json::Value>, String> {
     let mut found = Vec::new();
-    for client in clients {
+    for client in &scoped_clients(clients).await? {
         found.extend(client.passkeys(rp_id).await?);
     }
     Ok(found)
@@ -567,7 +617,7 @@ pub async fn assert(
     if let Some(item) = item {
         body["itemId"] = json!(item);
     }
-    for client in clients {
+    for client in &scoped_clients(clients).await? {
         if let Some(assertion) = client.assert(&body).await? {
             return Ok(assertion);
         }
@@ -580,7 +630,7 @@ pub async fn assert(
 /// The wanted fields (`username`, `password`, `totp`, `custom`) and the URIs of the
 /// login with this item id, from whichever client was granted it.
 pub async fn login(clients: &[Client], id: &str, want: &[String]) -> Result<Login, String> {
-    for client in clients {
+    for client in &scoped_clients(clients).await? {
         let items: Items = client.get(&["v1", "items"]).await?;
         if let Some(item) = items.items.into_iter().find(|item| item.id == id) {
             return client.read_login(&item, want).await;
@@ -592,6 +642,51 @@ pub async fn login(clients: &[Client], id: &str, want: &[String]) -> Result<Logi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn one_certificate_searches_each_discovered_account() {
+        use axum::{http::HeaderMap, routing::get, Json, Router};
+
+        let app = Router::new()
+            .route(
+                "/v1/accounts",
+                get(|| async { Json(json!({"accounts": ["default", "work"]})) }),
+            )
+            .route(
+                "/v1/items",
+                get(|headers: HeaderMap| async move {
+                    let account = headers.get("x-rbw-account").unwrap().to_str().unwrap();
+                    Json(json!({"items": [{
+                        "id": account, "name": account, "site": true,
+                        "hasPassword": true, "hasTotp": false,
+                    }]}))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap())
+            .parse()
+            .unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = Client {
+            base,
+            http: reqwest::Client::new(),
+            consumer: "browser-daemon-test",
+            account: None,
+        };
+        let items = search(&[client], "https://login.example", None, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            ["default", "work"]
+        );
+        task.abort();
+    }
 
     #[test]
     fn private_key_accepts_0600_and_systemd_credentials_only() {
