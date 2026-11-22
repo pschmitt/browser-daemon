@@ -298,7 +298,7 @@
         },
         "script": {
           "name": "Script",
-          "description": "A JavaScript function expression, `async ({ page, context, args, log }) => value`, instead of steps."
+          "description": "A JavaScript function expression that receives page, context, args and log. Use this instead of steps."
         },
         "args": {
           "name": "Arguments",
