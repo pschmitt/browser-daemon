@@ -294,7 +294,7 @@
         },
         "steps": {
           "name": "Steps",
-          "description": "Actions run in order, e.g. [{\"action\": \"click\", \"selector\": \"text=Sign in\"}, {\"action\": \"text\", \"selector\": \"h1\", \"as\": \"title\"}]. Values of steps with `as` end up in the result."
+          "description": "Run the actions in order. For example, click a sign-in button, then read the text from a heading. Use the as field to include a step's value in the result."
         },
         "script": {
           "name": "Script",
