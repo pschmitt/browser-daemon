@@ -37,36 +37,3 @@ jobs:
           name: browser-daemon-x86_64-linux-debug
           path: target/debug/browser-daemon
           if-no-files-found: error
-  # aarch64-linux packages and checks, built natively on GitHub's arm runners
-  # (nixbot on x86_64 would have to emulate them) and pushed to the niks3 S3 cache;
-  # see pschmitt/ci-workflows. rbw-extension only re-exports rbw's own build.
-  nix-aarch64:
-    permissions:
-      contents: read
-      id-token: write
-    uses: pschmitt/ci-workflows/.github/workflows/nix-build.yaml@main
-    with:
-      runner: ubuntu-26.04-arm
-      system: aarch64-linux
-      exclude: '["rbw-extension"]'
-      pin-prefix: gh-browser-daemon-main
-    secrets:
-      s3_store: ${{ secrets.NIKS3_S3_STORE }}
-      s3_access_key: ${{ secrets.NIKS3_S3_ACCESS_KEY }}
-      s3_secret_key: ${{ secrets.NIKS3_S3_SECRET_KEY }}
-
-  nix-aarch64-checks:
-    needs: nix-aarch64
-    permissions:
-      contents: read
-      id-token: write
-    uses: pschmitt/ci-workflows/.github/workflows/nix-checks.yaml@main
-    with:
-      runner: ubuntu-26.04-arm
-      system: aarch64-linux
-      full-flake-check: false
-      pin-prefix: gh-browser-daemon-main
-    secrets:
-      s3_store: ${{ secrets.NIKS3_S3_STORE }}
-      s3_access_key: ${{ secrets.NIKS3_S3_ACCESS_KEY }}
-      s3_secret_key: ${{ secrets.NIKS3_S3_SECRET_KEY }}
