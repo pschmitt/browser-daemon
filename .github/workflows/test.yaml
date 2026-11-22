@@ -60,21 +60,34 @@ jobs:
         run: |
           cargo build --locked
           python3 browser/build.py
+      - name: Read the locked rbw revision
+        id: rbw
+        run: |
+          revision="$(jq -er '.nodes.root.inputs.rbw as $id | .nodes[$id].locked.rev | select(test("^[0-9a-f]{40}$"))' flake.lock)"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - name: Checkout the locked rbw source
+        uses: actions/checkout@v7
+        with:
+          repository: pschmitt/rbw
+          ref: ${{ steps.rbw.outputs.revision }}
+          path: .ci/rbw
+      - name: Prepare the rbw live-view extension
+        run: python3 .ci/rbw/browser/build.py --browser-daemon "$RUNNER_TEMP/rbw-extension"
       - name: Chromium extension round trip
-        run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_chromium.mjs
+        run: nix --option max-jobs 0 --option fallback false shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_chromium.mjs
       - name: Live views of a shared browser
         run: |
-          BROWSER_DAEMON_EXTENSION_DIR="$(nix build --no-link --print-out-paths .#rbw-extension)" \
-            nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_handoff.mjs
+          BROWSER_DAEMON_EXTENSION_DIR="$RUNNER_TEMP/rbw-extension" \
+            nix --option max-jobs 0 --option fallback false shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_handoff.mjs
       - name: Shared media audio and owner revocation
-        run: nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_audio.mjs
+        run: nix --option max-jobs 0 --option fallback false shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_audio.mjs
       - name: Playwright against a shared browser
         run: |
           npm install --silent --prefix "$RUNNER_TEMP/playwright" playwright-core
-          PLAYWRIGHT_DIR="$RUNNER_TEMP/playwright" nix shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_playwright.mjs
+          PLAYWRIGHT_DIR="$RUNNER_TEMP/playwright" nix --option max-jobs 0 --option fallback false shell --inputs-from . 'nixpkgs#chromium' -c node browser/smoke_playwright.mjs
       - name: Firefox companion with real trusted input
-        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
+        run: nix --option max-jobs 0 --option fallback false shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox.py
       - name: Firefox extension and native messaging round trip
-        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py
+        run: nix --option max-jobs 0 --option fallback false shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py
       - name: Firefox extension without the native companion
-        run: nix shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py --dom-only
+        run: nix --option max-jobs 0 --option fallback false shell --inputs-from . 'nixpkgs#firefox' -c python3 browser/smoke_firefox_roundtrip.py --dom-only
