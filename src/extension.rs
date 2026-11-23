@@ -1,6 +1,6 @@
 //! Temporary, outbound-only browser nodes. An extension is never a trusted peer:
 //! it gets no cluster credential and can only answer requests for its own tabs.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -100,6 +100,8 @@ pub struct Broker {
     credential_path: Option<PathBuf>,
     // Offline remembered browsers are forgotten after this long (None: never).
     forget_after: Option<Duration>,
+    // A browser's signals changed or it went away (see `signals_stream`).
+    signals: tokio::sync::broadcast::Sender<Value>,
 }
 
 impl Broker {
@@ -111,6 +113,7 @@ impl Broker {
             credentials: Mutex::default(),
             credential_path: None,
             forget_after: None,
+            signals: tokio::sync::broadcast::channel(64).0,
         }
     }
     pub fn load(path: &FilePath, forget_after: Option<Duration>) -> Self {
@@ -351,6 +354,46 @@ pub struct NodeInfo {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub recording_paused: bool,
     pub tabs: Vec<Tab>,
+    /// Facts the browser derives from all its tabs, when its owner turned
+    /// signals on (docs/local-api.md): `media`, `meeting`, own rules.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub signals: BTreeMap<String, Signal>,
+}
+
+/// One signal: on or off, with a few short attributes (title, site, ...).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Signal {
+    pub on: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, Value>,
+}
+
+const MAX_SIGNALS: usize = 32;
+const MAX_SIGNAL_ATTRIBUTES: usize = 8;
+
+/// `[a-z][a-z0-9_]{0,31}`: names become entity ids in Home Assistant.
+fn signal_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 32
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+fn valid_signals(signals: &BTreeMap<String, Signal>) -> bool {
+    signals.len() <= MAX_SIGNALS
+        && signals.iter().all(|(name, signal)| {
+            signal_name(name)
+                && signal.attributes.len() <= MAX_SIGNAL_ATTRIBUTES
+                && signal.attributes.iter().all(|(key, value)| {
+                    signal_name(key)
+                        && match value {
+                            Value::String(s) => s.len() <= 1024,
+                            Value::Bool(_) | Value::Number(_) => true,
+                            _ => false,
+                        }
+                })
+        })
 }
 
 #[derive(Deserialize)]
@@ -477,6 +520,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<R
                 recording: false,
                 recording_paused: false,
                 tabs: vec![],
+                signals: BTreeMap::new(),
             });
         }
     }
@@ -1333,6 +1377,7 @@ async fn serve(
             recording: false,
             recording_paused: false,
             tabs: vec![],
+            signals: BTreeMap::new(),
         }),
         public_grant: Mutex::default(),
         deadline: (!lifetime.is_zero()).then(|| Instant::now() + lifetime),
@@ -1357,6 +1402,11 @@ async fn serve(
                 if nodes.get(&self.1).is_some_and(|n| Arc::ptr_eq(n, &self.2)) {
                     if let Some(n) = nodes.remove(&self.1) {
                         n.end();
+                        // Its signals end with it.
+                        let _ = self
+                            .0
+                            .signals
+                            .send(json!({"browser": self.1, "online": false, "signals": {}}));
                     }
                 }
             }
@@ -1367,7 +1417,9 @@ async fn serve(
     let _registration = Registration(broker.clone(), id, node.clone());
     broker.touch(id);
     let origins = current_extension_origins(extension_origins, peers).await?;
-    let mut registered = json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key, "origins": origins});
+    // `signals`: this daemon takes `signals` messages (older ones close the
+    // socket on an unknown message type).
+    let mut registered = json!({"type": "registered", "id": id, "expires_at": expires_at, "remembered": remembered, "remember_key": new_key, "origins": origins, "signals": true});
     // The browser's login is its id: its pick is kept on this side under it.
     struct Forget<'a>(&'a (dyn Fn(&str) + Sync), String);
     impl Drop for Forget<'_> {
@@ -1439,6 +1491,17 @@ async fn serve(
                                 *node.public_grant.lock().unwrap() = grant;
                                 drop(info);
                                 node.bump();
+                            }
+                            Some("signals") => {
+                                let signals: BTreeMap<String, Signal> = serde_json::from_value(value["signals"].clone()).map_err(|_| ())?;
+                                if !valid_signals(&signals) { return Err(()); }
+                                let mut info = node.info.lock().unwrap();
+                                if info.signals != signals {
+                                    info.signals = signals.clone();
+                                    let name = info.name.clone();
+                                    drop(info);
+                                    let _ = broker.signals.send(json!({"browser": id, "name": name, "online": true, "signals": signals}));
+                                }
                             }
                             Some("favicons") => {
                                 let favicons: Vec<FaviconUpdate> = serde_json::from_value(value["favicons"].clone()).map_err(|_| ())?;
@@ -1532,6 +1595,51 @@ pub async fn changes(
     Ok((
         [("cache-control", "no-store")],
         Json(json!({"revision": revision})),
+    )
+        .into_response())
+}
+
+/// The signals of every connected browser, then each change as it happens, as
+/// server-sent events (`event: signals`, data `{"browser", "name", "online",
+/// "signals"}`), so Home Assistant needs no polling for them. `event: resync`
+/// means changes were missed: read `/api/extension/nodes` again.
+pub async fn signals_stream(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio::sync::broadcast::error::RecvError;
+    state.check_auth(&headers)?;
+    // Subscribed before the snapshot: a change in between is sent twice, never lost.
+    let receiver = state.extensions.signals.subscribe();
+    let snapshot: Vec<Value> = state
+        .extensions
+        .nodes
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, node)| {
+            let info = node.info.lock().unwrap();
+            json!({"browser": id, "name": info.name, "online": true, "signals": info.signals})
+        })
+        .collect();
+    let first = futures_util::stream::iter(snapshot.into_iter().map(|v| {
+        Ok::<_, std::convert::Infallible>(Event::default().event("signals").data(v.to_string()))
+    }));
+    let changes = futures_util::stream::unfold(receiver, |mut receiver| async move {
+        let event = match receiver.recv().await {
+            Ok(v) => Event::default().event("signals").data(v.to_string()),
+            Err(RecvError::Lagged(_)) => Event::default().event("resync").data("{}"),
+            Err(RecvError::Closed) => return None,
+        };
+        Some((Ok::<_, std::convert::Infallible>(event), receiver))
+    });
+    use futures_util::StreamExt as _;
+    // nginx (and similar proxies) would otherwise buffer the stream.
+    Ok((
+        [("x-accel-buffering", "no"), ("cache-control", "no-store")],
+        Sse::new(first.chain(changes))
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(20))),
     )
         .into_response())
 }
@@ -1849,6 +1957,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn signal_names_and_attributes_are_checked() {
+        let ok = |name: &str, value: Value| {
+            let mut signals = BTreeMap::new();
+            signals.insert(
+                name.to_owned(),
+                Signal {
+                    on: true,
+                    attributes: BTreeMap::from([("title".to_owned(), value)]),
+                },
+            );
+            valid_signals(&signals)
+        };
+        assert!(ok("media", json!("x")));
+        assert!(ok("my_rule2", json!(3)));
+        assert!(!ok("Media", json!("x")));
+        assert!(!ok("2fa", json!("x")));
+        assert!(!ok("a-b", json!("x")));
+        assert!(!ok(&"a".repeat(33), json!("x")));
+        assert!(!ok("media", json!({"nested": true})));
+        assert!(!ok("media", json!("x".repeat(1025))));
+    }
+
     #[tokio::test]
     async fn pairing_is_origin_bound_single_use_and_disconnect_removes_the_node() {
         use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message as Wire};
@@ -1922,6 +2053,21 @@ mod tests {
         let id = Uuid::parse_str(registered["id"].as_str().unwrap()).unwrap();
         let node = broker.nodes.lock().unwrap().get(&id).unwrap().clone();
         assert_eq!(node.info.lock().unwrap().tabs[0].id, 7);
+        // Signals: announced, stored, and pushed to subscribers.
+        assert_eq!(registered["signals"], true);
+        let mut pushed = broker.signals.subscribe();
+        ws.send(Wire::Text(json!({"type": "signals", "signals": {"media": {"on": true, "attributes": {"title": "Song", "site": "example.org"}}}}).to_string().into())).await.unwrap();
+        ws.send(Wire::Text(json!({"type": "heartbeat"}).to_string().into()))
+            .await
+            .unwrap();
+        assert_eq!(receive_json(&mut ws).await.unwrap()["type"], "heartbeat");
+        assert!(node.info.lock().unwrap().signals["media"].on);
+        let event = pushed.try_recv().unwrap();
+        assert_eq!(event["browser"], json!(id));
+        assert_eq!(
+            event["signals"]["media"]["attributes"]["site"],
+            "example.org"
+        );
         // Concurrent registrations share one atomic limit, even after upgrade.
         let mut tasks = Vec::new();
         for _ in 0..MAX_CHANNELS * 2 {

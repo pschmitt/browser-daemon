@@ -10,6 +10,7 @@ A state-of-the-art Home Assistant custom component for managing, observing, and 
   - **Node Devices**: Per-node devices linked via `via_device`, reporting latency, uptime, active session count, storage used, and online/offline status.
   - **Sensors**: Active sessions, online nodes, total nodes, recordings, saved profiles, storage consumption, storage limits, and node ping latencies.
   - **Binary Sensors**: Mesh connectivity, node reachability, and active session indicators.
+  - **Browser signals**: per extension browser, a binary sensor for each signal it sends (`media`: a tab plays sound, `meeting`: a meeting tab is open, plus own `signalRules`), pushed by the daemon as they change. See [the local tab API](../../docs/local-api.md#signals-and-home-assistant).
   - **Buttons**: Mesh refresh and recording vacuuming.
 - **HA Services / Actions**:
   - `browser_daemon.create_session`: Launch ad-hoc or profile-backed browser sessions (with Chromium/Firefox, adblock, recording, phone/desktop screen emulation, and idle timeouts).

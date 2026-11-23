@@ -334,6 +334,12 @@ async function refresh() {
   renderDaemonAllowlist(origins);
   if (!origins.length && !state.allowlist.managed) $('advanced').open = true;
   $('companion').hidden = state.chromium;
+  const signals = state.signals || {};
+  if (document.activeElement !== $('signals')) $('signals').checked = !!signals.enabled;
+  $('signals').disabled = !!signals.managed;
+  $('signalsStatus').textContent = signals.enabled && !signals.connected && state.registration
+    ? 'On, but this daemon is too old for signals'
+    : 'Tell the daemon (Home Assistant) when a tab plays sound or a meeting is open';
   const local = state.localApi || {};
   if (document.activeElement !== $('localApi')) $('localApi').checked = !!local.enabled;
   $('localApi').disabled = !!local.managed;
@@ -588,6 +594,11 @@ $('shareAudio').addEventListener('click', () => {
     if (!allowed) throw new Error('Site access is needed to share media sound.');
     return message({type: 'shareAudio', enabled});
   }).then(refresh, error => { $('shareAudio').checked = !enabled; showError(error); });
+});
+
+$('signals').addEventListener('click', () => {
+  const enabled = $('signals').checked;
+  void message({type: 'signals', enabled}).then(refresh, error => { $('signals').checked = !enabled; showError(error); });
 });
 
 $('localApi').addEventListener('click', () => {

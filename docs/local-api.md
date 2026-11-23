@@ -1,7 +1,7 @@
 # Local tab API
 
-Status: phase 1 (read-only API, see [Rollout](#rollout)) implemented; the
-rest is the plan.
+Status: phase 1 (read-only API) and the signals of phase 3 are implemented;
+see [Rollout](#rollout) for the rest.
 
 A local API on the machine where the node extension runs, so scripts can ask
 about and control the tabs of the user's own Firefox and Chromium cheaply,
@@ -165,20 +165,33 @@ HTTP/1.1 over the Unix socket, JSON, `Authorization: Bearer <token>`.
 
 ## Signals and Home Assistant
 
-Signals are small facts the server derives from the tab state. With signals
-enabled they are the only thing that leaves the machine. The extension sends
-them over its existing daemon connection, and the Home Assistant integration
-turns them into entities on the node's device.
+Signals are small facts the extension derives from all its tabs. They are
+off by default; switch **Signals** on in the popup (Settings) or set the
+`signals` policy. Then they, and nothing else of the tabs, go to the paired
+daemon over the extension's existing connection, and only to daemons that
+announce support in their `registered` message (older ones close the
+connection on an unknown message). Private windows never count.
 
 - Built in:
-  - `media`: a tab is audible (title and site of the first one). This also
-    covers sound that has no MPRIS player (WebAudio, calls).
-  - `meeting`: a meeting tab is open (provider: Zoom, Jitsi, Teams, Meet;
-    join URL when known).
-- User rules: a name, a match (URL or title regex) and the attributes to
-    expose. For example a rule whose regex lives in the user's private
-    configuration, so the regex never reaches a public repository.
-- Entities: one binary sensor per signal (on/off) with attributes, per node.
+  - `media`: a tab plays sound and is not muted (attributes `title`, `site`;
+    the active tab first). This also covers sound without an MPRIS player
+    (WebAudio, calls).
+  - `meeting`: a meeting tab is open (attributes `provider`: `zoom`, `jitsi`,
+    `teams` or `meet`, and `url`).
+- Own rules, from the `signalRules` policy: `{"name": "...", "url": "regex",
+  "title": "regex", "match": "regex"}` (case-insensitive; `match` tests the
+  title or the URL; a tab must pass every pattern the rule has).
+  The signal is on while a tab matches, with the attribute `count`. Only the
+  name and the count leave the browser, so a rule can live in a private
+  configuration.
+
+The daemon keeps them per browser (`signals` in `GET /api/extension/nodes`)
+and pushes every change on `GET /api/extension/signals/stream` (server-sent
+events: `event: signals` with `{"browser", "name", "online", "signals"}`,
+first one per connected browser, then one per change; `event: resync` when a
+subscriber fell behind). The Home Assistant integration subscribes to that
+stream and keeps one binary sensor per signal on each browser's device, so a
+change shows up at once instead of with the next poll.
 
 This replaces the go-hass-agent sensors that poll bruvtab today: `pp`,
 `online-meeting`, `ms-teams in-a-meeting` and the browser fallback of the

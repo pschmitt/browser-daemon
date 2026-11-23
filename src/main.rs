@@ -1112,6 +1112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/extension/nodes/{id}/changes", get(extension::changes))
         .route(
+            "/api/extension/signals/stream",
+            get(extension::signals_stream),
+        )
+        .route(
             "/api/extension/nodes/{id}/cdp",
             get(extension::automation::socket),
         )

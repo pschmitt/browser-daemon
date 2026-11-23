@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import (
     BrowserDaemonAuthError,
     BrowserDaemonClient,
     BrowserDaemonConnectionError,
+    BrowserDaemonUnsupportedError,
 )
 from .const import (
     CONF_POLL_INTERVAL,
@@ -196,3 +198,51 @@ class BrowserDaemonCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         nodes = self.data.get("nodes") or {}
         node = nodes.get(node_name)
         return node is not None and node.get("status") == "online"
+
+    async def async_watch_signals(self) -> None:
+        """Keep the browsers' signals current from the daemon's push stream.
+
+        Runs for the config entry's lifetime; reconnects with a backoff. Older
+        daemons have no stream: their signals arrive with each poll instead.
+        """
+        delay = 5
+        while True:
+            try:
+                async for event, data in self.client.async_stream_signals():
+                    delay = 5
+                    if event == "resync":
+                        await self.async_request_refresh()
+                    elif event == "signals":
+                        self._apply_signals(data)
+            except BrowserDaemonUnsupportedError:
+                _LOGGER.info(
+                    "This browser-daemon has no signals stream; signals update with each poll"
+                )
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug("Signals stream ended: %s", err)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 300)
+
+    @callback
+    def _apply_signals(self, data: dict[str, Any]) -> None:
+        """Merge one pushed signals update into the coordinator's data."""
+        browser_id = str(data.get("browser") or "")
+        if not browser_id or not self.data:
+            return
+        browsers = dict(self.data.get("browsers") or {})
+        current = browsers.get(browser_id)
+        if current is None:
+            # A browser this coordinator has not listed yet: fetch everything.
+            if data.get("online"):
+                self.hass.async_create_task(self.async_request_refresh())
+            return
+        updated = {**current, "signals": data.get("signals") or {}}
+        if not data.get("online"):
+            updated["online"] = False
+        if updated == current:
+            return
+        browsers[browser_id] = updated
+        self.async_set_updated_data({**self.data, "browsers": browsers})

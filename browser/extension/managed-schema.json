@@ -26,6 +26,26 @@
       "description": "Push this browser's tabs to the local browser-daemon tab API (native messaging host dev.pschmitt.browser_daemon_local). Chromium also needs the nativeMessaging permission granted.",
       "type": "boolean"
     },
+    "signals": {
+      "title": "Signals",
+      "description": "Send the daemon small facts derived from all tabs (a tab playing sound, a meeting open, signalRules matches) for Home Assistant. Not the tabs themselves.",
+      "type": "boolean"
+    },
+    "signalRules": {
+      "title": "Signal rules",
+      "description": "Own signals: a name ([a-z][a-z0-9_]*) that is on while a tab matches the rule's regexes (case-insensitive): url, title, and match (title or URL). Only the name and a match count leave the browser.",
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "url": {"type": "string"},
+          "title": {"type": "string"},
+          "match": {"type": "string"}
+        }
+      }
+    },
     "defaultName": {
       "title": "Default browser name",
       "description": "The name this browser gets when it pairs without one being entered, e.g. laptop-chromium.",

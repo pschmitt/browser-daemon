@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+* Signals for Home Assistant: the node extension can tell the daemon when a
+  tab plays sound (`media`), a meeting is open (`meeting`) or a tab matches an
+  own rule (`signalRules` policy), without sending the tabs themselves. Off by
+  default (popup **Signals**, `signals` policy). The daemon pushes changes on
+  `GET /api/extension/signals/stream` (server-sent events), and the
+  integration keeps a binary sensor per signal on each browser's device,
+  updated at once instead of with each poll.
+
 ## [0.21.0] - 2026-11-23
 
 ### Added

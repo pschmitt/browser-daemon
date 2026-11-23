@@ -78,6 +78,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Forward to sensor, binary_sensor, button
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Browser signals are pushed: no waiting for the next poll.
+    entry.async_create_background_task(
+        hass, coordinator.async_watch_signals(), f"{DOMAIN} signals {entry.entry_id}"
+    )
+
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
 

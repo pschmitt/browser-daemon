@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
 
@@ -32,6 +34,10 @@ class BrowserDaemonNodeOfflineError(BrowserDaemonError):
 
 class BrowserDaemonNotConfiguredError(BrowserDaemonError):
     """No matching Browser Daemon config entry is available."""
+
+
+class BrowserDaemonUnsupportedError(BrowserDaemonError):
+    """The daemon is too old for this request."""
 
 
 class BrowserDaemonClient:
@@ -191,6 +197,59 @@ class BrowserDaemonClient:
         if "name" in local_node:
             self._local_node_name = local_node["name"]
         return data
+
+    async def async_stream_signals(self) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        """Yield (event, data) from the daemon's signals stream.
+
+        Server-sent events: first the signals of every connected browser, then
+        each change. ``resync`` means changes were missed.
+        """
+        url = f"{self.base_url}/api/extension/signals/stream"
+        headers = {"Accept": "text/event-stream"}
+        if self.cluster_secret:
+            headers["X-Browser-Cluster-Secret"] = self.cluster_secret
+        else:
+            token = await self._async_ensure_token()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+                headers["Cookie"] = f"bd_auth={token}"
+        try:
+            async with self.session.get(
+                url,
+                headers=headers,
+                ssl=self.verify_ssl,
+                # The daemon sends a keep-alive comment every 20 s.
+                timeout=aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=90),
+            ) as resp:
+                if resp.status == 404:
+                    raise BrowserDaemonUnsupportedError("no signals stream")
+                if resp.status in (401, 403):
+                    self._cached_token = None
+                    raise BrowserDaemonAuthError(f"signals stream: HTTP {resp.status}")
+                if resp.status != 200:
+                    raise BrowserDaemonConnectionError(f"signals stream: HTTP {resp.status}")
+                event, data = "message", []
+                async for raw in resp.content:
+                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                    if not line:
+                        if data:
+                            try:
+                                payload = json.loads("\n".join(data))
+                            except ValueError:
+                                payload = {}
+                            yield event, payload if isinstance(payload, dict) else {}
+                        event, data = "message", []
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    field, _, value = line.partition(":")
+                    value = value.removeprefix(" ")
+                    if field == "event":
+                        event = value
+                    elif field == "data":
+                        data.append(value)
+        except aiohttp.ClientError as err:
+            raise BrowserDaemonConnectionError(f"signals stream: {err}") from err
 
     async def async_list_extension_browsers(self) -> list[dict[str, Any]]:
         """List extension-backed (shared) browsers registered on the local node."""

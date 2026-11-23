@@ -97,7 +97,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
     storage: {local: {set: async data => { calls.push(['store', data]); }, get: async () => ({managedAllowlistSeen: true, ...stored}), remove: async () => {}},
       session: {get: async keys => Object.fromEntries([keys].flat().filter(k => k in session).map(k => [k, structuredClone(session[k])])),
         set: async data => { Object.assign(session, structuredClone(data)); }, remove: async keys => { for (const k of [keys].flat()) delete session[k]; }},
-      managed: {get: async () => ({allowedDaemonOrigins: ['https://daemon.example']})}, onChanged: event('storage')},
+      managed: {get: async () => ({allowedDaemonOrigins: ['https://daemon.example'], ...(stored.managed || {})})}, onChanged: event('storage')},
     scripting: {executeScript: async args => {
       calls.push(['script', args]);
       const url = tabs.get(args.target.tabId)?.url;
@@ -147,6 +147,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
   vm.runInContext(source('favicon.js'), context);
   vm.runInContext(source('censor.js'), context);
   vm.runInContext(source('local-api.js'), context);
+  vm.runInContext(source('signals.js'), context);
   vm.runInContext(source('background.js'), context);
   const ui = {id: 'test', url: 'chrome-extension://test/popup.html'};
   async function message(value, sender = ui) {
@@ -160,7 +161,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
     return socket;
   }
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  return {listeners, calls, sockets, tabs, message, pair, flush, api, menu, tabValues, nativePorts};
+  return {listeners, calls, sockets, tabs, message, pair, flush, api, menu, tabValues, nativePorts, context};
 }
 
 test('setup tab can manage sharing, but other extension pages cannot', async () => {
@@ -898,6 +899,61 @@ test('without the tab group API tabs still open, ungrouped', async () => {
   s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
   await h.flush(); await h.flush();
   assert.ok(s.sent.find(m => m.id === 'a').result.tab);
+});
+test('signals: a tab playing sound and a meeting, never from private windows', () => {
+  const {context} = harness();
+  const signals = context.bdSignals.derive([
+    {id: 1, url: 'https://meet.jit.si/standup', title: 'Standup', incognito: false},
+    {id: 2, url: 'https://music.example/x', title: 'Song', audible: true, incognito: false},
+    {id: 3, url: 'https://secret.example/', title: 'Secret', audible: true, active: true, incognito: true},
+    {id: 4, url: 'https://muted.example/', title: 'Muted', audible: true, active: true, mutedInfo: {muted: true}, incognito: false},
+  ]);
+  assert.equal(signals.media.on, true);
+  assert.equal(signals.media.attributes.title, 'Song');
+  assert.equal(signals.media.attributes.site, 'music.example');
+  assert.equal(signals.meeting.on, true);
+  assert.equal(signals.meeting.attributes.provider, 'jitsi');
+  const quiet = context.bdSignals.derive([{id: 3, url: 'https://zoom.us/wc/1/join', audible: true, incognito: true}]);
+  assert.equal(quiet.media.on, false);
+  assert.equal(quiet.meeting.on, false);
+});
+test('signal rules from the policy match the title or the URL', async () => {
+  const {context} = harness(false, {shareAll: false, managed: {signalRules: [
+    {name: 'pp', match: 'naughty'}, {name: 'docs', url: '^https://docs\\.', title: 'guide'},
+    {name: 'Bad Name', match: 'x'}, {name: 'media', match: 'x'}, {name: 'broken', match: '('}]}});
+  await context.bdSignals.setEnabled(true);
+  const signals = JSON.parse(JSON.stringify(context.bdSignals.derive([
+    {id: 1, url: 'https://example.org/naughty', title: 'Hi', incognito: false},
+    {id: 2, url: 'https://docs.example/a', title: 'A Guide', incognito: false},
+    {id: 3, url: 'https://docs.example/b', title: 'News', incognito: false},
+    {id: 4, url: 'https://x.example/', title: 'Naughty', incognito: true},
+  ])));
+  assert.deepEqual(signals.pp, {on: true, attributes: {count: 1}});
+  assert.deepEqual(signals.docs, {on: true, attributes: {count: 1}});
+  assert.deepEqual(Object.keys(signals).sort(), ['docs', 'media', 'meeting', 'pp']);
+});
+test('signals go only to daemons that announce them, and only when enabled', async () => {
+  const older = harness(false, {shareAll: false, signals: true});
+  const socket = await older.pair();
+  await older.flush();
+  assert.ok(!socket.sent.some(m => m.type === 'signals'));
+
+  const h = harness(false, {shareAll: false, signals: true});
+  await h.message({type: 'connect', server: 'https://daemon.example', code: 'a'.repeat(64), name: 'Test browser'});
+  const current = h.sockets.at(-1); current.onopen();
+  current.receive({type: 'registered', id: 'node', expires_at: Math.floor(Date.now() / 1000) + 600, signals: true});
+  await h.flush();
+  await h.flush();
+  const sent = current.sent.filter(m => m.type === 'signals');
+  assert.equal(sent.length, 1);
+  assert.deepEqual(Object.keys(sent[0].signals).sort(), ['media', 'meeting']);
+
+  const off = harness(false, {shareAll: false});
+  await off.message({type: 'connect', server: 'https://daemon.example', code: 'a'.repeat(64), name: 'Test browser'});
+  const plain = off.sockets.at(-1); plain.onopen();
+  plain.receive({type: 'registered', id: 'node', expires_at: Math.floor(Date.now() / 1000) + 600, signals: true});
+  await off.flush();
+  assert.ok(!plain.sent.some(m => m.type === 'signals'));
 });
 const LOCAL_HOST = 'dev.pschmitt.browser_daemon_local';
 test('the local tab API is off until enabled', async () => {

@@ -1,5 +1,5 @@
 /* Local extension code only; dashboard bridge requires explicit daemon approval. */
-if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js', 'censor.js', 'local-api.js');
+if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js', 'censor.js', 'local-api.js', 'signals.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
 // Firefox for Android has no history or bookmarks, and asking for those permissions
@@ -841,6 +841,7 @@ async function stop(reason = 'Disconnected', retry = false) {
   const old = socket;
   socket = null;
   registration = null;
+  bdSignals.detach();
   proxyOffer = null;
   tabProxies.clear();
   buildTabMenu();
@@ -2405,6 +2406,8 @@ async function connect({server, code = '', key = '', name, remember = false}) {
         }
       }
       registration = {...grant, server};
+      // Daemons that take signals say so; older ones close on unknown messages.
+      if (message.signals === true) bdSignals.attach(send);
       void takeProxyOffer(proxyMessage, message.origins).catch(error => record(`Daemon proxy unavailable: ${error.message}`));
       if (Array.isArray(message.origins)) void updateAutoOrigins(message.origins).catch(error => record(`Daemon origin update failed: ${error.message}`));
       clientConnected = false;
@@ -2609,7 +2612,7 @@ async function localMessage(message, sender) {
     const currentTab = current && safeTab(current) ? {id: current.id, title: current.title || '', url: current.url, shared: shared.has(current.id), control: shared.get(current.id)?.control || false, agent: agentTabs.has(current.id)} : null;
     const [activeTab] = proxyOffer ? await api.tabs.query({active: true, lastFocusedWindow: true}) : [];
     const proxy = proxyOffer ? {perTab: !chromium, tab: activeTab ? (tabProxies.has(activeTab.id) ? {own: true, pick: tabProxies.get(activeTab.id)} : {own: false}) : null, choices: proxyOffer.proxies, selected: proxyChoice, host: proxyOffer.host, port: proxyOffer.port, node: proxyOffer.node, blocked: proxyBlocked, permitted: await api.permissions.contains(proxyPermissions())} : null;
-    return {currentTab, groupsSupported: groupsSupported(), proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions, android, localApi: await localApi.status()};
+    return {currentTab, groupsSupported: groupsSupported(), proxy, allowlist, rememberedBrowser: rememberedNode ? {server: rememberedNode.server, name: rememberedNode.name, paused: rememberedNode.paused} : null, dashboardRequest: dashboardPairing?.expires > Date.now() ? {server: dashboardPairing.server, remember: dashboardPairing.remember, control: dashboardPairing.control !== false} : null, status, history, connecting: !!pendingConnection || !!socket && !registration, registration, tabs, saved: await api.storage.local.get(['server', 'name', 'rememberPreference']), defaultName: await defaultName(), sharing, version: api.runtime.getManifest().version, chromium, nativeReady, addressSuggestions, android, localApi: await localApi.status(), signals: bdSignals.status()};
   }
   if (message.type === 'connect') { await connect(message); return {ok: true}; }
   if (message.type === 'cancelConnect') { await stop('Daemon site permission denied — setup fields saved'); return {ok: true}; }
@@ -2684,6 +2687,10 @@ async function localMessage(message, sender) {
     await applyProxy();
     void badge();
     return {ok: true};
+  }
+  if (message.type === 'signals') {
+    await bdSignals.setEnabled(message.enabled === true);
+    return {ok: true, signals: bdSignals.status()};
   }
   if (message.type === 'localApi') {
     await localApi.setEnabled(message.enabled === true);
