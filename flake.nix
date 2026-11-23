@@ -90,6 +90,23 @@
     in
     eachSystem
     // {
+      circus.consumerBuilds.nixos-config = {
+        repository = "pschmitt/nixos-config";
+        ref = "main";
+        input = "browser-daemon";
+        follows = [
+          "nixpkgs"
+          "flake-utils"
+          "rbw"
+        ];
+        packages.aarch64-linux = [
+          "browser-daemon"
+          "browser-daemon-client"
+          "browser-native-host"
+          "chromium-addon"
+        ];
+      };
+
       # Expose both Linux architectures to Circus.
       hydraJobs = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: {
         # rbw builds its own extension; this output only re-exports it.
