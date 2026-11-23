@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-23
+
 ### Added
 
 * A local tab API ([docs/local-api.md](docs/local-api.md)): local scripts read
