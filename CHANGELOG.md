@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-24
+
 ### Added
 
 * Signals for Home Assistant: the node extension can tell the daemon when a
