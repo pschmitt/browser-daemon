@@ -25,5 +25,3 @@ jobs:
         tools/sync-rbw-shared.sh --check
         node --test browser/check.mjs
         python3 browser/check_companion.py
-  release-script:
-    uses: pschmitt/ci-workflows/.github/workflows/release-script.yaml@main
