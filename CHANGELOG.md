@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### Added
+
+* A local tab API ([docs/local-api.md](docs/local-api.md)): local scripts read
+  the tabs of your own Firefox and Chromium through `browser-daemon tabs`
+  (`list`, `active`, `get`, `windows`, `clients`) or HTTP on a Unix socket,
+  every request with a scoped token (`browser-daemon local token`). The node
+  extension pushes its tabs to a new native messaging host
+  (`dev.pschmitt.browser_daemon_local`, `browser-daemon-native-host`) when
+  **Local tab API** is switched on in its popup or the `localApi` policy is
+  set; private windows are never sent. `browser-daemon local serve` keeps them
+  (socket-activated with the new Home Manager module,
+  `homeManagerModules.default`), and `browser-daemon local install` registers
+  the host without Nix. Read-only for now; control commands, events and Home
+  Assistant signals follow.
+* The secret agent discovers the accounts of an account-scoped rbw policy
+  through one client certificate.
+
+### Changed
+
+* The Nix `browser-native-host` package also registers the local tab API's
+  host for Chromium-based browsers.
+* The live view's vault is rbw 2.48.1's.
+
 ## [0.20.0] - 2026-11-19
 
 ### Added
