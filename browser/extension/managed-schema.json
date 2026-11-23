@@ -21,6 +21,11 @@
       "description": "Trusted HTTPS daemon that supplies the automatic origin list.",
       "type": "string"
     },
+    "localApi": {
+      "title": "Local tab API",
+      "description": "Push this browser's tabs to the local browser-daemon tab API (native messaging host dev.pschmitt.browser_daemon_local). Chromium also needs the nativeMessaging permission granted.",
+      "type": "boolean"
+    },
     "defaultName": {
       "title": "Default browser name",
       "description": "The name this browser gets when it pairs without one being entered, e.g. laptop-chromium.",

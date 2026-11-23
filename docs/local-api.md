@@ -1,12 +1,38 @@
-# Local tab API (proposal)
+# Local tab API
 
-Status: proposal, not implemented.
+Status: phase 1 (read-only API, see [Rollout](#rollout)) implemented; the
+rest is the plan.
 
 A local API on the machine where the node extension runs, so scripts can ask
 about and control the tabs of the user's own Firefox and Chromium cheaply,
 with a token, and without polling the browser. It replaces
 [bruvtab](https://github.com/pschmitt/bruvtab) once it covers bruvtab's
 features.
+
+## Setup
+
+1. Register the native messaging host for Firefox and Chromium-based
+   browsers: `browser-daemon local install`. With Nix, add the flake's
+   `browser-native-host` package to the browsers' native messaging hosts
+   instead (Home Manager: `programs.firefox.nativeMessagingHosts`,
+   `programs.chromium.nativeMessagingHosts`).
+2. Run the server: `browser-daemon local serve`, or with Home Manager import
+   the flake's `homeManagerModules.default` and set
+   `services.browser-daemon-local.enable = true` (socket activated). Without
+   a running server the native host starts one itself.
+3. Make a token: `browser-daemon local token create --name me --scope tabs:read`,
+   and save it as `~/.config/browser-daemon/local-token` (or pass it in
+   `BROWSER_DAEMON_LOCAL_TOKEN`). With Home Manager, `--no-save` prints the
+   entry for `services.browser-daemon-local.tokens.<name>`.
+4. Turn on **Local tab API** in the extension popup (Advanced), or set the
+   managed policy `localApi: true`. Chromium asks for the native messaging
+   permission when you switch it on.
+
+```text
+$ browser-daemon tabs list --audible
+a.1.42	Some video - YouTube	https://www.youtube.com/watch?v=...
+$ browser-daemon tabs --json clients
+```
 
 ## Why
 
@@ -193,11 +219,9 @@ Consumers to move in the user's configuration: go-hass-agent `lib.sh`,
 
 ## Open questions
 
-- Packaging: the laptops do not have `browser-daemon` installed. They need a
-  slim output with only the binary (no browser runtime around it).
-- Chromium asks the user to accept the new `nativeMessaging` permission on an
-  update of a normally installed extension. Policy-installed ones are not
-  asked.
+- Chromium: `nativeMessaging` is an optional permission, asked for when the
+  user switches the API on, so updating the extension does not disable it.
+  A policy cannot grant it; the popup switch is needed once.
 - The extension version: every extension change needs a new signed release
   (AMO signs each version once), so batch the extension work per phase.
 - Search index: keep it in memory only, or persist it under

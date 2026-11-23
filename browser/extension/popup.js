@@ -334,6 +334,13 @@ async function refresh() {
   renderDaemonAllowlist(origins);
   if (!origins.length && !state.allowlist.managed) $('advanced').open = true;
   $('companion').hidden = state.chromium;
+  const local = state.localApi || {};
+  if (document.activeElement !== $('localApi')) $('localApi').checked = !!local.enabled;
+  $('localApi').disabled = !!local.managed;
+  $('localApiStatus').textContent = !local.enabled
+    ? 'Let local programs read this browser’s tabs (browser-daemon tabs)'
+    : local.connected ? 'On: local programs with a token can read this browser’s tabs'
+      : `On, but the native host is not reachable${local.error ? `: ${local.error}` : ''}`;
   $('nativeLabel').textContent = state.nativeReady ? 'Disable companion' : 'Enable companion';
   $('native').disabled = !reg;
   $('diagnosticStatus').textContent = reg?.id || state.rememberedBrowser?.name || 'Not connected';
@@ -581,6 +588,17 @@ $('shareAudio').addEventListener('click', () => {
     if (!allowed) throw new Error('Site access is needed to share media sound.');
     return message({type: 'shareAudio', enabled});
   }).then(refresh, error => { $('shareAudio').checked = !enabled; showError(error); });
+});
+
+$('localApi').addEventListener('click', () => {
+  const enabled = $('localApi').checked;
+  // Chromium asks for native messaging in this click; Firefox has it already.
+  const permission = enabled && state.chromium
+    ? api.permissions.request({permissions: ['nativeMessaging']}) : Promise.resolve(true);
+  void permission.then(allowed => {
+    if (!allowed) throw new Error('Native messaging is needed for the local tab API.');
+    return message({type: 'localApi', enabled});
+  }).then(refresh, error => { $('localApi').checked = !enabled; showError(error); });
 });
 
 $('shareFiles').addEventListener('click', () => {

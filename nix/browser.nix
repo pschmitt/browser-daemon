@@ -1,4 +1,8 @@
-{ pkgs }:
+{
+  pkgs,
+  # For the local tab API's native messaging host (docs/local-api.md).
+  browser-daemon,
+}:
 let
   inherit ((fromTOML (builtins.readFile ../Cargo.toml)).package) version;
   addonId = "browser-daemon-node@pschmitt.dev";
@@ -26,11 +30,34 @@ let
     type = "stdio";
     allowed_extensions = [ addonId ];
   };
+  # The local tab API: Firefox and Chromium-based browsers.
+  localHostName = "dev.pschmitt.browser_daemon_local";
+  localManifest =
+    allowed:
+    (pkgs.formats.json { }).generate "${localHostName}.json" (
+      {
+        name = localHostName;
+        description = "Browser Daemon local tab API";
+        path = "${browser-daemon}/bin/browser-daemon-native-host";
+        type = "stdio";
+      }
+      // allowed
+    );
+  localFirefox = localManifest { allowed_extensions = [ addonId ]; };
+  localChromium = localManifest {
+    allowed_origins = [ "chrome-extension://${metadata.chromiumId}/" ];
+  };
 in
 {
+  # Firefox: the companion and the local tab API. Chromium-based browsers: the
+  # local tab API (the companion is Firefox-only).
   browser-native-host = pkgs.runCommand "browser-daemon-native-host-${version}" { } ''
-    mkdir -p $out/lib/mozilla/native-messaging-hosts
+    mkdir -p $out/lib/mozilla/native-messaging-hosts \
+      $out/etc/chromium/native-messaging-hosts $out/lib/chromium/NativeMessagingHosts
     ln -s ${manifest} $out/lib/mozilla/native-messaging-hosts/${hostName}.json
+    ln -s ${localFirefox} $out/lib/mozilla/native-messaging-hosts/${localHostName}.json
+    ln -s ${localChromium} $out/etc/chromium/native-messaging-hosts/${localHostName}.json
+    ln -s ${localChromium} $out/lib/chromium/NativeMessagingHosts/${localHostName}.json
   '';
 
   firefox-addon =

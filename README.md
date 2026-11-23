@@ -111,6 +111,7 @@ live view.
 | [Access control](docs/access-control.md) | Cluster secret, tokens, Host and Origin checks |
 | [CLI](docs/cli.md) | Commands and `browser-daemon run` |
 | [Terminal UI](docs/tui.md) | `browser-daemon tui` |
+| [Local tab API](docs/local-api.md) | Your own browsers' tabs for local scripts, with tokens: `browser-daemon tabs` |
 | [MCP server](docs/mcp.md) | Browsers for AI agents, `browser_fill_secret` |
 | [Behaviour worth knowing](docs/behaviour.md) | Profiles, recording, relay, peers |
 | [Browser extension](browser/README.md) | Sharing a desktop browser |

@@ -36,7 +36,7 @@
             inherit rev;
             craneLib = crane.mkLib pkgs;
           };
-          browser = import ./nix/browser.nix { inherit pkgs; };
+          browser = import ./nix/browser.nix { inherit pkgs browser-daemon; };
           adblock = pkgs.callPackage ./nix/adblock.nix { };
           # The Python client (python/), for Home Assistant integrations and scripts.
           browser-daemon-client = pkgs.python3Packages.callPackage ./nix/python-client.nix { };
@@ -143,5 +143,16 @@
           };
         };
       nixosModules.browser-daemon = self.nixosModules.default;
+
+      # The local tab API's server (docs/local-api.md), for Home Manager.
+      homeManagerModules.default =
+        { lib, pkgs, ... }:
+        {
+          imports = [ ./nix/home-manager.nix ];
+          services.browser-daemon-local.package =
+            lib.mkDefault
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        };
+      homeManagerModules.browser-daemon-local = self.homeManagerModules.default;
     };
 }

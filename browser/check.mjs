@@ -110,6 +110,14 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
     }},
     permissions: {contains: async () => true, request: async () => true, onAdded: event('permissionAdded'), onRemoved: event('permission')}, commands: {onCommand: event('shortcut')},
   };
+  // Native messaging ports the extension opened, with what it posted.
+  const nativePorts = [];
+  api.runtime.connectNative = name => {
+    const port = {name, posted: [], postMessage(m) { this.posted.push(structuredClone(m)); }, disconnect() {},
+      onDisconnect: {addListener() {}}, onMessage: {addListener() {}}};
+    nativePorts.push(port);
+    return port;
+  };
   const tabValues = new Map();
   if (firefox) api.sessions = {setTabValue: async (tab, key, value) => { tabValues.set(`${tab}:${key}`, value); }, removeTabValue: async (tab, key) => { tabValues.delete(`${tab}:${key}`); },
     getTabValue: async (tab, key) => tabValues.get(`${tab}:${key}`)};
@@ -138,6 +146,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
   vm.runInContext(source('files.js'), context);
   vm.runInContext(source('favicon.js'), context);
   vm.runInContext(source('censor.js'), context);
+  vm.runInContext(source('local-api.js'), context);
   vm.runInContext(source('background.js'), context);
   const ui = {id: 'test', url: 'chrome-extension://test/popup.html'};
   async function message(value, sender = ui) {
@@ -151,7 +160,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
     return socket;
   }
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  return {listeners, calls, sockets, tabs, message, pair, flush, api, menu, tabValues};
+  return {listeners, calls, sockets, tabs, message, pair, flush, api, menu, tabValues, nativePorts};
 }
 
 test('setup tab can manage sharing, but other extension pages cannot', async () => {
@@ -889,6 +898,27 @@ test('without the tab group API tabs still open, ungrouped', async () => {
   s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
   await h.flush(); await h.flush();
   assert.ok(s.sent.find(m => m.id === 'a').result.tab);
+});
+const LOCAL_HOST = 'dev.pschmitt.browser_daemon_local';
+test('the local tab API is off until enabled', async () => {
+  const h = harness();
+  await h.flush();
+  assert.equal(h.nativePorts.filter(port => port.name === LOCAL_HOST).length, 0);
+  assert.equal((await h.message({type: 'state'})).localApi.enabled, false);
+});
+test('the local tab API sends a hello and the tabs, never private ones', async () => {
+  const h = harness(false, {shareAll: false, localApi: true});
+  await h.flush();
+  await h.flush();
+  const port = h.nativePorts.find(p => p.name === LOCAL_HOST);
+  assert.ok(port);
+  const [hello, snapshot] = port.posted;
+  assert.equal(hello.type, 'hello');
+  assert.equal(hello.browser, 'chromium');
+  assert.ok(hello.profile);
+  assert.equal(snapshot.type, 'snapshot');
+  assert.deepEqual(snapshot.tabs.map(t => t.id), [1, 3, 4]);
+  assert.ok(!snapshot.tabs.some(t => t.title === 'Private'));
 });
 test('the group setting turns grouping off', async () => {
   const h = harness(false, {agentGroup: false}); const groups = groupMocks(h); const s = await h.pair();

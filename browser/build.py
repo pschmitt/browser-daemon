@@ -65,7 +65,8 @@ def main():
             manifest["minimum_chrome_version"] = "116"
             # Routing the browser through the daemon's proxy asks for these
             # when the user picks a proxy.
-            manifest["optional_permissions"] = ["history", "bookmarks", "proxy", "webRequest", "webRequestAuthProvider"]
+            # nativeMessaging: the local tab API, asked for when it is enabled.
+            manifest["optional_permissions"] = ["history", "bookmarks", "proxy", "webRequest", "webRequestAuthProvider", "nativeMessaging"]
             # Chrome excludes debugger from optional permissions. Installation
             # permits the API; actual tab/control grants remain explicit.
             manifest["permissions"].extend(["debugger", "contextMenus"])
@@ -81,7 +82,7 @@ def main():
             ])
             manifest["host_permissions"] = ["<all_urls>"]
             manifest["optional_permissions"] = ["proxy"]
-            manifest["background"] = {"scripts": ["policy.js", "proxy.js", "audio.js", "files-page.js", "files.js", "favicon.js", "censor.js", "background.js"]}
+            manifest["background"] = {"scripts": ["policy.js", "proxy.js", "audio.js", "files-page.js", "files.js", "favicon.js", "censor.js", "local-api.js", "background.js"]}
             manifest["browser_specific_settings"] = {"gecko": {
                 "id": "browser-daemon-node@pschmitt.dev",
                 "strict_min_version": "142.0",

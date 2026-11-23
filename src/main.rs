@@ -26,6 +26,7 @@ mod idle;
 mod json_api;
 mod labels;
 mod live_ws;
+mod local;
 mod login_api;
 mod mcp;
 mod mesh;
@@ -466,6 +467,10 @@ pub enum Command {
     Completions { shell: clap_complete::Shell },
     /// Serve the live views' vault (passkeys, logins) from the local rbw vault.
     SecretAgent(secret_agent::SecretAgentArgs),
+    /// The tabs of your own browsers on this machine (needs the local server).
+    Tabs(local::TabsArgs),
+    /// The local tab API: server, tokens, native messaging host registration.
+    Local(local::LocalArgs),
 }
 
 pub(crate) fn default_true() -> bool {
@@ -508,8 +513,20 @@ fn meta_profile(profile: &Profile, meta: profiles::ProfileMeta) -> Profile {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The browsers start the native messaging host by this name, with their
+    // own arguments (manifest path or extension origin).
+    if std::env::args_os()
+        .next()
+        .map(PathBuf::from)
+        .and_then(|p| p.file_name().map(|n| n == local::HOST_PROGRAM))
+        == Some(true)
+    {
+        return ctl_exit(local::native_host().await);
+    }
     let command = Cli::parse_from(hoist_conn_args(std::env::args_os().collect())).command;
-    if !matches!(command, Command::Run(_)) {
+    // The server and the native host write to sockets and pipes that may close:
+    // a closed peer is an error there, not a reason to die.
+    if !matches!(command, Command::Run(_) | Command::Local(_)) {
         // `browser-daemon session list | head`: end quietly instead of panicking.
         // SAFETY: restoring the default disposition of SIGPIPE.
         unsafe {
@@ -532,6 +549,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // The TUI owns the terminal: no log output.
         Command::Tui(conn) => return ctl_exit(tui::run(conn).await),
+        Command::Tabs(a) => return ctl_exit(local::tabs(a).await),
+        Command::Local(a) => return ctl_exit(local::local(a).await),
         Command::SecretAgent(agent_args) => {
             tracing_subscriber::fmt()
                 .with_env_filter(

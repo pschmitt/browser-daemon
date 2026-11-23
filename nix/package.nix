@@ -92,7 +92,12 @@ craneLib.buildPackage (
       + " --skip=relay::tests::a_strict_relay_refuses_loopback_with_a_ruleset_reply"
     );
 
-    postInstall = lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
+    # The browsers start the local API's native messaging host by this name
+    # (`main` dispatches on it).
+    postInstall = ''
+      ln -s browser-daemon $out/bin/browser-daemon-native-host
+    ''
+    + lib.optionalString (stdenv.buildPlatform.canExecute stdenv.hostPlatform) ''
       for shell in bash zsh fish; do
         $out/bin/browser-daemon completions $shell > browser-daemon.$shell
       done
