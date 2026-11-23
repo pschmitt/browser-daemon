@@ -30,8 +30,8 @@ the release publishes the client to PyPI. Renovate is told to leave the package
 alone, so there is no dependency PR for it to merge or wait for; if one shows up
 anyway, close it.
 
-Release with `just release-prepare X.Y.Z`, then `just release-tag` (see
-`tools/release.sh`); the tag must be GPG-signed, so unlock GPG first. The
+Release with `just release-prepare X.Y.Z`, then `just release-tag` (they run
+`nix run github:pschmitt/ci-workflows#release`); the tag must be GPG-signed, so unlock GPG first. The
 release workflow signs the browser extension, publishes it and then commits
 its hashes to `browser/packages/metadata.json` on `main`. Any extension source
 change needs a new version, because AMO signs each version only once.

@@ -1,4 +1,4 @@
-# Project specifics for tools/release.sh: the Python client (python/) and the
+# Project specifics for the shared release script (pschmitt/ci-workflows): the Python client (python/) and the
 # Home Assistant integration (custom_components/browser_daemon) are released
 # with the daemon, under the same version.
 

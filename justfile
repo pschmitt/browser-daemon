@@ -39,9 +39,9 @@ browser-smoke:
 
 # Bump to VERSION (X.Y.Z), date the changelog, commit and push.
 release-prepare version:
-  tools/release.sh prepare '{{ version }}'
+  nix run github:pschmitt/ci-workflows#release -- prepare '{{ version }}'
 
 # Push a GPG-signed vVERSION tag once build and test are green for HEAD;
 # the release workflow publishes binaries and the signed browser extension.
 release-tag:
-  tools/release.sh tag
+  nix run github:pschmitt/ci-workflows#release -- tag
