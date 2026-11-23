@@ -137,6 +137,7 @@ try {
 } finally {
   for (const c of children) c.kill('SIGTERM');
   await sleep(1000);
-  await rm(directory, {recursive: true, force: true});
+  // Chromium can still be flushing its profile right after it exits.
+  await rm(directory, {recursive: true, force: true, maxRetries: 10, retryDelay: 200});
 }
 process.exit(0);

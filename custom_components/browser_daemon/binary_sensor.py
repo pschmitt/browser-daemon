@@ -88,8 +88,6 @@ async def async_setup_entry(
             ]
         )
 
-    entry.async_on_unload(coordinator.async_add_listener(add_new_signal_entities))
-
     def add_new_browser_entities() -> None:
         """Add entities for extension browsers first seen after setup."""
         current = set((coordinator.data or {}).get("browsers", {}))
@@ -104,6 +102,7 @@ async def async_setup_entry(
     def add_new_node_entities() -> None:
         """Add online sensors for nodes first seen after initial setup."""
         add_new_browser_entities()
+        add_new_signal_entities()
         current_nodes = set((coordinator.data or {}).get("nodes", {}))
         new_nodes = current_nodes - known_nodes
         if not new_nodes:

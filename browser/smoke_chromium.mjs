@@ -217,5 +217,6 @@ try {
     if (child.exitCode === null) child.kill('SIGKILL');
   }));
   if (pageServer) await new Promise(resolve => pageServer.close(resolve));
-  await rm(directory, {recursive: true, force: true});
+  // Chromium can still be flushing its profile right after it exits.
+  await rm(directory, {recursive: true, force: true, maxRetries: 10, retryDelay: 200});
 }
