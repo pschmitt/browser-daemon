@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-11-24
+
 ### Changed
 
 * `tabs screenshot|pdf|text|html ID [FILE]`: the target can be given as an
@@ -11,6 +13,8 @@
 * Completion of tab ids and `--browser` honours the sources and filters
   already typed (`--local`, `--browser`, `--active`, …); `--browser` offers
   browser names only.
+* Dependencies: `url` 2.5.9, `psl` 2.1.262, lock file maintenance (crates
+  and flake inputs).
 
 ### Fixed
 
