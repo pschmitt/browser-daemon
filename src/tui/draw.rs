@@ -738,7 +738,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         }
         Tab::Profiles => "⏎ launch  p proxy  b backups  e rename  N new  d delete  m menu",
         Tab::Recordings => {
-            "⏎ play (mpv)  o browser  K favorite  E export  d delete  v vacuum  m menu"
+            "⏎ play  P play (other way)  o browser  K favorite  E export  d delete  v vacuum  m menu"
         }
         Tab::Nodes => "n new session  f filter  a add peer  x remove  m menu",
         Tab::Engines => "a ad blocker  c appearance  t touches  m menu  (defaults of new sessions)",

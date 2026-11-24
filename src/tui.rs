@@ -182,8 +182,8 @@ enum Action {
     /// Several calls at once (one per node), reported as one.
     ApiAll(String, Vec<Call>),
     Open(String),
-    /// Play a recording (node, id) in the video player.
-    Play(String, String),
+    /// Play a recording (node, id): in this terminal (true) or in a player window.
+    Play(String, String, bool),
     Say(String),
     Menu {
         title: String,
@@ -522,6 +522,8 @@ enum Msg {
     Icon(String, Option<image::DynamicImage>),
     /// A profile's backups, for its data menu.
     Backups(MeshProfile, Result<Vec<Value>, String>),
+    /// A recording downloaded to play here: the event loop hands mpv the terminal.
+    PlayHere(tempfile::NamedTempFile),
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -534,6 +536,8 @@ struct App {
     refreshing: bool,
     /// Draws images on this terminal (None: it cannot, or it is switched off).
     picker: Option<Picker>,
+    /// A downloaded recording to play in this terminal next (see `play_here`).
+    play_here: Option<tempfile::NamedTempFile>,
     /// The screenshots fetched so far, by session id.
     shots: HashMap<String, StatefulProtocol>,
     /// When a session's screenshot was last asked for.
@@ -679,6 +683,11 @@ impl App {
                     }
                     Err(e) => self.set_status(format!("Backups: {e}"), true),
                 }
+            }
+            Msg::PlayHere(file) => {
+                self.pending = self.pending.saturating_sub(1);
+                self.set_status("", false);
+                self.play_here = Some(file);
             }
         }
     }
@@ -1088,9 +1097,16 @@ impl App {
             (Tab::Recordings, KeyCode::Char('d') | KeyCode::Delete) => {
                 self.recording().map(|r| delete_recording(&r))
             }
-            (Tab::Recordings, KeyCode::Enter | KeyCode::Char('p')) => self
-                .recording()
-                .map(|r| Action::Play(r.node_name.clone(), r.recording.id.to_string())),
+            (Tab::Recordings, KeyCode::Enter | KeyCode::Char('p')) => {
+                let here = inline_player();
+                self.recording()
+                    .map(|r| Action::Play(r.node_name.clone(), r.recording.id.to_string(), here))
+            }
+            (Tab::Recordings, KeyCode::Char('P')) => {
+                let here = !inline_player();
+                self.recording()
+                    .map(|r| Action::Play(r.node_name.clone(), r.recording.id.to_string(), here))
+            }
             (Tab::Recordings, KeyCode::Char('o')) => {
                 self.recording().map(|r| Action::Open(play_url(&r)))
             }
@@ -1805,7 +1821,7 @@ impl App {
             Action::Api(call) => self.call(call),
             Action::ApiAll(label, calls) => self.call_all(label, calls),
             Action::Open(url) => self.open(&url),
-            Action::Play(node, id) => self.play(&node, &id),
+            Action::Play(node, id, here) => self.play(&node, &id, here),
             Action::Say(text) => self.set_status(text, false),
             Action::Menu { title, items } => {
                 self.modal = Some(Modal::Menu {
@@ -1871,10 +1887,33 @@ impl App {
         });
     }
 
-    /// Fetch a recording as a video file and play it: `$BROWSER_DAEMON_PLAYER` (mpv by
-    /// default; a command with arguments is fine). Any player does, as it gets a file:
-    /// the daemon's secret stays out of its command line.
-    fn play(&mut self, node: &str, id: &str) {
+    /// Fetch a recording as a video file and play it: here, in the terminal (mpv
+    /// drawing into it; the event loop hands the terminal over), or in a window of
+    /// `$BROWSER_DAEMON_PLAYER` (mpv by default; a command with arguments is fine).
+    /// Either way the player gets a file: the daemon's secret stays out of its
+    /// command line.
+    fn play(&mut self, node: &str, id: &str, here: bool) {
+        if here {
+            let url = self.api(node, &format!("/recordings/{id}/export.webm"));
+            let req = self
+                .request(Method::GET, &url)
+                .timeout(Duration::from_secs(3600));
+            self.set_status("Fetching the recording…", false);
+            self.pending += 1;
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let msg = match download_video(req).await {
+                    Ok(file) => Msg::PlayHere(file),
+                    Err(e) => Msg::Done {
+                        label: "Fetching the recording".into(),
+                        result: Err(e),
+                        refresh: false,
+                    },
+                };
+                let _ = tx.send(msg);
+            });
+            return;
+        }
         let player = std::env::var("BROWSER_DAEMON_PLAYER").unwrap_or_else(|_| "mpv".into());
         let mut words = player.split_whitespace().map(String::from);
         let Some(program) = words.next() else {
@@ -2783,8 +2822,12 @@ fn recording_menu(r: &MeshRecording) -> Action {
         title,
         items: vec![
             item(
-                "Play in the video player",
-                Action::Play(r.node_name.clone(), r.recording.id.to_string()),
+                "Play here, in the terminal (mpv)",
+                Action::Play(r.node_name.clone(), r.recording.id.to_string(), true),
+            ),
+            item(
+                "Play in a player window",
+                Action::Play(r.node_name.clone(), r.recording.id.to_string(), false),
             ),
             item("Play in the browser", Action::Open(play_url(r))),
             item(
@@ -3041,6 +3084,7 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         pending: 0,
         refreshing: false,
         picker: None,
+        play_here: None,
         shots: HashMap::new(),
         shot_asked: HashMap::new(),
         icons: HashMap::new(),
@@ -3084,10 +3128,7 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
     {
         let _ = event::read();
     }
-    let mouse = !matches!(
-        std::env::var("BROWSER_DAEMON_TUI_MOUSE").as_deref(),
-        Ok("off" | "0" | "no")
-    );
+    let mouse = mouse_wanted();
     if mouse {
         let _ = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
     }
@@ -3099,6 +3140,94 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
     result
 }
 
+fn mouse_wanted() -> bool {
+    !matches!(
+        std::env::var("BROWSER_DAEMON_TUI_MOUSE").as_deref(),
+        Ok("off" | "0" | "no")
+    )
+}
+
+/// Play recordings in this terminal (the default) rather than in a player window;
+/// `BROWSER_DAEMON_TUI_INLINE_PLAYER=off` turns it around (`P` plays the other way).
+fn inline_player() -> bool {
+    !matches!(
+        std::env::var("BROWSER_DAEMON_TUI_INLINE_PLAYER").as_deref(),
+        Ok("off" | "0" | "no" | "false")
+    )
+}
+
+/// mpv's video output for this terminal: `$BROWSER_DAEMON_TUI_PLAYER_VO`, else kitty
+/// graphics (not through tmux, which mpv cannot pass them through), sixel (tmux
+/// draws sixel itself), else truecolor text.
+fn mpv_vo(protocol: Option<ProtocolType>, tmux: bool) -> String {
+    if let Ok(vo) = std::env::var("BROWSER_DAEMON_TUI_PLAYER_VO") {
+        if !vo.trim().is_empty() {
+            return vo.trim().to_owned();
+        }
+    }
+    match protocol {
+        Some(ProtocolType::Kitty) if !tmux => "kitty",
+        Some(ProtocolType::Sixel) => "sixel",
+        _ => "tct",
+    }
+    .to_owned()
+}
+
+/// Whether this mpv lists `vo` among its video outputs (`mpv --vo=help`).
+fn mpv_has_vo(vo: &str) -> bool {
+    std::process::Command::new("mpv")
+        .arg("--vo=help")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.split_whitespace().next() == Some(vo))
+        })
+        .unwrap_or(false)
+}
+
+/// Hand the terminal to mpv for a downloaded recording, then take it back.
+fn play_here(terminal: &mut DefaultTerminal, app: &mut App, file: &tempfile::NamedTempFile) {
+    let mut vo = mpv_vo(
+        app.picker.as_ref().map(Picker::protocol_type),
+        std::env::var_os("TMUX").is_some(),
+    );
+    // Not every mpv build has every output (sixel needs libsixel).
+    if vo != "tct" && !mpv_has_vo(&vo) {
+        vo = "tct".into();
+    }
+    let mouse = mouse_wanted();
+    if mouse {
+        let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+    }
+    ratatui::restore();
+    let status = std::process::Command::new("mpv")
+        .arg(format!("--vo={vo}"))
+        .args(["--really-quiet", "--keep-open=no", "--force-window=no"])
+        .arg(file.path())
+        .status();
+    *terminal = ratatui::init();
+    if mouse {
+        let _ = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+    }
+    let _ = terminal.clear();
+    // Images drawn before are gone from the screen; draw them again.
+    app.shots.clear();
+    app.shot_asked.clear();
+    app.icons.clear();
+    app.icon_asked.clear();
+    match status {
+        Ok(s) if s.success() => app.set_status("", false),
+        Ok(s) => app.set_status(format!("mpv ({vo}) exited with {s}"), true),
+        Err(e) => app.set_status(
+            format!("mpv: {e} (BROWSER_DAEMON_TUI_INLINE_PLAYER=off plays in a window)"),
+            true,
+        ),
+    }
+}
+
 fn event_loop(
     terminal: &mut DefaultTerminal,
     app: &mut App,
@@ -3107,6 +3236,9 @@ fn event_loop(
     loop {
         while let Ok(msg) = rx.try_recv() {
             app.handle(msg);
+        }
+        if let Some(file) = app.play_here.take() {
+            play_here(terminal, app, &file);
         }
         app.tick = app.tick.wrapping_add(1);
         app.fetch_shot();
@@ -3359,5 +3491,19 @@ mod tmux_image_tests {
             Some(ProtocolType::Sixel)
         );
         assert_eq!(tmux_protocol(&viewer("", "RGB,sync")), None);
+    }
+}
+
+#[cfg(test)]
+mod player_tests {
+    use super::*;
+
+    #[test]
+    fn mpv_draws_with_what_the_terminal_can_show() {
+        assert_eq!(mpv_vo(Some(ProtocolType::Kitty), false), "kitty");
+        assert_eq!(mpv_vo(Some(ProtocolType::Kitty), true), "tct");
+        assert_eq!(mpv_vo(Some(ProtocolType::Sixel), true), "sixel");
+        assert_eq!(mpv_vo(Some(ProtocolType::Iterm2), false), "tct");
+        assert_eq!(mpv_vo(None, false), "tct");
     }
 }

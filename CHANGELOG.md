@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+* TUI: recordings play right in the terminal. `Enter`/`p` hands the
+  terminal to mpv (kitty graphics, sixel, or truecolor text, whichever the
+  terminal can show; `BROWSER_DAEMON_TUI_PLAYER_VO` overrides) until it
+  quits; `P` and the menu play in a player window as before.
+  `BROWSER_DAEMON_TUI_INLINE_PLAYER=off` makes the window the default.
+
 ## [0.23.4] - 2026-11-24
 
 ### Added
