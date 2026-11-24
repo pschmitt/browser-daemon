@@ -113,8 +113,9 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
   // Native messaging ports the extension opened, with what it posted.
   const nativePorts = [];
   api.runtime.connectNative = name => {
-    const port = {name, posted: [], postMessage(m) { this.posted.push(structuredClone(m)); }, disconnect() {},
-      onDisconnect: {addListener() {}}, onMessage: {addListener() {}}};
+    const port = {name, posted: [], listeners: [], postMessage(m) { this.posted.push(structuredClone(m)); }, disconnect() {},
+      onDisconnect: {addListener() {}}, onMessage: {addListener(fn) { port.listeners.push(fn); }},
+      receive(m) { for (const fn of port.listeners) fn(m); }};
     nativePorts.push(port);
     return port;
   };
@@ -975,6 +976,27 @@ test('the local tab API sends a hello and the tabs, never private ones', async (
   assert.equal(snapshot.type, 'snapshot');
   assert.deepEqual(snapshot.tabs.map(t => t.id), [1, 3, 4]);
   assert.ok(!snapshot.tabs.some(t => t.title === 'Private'));
+});
+test('the local tab API runs commands, but never on private windows', async () => {
+  const h = harness(false, {shareAll: false, localApi: true});
+  await h.flush();
+  await h.flush();
+  const port = h.nativePorts.find(p => p.name === LOCAL_HOST);
+  port.posted.length = 0;
+  port.receive({type: 'command', id: 1, action: 'activate', tab: 1});
+  port.receive({type: 'command', id: 2, action: 'close', tab: 2});
+  port.receive({type: 'command', id: 3, action: 'open', url: 'javascript:alert(1)'});
+  port.receive({type: 'command', id: 4, action: 'open', url: 'https://new.example/'});
+  await h.flush();
+  await h.flush();
+  const byId = Object.fromEntries(port.posted.filter(m => m.type === 'result').map(m => [m.id, m]));
+  assert.equal(byId[1].ok, true);
+  assert.ok(h.calls.some(c => c[0] === 'update' && c[1] === 1));
+  assert.equal(byId[2].ok, false);
+  assert.ok(h.tabs.has(2));
+  assert.equal(byId[3].ok, false);
+  assert.equal(byId[4].ok, true);
+  assert.ok(Number.isSafeInteger(byId[4].tab));
 });
 test('the group setting turns grouping off', async () => {
   const h = harness(false, {agentGroup: false}); const groups = groupMocks(h); const s = await h.pair();

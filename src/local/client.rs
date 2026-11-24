@@ -15,6 +15,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use clap_complete::engine::{ArgValueCompleter, CompletionCandidate};
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -118,6 +119,25 @@ enum TabsCommand {
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
     },
+    /// Bring a tab to the front (and its window).
+    #[command(visible_alias = "focus")]
+    Activate {
+        #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
+        id: String,
+    },
+    /// Close tabs.
+    Close {
+        #[arg(required = true, add = ArgValueCompleter::new(complete_tab_ids))]
+        ids: Vec<String>,
+    },
+    /// Open a URL in a new tab of this machine's browser (`--browser NAME` to
+    /// pick one); prints the new tab's id.
+    Open {
+        url: String,
+        /// Open it without bringing it to the front.
+        #[arg(long)]
+        background: bool,
+    },
 }
 
 /// A tab from any source.
@@ -145,6 +165,11 @@ pub struct Row {
     pub tab: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<i64>,
+    /// The tab's window has the focus (local browsers).
+    pub focused_window: bool,
+    /// The paired browser's id on the daemon, for commands to shared tabs.
+    #[serde(skip)]
+    pub node_id: Option<String>,
 }
 
 fn fail<T>(code: i32, msg: impl Into<String>) -> R<T> {
@@ -216,8 +241,13 @@ fn dechunk(mut body: &[u8]) -> R<Vec<u8>> {
 }
 
 /// `GET path` on the local API with the token; the JSON body of a 2xx answer.
-/// Blocking on purpose: one short request, and this starts fast.
 fn local_get(local: &LocalConn, path: &str) -> R<Value> {
+    local_request(local, "GET", path, None)
+}
+
+/// A request to the local API with the token; the JSON body of a 2xx answer.
+/// Blocking on purpose: one short request, and this starts fast.
+fn local_request(local: &LocalConn, method: &str, path: &str, body: Option<&Value>) -> R<Value> {
     let socket = local.socket.clone().unwrap_or_else(super::api_socket);
     let token = token(local)?;
     let mut stream = match UnixStream::connect(&socket) {
@@ -235,10 +265,13 @@ fn local_get(local: &LocalConn, path: &str) -> R<Value> {
     };
     // A shell waiting for completions must not hang on a stuck server.
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    let body = body.map(Value::to_string).unwrap_or_default();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
-         Accept: application/json\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
+         Accept: application/json\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
     )?;
     let mut raw = Vec::new();
     stream.read_to_end(&mut raw)?;
@@ -298,6 +331,8 @@ fn local_rows(list: &Value) -> Vec<Row> {
             shared: false,
             tab: t.get("tab_id").map(|v| v.to_string()).unwrap_or_default(),
             window: t.get("window_id").and_then(Value::as_i64),
+            focused_window: b(t, "focused_window"),
+            node_id: None,
         })
         .collect()
 }
@@ -338,6 +373,8 @@ fn shared_rows(nodes: &Value, daemon: &str) -> Vec<Row> {
                 shared: true,
                 tab,
                 window: t.get("window_id").and_then(Value::as_i64),
+                focused_window: false,
+                node_id: Some(s(node, "id").to_owned()).filter(|id| !id.is_empty()),
             });
         }
     }
@@ -384,6 +421,8 @@ fn session_rows(targets: &Value, sessions: &Value) -> Vec<Row> {
                 shared: false,
                 tab: target.to_owned(),
                 window: None,
+                focused_window: false,
+                node_id: None,
             })
         })
         .collect()
@@ -468,6 +507,38 @@ async fn collect(args: &TabsArgs, quiet: bool) -> R<Vec<Row>> {
     Ok(merge(local, shared, sessions))
 }
 
+/// Activate or close a tab where it lives: this machine's browser (local
+/// API), a paired browser (the daemon's extension command) or a session.
+async fn act(args: &TabsArgs, row: &Row, action: &str) -> R<()> {
+    match row.source {
+        "local" => {
+            let local = args.local.clone();
+            let path = format!(
+                "/v1/tabs/{}/{action}",
+                utf8_percent_encode(&row.id, NON_ALPHANUMERIC)
+            );
+            tokio::task::block_in_place(|| local_request(&local, "POST", &path, None))?;
+        }
+        "shared" => {
+            let node_id = row
+                .node_id
+                .as_deref()
+                .ok_or("the daemon did not say which browser this is")?;
+            let action = if action == "activate" {
+                "focus"
+            } else {
+                action
+            };
+            crate::ctl::shared_tab_command(&args.conn, node_id, &row.tab, action).await?;
+        }
+        _ => {
+            let node = row.node.as_deref().ok_or("the session's node is unknown")?;
+            crate::ctl::session_tab_command(&args.conn, node, &row.tab, action).await?;
+        }
+    }
+    Ok(())
+}
+
 fn print_rows(rows: &[Row]) {
     for r in rows {
         println!("{}\t{}\t{}", r.id, clean(&r.title), r.url);
@@ -476,6 +547,15 @@ fn print_rows(rows: &[Row]) {
 
 pub async fn tabs(args: TabsArgs) -> R<()> {
     let json = args.conn.json;
+    if let Some(TabsCommand::Open { url, background }) = &args.command {
+        let local = args.local.clone();
+        let body = serde_json::json!({"url": url, "client": args.filter.browser, "background": background});
+        let opened = tokio::task::block_in_place(|| {
+            local_request(&local, "POST", "/v1/tabs/open", Some(&body))
+        })?;
+        println!("{}", s(&opened, "id"));
+        return Ok(());
+    }
     let rows = collect(&args, false).await?;
     let list = TabsCommand::List { query: None };
     match args.command.as_ref().unwrap_or(&list) {
@@ -511,6 +591,25 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 print_rows(&[row]);
             }
         }
+        TabsCommand::Activate { id } => {
+            let Some(row) = rows.iter().find(|r| r.id == *id) else {
+                return fail(EXIT_NOT_FOUND, format!("no tab {id}"));
+            };
+            act(&args, row, "activate").await?;
+        }
+        TabsCommand::Close { ids } => {
+            let mut missing = Vec::new();
+            for id in ids {
+                match rows.iter().find(|r| r.id == *id) {
+                    Some(row) => act(&args, row, "close").await?,
+                    None => missing.push(id.as_str()),
+                }
+            }
+            if !missing.is_empty() {
+                return fail(EXIT_NOT_FOUND, format!("no tab {}", missing.join(", ")));
+            }
+        }
+        TabsCommand::Open { .. } => unreachable!("handled before listing"),
     }
     Ok(())
 }
@@ -600,6 +699,8 @@ mod tests {
             shared: false,
             tab: tab.into(),
             window: None,
+            focused_window: false,
+            node_id: None,
         }
     }
 

@@ -22,6 +22,14 @@
 * Every command and subcommand answers to an unambiguous prefix of its name:
   `browser-daemon no` is `nodes`, `p ls` is `profile list`; an ambiguous one
   (`t`: `tabs` or `tui`) is an error that names the candidates.
+* Tab control: `browser-daemon tabs activate` (alias `focus`), `close` (several
+  ids) and `open URL` (this machine's browser, `--browser` to pick one, `--background`).
+  A tab is acted on where it lives: this machine's browsers through the local
+  API (`POST /v1/tabs/{id}/activate|close`, `POST /v1/tabs/open`; token scope
+  `tabs:control`), paired browsers through the daemon, session tabs through
+  their node. The node extension runs these commands for the local API; tabs
+  of private windows are refused, and only http(s) URLs open. `--json`
+  shows `focused_window`.
 * `show` everywhere, with `get` as an alias (`tabs get` also answers to
   `show`): new `extension show` (by id or name), `label show` (icon, color and
   what carries it), `profile backup show`; `node show` also shows browser

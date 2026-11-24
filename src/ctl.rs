@@ -143,6 +143,41 @@ pub(crate) async fn remote_tabs(conn: &Conn) -> R<(Value, Value, Value)> {
     ))
 }
 
+/// For `browser-daemon tabs activate|close`: a tab of a browser paired with
+/// the daemon (the extension's `focus` or `close`).
+pub(crate) async fn shared_tab_command(
+    conn: &Conn,
+    node_id: &str,
+    tab: &str,
+    action: &str,
+) -> R<()> {
+    let c = Client::connect(conn).await?;
+    let tab: u64 = tab
+        .parse()
+        .map_err(|_| format!("not a browser tab id: {tab}"))?;
+    let path = format!("/api/extension/nodes/{}/command", enc(node_id));
+    c.call(
+        c.req(Method::POST, &path)
+            .json(&json!({"tab": tab, "action": action, "params": {}})),
+    )
+    .await?;
+    Ok(())
+}
+
+/// For `browser-daemon tabs activate|close`: a session tab (DevTools
+/// `/json/activate` or `/json/close` on its node).
+pub(crate) async fn session_tab_command(
+    conn: &Conn,
+    node: &str,
+    target: &str,
+    action: &str,
+) -> R<()> {
+    let c = Client::connect(conn).await?;
+    let path = c.devtools(node, &format!("/json/{action}/{}", enc(target)));
+    c.call(c.req(Method::PUT, &path)).await?;
+    Ok(())
+}
+
 struct Client {
     http: reqwest::Client,
     base: String,

@@ -11,13 +11,15 @@ use axum::extract::connect_info::{ConnectInfo, Connected};
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::{header, HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Args;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::{mpsc, oneshot};
 
 use super::tokens::{self, Denied, Store};
 use super::{Feed, Tab, Window, R};
@@ -59,6 +61,11 @@ struct Tabs {
     /// A profile keeps its prefix across reconnects while the server runs.
     prefixes: HashMap<String, String>,
     next_conn: u64,
+    /// Lines to each native host, by connection (commands for the extension).
+    outbound: HashMap<u64, mpsc::UnboundedSender<String>>,
+    /// Commands waiting for the extension's `result`, by request id.
+    pending: HashMap<u64, oneshot::Sender<Value>>,
+    next_request: u64,
 }
 
 fn now() -> u64 {
@@ -383,12 +390,172 @@ async fn list_clients(
     Json(out).into_response()
 }
 
+/// An API error before it becomes a response (small, unlike `Response`).
+type Failure = (StatusCode, String);
+
+fn respond((status, msg): Failure) -> Response {
+    error(status, &msg)
+}
+
+/// Send a command to the extension of the browser called `client` and wait
+/// for its `result` (10 s at most).
+async fn command(app: &App, client: &str, mut cmd: Value) -> Result<Value, Failure> {
+    let (tx, rx) = oneshot::channel();
+    {
+        let mut t = app.tabs.lock().expect("tabs");
+        let Some(conn) = t
+            .clients
+            .iter()
+            .find(|(_, c)| c.prefix == client)
+            .map(|(conn, _)| *conn)
+        else {
+            return Err((StatusCode::NOT_FOUND, "no such browser".to_owned()));
+        };
+        t.next_request += 1;
+        let id = t.next_request;
+        cmd["type"] = json!("command");
+        cmd["id"] = json!(id);
+        let Some(outbound) = t.outbound.get(&conn).cloned() else {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                "the browser is not connected".to_owned(),
+            ));
+        };
+        t.pending.insert(id, tx);
+        if outbound.send(cmd.to_string()).is_err() {
+            t.pending.remove(&id);
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                "the browser is not connected".to_owned(),
+            ));
+        }
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+        Ok(Ok(result)) if result["ok"] == true => Ok(result),
+        Ok(Ok(result)) => Err((
+            StatusCode::BAD_GATEWAY,
+            result["error"]
+                .as_str()
+                .unwrap_or("the browser refused")
+                .to_owned(),
+        )),
+        _ => Err((
+            StatusCode::GATEWAY_TIMEOUT,
+            "the browser did not answer".to_owned(),
+        )),
+    }
+}
+
+/// `<client>:<tab>` with the tab known to that client.
+fn known_tab(app: &App, id: &str) -> Result<(String, i64), Failure> {
+    let not_found = || (StatusCode::NOT_FOUND, "no such tab".to_owned());
+    let (client, tab) = id.rsplit_once(':').ok_or_else(not_found)?;
+    let tab: i64 = tab.parse().map_err(|_| not_found())?;
+    let t = app.tabs.lock().expect("tabs");
+    t.clients
+        .values()
+        .any(|c| c.prefix == client && c.tabs.iter().any(|x| x.id == tab))
+        .then(|| (client.to_owned(), tab))
+        .ok_or_else(not_found)
+}
+
+async fn tab_action(
+    app: App,
+    peer: Peer,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    id: String,
+    action: &str,
+) -> Response {
+    if let Some(res) = app.reject(&headers, "tabs:control", &peer, &method, &uri) {
+        return res;
+    }
+    let (client, tab) = match known_tab(&app, &id) {
+        Ok(found) => found,
+        Err(failure) => return respond(failure),
+    };
+    match command(&app, &client, json!({"action": action, "tab": tab})).await {
+        Ok(_) => Json(json!({"ok": true, "id": id})).into_response(),
+        Err(failure) => respond(failure),
+    }
+}
+
+async fn activate_tab(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<Peer>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    tab_action(app, peer, method, uri, headers, id, "activate").await
+}
+
+async fn close_tab(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<Peer>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    tab_action(app, peer, method, uri, headers, id, "close").await
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRequest {
+    url: String,
+    /// The browser to open it in (default: the first one connected).
+    #[serde(default)]
+    client: Option<String>,
+    /// Do not bring it to the front.
+    #[serde(default)]
+    background: bool,
+}
+
+async fn open_tab(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<Peer>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    Json(req): Json<OpenRequest>,
+) -> Response {
+    if let Some(res) = app.reject(&headers, "tabs:control", &peer, &method, &uri) {
+        return res;
+    }
+    if !(req.url.starts_with("http://") || req.url.starts_with("https://")) {
+        return error(StatusCode::BAD_REQUEST, "only http and https URLs open");
+    }
+    let client = match req.client {
+        Some(c) => c,
+        None => {
+            let t = app.tabs.lock().expect("tabs");
+            match t.sorted_clients().first() {
+                Some(c) => c.prefix.clone(),
+                None => return error(StatusCode::NOT_FOUND, "no browser is connected"),
+            }
+        }
+    };
+    let cmd = json!({"action": "open", "url": req.url, "background": req.background});
+    match command(&app, &client, cmd).await {
+        Ok(result) => {
+            Json(json!({"ok": true, "id": format!("{client}:{}", result["tab"])})).into_response()
+        }
+        Err(failure) => respond(failure),
+    }
+}
+
 fn router(app: App) -> Router {
     Router::new()
         .route("/v1/tabs", get(list_tabs))
         .route("/v1/tabs/{id}", get(get_tab))
         .route("/v1/windows", get(list_windows))
         .route("/v1/clients", get(list_clients))
+        .route("/v1/tabs/{id}/activate", post(activate_tab))
+        .route("/v1/tabs/{id}/close", post(close_tab))
+        .route("/v1/tabs/open", post(open_tab))
         .with_state(app)
 }
 
@@ -407,12 +574,27 @@ async fn feed(stream: UnixStream, tabs: Arc<Mutex<Tabs>>) {
             return;
         }
     }
+    let (read, mut write) = stream.into_split();
+    let (outbound, mut to_host) = mpsc::unbounded_channel::<String>();
     let conn = {
         let mut t = tabs.lock().expect("tabs");
         t.next_conn += 1;
-        t.next_conn
+        let conn = t.next_conn;
+        t.outbound.insert(conn, outbound);
+        conn
     };
-    let mut lines = BufReader::new(stream).lines();
+    tokio::spawn(async move {
+        while let Some(line) = to_host.recv().await {
+            if write
+                .write_all(format!("{line}\n").as_bytes())
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let mut lines = BufReader::new(read).lines();
     loop {
         let line = match lines.next_line().await {
             Ok(Some(line)) => line,
@@ -422,6 +604,18 @@ async fn feed(stream: UnixStream, tabs: Arc<Mutex<Tabs>>) {
                 break;
             }
         };
+        // The extension's answer to a command (see `command`).
+        if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            if value["type"] == "result" {
+                let waiting = value["id"]
+                    .as_u64()
+                    .and_then(|id| tabs.lock().expect("tabs").pending.remove(&id));
+                if let Some(waiting) = waiting {
+                    let _ = waiting.send(value);
+                }
+                continue;
+            }
+        }
         let msg: Feed = match serde_json::from_str(&line) {
             Ok(m) => m,
             Err(e) => {
@@ -469,6 +663,7 @@ async fn feed(stream: UnixStream, tabs: Arc<Mutex<Tabs>>) {
             },
         }
     }
+    tabs.lock().expect("tabs").outbound.remove(&conn);
     if let Some(c) = tabs.lock().expect("tabs").clients.remove(&conn) {
         tracing::info!("{} ({}) disconnected", c.prefix, c.browser);
     }

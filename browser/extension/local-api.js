@@ -86,6 +86,37 @@ globalThis.localApi = (() => {
     retryDelay = Math.min(retryDelay * 2, MAX_RETRY);
   }
 
+  // A command from the local server (`browser-daemon tabs activate|close|open`):
+  // only ever from our own native host, and never about a private window.
+  async function runCommand(from, message) {
+    if (!message || message.type !== 'command' || !Number.isSafeInteger(message.id)) return;
+    let reply = {type: 'result', id: message.id, ok: true};
+    try {
+      if (message.action === 'activate' || message.action === 'close') {
+        const tab = await ext.tabs.get(message.tab);
+        if (tab.incognito) throw new Error('Tabs of private windows are not available.');
+        if (message.action === 'close') {
+          await ext.tabs.remove(tab.id);
+        } else {
+          await ext.tabs.update(tab.id, {active: true});
+          if (ext.windows) await ext.windows.update(tab.windowId, {focused: true});
+        }
+      } else if (message.action === 'open') {
+        if (!/^https?:\/\//i.test(message.url || '')) throw new Error('Only http and https URLs open.');
+        const tab = await ext.tabs.create({url: message.url, active: message.background !== true});
+        if (message.background !== true && ext.windows && tab.windowId !== undefined) {
+          await ext.windows.update(tab.windowId, {focused: true});
+        }
+        reply.tab = tab.id;
+      } else {
+        throw new Error(`Unknown command: ${message.action}`);
+      }
+    } catch (error) {
+      reply = {type: 'result', id: message.id, ok: false, error: String(error?.message || error)};
+    }
+    try { from.postMessage(reply); } catch { /* The host went away. */ }
+  }
+
   async function connect() {
     if (port || !enabled) return;
     let next;
@@ -108,8 +139,7 @@ globalThis.localApi = (() => {
       if (Date.now() - connectedAt > 10000) retryDelay = 1000;
       if (enabled) scheduleRetry();
     });
-    // Commands from the server arrive here (later phases).
-    next.onMessage.addListener(() => {});
+    next.onMessage.addListener(message => void runCommand(next, message));
     try {
       next.postMessage({type: 'hello', profile: await profileId(), ...await identity()});
       lastError = '';

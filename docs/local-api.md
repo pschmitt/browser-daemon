@@ -1,6 +1,7 @@
 # Local tab API
 
-Status: phase 1 (read-only API) and the signals of phase 3 are implemented;
+Status: phases 1 (read), 2 (activate, close, open) and the signals of phase 3
+are implemented;
 see [Rollout](#rollout) for the rest.
 
 A local API on the machine where the node extension runs, so scripts can ask
@@ -59,6 +60,12 @@ $ browser-daemon tabs get gk4-firefox:42
 Browsers are nodes, next to the mesh's daemons: `browser-daemon nodes` lists
 both (kind `browser`, with `local`, `shared` or both), and `browser-daemon
 nodes --local` only this machine's browsers, without a daemon.
+
+Act on tabs with `tabs activate ID` (alias `focus`; also brings the window
+to the front), `tabs close ID...` and `tabs open URL` (`--browser NAME`,
+`--background`; prints the new id). A tab is acted on where it lives: local
+ones through this API (token scope `tabs:control`), shared ones through the
+daemon, session tabs through their node.
 
 Filters: `--audible`, `--active`, `--pinned`, `--site` (URL contains),
 `--title`, `--browser` (a client name, a kind such as `firefox`, or a name
