@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-11-24
+
 ### Added
 
 * `browser-daemon tabs text|html|screenshot|pdf ID`: a tab's text, HTML, a
