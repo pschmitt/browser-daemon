@@ -974,6 +974,7 @@ test('the local tab API sends a hello and the tabs, private ones marked', async 
   assert.equal(hello.type, 'hello');
   assert.equal(hello.browser, 'chromium');
   assert.ok(hello.profile);
+  assert.equal(hello.extension, '0.3.1');
   assert.equal(snapshot.type, 'snapshot');
   assert.deepEqual(snapshot.tabs.map(t => t.id), [1, 2, 3, 4]);
   assert.equal(snapshot.tabs.find(t => t.title === 'Private').private, true);

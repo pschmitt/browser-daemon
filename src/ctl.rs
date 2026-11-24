@@ -2532,6 +2532,7 @@ pub(crate) struct BrowserNode {
     pub online: bool,
     /// `local`, `shared` or both.
     pub sources: Vec<&'static str>,
+    /// The browser-daemon extension's version.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub version: String,
     pub tabs: usize,
@@ -2547,7 +2548,9 @@ pub(crate) fn browser_nodes(local: &Value, paired: &Value) -> Vec<BrowserNode> {
             browser: text(c, "browser"),
             online: true,
             sources: vec!["local"],
-            version: text(c, "version"),
+            // The extension's version, like a paired browser's (empty before
+            // 0.23.1), not the browser's.
+            version: text(c, "extension"),
             tabs: c.get("tabs").and_then(Value::as_u64).unwrap_or(0) as usize,
         });
     }
@@ -2922,6 +2925,9 @@ mod tests {
         assert_eq!(nodes[0].name, "gk4-firefox");
         assert_eq!(nodes[0].sources, ["local", "shared"]);
         assert_eq!(nodes[0].tabs, 3);
+        // The extension's version: the local one sent none (before 0.23.1),
+        // so the paired browser's.
+        assert_eq!(nodes[0].version, "0.22.1");
         assert!(!nodes[1].online);
         assert_eq!(nodes[1].sources, ["shared"]);
         assert!(

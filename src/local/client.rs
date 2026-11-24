@@ -9,7 +9,7 @@
 //! `<session name>:<first 8 of the target id>` for a session tab. A browser's
 //! tab has the same id locally and shared, so it is listed once.
 
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
@@ -153,7 +153,11 @@ enum TabsCommand {
     Screenshot {
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
-        /// Where to write it (default: `<id>.png` here; `-` for stdout).
+        /// Where to write it: a file, or `-` for stdout (piped or redirected;
+        /// default: stdout when piped, else `<id>.png` here).
+        #[arg(value_name = "FILE", conflicts_with = "file")]
+        target: Option<String>,
+        /// The same as FILE.
         #[arg(short = 'f', long)]
         file: Option<String>,
     },
@@ -161,7 +165,11 @@ enum TabsCommand {
     Pdf {
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
-        /// Where to write it (default: `<id>.pdf` here; `-` for stdout).
+        /// Where to write it: a file, or `-` for stdout (piped or redirected;
+        /// default: stdout when piped, else `<id>.pdf` here).
+        #[arg(value_name = "FILE", conflicts_with = "file")]
+        target: Option<String>,
+        /// The same as FILE.
         #[arg(short = 'f', long)]
         file: Option<String>,
     },
@@ -169,7 +177,10 @@ enum TabsCommand {
     Text {
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
-        /// Write it to a file instead of stdout.
+        /// Write it to this file instead of stdout (`-`: stdout).
+        #[arg(value_name = "FILE", conflicts_with = "file")]
+        target: Option<String>,
+        /// The same as FILE.
         #[arg(short = 'f', long)]
         file: Option<String>,
     },
@@ -177,7 +188,10 @@ enum TabsCommand {
     Html {
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
-        /// Write it to a file instead of stdout.
+        /// Write it to this file instead of stdout (`-`: stdout).
+        #[arg(value_name = "FILE", conflicts_with = "file")]
+        target: Option<String>,
+        /// The same as FILE.
         #[arg(short = 'f', long)]
         file: Option<String>,
     },
@@ -296,14 +310,27 @@ fn dechunk(mut body: &[u8]) -> R<Vec<u8>> {
     }
 }
 
+/// How long the CLI waits for the local server: a little longer than the
+/// server waits for the browser (10 s for control, 60 s for content), so the
+/// server's own answer arrives; reads come from memory.
+const READ_WAIT: u64 = 5;
+const CONTROL_WAIT: u64 = 15;
+const CONTENT_WAIT: u64 = 70;
+
 /// `GET path` on the local API with the token; the JSON body of a 2xx answer.
 fn local_get(local: &LocalConn, path: &str) -> R<Value> {
-    local_request(local, "GET", path, None)
+    local_request(local, "GET", path, None, READ_WAIT)
 }
 
 /// A request to the local API with the token; the JSON body of a 2xx answer.
 /// Blocking on purpose: one short request, and this starts fast.
-fn local_request(local: &LocalConn, method: &str, path: &str, body: Option<&Value>) -> R<Value> {
+fn local_request(
+    local: &LocalConn,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    wait: u64,
+) -> R<Value> {
     let socket = local.socket.clone().unwrap_or_else(super::api_socket);
     let token = token(local)?;
     let mut stream = match UnixStream::connect(&socket) {
@@ -320,7 +347,7 @@ fn local_request(local: &LocalConn, method: &str, path: &str, body: Option<&Valu
         }
     };
     // A shell waiting for completions must not hang on a stuck server.
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(wait)))?;
     let body = body.map(Value::to_string).unwrap_or_default();
     write!(
         stream,
@@ -330,7 +357,18 @@ fn local_request(local: &LocalConn, method: &str, path: &str, body: Option<&Valu
         body.len()
     )?;
     let mut raw = Vec::new();
-    stream.read_to_end(&mut raw)?;
+    if let Err(e) = stream.read_to_end(&mut raw) {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ) {
+            return fail(
+                EXIT_UNREACHABLE,
+                format!("the local tab API did not answer within {wait} s"),
+            );
+        }
+        return Err(e.into());
+    }
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -364,6 +402,8 @@ fn local_request(local: &LocalConn, method: &str, path: &str, body: Option<&Valu
             format!("local tab API: forbidden: {}", message()),
         ),
         404 => fail(EXIT_NOT_FOUND, message()),
+        // The browser's own answer (refused, too old, did not answer) says it all.
+        409 | 502 | 504 => Err(message().into()),
         _ => Err(format!("local tab API answered {status}: {}", message()).into()),
     }
 }
@@ -579,7 +619,9 @@ async fn act(args: &TabsArgs, row: &Row, action: &str) -> R<()> {
                 "/v1/tabs/{}/{action}",
                 utf8_percent_encode(&row.id, NON_ALPHANUMERIC)
             );
-            tokio::task::block_in_place(|| local_request(&local, "POST", &path, None))?;
+            tokio::task::block_in_place(|| {
+                local_request(&local, "POST", &path, None, CONTROL_WAIT)
+            })?;
         }
         "shared" => {
             let node_id = row
@@ -626,7 +668,7 @@ async fn content(args: &TabsArgs, row: &Row, kind: &str) -> R<Value> {
                 "/v1/tabs/{}/content?kind={kind}",
                 utf8_percent_encode(&row.id, NON_ALPHANUMERIC)
             );
-            tokio::task::block_in_place(|| local_get(&local, &path))
+            tokio::task::block_in_place(|| local_request(&local, "GET", &path, None, CONTENT_WAIT))
         }
         "shared" => {
             let node_id = row
@@ -710,8 +752,27 @@ fn write_content(row: &Row, got: &Value, file: Option<&str>) -> R<()> {
     let data = got["data"].as_str().ok_or("the browser sent no data")?;
     let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
     let format = got["format"].as_str().unwrap_or("bin");
+    let terminal = std::io::stdout().is_terminal();
+    // Like curl: binary goes to stdout when it is piped or redirected, never
+    // onto a terminal.
+    let file = match file {
+        Some("-") if terminal => {
+            return Err(format!(
+                "binary output ({format}) can mess up your terminal: pipe or redirect it \
+                 (`… - > {}.{format}`), or give a file name",
+                row.id.replace([':', '/'], "-")
+            )
+            .into())
+        }
+        None if !terminal => Some("-"),
+        other => other,
+    };
     match file {
-        Some("-") => std::io::stdout().write_all(&bytes)?,
+        Some("-") => {
+            let mut out = std::io::stdout().lock();
+            out.write_all(&bytes)?;
+            out.flush()?;
+        }
         Some(path) => {
             std::fs::write(path, &bytes)?;
             println!("{path}");
@@ -781,7 +842,7 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
         let local = args.local.clone();
         let body = serde_json::json!({"url": url, "client": args.filter.browser, "background": background});
         let opened = tokio::task::block_in_place(|| {
-            local_request(&local, "POST", "/v1/tabs/open", Some(&body))
+            local_request(&local, "POST", "/v1/tabs/open", Some(&body), CONTROL_WAIT)
         })?;
         println!("{}", s(&opened, "id"));
         return Ok(());
@@ -831,10 +892,10 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 return fail(EXIT_NOT_FOUND, format!("no tab {}", missing.join(", ")));
             }
         }
-        TabsCommand::Screenshot { id, file }
-        | TabsCommand::Pdf { id, file }
-        | TabsCommand::Text { id, file }
-        | TabsCommand::Html { id, file } => {
+        TabsCommand::Screenshot { id, target, file }
+        | TabsCommand::Pdf { id, target, file }
+        | TabsCommand::Text { id, target, file }
+        | TabsCommand::Html { id, target, file } => {
             let kind = match args.command {
                 Some(TabsCommand::Screenshot { .. }) => "screenshot",
                 Some(TabsCommand::Pdf { .. }) => "pdf",
@@ -845,7 +906,7 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 return fail(EXIT_NOT_FOUND, format!("no tab {id}"));
             };
             let got = content(&args, row, kind).await?;
-            write_content(row, &got, file.as_deref())?;
+            write_content(row, &got, file.as_deref().or(target.as_deref()))?;
         }
         TabsCommand::Open { .. } => unreachable!("handled before listing"),
     }
@@ -857,6 +918,7 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
 /// The arguments a completer has: none of the command line, so the
 /// environment's defaults.
 fn completion_args() -> TabsArgs {
+    let (sources, filter) = typed_options(&completion_words());
     TabsArgs {
         conn: Conn {
             url: std::env::var("BROWSER_DAEMON_URL")
@@ -869,10 +931,50 @@ fn completion_args() -> TabsArgs {
             socket: None,
             token_file: std::env::var_os("BROWSER_DAEMON_LOCAL_TOKEN_FILE").map(PathBuf::from),
         },
-        sources: Sources::default(),
-        filter: Filter::default(),
+        sources,
+        filter,
         command: None,
     }
+}
+
+/// The words of the command line being completed, without the one being
+/// completed: the shell passes them after `--` (`COMPLETE=zsh bd -- bd tabs …`).
+fn completion_words() -> Vec<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut words: Vec<String> = match args.iter().position(|a| a == "--") {
+        Some(i) => args[i + 1..].to_vec(),
+        None => Vec::new(),
+    };
+    words.pop();
+    words
+}
+
+/// The sources and filters already typed (`--local`, `--browser NAME`, …), so
+/// completions offer only what the command would act on.
+fn typed_options(words: &[String]) -> (Sources, Filter) {
+    let mut sources = Sources::default();
+    let mut filter = Filter::default();
+    let mut it = words.iter().peekable();
+    while let Some(word) = it.next() {
+        let (flag, inline) = match word.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_owned())),
+            _ => (word.as_str(), None),
+        };
+        let mut value = || inline.clone().or_else(|| it.next().cloned());
+        match flag {
+            "--local" => sources.local = true,
+            "--shared" => sources.shared = true,
+            "--sessions" => sources.sessions = true,
+            "--audible" => filter.audible = true,
+            "--active" => filter.active = true,
+            "--pinned" => filter.pinned = true,
+            "--site" => filter.site = value(),
+            "--title" => filter.title = value(),
+            "--browser" => filter.browser = value(),
+            _ => {}
+        }
+    }
+    (sources, filter)
 }
 
 /// Rows for a completer: quiet, empty when nothing answers. Completion runs
@@ -890,27 +992,29 @@ fn completion_rows() -> Vec<Row> {
     }
 }
 
-fn tab_candidates(rows: &[Row], prefix: &str) -> Vec<CompletionCandidate> {
+fn tab_candidates(rows: &[Row], filter: &Filter, prefix: &str) -> Vec<CompletionCandidate> {
     rows.iter()
-        .filter(|r| r.id.starts_with(prefix))
+        .filter(|r| r.id.starts_with(prefix) && filter.matches(r, None))
         .map(|r| CompletionCandidate::new(&r.id).help(Some(clean(&r.title).into())))
         .collect()
 }
 
-/// Shell completion for tab ids, every source; titles as hints.
+/// Shell completion for tab ids of the typed sources and filters; titles as
+/// hints.
 fn complete_tab_ids(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
-    tab_candidates(&completion_rows(), &current.to_string_lossy())
+    let filter = completion_args().filter;
+    tab_candidates(&completion_rows(), &filter, &current.to_string_lossy())
 }
 
 /// Shell completion for `--browser`: client names and browser kinds.
 fn complete_clients(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
+    // Browser names of the typed sources (kinds such as `firefox` work too,
+    // but are not offered).
     let prefix = current.to_string_lossy();
     let mut names: Vec<String> = Vec::new();
     for r in completion_rows() {
-        for name in [r.client, r.browser] {
-            if !name.is_empty() && name.starts_with(&*prefix) && !names.contains(&name) {
-                names.push(name);
-            }
+        if !r.client.is_empty() && r.client.starts_with(&*prefix) && !names.contains(&r.client) {
+            names.push(r.client);
         }
     }
     names.into_iter().map(CompletionCandidate::new).collect()
@@ -1029,7 +1133,7 @@ mod tests {
             row("gk4-firefox:6", "local", "Meet"),
             row("ge2-firefox:7", "shared", "Other"),
         ];
-        let got = tab_candidates(&rows, "gk4");
+        let got = tab_candidates(&rows, &Filter::default(), "gk4");
         let ids: Vec<String> = got
             .iter()
             .map(|c| c.get_value().to_string_lossy().into_owned())
@@ -1039,7 +1143,35 @@ mod tests {
             got[0].get_help().map(ToString::to_string).as_deref(),
             Some("Tube video")
         );
-        assert_eq!(tab_candidates(&rows, "").len(), 3);
+        assert_eq!(tab_candidates(&rows, &Filter::default(), "").len(), 3);
+        let only_ge2 = Filter {
+            browser: Some("ge2-firefox".into()),
+            ..Filter::default()
+        };
+        assert_eq!(tab_candidates(&rows, &only_ge2, "").len(), 1);
+    }
+
+    #[test]
+    fn completion_reads_typed_sources_and_filters() {
+        let words: Vec<String> = [
+            "browser-daemon",
+            "tabs",
+            "--local",
+            "--browser",
+            "ge2-chromium",
+            "screenshot",
+            "--active",
+            "--site=meet",
+        ]
+        .map(String::from)
+        .to_vec();
+        let (sources, filter) = typed_options(&words);
+        assert!(sources.local() && !sources.shared() && !sources.sessions());
+        assert_eq!(filter.browser.as_deref(), Some("ge2-chromium"));
+        assert!(filter.active && !filter.audible);
+        assert_eq!(filter.site.as_deref(), Some("meet"));
+        let (sources, filter) = typed_options(&["tabs".into(), "--browser".into()]);
+        assert!(sources.all() && filter.browser.is_none());
     }
 
     #[test]

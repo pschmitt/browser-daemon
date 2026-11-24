@@ -68,13 +68,16 @@ ones through this API (token scope `tabs:control`), shared ones through the
 daemon, session tabs through their node.
 
 Read what a tab shows with `tabs text ID`, `tabs html ID`, `tabs screenshot
-ID` and `tabs pdf ID`. Text and HTML go to stdout; a screenshot (PNG) or PDF
-is written to `<id>.png`/`<id>.pdf` here (`-f FILE` elsewhere, `-f -` to
-stdout) and the path printed. Local tabs need the scopes `tabs:content`
+ID` and `tabs pdf ID`. Text and HTML go to stdout (or a FILE). A screenshot (PNG) or PDF goes
+to FILE when given (`-` for stdout); otherwise, like curl, to stdout when that
+is piped or redirected, and to `<id>.png`/`<id>.pdf` here at a terminal (the
+path is printed). Binary output is never written onto a terminal. Local tabs need the scopes `tabs:content`
 (text, HTML) and `tabs:capture` (screenshot, PDF). Chromium prints a real
 PDF; Firefox gives extensions no PDF bytes (`tabs.saveAsPDF` only opens a
 Save dialog), so there the PDF is the whole page captured as one image, and
-its text cannot be selected. Session tabs need a Chromium session.
+its text cannot be selected. Session tabs need a Chromium session. An
+extension older than 0.23.1 cannot read tabs: the local tab API says so at
+once (the extension reports its version since 0.23.1).
 
 Tabs of private windows are listed (`-o wide` shows PRIVATE, `--json` has
 `private`) and can be used like any other when the browser lets the

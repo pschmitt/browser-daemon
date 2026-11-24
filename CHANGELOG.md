@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Changed
+
+* `tabs screenshot|pdf|text|html ID [FILE]`: the target can be given as an
+  argument (`-` for stdout). Like curl, screenshots and PDFs go to stdout when
+  it is piped or redirected and are never written onto a terminal (at one,
+  `-` is refused and the default is `<id>.png|pdf`).
+* Completion of tab ids and `--browser` honours the sources and filters
+  already typed (`--local`, `--browser`, `--active`, …); `--browser` offers
+  browser names only.
+
+### Fixed
+
+* Reading a tab through a browser whose extension predates 0.23.1 failed with
+  `Resource temporarily unavailable (os error 11)` after 5 s: such extensions
+  are now refused at once with a message saying to update them (the
+  extension reports its version), and the CLI waits as long as the server
+  does (70 s for content), saying so when it gives up.
+
 ## [0.23.1] - 2026-11-24
 
 ### Added

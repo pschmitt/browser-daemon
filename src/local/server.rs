@@ -48,6 +48,8 @@ struct Client {
     profile: String,
     name: String,
     version: String,
+    /// The extension's version; empty for extensions before 0.23.1.
+    extension: String,
     connected: u64,
     updated: u64,
     windows: Vec<Window>,
@@ -388,6 +390,7 @@ async fn list_clients(
                 "browser": c.browser,
                 "product": c.name,
                 "version": c.version,
+                "extension": c.extension,
                 "profile": c.profile,
                 "windows": c.windows.len(),
                 "tabs": c.tabs.len(),
@@ -460,7 +463,10 @@ async fn command_within(
         )),
         _ => Err((
             StatusCode::GATEWAY_TIMEOUT,
-            "the browser did not answer".to_owned(),
+            "the browser did not answer (an extension older than this \
+             browser-daemon does not know every command: update it and \
+             restart the browser)"
+                .to_owned(),
         )),
     }
 }
@@ -557,6 +563,22 @@ async fn tab_content(
         Ok(found) => found,
         Err(failure) => return respond(failure),
     };
+    // Extensions before 0.23.1 do not know the command and never answer.
+    let outdated = {
+        let t = app.tabs.lock().expect("tabs");
+        t.clients
+            .values()
+            .any(|c| c.prefix == client && c.extension.is_empty())
+    };
+    if outdated {
+        return error(
+            StatusCode::CONFLICT,
+            &format!(
+                "{client}'s browser-daemon extension is too old to read tabs (it needs 0.23.1 \
+                 or newer); update it and restart the browser"
+            ),
+        );
+    }
     let cmd = json!({"action": "content", "tab": tab, "kind": q.kind});
     match command_within(&app, &client, cmd, 60).await {
         Ok(result) => Json(result["content"].clone()).into_response(),
@@ -692,6 +714,7 @@ async fn feed(stream: UnixStream, tabs: Arc<Mutex<Tabs>>) {
                 profile,
                 name,
                 version,
+                extension,
                 label,
             } => {
                 let prefix = t.name_for(&profile, &label, &browser);
@@ -705,6 +728,7 @@ async fn feed(stream: UnixStream, tabs: Arc<Mutex<Tabs>>) {
                         profile,
                         name,
                         version,
+                        extension,
                         connected: now,
                         updated: now,
                         windows: Vec::new(),
@@ -867,6 +891,7 @@ mod tests {
             profile: prefix.into(),
             name: "Firefox".into(),
             version: "1".into(),
+            extension: "0.23.1".into(),
             connected: 0,
             updated: 0,
             windows,

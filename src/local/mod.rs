@@ -102,6 +102,10 @@ pub enum Feed {
         name: String,
         #[serde(default)]
         version: String,
+        /// The extension's own version (0.23.1 and later; older ones do not
+        /// know the content commands).
+        #[serde(default)]
+        extension: String,
         /// The client's name in tab ids (default `<host>-<browser>`, the name
         /// the extension pairs with by default).
         #[serde(default)]

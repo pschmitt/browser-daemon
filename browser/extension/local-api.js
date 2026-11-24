@@ -149,7 +149,7 @@ globalThis.localApi = (() => {
     });
     next.onMessage.addListener(message => void runCommand(next, message));
     try {
-      next.postMessage({type: 'hello', profile: await profileId(), ...await identity()});
+      next.postMessage({type: 'hello', profile: await profileId(), extension: ext.runtime.getManifest().version, ...await identity()});
       lastError = '';
       await send();
     } catch (error) {
