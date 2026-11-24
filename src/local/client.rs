@@ -149,6 +149,38 @@ enum TabsCommand {
         #[arg(required = true, add = ArgValueCompleter::new(complete_tab_ids))]
         ids: Vec<String>,
     },
+    /// A PNG screenshot of a tab; prints the file it wrote.
+    Screenshot {
+        #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
+        id: String,
+        /// Where to write it (default: `<id>.png` here; `-` for stdout).
+        #[arg(short = 'f', long)]
+        file: Option<String>,
+    },
+    /// A tab printed to PDF (Chromium tabs and sessions); prints the file it wrote.
+    Pdf {
+        #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
+        id: String,
+        /// Where to write it (default: `<id>.pdf` here; `-` for stdout).
+        #[arg(short = 'f', long)]
+        file: Option<String>,
+    },
+    /// A tab's visible text.
+    Text {
+        #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
+        id: String,
+        /// Write it to a file instead of stdout.
+        #[arg(short = 'f', long)]
+        file: Option<String>,
+    },
+    /// A tab's HTML.
+    Html {
+        #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
+        id: String,
+        /// Write it to a file instead of stdout.
+        #[arg(short = 'f', long)]
+        file: Option<String>,
+    },
     /// Open a URL in a new tab of this machine's browser (`--browser NAME` to
     /// pick one); prints the new tab's id.
     Open {
@@ -178,6 +210,8 @@ pub struct Row {
     pub audible: bool,
     pub muted: bool,
     pub pinned: bool,
+    /// A tab of a private (incognito) window.
+    pub private: bool,
     /// A local tab that is also shared with the daemon.
     pub shared: bool,
     /// The source's own id of the tab (browser tab id, CDP target id).
@@ -189,6 +223,9 @@ pub struct Row {
     /// The paired browser's id on the daemon, for commands to shared tabs.
     #[serde(skip)]
     pub node_id: Option<String>,
+    /// A session's node URL, for DevTools calls on its tabs.
+    #[serde(skip)]
+    pub node_url: Option<String>,
 }
 
 fn fail<T>(code: i32, msg: impl Into<String>) -> R<T> {
@@ -347,11 +384,13 @@ fn local_rows(list: &Value) -> Vec<Row> {
             audible: b(t, "audible"),
             muted: b(t, "muted"),
             pinned: b(t, "pinned"),
+            private: b(t, "private"),
             shared: false,
             tab: t.get("tab_id").map(|v| v.to_string()).unwrap_or_default(),
             window: t.get("window_id").and_then(Value::as_i64),
             focused_window: b(t, "focused_window"),
             node_id: None,
+            node_url: None,
         })
         .collect()
 }
@@ -389,11 +428,13 @@ fn shared_rows(nodes: &Value, daemon: &str) -> Vec<Row> {
                 audible: false,
                 muted: false,
                 pinned: b(t, "pinned"),
+                private: false,
                 shared: true,
                 tab,
                 window: t.get("window_id").and_then(Value::as_i64),
                 focused_window: false,
                 node_id: Some(s(node, "id").to_owned()).filter(|id| !id.is_empty()),
+                node_url: None,
             });
         }
     }
@@ -437,11 +478,13 @@ fn session_rows(targets: &Value, sessions: &Value) -> Vec<Row> {
                 audible: b(t, "audible"),
                 muted: false,
                 pinned: false,
+                private: false,
                 shared: false,
                 tab: target.to_owned(),
                 window: None,
                 focused_window: false,
                 node_id: None,
+                node_url: Some(s(t, "node_url").to_owned()).filter(|u| !u.is_empty()),
             })
         })
         .collect()
@@ -573,6 +616,115 @@ fn yes_no(b: bool) -> String {
     (if b { "yes" } else { "no" }).into()
 }
 
+/// What a tab shows (`text`, `html`, `screenshot`, `pdf`), from where it
+/// lives: `{"kind", "text"}` or `{"kind", "format", "data"}` (base64).
+async fn content(args: &TabsArgs, row: &Row, kind: &str) -> R<Value> {
+    match row.source {
+        "local" => {
+            let local = args.local.clone();
+            let path = format!(
+                "/v1/tabs/{}/content?kind={kind}",
+                utf8_percent_encode(&row.id, NON_ALPHANUMERIC)
+            );
+            tokio::task::block_in_place(|| local_get(&local, &path))
+        }
+        "shared" => {
+            let node_id = row
+                .node_id
+                .as_deref()
+                .ok_or("the daemon did not say which browser this is")?;
+            let call = |action: &'static str, params: Value| {
+                crate::ctl::shared_tab_call(&args.conn, node_id, &row.tab, action, params)
+            };
+            match kind {
+                // The extension's view screenshot (JPEG), as live views use it.
+                "screenshot" => {
+                    let shot = call("screenshot", serde_json::json!({})).await?;
+                    Ok(
+                        serde_json::json!({"kind": "screenshot", "format": shot["format"], "data": shot["data"]}),
+                    )
+                }
+                "pdf" => call("pdf", serde_json::json!({})).await,
+                _ => call("content", serde_json::json!({"kind": kind})).await,
+            }
+        }
+        _ => {
+            let node_url = row
+                .node_url
+                .as_deref()
+                .ok_or("the session's node is unknown")?;
+            if row.browser.eq_ignore_ascii_case("firefox") {
+                return Err(
+                    "tabs of Firefox sessions have no DevTools endpoint for this yet".into(),
+                );
+            }
+            let cdp = |method: &'static str, params: Value| {
+                crate::ctl::session_tab_cdp(&args.conn, node_url, &row.tab, method, params)
+            };
+            match kind {
+                "screenshot" => {
+                    let shot = cdp(
+                        "Page.captureScreenshot",
+                        serde_json::json!({"format": "png"}),
+                    )
+                    .await?;
+                    Ok(serde_json::json!({"kind": kind, "format": "png", "data": shot["data"]}))
+                }
+                "pdf" => {
+                    let pdf = cdp(
+                        "Page.printToPDF",
+                        serde_json::json!({"printBackground": true}),
+                    )
+                    .await?;
+                    Ok(serde_json::json!({"kind": kind, "format": "pdf", "data": pdf["data"]}))
+                }
+                _ => {
+                    let expression = if kind == "html" {
+                        "document.documentElement.outerHTML"
+                    } else {
+                        "document.body ? document.body.innerText : ''"
+                    };
+                    let value = cdp(
+                        "Runtime.evaluate",
+                        serde_json::json!({"expression": expression, "returnByValue": true}),
+                    )
+                    .await?;
+                    Ok(serde_json::json!({"kind": kind, "text": value["result"]["value"]}))
+                }
+            }
+        }
+    }
+}
+
+/// Write a tab's content: text to stdout or `file`; a screenshot or PDF to
+/// `file` (default `<id>.<format>`, `-` for stdout), printing where it went.
+fn write_content(row: &Row, got: &Value, file: Option<&str>) -> R<()> {
+    use base64::Engine as _;
+    if let Some(text) = got["text"].as_str() {
+        match file {
+            None | Some("-") => print!("{text}"),
+            Some(path) => std::fs::write(path, text)?,
+        }
+        return Ok(());
+    }
+    let data = got["data"].as_str().ok_or("the browser sent no data")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+    let format = got["format"].as_str().unwrap_or("bin");
+    match file {
+        Some("-") => std::io::stdout().write_all(&bytes)?,
+        Some(path) => {
+            std::fs::write(path, &bytes)?;
+            println!("{path}");
+        }
+        None => {
+            let path = format!("{}.{format}", row.id.replace([':', '/'], "-"));
+            std::fs::write(&path, &bytes)?;
+            println!("{path}");
+        }
+    }
+    Ok(())
+}
+
 fn print_rows(rows: &[Row], output: Output) -> R<()> {
     match output {
         Output::Json => println!("{}", serde_json::to_string_pretty(rows)?),
@@ -596,7 +748,7 @@ fn print_rows(rows: &[Row], output: Output) -> R<()> {
         ),
         Output::Wide => crate::ctl::table(
             &[
-                "ID", "SOURCE", "BROWSER", "ACTIVE", "SOUND", "NODE", "TITLE", "URL",
+                "ID", "SOURCE", "BROWSER", "ACTIVE", "SOUND", "PRIVATE", "NODE", "TITLE", "URL",
             ],
             &rows
                 .iter()
@@ -607,6 +759,7 @@ fn print_rows(rows: &[Row], output: Output) -> R<()> {
                         r.client.clone(),
                         yes_no(r.active),
                         yes_no(r.audible),
+                        yes_no(r.private),
                         r.node.clone().unwrap_or_else(|| "-".into()),
                         short(&r.title, 60),
                         r.url.clone(),
@@ -677,6 +830,22 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
             if !missing.is_empty() {
                 return fail(EXIT_NOT_FOUND, format!("no tab {}", missing.join(", ")));
             }
+        }
+        TabsCommand::Screenshot { id, file }
+        | TabsCommand::Pdf { id, file }
+        | TabsCommand::Text { id, file }
+        | TabsCommand::Html { id, file } => {
+            let kind = match args.command {
+                Some(TabsCommand::Screenshot { .. }) => "screenshot",
+                Some(TabsCommand::Pdf { .. }) => "pdf",
+                Some(TabsCommand::Text { .. }) => "text",
+                _ => "html",
+            };
+            let Some(row) = rows.iter().find(|r| r.id == *id) else {
+                return fail(EXIT_NOT_FOUND, format!("no tab {id}"));
+            };
+            let got = content(&args, row, kind).await?;
+            write_content(row, &got, file.as_deref())?;
         }
         TabsCommand::Open { .. } => unreachable!("handled before listing"),
     }
@@ -766,11 +935,13 @@ mod tests {
             audible: false,
             muted: false,
             pinned: false,
+            private: false,
             shared: false,
             tab: tab.into(),
             window: None,
             focused_window: false,
             node_id: None,
+            node_url: None,
         }
     }
 

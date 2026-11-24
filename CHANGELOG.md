@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+* `browser-daemon tabs text|html|screenshot|pdf ID`: a tab's text, HTML, a
+  PNG screenshot or a PDF, wherever it lives (local, shared or a Chromium
+  session); files go to `<id>.png|pdf` or `-f FILE`. The local tab API
+  serves them at `GET /v1/tabs/{id}/content?kind=…` (scopes `tabs:content`,
+  `tabs:capture`). Firefox has no PDF API for extensions, so its PDFs are
+  the whole page as one image.
+* The extension list (`browser-daemon extension list`) is a table like the
+  other lists; an unreachable daemon is a one-line error that names
+  `--url`/`BROWSER_DAEMON_URL`.
+
+### Changed
+
+* The local tab API includes tabs of private windows when the browser lets
+  the extension into them, marked `private` (PRIVATE in `-o wide`); every
+  command works on them. Signals still never count them.
+
+## [0.23.0] - 2026-11-24
+
 ### Changed
 
 * Lists are kubectl-style tables, colored like kubecolor on a terminal (bold
@@ -10,17 +30,6 @@
   or on a dumb terminal). `browser-daemon tabs` prints a table (ID, BROWSER,
   TITLE, URL) and takes `-o wide|json|name|tsv`; scripts use `-o tsv`
   (`id<TAB>title<TAB>url`) or `--json`. `local token list` is a table too.
-
-### Fixed
-
-* A browser that disconnected no longer keeps its client name from others
-  (`ge2-chromium-2` after a short-lived connection); a browser that comes
-  back gets its earlier name when it is free.
-
-## [0.23.0] - 2026-11-24
-
-### Changed
-
 * **Breaking:** `browser-daemon tabs` lists every tab you can reach: this
   machine's browsers (local tab API), browsers paired with the daemon, and the
   daemon's sessions mesh-wide; `--local`, `--shared` and `--sessions` pick
@@ -57,6 +66,9 @@
 
 ### Fixed
 
+* A browser that disconnected no longer keeps its client name from others
+  (`ge2-chromium-2` after a short-lived connection); a browser that comes
+  back gets its earlier name when it is free.
 * Chromium: switching on **Local tab API** for the first time reloads the
   extension once, because Chromium gives its service worker native messaging
   only after a restart (before, the switch stayed without effect until

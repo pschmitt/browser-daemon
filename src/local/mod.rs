@@ -62,7 +62,8 @@ pub fn config_dir() -> PathBuf {
         .join("browser-daemon")
 }
 
-/// One tab as the extension reports it. Private windows are never reported.
+/// One tab as the extension reports it. Tabs of private windows come only
+/// when the browser lets the extension into them, and are marked `private`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Tab {
@@ -76,6 +77,7 @@ pub struct Tab {
     pub muted: bool,
     pub pinned: bool,
     pub discarded: bool,
+    pub private: bool,
     pub favicon: String,
 }
 

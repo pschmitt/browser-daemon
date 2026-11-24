@@ -1,5 +1,5 @@
 /* Local extension code only; dashboard bridge requires explicit daemon approval. */
-if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js', 'censor.js', 'local-api.js', 'signals.js');
+if (typeof importScripts === 'function') importScripts('policy.js', 'proxy.js', 'audio.js', 'files-page.js', 'files.js', 'favicon.js', 'censor.js', 'tab-content.js', 'local-api.js', 'signals.js');
 const api = globalThis.browser || chrome;
 const chromium = typeof api.runtime.getBrowserInfo !== 'function';
 // Firefox for Android has no history or bookmarks, and asking for those permissions
@@ -1658,6 +1658,9 @@ async function execute(command) {
   const {tab, action} = command;
   let {params} = command;
   if (action === 'suggest') return addressSuggestions(params.query);
+  // Read only, like a screenshot: the page's text or HTML, or a PDF (Chromium).
+  if (action === 'content') return tabContent.get(tab, params.kind);
+  if (action === 'pdf') return tabContent.get(tab, 'pdf');
   if (action === 'screenshot' && params.censor !== undefined && params.censor !== null) return censoredScreenshot(command);
   if (action === 'publicAudio') {
     if (!command.public_grant || !sharing.audio) throw new Error('Audio sharing is disabled.');

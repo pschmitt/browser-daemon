@@ -56,7 +56,8 @@ globalThis.NodePolicy = (() => {
     if (!command || !Number.isSafeInteger(command.tab) || !command.params ||
         typeof command.params !== 'object' || Array.isArray(command.params) ||
         JSON.stringify(command.params).length > 128 * 1024) return false;
-    if (['screenshot', 'snapshot', 'publicAudio'].includes(command.action)) return true;
+    if (['screenshot', 'snapshot', 'publicAudio', 'pdf'].includes(command.action)) return true;
+    if (command.action === 'content') return ['text', 'html'].includes(command.params.kind);
     if (!control) return false;
     if (command.action === 'navigate' || command.action === 'open') return pageURL(command.params.url);
     if (command.action === 'move') return Number.isSafeInteger(command.params.index) && command.params.index >= 0;

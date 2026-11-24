@@ -587,8 +587,12 @@ fn valid_command(command: &Command, control: bool) -> bool {
     if !command.params.is_object() || command.params.to_string().len() > 128 * 1024 {
         return false;
     }
-    if matches!(command.action.as_str(), "screenshot" | "snapshot") {
+    // Read only: the view, its text or HTML, a PDF.
+    if matches!(command.action.as_str(), "screenshot" | "snapshot" | "pdf") {
         return true;
+    }
+    if command.action == "content" {
+        return matches!(command.params["kind"].as_str(), Some("text" | "html"));
     }
     if !control {
         return false;

@@ -67,6 +67,20 @@ to the front), `tabs close ID...` and `tabs open URL` (`--browser NAME`,
 ones through this API (token scope `tabs:control`), shared ones through the
 daemon, session tabs through their node.
 
+Read what a tab shows with `tabs text ID`, `tabs html ID`, `tabs screenshot
+ID` and `tabs pdf ID`. Text and HTML go to stdout; a screenshot (PNG) or PDF
+is written to `<id>.png`/`<id>.pdf` here (`-f FILE` elsewhere, `-f -` to
+stdout) and the path printed. Local tabs need the scopes `tabs:content`
+(text, HTML) and `tabs:capture` (screenshot, PDF). Chromium prints a real
+PDF; Firefox gives extensions no PDF bytes (`tabs.saveAsPDF` only opens a
+Save dialog), so there the PDF is the whole page captured as one image, and
+its text cannot be selected. Session tabs need a Chromium session.
+
+Tabs of private windows are listed (`-o wide` shows PRIVATE, `--json` has
+`private`) and can be used like any other when the browser lets the
+extension into private windows (Firefox: "Run in Private Windows";
+Chromium: "Allow in Incognito"). Signals never count them.
+
 Filters: `--audible`, `--active`, `--pinned`, `--site` (URL contains),
 `--title`, `--browser` (a client name, a kind such as `firefox`, or a name
 prefix), and a free-text query after `list`. `--json` prints every field.
@@ -102,7 +116,8 @@ completions <shell>` registers dynamic completion).
 
 - Exposing the full tab list beyond the machine. Only derived signals leave
   it (see [Signals](#signals-and-home-assistant)), and only when enabled.
-- Private and incognito windows: excluded unless explicitly enabled.
+- Private and incognito windows: only with the browser's own permission for
+  the extension (see above), and never in signals.
 
 ## Architecture
 
@@ -135,7 +150,7 @@ Chromium ─native messaging──▶ browser-daemon native-host ─┤ feeder s
   few milliseconds. `--json` everywhere.
 - **Extension**. On every tab change it sends a debounced snapshot (about
   100 ms) of that window: id, window, index, title, URL, active, audible,
-  muted, pinned, discarded, incognito, favicon URL. Full resync on connect and
+  muted, pinned, discarded, private, favicon URL. Full resync on connect and
   on request. It executes control commands with the tabs and scripting APIs,
   and on Chromium with the debugger it already attaches for sharing.
 
@@ -196,9 +211,9 @@ HTTP/1.1 over the Unix socket, JSON, `Authorization: Bearer <token>`.
 | `POST /v1/tabs/close` | `tabs:control` | ids; `force` needs `tabs:debug` (Chromium) |
 | `POST /v1/tabs/move`, `/update`, `/navigate` | `tabs:control` | bruvtab's `move`, `update`, `navigate` |
 | `POST /v1/tabs/{id}/media` | `media:control` | `play`, `pause`, `mute`, `unmute` |
-| `GET /v1/tabs/{id}/text`, `/html`, `/words` | `tabs:content` | |
+| `GET /v1/tabs/{id}/content?kind=text\|html` | `tabs:content` | `{kind, text}` |
+| `GET /v1/tabs/{id}/content?kind=screenshot\|pdf` | `tabs:capture` | `{kind, format, data}` (base64); Firefox PDFs are a page image (`raster: true`) |
 | `POST /v1/index`, `GET /v1/search` | `tabs:content` | SQLite FTS5 index kept by the server |
-| `GET /v1/tabs/{id}/screenshot`, `/pdf` | `tabs:capture` | Chromium: debugger; Firefox: BiDi through the companion |
 | `GET /v1/tabs/{id}/console`, `/network` | `tabs:debug` | streams, Chromium |
 | `GET /v1/events` | `events:read` | server-sent events: tab created, updated, removed, activated; signal changes |
 

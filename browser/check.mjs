@@ -138,7 +138,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
         : name === 'putImageData' ? () => {} : (...args) => { drawn.push(String(name)); }, set: () => true});
     }
   }
-  const context = vm.createContext({URL, console, crypto: webcrypto, chrome: api, WebSocket: Socket, navigator: {userAgent},
+  const context = vm.createContext({URL, console, atob, btoa, crypto: webcrypto, chrome: api, WebSocket: Socket, navigator: {userAgent},
     OffscreenCanvas: FakeCanvas, createImageBitmap: async () => ({}), fetch: async () => ({blob: async () => ({})}),
     setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}});
   vm.runInContext(source('policy.js'), context);
@@ -147,6 +147,7 @@ function harness(firefox = false, stored = {shareAll: false}, userAgent = '', se
   vm.runInContext(source('files.js'), context);
   vm.runInContext(source('favicon.js'), context);
   vm.runInContext(source('censor.js'), context);
+  vm.runInContext(source('tab-content.js'), context);
   vm.runInContext(source('local-api.js'), context);
   vm.runInContext(source('signals.js'), context);
   vm.runInContext(source('background.js'), context);
@@ -963,7 +964,7 @@ test('the local tab API is off until enabled', async () => {
   assert.equal(h.nativePorts.filter(port => port.name === LOCAL_HOST).length, 0);
   assert.equal((await h.message({type: 'state'})).localApi.enabled, false);
 });
-test('the local tab API sends a hello and the tabs, never private ones', async () => {
+test('the local tab API sends a hello and the tabs, private ones marked', async () => {
   const h = harness(false, {shareAll: false, localApi: true});
   await h.flush();
   await h.flush();
@@ -974,10 +975,11 @@ test('the local tab API sends a hello and the tabs, never private ones', async (
   assert.equal(hello.browser, 'chromium');
   assert.ok(hello.profile);
   assert.equal(snapshot.type, 'snapshot');
-  assert.deepEqual(snapshot.tabs.map(t => t.id), [1, 3, 4]);
-  assert.ok(!snapshot.tabs.some(t => t.title === 'Private'));
+  assert.deepEqual(snapshot.tabs.map(t => t.id), [1, 2, 3, 4]);
+  assert.equal(snapshot.tabs.find(t => t.title === 'Private').private, true);
+  assert.equal(snapshot.tabs.find(t => t.id === 1).private, false);
 });
-test('the local tab API runs commands, but never on private windows', async () => {
+test('the local tab API runs commands, private windows included', async () => {
   const h = harness(false, {shareAll: false, localApi: true});
   await h.flush();
   await h.flush();
@@ -992,11 +994,42 @@ test('the local tab API runs commands, but never on private windows', async () =
   const byId = Object.fromEntries(port.posted.filter(m => m.type === 'result').map(m => [m.id, m]));
   assert.equal(byId[1].ok, true);
   assert.ok(h.calls.some(c => c[0] === 'update' && c[1] === 1));
-  assert.equal(byId[2].ok, false);
-  assert.ok(h.tabs.has(2));
+  assert.equal(byId[2].ok, true);
+  assert.ok(!h.tabs.has(2));
   assert.equal(byId[3].ok, false);
   assert.equal(byId[4].ok, true);
   assert.ok(Number.isSafeInteger(byId[4].tab));
+});
+test('the local tab API reads text, screenshots and (Firefox: raster) PDFs, private tabs too', async () => {
+  const h = harness(true, {shareAll: false, localApi: true});
+  const executeScript = h.api.scripting.executeScript;
+  h.api.scripting.executeScript = async args => (args.func.toString().includes('scrollHeight')
+    ? [{frameId: 0, result: [800, 1200]}] : executeScript(args));
+  await h.flush();
+  await h.flush();
+  const port = h.nativePorts.find(p => p.name === LOCAL_HOST);
+  port.posted.length = 0;
+  port.receive({type: 'command', id: 1, action: 'content', tab: 1, kind: 'text'});
+  port.receive({type: 'command', id: 2, action: 'content', tab: 1, kind: 'screenshot'});
+  port.receive({type: 'command', id: 3, action: 'content', tab: 2, kind: 'text'});
+  port.receive({type: 'command', id: 4, action: 'content', tab: 1, kind: 'pdf'});
+  await h.flush();
+  await h.flush();
+  const byId = Object.fromEntries(port.posted.filter(m => m.type === 'result').map(m => [m.id, m]));
+  assert.equal(byId[1].ok, true);
+  assert.equal(byId[1].content.kind, 'text');
+  assert.equal(byId[2].ok, true);
+  assert.ok(byId[2].content.data);
+  assert.equal(byId[3].ok, true);
+  // Firefox: the page captured into a one-page PDF.
+  assert.equal(byId[4].ok, true, byId[4].error);
+  assert.equal(byId[4].content.raster, true);
+  const pdf = Buffer.from(byId[4].content.data, 'base64').toString('latin1');
+  assert.match(pdf, /^%PDF-1\.4/);
+  assert.match(pdf, /MediaBox\[0 0 600\.00 900\.00\]/);
+  assert.match(pdf, /\/Width 800\/Height 1200/);
+  const xref = Number(pdf.match(/startxref\n(\d+)/)[1]);
+  assert.equal(pdf.slice(xref, xref + 4), 'xref');
 });
 test('the group setting turns grouping off', async () => {
   const h = harness(false, {agentGroup: false}); const groups = groupMocks(h); const s = await h.pair();

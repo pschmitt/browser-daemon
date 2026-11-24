@@ -152,6 +152,7 @@ pub struct TabView {
     pub muted: bool,
     pub pinned: bool,
     pub discarded: bool,
+    pub private: bool,
     pub focused_window: bool,
     pub favicon: String,
 }
@@ -218,6 +219,7 @@ fn tab_views(tabs: &Tabs) -> Vec<TabView> {
                 muted: t.muted,
                 pinned: t.pinned,
                 discarded: t.discarded,
+                private: t.private,
                 focused_window: focused,
                 favicon: t.favicon.clone(),
             });
@@ -406,7 +408,17 @@ fn respond((status, msg): Failure) -> Response {
 
 /// Send a command to the extension of the browser called `client` and wait
 /// for its `result` (10 s at most).
-async fn command(app: &App, client: &str, mut cmd: Value) -> Result<Value, Failure> {
+async fn command(app: &App, client: &str, cmd: Value) -> Result<Value, Failure> {
+    command_within(app, client, cmd, 10).await
+}
+
+/// `command` with its own wait: a PDF of a long page takes a while.
+async fn command_within(
+    app: &App,
+    client: &str,
+    mut cmd: Value,
+    secs: u64,
+) -> Result<Value, Failure> {
     let (tx, rx) = oneshot::channel();
     {
         let mut t = app.tabs.lock().expect("tabs");
@@ -437,7 +449,7 @@ async fn command(app: &App, client: &str, mut cmd: Value) -> Result<Value, Failu
             ));
         }
     }
-    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+    match tokio::time::timeout(std::time::Duration::from_secs(secs), rx).await {
         Ok(Ok(result)) if result["ok"] == true => Ok(result),
         Ok(Ok(result)) => Err((
             StatusCode::BAD_GATEWAY,
@@ -511,6 +523,48 @@ async fn close_tab(
 }
 
 #[derive(Debug, Deserialize)]
+struct ContentQuery {
+    /// `text`, `html`, `screenshot` (PNG) or `pdf`.
+    kind: String,
+}
+
+/// What a tab shows: `{"kind", "text"}` for text and HTML (scope
+/// `tabs:content`), `{"kind", "format", "data"}` (base64) for a screenshot or
+/// PDF (scope `tabs:capture`).
+async fn tab_content(
+    State(app): State<App>,
+    ConnectInfo(peer): ConnectInfo<Peer>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+    Query(q): Query<ContentQuery>,
+) -> Response {
+    let scope = match q.kind.as_str() {
+        "text" | "html" => "tabs:content",
+        "screenshot" | "pdf" => "tabs:capture",
+        _ => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "kind is text, html, screenshot or pdf",
+            )
+        }
+    };
+    if let Some(res) = app.reject(&headers, scope, &peer, &method, &uri) {
+        return res;
+    }
+    let (client, tab) = match known_tab(&app, &id) {
+        Ok(found) => found,
+        Err(failure) => return respond(failure),
+    };
+    let cmd = json!({"action": "content", "tab": tab, "kind": q.kind});
+    match command_within(&app, &client, cmd, 60).await {
+        Ok(result) => Json(result["content"].clone()).into_response(),
+        Err(failure) => respond(failure),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct OpenRequest {
     url: String,
     /// The browser to open it in (default: the first one connected).
@@ -562,6 +616,7 @@ fn router(app: App) -> Router {
         .route("/v1/clients", get(list_clients))
         .route("/v1/tabs/{id}/activate", post(activate_tab))
         .route("/v1/tabs/{id}/close", post(close_tab))
+        .route("/v1/tabs/{id}/content", get(tab_content))
         .route("/v1/tabs/open", post(open_tab))
         .with_state(app)
 }

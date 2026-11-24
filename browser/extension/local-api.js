@@ -1,7 +1,9 @@
 /* Local tab API: push this browser's tabs to browser-daemon's native messaging
  * host on every change, so `browser-daemon tabs` and other local clients read
- * them from memory (docs/local-api.md). Opt-in; private windows never leave
- * the browser. Nothing here goes to a daemon. */
+ * them from memory (docs/local-api.md). Opt-in. Tabs of private windows are
+ * included when the browser lets the extension into them (Firefox: "Run in
+ * Private Windows", Chromium: "Allow in Incognito"). Nothing here goes to a
+ * daemon. */
 globalThis.localApi = (() => {
   const HOST = 'dev.pschmitt.browser_daemon_local';
   const ext = globalThis.browser || chrome;
@@ -49,9 +51,9 @@ globalThis.localApi = (() => {
     return {
       type: 'snapshot',
       windows: windows
-        ? windows.filter(w => !w.incognito).map(w => ({id: w.id, focused: w.focused === true}))
-        : [...new Set(tabs.filter(t => !t.incognito).map(t => t.windowId))].map(id => ({id, focused: true})),
-      tabs: tabs.filter(t => !t.incognito && t.id >= 0).map(t => ({
+        ? windows.map(w => ({id: w.id, focused: w.focused === true}))
+        : [...new Set(tabs.map(t => t.windowId))].map(id => ({id, focused: true})),
+      tabs: tabs.filter(t => t.id >= 0).map(t => ({
         id: t.id,
         window_id: t.windowId,
         index: t.index,
@@ -62,6 +64,7 @@ globalThis.localApi = (() => {
         muted: t.mutedInfo?.muted === true,
         pinned: t.pinned === true,
         discarded: t.discarded === true,
+        private: t.incognito === true,
         favicon: /^https?:/.test(t.favIconUrl || '') ? t.favIconUrl : '',
       })),
     };
@@ -89,15 +92,17 @@ globalThis.localApi = (() => {
     retryDelay = Math.min(retryDelay * 2, MAX_RETRY);
   }
 
-  // A command from the local server (`browser-daemon tabs activate|close|open`):
-  // only ever from our own native host, and never about a private window.
+  // A command from the local server (`browser-daemon tabs activate|close|open|…`),
+  // only ever from our own native host.
   async function runCommand(from, message) {
     if (!message || message.type !== 'command' || !Number.isSafeInteger(message.id)) return;
     let reply = {type: 'result', id: message.id, ok: true};
     try {
-      if (message.action === 'activate' || message.action === 'close') {
+      if (message.action === 'content') {
         const tab = await ext.tabs.get(message.tab);
-        if (tab.incognito) throw new Error('Tabs of private windows are not available.');
+        reply.content = await tabContent.get(tab.id, message.kind);
+      } else if (message.action === 'activate' || message.action === 'close') {
+        const tab = await ext.tabs.get(message.tab);
         if (message.action === 'close') {
           await ext.tabs.remove(tab.id);
         } else {

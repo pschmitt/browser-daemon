@@ -88,7 +88,64 @@ pub async fn extension(args: ExtensionArgs) -> R<()> {
         } => c
             .req(Method::POST, "/api/extension/pair")
             .json(&json!({"origin": origin, "lifetime_secs": lifetime_secs, "remember": remember})),
-        ExtensionCmd::List => c.req(Method::GET, "/api/extension/nodes"),
+        ExtensionCmd::List => {
+            let all = c.call(c.req(Method::GET, "/api/extension/nodes")).await?;
+            if c.json {
+                c.print_json(&all);
+                return Ok(());
+            }
+            let rows: Vec<Vec<String>> = all["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|n| {
+                    let text = |k: &str| n[k].as_str().unwrap_or("").to_string();
+                    let expires = n["expires_at"].as_u64().unwrap_or(0);
+                    vec![
+                        text("name"),
+                        text("browser"),
+                        if n["online"].as_bool() == Some(true) {
+                            "online"
+                        } else {
+                            "offline"
+                        }
+                        .into(),
+                        n["tabs"].as_array().map_or(0, Vec::len).to_string(),
+                        if text("version").is_empty() {
+                            "-".into()
+                        } else {
+                            text("version")
+                        },
+                        if n["remembered"].as_bool() == Some(true) {
+                            "yes"
+                        } else {
+                            "no"
+                        }
+                        .into(),
+                        if expires == 0 {
+                            "never".into()
+                        } else {
+                            ago(expires)
+                        },
+                        text("id"),
+                    ]
+                })
+                .collect();
+            table(
+                &[
+                    "NAME",
+                    "BROWSER",
+                    "STATUS",
+                    "SHARED TABS",
+                    "VERSION",
+                    "REMEMBERED",
+                    "EXPIRES",
+                    "ID",
+                ],
+                &rows,
+            );
+            return Ok(());
+        }
         ExtensionCmd::Show { browser } => {
             let all = c.call(c.req(Method::GET, "/api/extension/nodes")).await?;
             let found = all["nodes"]
@@ -143,14 +200,16 @@ pub(crate) async fn remote_tabs(conn: &Conn) -> R<(Value, Value, Value)> {
     ))
 }
 
-/// For `browser-daemon tabs activate|close`: a tab of a browser paired with
-/// the daemon (the extension's `focus` or `close`).
-pub(crate) async fn shared_tab_command(
+/// For `browser-daemon tabs`: a command to a tab of a browser paired with the
+/// daemon (the extension's `focus`, `close`, `screenshot`, `content`, `pdf`),
+/// and its answer.
+pub(crate) async fn shared_tab_call(
     conn: &Conn,
     node_id: &str,
     tab: &str,
     action: &str,
-) -> R<()> {
+    params: Value,
+) -> R<Value> {
     let c = Client::connect(conn).await?;
     let tab: u64 = tab
         .parse()
@@ -158,10 +217,76 @@ pub(crate) async fn shared_tab_command(
     let path = format!("/api/extension/nodes/{}/command", enc(node_id));
     c.call(
         c.req(Method::POST, &path)
-            .json(&json!({"tab": tab, "action": action, "params": {}})),
+            .json(&json!({"tab": tab, "action": action, "params": params})),
     )
-    .await?;
+    .await
+}
+
+/// `shared_tab_call` without an answer (activate, close).
+pub(crate) async fn shared_tab_command(
+    conn: &Conn,
+    node_id: &str,
+    tab: &str,
+    action: &str,
+) -> R<()> {
+    shared_tab_call(conn, node_id, tab, action, json!({})).await?;
     Ok(())
+}
+
+/// For `browser-daemon tabs screenshot|pdf|text|html`: one DevTools call on a
+/// session tab (Chromium), over its node's `/devtools/page/{target}`.
+pub(crate) async fn session_tab_cdp(
+    conn: &Conn,
+    node_url: &str,
+    target: &str,
+    method: &str,
+    params: Value,
+) -> R<Value> {
+    use futures_util::{SinkExt as _, StreamExt as _};
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest as _, Message};
+    let http = reqwest::Client::new();
+    let base = conn.url.trim_end_matches('/').to_string();
+    let secret = crate::tui::find_secret(&http, &base, conn.secret_file.as_ref()).await?;
+    let ws = node_url
+        .trim_end_matches('/')
+        .replacen("https://", "wss://", 1)
+        .replacen("http://", "ws://", 1);
+    let mut request = format!("{ws}/devtools/page/{}", enc(target)).into_client_request()?;
+    if let Some(secret) = secret {
+        request
+            .headers_mut()
+            .insert("X-Browser-Cluster-Secret", secret.parse()?);
+    }
+    let (mut socket, _) = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio_tungstenite::connect_async(request),
+    )
+    .await
+    .map_err(|_| "the session's node did not answer")??;
+    socket
+        .send(Message::Text(
+            json!({"id": 1, "method": method, "params": params})
+                .to_string()
+                .into(),
+        ))
+        .await?;
+    let answer = tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(message) = socket.next().await {
+            if let Message::Text(text) = message? {
+                let value: Value = serde_json::from_str(&text)?;
+                if value["id"] == 1 {
+                    return Ok::<Value, Box<dyn std::error::Error>>(value);
+                }
+            }
+        }
+        Err("the session closed the connection".into())
+    })
+    .await
+    .map_err(|_| "the session did not answer in time")??;
+    if let Some(message) = answer["error"]["message"].as_str() {
+        return Err(format!("{method}: {message}").into());
+    }
+    Ok(answer["result"].clone())
 }
 
 /// For `browser-daemon tabs activate|close`: a session tab (DevTools
@@ -207,7 +332,15 @@ impl Client {
         }
         let res = match req.send().await {
             Ok(res) => res,
-            Err(e) => return fail(EXIT_UNREACHABLE, format!("{base}: {e}")),
+            Err(e) => {
+                return fail(
+                    EXIT_UNREACHABLE,
+                    format!(
+                        "no browser-daemon answers at {base} ({}); pass --url or set BROWSER_DAEMON_URL",
+                        e.without_url()
+                    ),
+                )
+            }
         };
         if res.status() == reqwest::StatusCode::UNAUTHORIZED {
             return fail(EXIT_UNAUTHORIZED, UNAUTHORIZED);
