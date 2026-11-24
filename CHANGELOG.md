@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+* The daemon to talk to can come from a file: when neither `--url` nor
+  `BROWSER_DAEMON_URL` is given, the CLI and TUI read the first line of
+  `~/.config/browser-daemon/url`, then `/etc/browser-daemon/url`, before
+  falling back to `http://127.0.0.1:3001`. A new environment variable does
+  not reach shells started before it (tmux panes inherit the server's
+  environment); a file does.
+
 ## [0.23.3] - 2026-11-24
 
 ### Fixed

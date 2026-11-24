@@ -921,8 +921,7 @@ fn completion_args() -> TabsArgs {
     let (sources, filter) = typed_options(&completion_words());
     TabsArgs {
         conn: Conn {
-            url: std::env::var("BROWSER_DAEMON_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:3001".into()),
+            url: std::env::var("BROWSER_DAEMON_URL").unwrap_or_else(|_| crate::ctl::default_url()),
             secret_file: std::env::var_os("BROWSER_DAEMON_SECRET_FILE").map(PathBuf::from),
             json: false,
         },

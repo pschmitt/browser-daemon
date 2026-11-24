@@ -55,11 +55,13 @@ const UNAUTHORIZED: &str = "Unauthorized: pass --secret-file (or set BROWSER_DAE
 /// Which daemon to talk to, and how.
 #[derive(Args, Debug, Clone)]
 pub struct Conn {
-    /// Daemon to talk to; its peers are reachable through it.
+    /// Daemon to talk to; its peers are reachable through it (default: the
+    /// first line of ~/.config/browser-daemon/url, else /etc/browser-daemon/url,
+    /// else http://127.0.0.1:3001).
     #[arg(
         long,
         global = true,
-        default_value = "http://127.0.0.1:3001",
+        default_value_t = default_url(),
         env = "BROWSER_DAEMON_URL"
     )]
     pub url: String,
@@ -73,6 +75,28 @@ pub struct Conn {
     /// Print JSON instead of tables.
     #[arg(long, global = true)]
     pub json: bool,
+}
+
+/// The daemon a machine talks to when neither `--url` nor `BROWSER_DAEMON_URL`
+/// says: a file, because a new environment variable does not reach shells that
+/// started before it (tmux panes inherit the server's environment).
+pub(crate) fn default_url() -> String {
+    let user = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .map(|dir| dir.join("browser-daemon/url"));
+    user.into_iter()
+        .chain([PathBuf::from("/etc/browser-daemon/url")])
+        .find_map(|path| url_from(&std::fs::read_to_string(path).ok()?))
+        .unwrap_or_else(|| "http://127.0.0.1:3001".to_owned())
+}
+
+/// The first non-empty, non-comment line of a URL file.
+fn url_from(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_owned)
 }
 
 mod commands;
@@ -336,7 +360,7 @@ impl Client {
                 return fail(
                     EXIT_UNREACHABLE,
                     format!(
-                        "no browser-daemon answers at {base} ({}); pass --url or set BROWSER_DAEMON_URL",
+                        "no browser-daemon answers at {base} ({}); pass --url, set BROWSER_DAEMON_URL or write it to /etc/browser-daemon/url",
                         e.without_url()
                     ),
                 )
@@ -2892,6 +2916,15 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn url_files_skip_comments_and_blank_lines() {
+        assert_eq!(
+            url_from("# the mesh\n\n  https://browser.example  \n").as_deref(),
+            Some("https://browser.example")
+        );
+        assert_eq!(url_from("# nothing\n"), None);
+    }
 
     #[test]
     fn link_expiry_durations() {

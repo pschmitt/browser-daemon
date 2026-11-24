@@ -3215,8 +3215,8 @@ async fn fetch_overview(req: reqwest::RequestBuilder, base: &str) -> Result<Mesh
         }
         Ok(r) => Err(format!("{base}: HTTP {}", r.status())),
         Err(e) => Err(format!(
-            "No browser-daemon answers at {base} ({}): pass --url or set BROWSER_DAEMON_URL \
-             (a new shell has it on machines that use the mesh)",
+            "No browser-daemon at {base} ({}): pass --url, set BROWSER_DAEMON_URL or write \
+             it to /etc/browser-daemon/url",
             e.without_url()
         )),
     }
