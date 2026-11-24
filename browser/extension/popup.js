@@ -342,11 +342,16 @@ async function refresh() {
     : 'Tell the daemon (Home Assistant) when a tab plays sound or a meeting is open';
   const local = state.localApi || {};
   if (document.activeElement !== $('localApi')) $('localApi').checked = !!local.enabled;
-  $('localApi').disabled = !!local.managed;
-  $('localApiStatus').textContent = !local.enabled
-    ? 'Let local programs read this browser’s tabs (browser-daemon tabs)'
-    : local.connected ? 'On: local programs with a token can read this browser’s tabs'
-      : `On, but the native host is not reachable${local.error ? `: ${local.error}` : ''}`;
+  // A policy can turn the API on but cannot grant Chromium's native messaging
+  // permission: until that is granted here, the switch must stay clickable.
+  const waitingForGrant = !!local.managed && !local.permitted;
+  $('localApi').disabled = !!local.managed && !waitingForGrant;
+  $('localApiStatus').textContent = waitingForGrant
+    ? 'On by policy: switch on once to allow native messaging'
+    : !local.enabled
+      ? 'Let local programs read this browser’s tabs (browser-daemon tabs)'
+      : local.connected ? 'On: local programs with a token can read this browser’s tabs'
+        : `On, but the native host is not reachable${local.error ? `: ${local.error}` : ''}`;
   $('nativeLabel').textContent = state.nativeReady ? 'Disable companion' : 'Enable companion';
   $('native').disabled = !reg;
   $('diagnosticStatus').textContent = reg?.id || state.rememberedBrowser?.name || 'Not connected';

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* Chromium: the **Local tab API** switch stayed off and could not be clicked
+  when the `localApi` policy was set, because a policy cannot grant the native
+  messaging permission. It now stays clickable until that permission is
+  granted.
+
 ## [0.22.0] - 2026-11-24
 
 ### Added
