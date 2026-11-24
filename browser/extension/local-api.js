@@ -14,6 +14,9 @@ globalThis.localApi = (() => {
   let sendTimer = null;
   let retryTimer = null;
   let retryDelay = 1000;
+  // Chromium lets a service worker use native messaging only after it
+  // restarts once the (optional) permission is granted.
+  let grantedWhileRunning = false;
 
   async function profileId() {
     const {localApiProfile} = await ext.storage.local.get('localApiProfile');
@@ -179,6 +182,11 @@ globalThis.localApi = (() => {
 
   async function setEnabled(value) {
     await ext.storage.local.set({localApi: value === true});
+    if (value === true && onChromium && grantedWhileRunning) {
+      // Answer the popup first; the reload closes it and reconnects the rest.
+      setTimeout(() => ext.runtime.reload(), 300);
+      return;
+    }
     await refresh();
   }
 
@@ -206,7 +214,10 @@ globalThis.localApi = (() => {
   ext.storage.onChanged.addListener((changes, area) => {
     if ((area === 'local' || area === 'managed') && changes.localApi) void refresh();
   });
-  ext.permissions.onAdded.addListener(() => void refresh());
+  ext.permissions.onAdded.addListener(added => {
+    if (onChromium && added?.permissions?.includes('nativeMessaging')) grantedWhileRunning = true;
+    void refresh();
+  });
   ext.permissions.onRemoved.addListener(() => void refresh());
   void refresh();
 

@@ -40,6 +40,13 @@
   `browser-daemon completions bash|zsh|fish` now registers clap's dynamic
   completion, which asks `browser-daemon` itself.
 
+### Fixed
+
+* Chromium: switching on **Local tab API** for the first time reloads the
+  extension once, because Chromium gives its service worker native messaging
+  only after a restart (before, the switch stayed without effect until
+  Chromium was restarted).
+
 ## [0.22.1] - 2026-11-24
 
 ### Fixed
