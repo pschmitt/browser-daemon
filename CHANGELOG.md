@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* TUI in tmux: no more resizing of the tmux window at start. The terminal is
+  no longer queried for image support inside tmux (tmux sent the query to
+  every client of the window, and their replies made another client's size
+  win); the image protocol and cell size come from the tmux client viewing
+  the pane (kitty, Ghostty, WezTerm, iTerm2, sixel).
+* TUI: an unreachable daemon says so and how to point at one (`--url`,
+  `BROWSER_DAEMON_URL`) instead of a raw request error.
+
 ## [0.23.2] - 2026-11-24
 
 ### Changed

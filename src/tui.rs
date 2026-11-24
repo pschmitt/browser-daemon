@@ -284,8 +284,13 @@ fn node_cell(name: &str) -> Cell<'static> {
 const SHOT_ROWS: usize = 16;
 const SHOT_EVERY: Duration = Duration::from_secs(10);
 
-/// Ask the terminal what it can draw (kitty graphics, sixel, iTerm2; also through
-/// tmux), unless `BROWSER_DAEMON_TUI_IMAGES=off`. None: no images.
+/// What the terminal can draw (kitty graphics, sixel, iTerm2), unless
+/// `BROWSER_DAEMON_TUI_IMAGES=off`. None: no images.
+///
+/// Inside tmux nothing is queried: tmux passes a query on to every client viewing
+/// the window, their replies count as input, and with `window-size latest` the
+/// window jumps to another client's size. tmux knows each client's terminal type,
+/// features and cell size, so the client looking at this pane decides.
 fn image_picker() -> Option<Picker> {
     if matches!(
         std::env::var("BROWSER_DAEMON_TUI_IMAGES").as_deref(),
@@ -293,12 +298,11 @@ fn image_picker() -> Option<Picker> {
     ) {
         return None;
     }
-    let tmux_client = tmux_active_client();
+    if std::env::var_os("TMUX").is_some() {
+        return tmux_picker();
+    }
     let started = Instant::now();
     let picker = Picker::from_query_stdio().ok();
-    if let Some(client) = tmux_client {
-        reclaim_tmux_window(client);
-    }
     if started.elapsed() >= Duration::from_millis(900) {
         // ratatui-image gives up after 1s but leaves its query thread blocked on stdin,
         // where it swallows keystrokes until it reads a Device Status Report.
@@ -307,8 +311,7 @@ fn image_picker() -> Option<Picker> {
         let _ = out.write_all(b"\x1b[5n").and_then(|()| out.flush());
         std::thread::sleep(Duration::from_millis(200));
     }
-    let picker = with_viewer_cell_size(picker?);
-    (picker.protocol_type() != ProtocolType::Halfblocks).then_some(picker)
+    picker.filter(|p| p.protocol_type() != ProtocolType::Halfblocks)
 }
 
 fn tmux(args: &[&str]) -> Option<String> {
@@ -322,106 +325,72 @@ fn tmux(args: &[&str]) -> Option<String> {
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
-/// The attached tmux client that most recently used our window, i.e. the one that
-/// launched us. None outside tmux or when only one client views the window.
-fn tmux_active_client() -> Option<String> {
+/// The tmux client looking at a window: its terminal and cell size.
+#[derive(Debug, PartialEq)]
+struct TmuxViewer {
+    /// `client_termtype`, e.g. `kitty(0.50.0)` (empty when tmux does not know).
+    termtype: String,
+    /// `client_termfeatures`, e.g. `RGB,sixel,sync`.
+    features: String,
+    cell: (u16, u16),
+}
+
+const TMUX_CLIENT_FORMAT: &str = "#{client_activity}\t#{window_id}\t#{client_cell_width}\t\
+     #{client_cell_height}\t#{client_termtype}\t#{client_termfeatures}";
+
+/// A picker for the tmux client viewing this pane, without querying the terminal.
+fn tmux_picker() -> Option<Picker> {
     let pane = std::env::var("TMUX_PANE").ok()?;
-    std::env::var_os("TMUX")?;
     let window = tmux(&["display-message", "-p", "-t", &pane, "#{window_id}"])?;
-    let window = window.trim();
-    let clients = tmux(&[
-        "list-clients",
-        "-F",
-        "#{client_activity}\t#{window_id}\t#{client_name}",
-    ])?;
-    let viewers: Vec<(u64, String)> = clients
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.splitn(3, '\t');
-            let activity = fields.next()?.parse().ok()?;
-            let window_id = fields.next()?;
-            let name = fields.next()?;
-            (window_id == window).then(|| (activity, name.to_string()))
-        })
-        .collect();
-    // With a single viewer there is no other client to steal the window size.
-    if viewers.len() < 2 {
-        return None;
-    }
-    viewers.into_iter().max().map(|(_, name)| name)
-}
-
-/// The image query is passed through to every tmux client viewing this window. Their
-/// terminals' replies count as input, so with `window-size latest` another (smaller)
-/// client becomes the latest and the window shrinks. Make the launching client the
-/// latest again, now and once more for late replies.
-fn reclaim_tmux_window(client: String) {
-    let reclaim = move || {
-        let Ok(pane) = std::env::var("TMUX_PANE") else {
-            return;
-        };
-        let _ = std::process::Command::new("tmux")
-            .args(["switch-client", "-c", &client, "-t", &pane])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    };
-    reclaim();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
-        reclaim();
-    });
-}
-
-/// Inside tmux the cell-size query is answered with the size of some client, which is
-/// wrong when clients with different fonts or DPI view the session. Use the cell size
-/// of the client actually looking at this pane.
-fn with_viewer_cell_size(picker: Picker) -> Picker {
-    let Some(cell) = tmux_viewer_cell_size() else {
-        return picker;
-    };
-    let current = picker.font_size();
-    if cell == (current.width, current.height) {
-        return picker;
-    }
-    let cell = ratatui_image::FontSize::new(cell.0, cell.1);
-    let protocol = picker.protocol_type();
-    // Deprecated without a replacement for a known cell size: the queried one is wrong here.
+    let clients = tmux(&["list-clients", "-F", TMUX_CLIENT_FORMAT])?;
+    let viewer = tmux_viewer(&clients, window.trim())?;
+    let protocol = tmux_protocol(&viewer)?;
+    // from_fontsize turns on tmux passthrough; the protocol is ours.
     #[allow(deprecated)]
-    let mut updated = Picker::from_fontsize(cell);
-    updated.set_protocol_type(protocol);
-    updated
+    let mut picker =
+        Picker::from_fontsize(ratatui_image::FontSize::new(viewer.cell.0, viewer.cell.1));
+    picker.set_protocol_type(protocol);
+    Some(picker)
 }
 
-fn tmux_viewer_cell_size() -> Option<(u16, u16)> {
-    let pane = std::env::var("TMUX_PANE").ok()?;
-    std::env::var_os("TMUX")?;
-    let window = tmux(&["display-message", "-p", "-t", &pane, "#{window_id}"])?;
-    let clients = tmux(&[
-        "list-clients",
-        "-F",
-        "#{client_activity}\t#{window_id}\t#{client_cell_width}\t#{client_cell_height}",
-    ])?;
-    viewer_cell_size(&clients, window.trim())
-}
-
-/// Cell size of the most recently active client viewing `window`, from `list-clients`
-/// output (activity, window id, cell width, cell height).
-fn viewer_cell_size(clients: &str, window: &str) -> Option<(u16, u16)> {
+/// The most recently active client viewing `window`, from `list-clients` output in
+/// TMUX_CLIENT_FORMAT.
+fn tmux_viewer(clients: &str, window: &str) -> Option<TmuxViewer> {
     clients
         .lines()
         .filter_map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
-            let [activity, window_id, width, height] = fields[..] else {
+            let [activity, window_id, width, height, termtype, features] = fields[..] else {
                 return None;
             };
             let (width, height): (u16, u16) = (width.parse().ok()?, height.parse().ok()?);
-            (window_id == window && width > 0 && height > 0)
-                .then_some((activity.parse::<u64>().ok()?, (width, height)))
+            (window_id == window && width > 0 && height > 0).then(|| {
+                (
+                    activity.parse::<u64>().unwrap_or(0),
+                    TmuxViewer {
+                        termtype: termtype.to_owned(),
+                        features: features.to_owned(),
+                        cell: (width, height),
+                    },
+                )
+            })
         })
         .max_by_key(|(activity, _)| *activity)
-        .map(|(_, cell)| cell)
+        .map(|(_, viewer)| viewer)
+}
+
+/// The image protocol of a tmux client's terminal; None: no images.
+fn tmux_protocol(viewer: &TmuxViewer) -> Option<ProtocolType> {
+    let termtype = viewer.termtype.to_lowercase();
+    if termtype.starts_with("kitty") || termtype.starts_with("ghostty") {
+        Some(ProtocolType::Kitty)
+    } else if termtype.starts_with("wezterm") || termtype.starts_with("iterm2") {
+        Some(ProtocolType::Iterm2)
+    } else if viewer.features.split(',').any(|f| f == "sixel") {
+        Some(ProtocolType::Sixel)
+    } else {
+        None
+    }
 }
 
 /// Size of a terminal cell in pixels (a typical one when the terminal does not say).
@@ -3245,7 +3214,11 @@ async fn fetch_overview(req: reqwest::RequestBuilder, base: &str) -> Result<Mesh
             Err("Unauthorized: pass --secret-file (or set BROWSER_DAEMON_SECRET_FILE)".to_string())
         }
         Ok(r) => Err(format!("{base}: HTTP {}", r.status())),
-        Err(e) => Err(format!("{base}: {e}")),
+        Err(e) => Err(format!(
+            "No browser-daemon answers at {base} ({}): pass --url or set BROWSER_DAEMON_URL \
+             (a new shell has it on machines that use the mesh)",
+            e.without_url()
+        )),
     }
 }
 
@@ -3344,5 +3317,47 @@ mod secret_tests {
             find_secret(&http, "http://127.0.0.1:1", Some(&ok)).await,
             Ok(Some("s3cret".to_string()))
         );
+    }
+}
+
+#[cfg(test)]
+mod tmux_image_tests {
+    use super::*;
+
+    #[test]
+    fn tmux_viewer_is_the_latest_client_on_the_window() {
+        let clients = "100\t@1\t12\t24\tkitty(0.50.0)\tRGB,sync\n\
+                       200\t@1\t15\t30\t\tRGB,sixel,sync\n\
+                       300\t@2\t9\t18\tkitty(0.50.0)\tRGB\n";
+        let viewer = tmux_viewer(clients, "@1").unwrap();
+        assert_eq!(viewer.cell, (15, 30));
+        assert_eq!(tmux_protocol(&viewer), Some(ProtocolType::Sixel));
+        assert!(tmux_viewer(clients, "@9").is_none());
+    }
+
+    #[test]
+    fn tmux_protocol_follows_the_client_terminal() {
+        let viewer = |termtype: &str, features: &str| TmuxViewer {
+            termtype: termtype.into(),
+            features: features.into(),
+            cell: (10, 20),
+        };
+        assert_eq!(
+            tmux_protocol(&viewer("kitty(0.50.0)", "RGB")),
+            Some(ProtocolType::Kitty)
+        );
+        assert_eq!(
+            tmux_protocol(&viewer("ghostty 1.2", "")),
+            Some(ProtocolType::Kitty)
+        );
+        assert_eq!(
+            tmux_protocol(&viewer("WezTerm 2024", "")),
+            Some(ProtocolType::Iterm2)
+        );
+        assert_eq!(
+            tmux_protocol(&viewer("", "RGB,sixel")),
+            Some(ProtocolType::Sixel)
+        );
+        assert_eq!(tmux_protocol(&viewer("", "RGB,sync")), None);
     }
 }
