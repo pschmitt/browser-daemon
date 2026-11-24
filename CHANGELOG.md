@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.3] - 2026-11-24
+
 ### Fixed
 
 * TUI in tmux: no more resizing of the tmux window at start. The terminal is
