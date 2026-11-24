@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-24
+
 ### Changed
 
 * **Breaking:** `browser-daemon tabs` lists every tab you can reach: this
