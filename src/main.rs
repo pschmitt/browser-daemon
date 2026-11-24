@@ -523,6 +523,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return ctl_exit(local::native_host().await);
     }
+    // `COMPLETE=<shell> browser-daemon ...`: answer the shell's completion
+    // request (also with live values, such as tab ids) and exit.
+    clap_complete::CompleteEnv::with_factory(<Cli as clap::CommandFactory>::command).complete();
     let command = Cli::parse_from(hoist_conn_args(std::env::args_os().collect())).command;
     // The server and the native host write to sockets and pipes that may close:
     // a closed peer is an error there, not a reason to die.

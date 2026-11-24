@@ -100,6 +100,10 @@ pub enum Feed {
         name: String,
         #[serde(default)]
         version: String,
+        /// The client's name in tab ids (default `<host>-<browser>`, the name
+        /// the extension pairs with by default).
+        #[serde(default)]
+        label: String,
     },
     /// The complete current state; replaces the previous one.
     Snapshot {

@@ -112,6 +112,19 @@ pub async fn extension(args: ExtensionArgs) -> R<()> {
     Ok(())
 }
 
+/// For `browser-daemon tabs`: every session tab of the mesh, the sessions
+/// (for their names) and the browsers paired with this daemon (their shared
+/// tabs), as the API returns them.
+pub(crate) async fn remote_tabs(conn: &Conn) -> R<(Value, Value, Value)> {
+    let c = Client::connect(conn).await?;
+    let nodes = c.call(c.req(Method::GET, "/api/extension/nodes")).await?;
+    Ok((
+        serde_json::to_value(&c.ov.targets)?,
+        serde_json::to_value(&c.ov.sessions)?,
+        nodes,
+    ))
+}
+
 struct Client {
     http: reqwest::Client,
     base: String,
@@ -2343,10 +2356,33 @@ pub async fn node(args: NodeArgs) -> R<()> {
 }
 
 /// `browser-daemon completions <shell>`: a completion script on stdout.
+/// The shell's completion script. Bash, zsh and fish get clap's dynamic
+/// registration: the shell asks `browser-daemon` itself (`COMPLETE=<shell>`),
+/// which can also offer live values such as tab ids. Other shells get the
+/// static script.
 pub fn completions(shell: clap_complete::Shell) {
     use clap::CommandFactory;
-    let mut cmd = crate::Cli::command();
-    clap_complete::generate(shell, &mut cmd, "browser-daemon", &mut std::io::stdout());
+    use clap_complete::env::EnvCompleter;
+    use clap_complete::Shell;
+    let name = "browser-daemon";
+    let mut out = std::io::stdout();
+    let dynamic: Option<&dyn EnvCompleter> = match shell {
+        Shell::Bash => Some(&clap_complete::env::Bash),
+        Shell::Zsh => Some(&clap_complete::env::Zsh),
+        Shell::Fish => Some(&clap_complete::env::Fish),
+        _ => None,
+    };
+    match dynamic {
+        Some(completer) => {
+            if let Err(e) = completer.write_registration("COMPLETE", name, name, name, &mut out) {
+                eprintln!("error: {e}");
+            }
+        }
+        None => {
+            let mut cmd = crate::Cli::command();
+            clap_complete::generate(shell, &mut cmd, name, &mut out);
+        }
+    }
 }
 
 #[cfg(test)]

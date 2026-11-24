@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+* **Breaking:** `browser-daemon tabs` lists every tab you can reach: this
+  machine's browsers (local tab API), browsers paired with the daemon, and the
+  daemon's sessions mesh-wide; `--local`, `--shared` and `--sessions` pick
+  sources (scripts should use `--local`). `tabs` alone lists. Tab ids are
+  `<client>:<tab>` (`gk4-firefox:42`, `<session>:<target>`) instead of
+  `a.1.42`; a local tab that is also shared is listed once. The URL filter is
+  `--site`; `--browser` takes a client name, a kind or a prefix. The local
+  API's ids and `/v1/clients` change accordingly (`name`, `product`).
+
+### Added
+
+* Shell completion of tab ids (with titles) and `--browser` values:
+  `browser-daemon completions bash|zsh|fish` now registers clap's dynamic
+  completion, which asks `browser-daemon` itself.
+
 ## [0.22.1] - 2026-11-24
 
 ### Fixed

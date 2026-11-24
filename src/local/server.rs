@@ -68,47 +68,61 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// a, b, ..., z, aa, ab, ...
-fn prefix_name(mut n: usize) -> String {
-    let mut s = Vec::new();
-    loop {
-        s.push(b'a' + (n % 26) as u8);
-        if n < 26 {
-            break;
-        }
-        n = n / 26 - 1;
+/// This machine's host name, for client names like `gk4-firefox` (the names
+/// the extension pairs with by default).
+fn host_name() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|h| h.trim().to_owned())
+        .ok()
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "local".into())
+}
+
+/// A client name safe in tab ids: lowercase, `[a-z0-9-]`.
+fn slug(text: &str) -> String {
+    let s: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let s = s.trim_matches('-').to_owned();
+    if s.is_empty() {
+        "browser".into()
+    } else {
+        s
     }
-    s.reverse();
-    String::from_utf8(s).unwrap_or_default()
 }
 
 impl Tabs {
-    fn prefix_for(&mut self, profile: &str) -> String {
+    /// The client name for a browser profile: `label`, else `<host>-<browser>`;
+    /// `-2`, `-3`, ... when another profile has it. Kept across reconnects
+    /// while the server runs.
+    fn name_for(&mut self, profile: &str, label: &str, browser: &str) -> String {
         if let Some(p) = self.prefixes.get(profile) {
             return p.clone();
         }
+        let base = if label.trim().is_empty() {
+            slug(&format!("{}-{}", host_name(), browser))
+        } else {
+            slug(label)
+        };
         let taken: Vec<&String> = self.prefixes.values().collect();
-        let p = (0..)
-            .map(prefix_name)
-            .find(|p| !taken.contains(&p))
-            .unwrap_or_default();
-        self.prefixes.insert(profile.to_owned(), p.clone());
-        p
+        let name = std::iter::once(base.clone())
+            .chain((2..).map(|n| format!("{base}-{n}")))
+            .find(|candidate| !taken.contains(&candidate))
+            .unwrap_or(base);
+        self.prefixes.insert(profile.to_owned(), name.clone());
+        name
     }
 
     fn sorted_clients(&self) -> Vec<&Client> {
         let mut clients: Vec<&Client> = self.clients.values().collect();
-        clients.sort_by(|a, b| {
-            a.prefix
-                .len()
-                .cmp(&b.prefix.len())
-                .then(a.prefix.cmp(&b.prefix))
-        });
+        clients.sort_by(|a, b| a.prefix.cmp(&b.prefix));
         clients
     }
 }
 
-/// A tab as the API shows it: `id` is `<prefix>.<window>.<tab>`.
+/// A tab as the API shows it: `id` is `<client>:<tab>`, e.g. `gk4-firefox:42`.
 #[derive(Debug, Serialize, PartialEq)]
 pub struct TabView {
     pub id: String,
@@ -177,7 +191,7 @@ fn tab_views(tabs: &Tabs) -> Vec<TabView> {
         for t in list {
             let focused = c.windows.iter().any(|w| w.id == t.window_id && w.focused);
             out.push(TabView {
-                id: format!("{}.{}.{}", c.prefix, t.window_id, t.id),
+                id: format!("{}:{}", c.prefix, t.id),
                 client: c.prefix.clone(),
                 browser: c.browser.clone(),
                 window_id: t.window_id,
@@ -323,9 +337,9 @@ async fn list_windows(
             let active = in_window
                 .iter()
                 .find(|t| t.active)
-                .map(|t| format!("{}.{}.{}", c.prefix, w.id, t.id));
+                .map(|t| format!("{}:{}", c.prefix, t.id));
             out.push(json!({
-                "id": format!("{}.{}", c.prefix, w.id),
+                "id": format!("{}:w{}", c.prefix, w.id),
                 "client": c.prefix,
                 "browser": c.browser,
                 "window_id": w.id,
@@ -354,9 +368,9 @@ async fn list_clients(
         .into_iter()
         .map(|c| {
             json!({
-                "prefix": c.prefix,
+                "name": c.prefix,
                 "browser": c.browser,
-                "name": c.name,
+                "product": c.name,
                 "version": c.version,
                 "profile": c.profile,
                 "windows": c.windows.len(),
@@ -422,8 +436,9 @@ async fn feed(stream: UnixStream, tabs: Arc<Mutex<Tabs>>) {
                 profile,
                 name,
                 version,
+                label,
             } => {
-                let prefix = t.prefix_for(&profile);
+                let prefix = t.name_for(&profile, &label, &browser);
                 tracing::info!("{browser} ({name} {version}) connected as {prefix}");
                 let now = now();
                 t.clients.insert(
@@ -603,19 +618,17 @@ mod tests {
     }
 
     #[test]
-    fn names_prefixes_like_spreadsheet_columns() {
-        assert_eq!(prefix_name(0), "a");
-        assert_eq!(prefix_name(25), "z");
-        assert_eq!(prefix_name(26), "aa");
-        assert_eq!(prefix_name(27), "ab");
-    }
-
-    #[test]
-    fn keeps_a_profiles_prefix() {
+    fn names_clients_after_the_host_and_browser_or_their_label() {
         let mut t = Tabs::default();
-        assert_eq!(t.prefix_for("p1"), "a");
-        assert_eq!(t.prefix_for("p2"), "b");
-        assert_eq!(t.prefix_for("p1"), "a");
+        let firefox = format!("{}-firefox", slug(&host_name()));
+        assert_eq!(t.name_for("p1", "", "firefox"), firefox);
+        assert_eq!(t.name_for("p2", "", "firefox"), format!("{firefox}-2"));
+        assert_eq!(t.name_for("p1", "", "firefox"), firefox);
+        assert_eq!(
+            t.name_for("p3", "Work Chromium!", "chromium"),
+            "work-chromium"
+        );
+        assert_eq!(slug("--"), "browser");
     }
 
     #[test]
@@ -645,7 +658,7 @@ mod tests {
             ),
         );
         let views = tab_views(&t);
-        assert_eq!(views[0].id, "a.1.5");
+        assert_eq!(views[0].id, "a:5");
         assert!(views[0].focused_window);
         let audible = TabFilter {
             audible: Some(true),
@@ -658,6 +671,6 @@ mod tests {
         };
         let hits: Vec<_> = views.iter().filter(|v| url.matches(v)).collect();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "a.1.7");
+        assert_eq!(hits[0].id, "a:7");
     }
 }

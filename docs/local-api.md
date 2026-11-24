@@ -28,11 +28,42 @@ features.
    managed policy `localApi: true`. Chromium asks for the native messaging
    permission when you switch it on.
 
+## The `tabs` command
+
+`browser-daemon tabs` lists every tab you can reach, from three sources:
+
+| Source | Flag | What |
+| --- | --- | --- |
+| local | `--local` | all tabs of this machine's browsers (local tab API; no network) |
+| shared | `--shared` | tabs of browsers paired with the daemon |
+| sessions | `--sessions` | tabs of the daemon's browser sessions, mesh-wide |
+
+Without a flag it reads all three and skips one that does not answer, with a
+note on stderr; a source asked for by flag that fails is an error. Scripts
+use `--local`: about a millisecond, and no network.
+
+Tab ids are `<client>:<tab>`. A browser's client name is `<host>-<browser>`
+(`gk4-firefox`; the name the extension pairs with by default), so a tab of
+your own browser that is also shared has the same id from both sources and is
+listed once (`shared` in `--json`). Session tabs are `<session name>:<first 8
+characters of the target id>`.
+
 ```text
-$ browser-daemon tabs list --audible
-a.1.42	Some video - YouTube	https://www.youtube.com/watch?v=...
-$ browser-daemon tabs --json clients
+$ browser-daemon tabs --audible
+gk4-firefox:42	Some video - YouTube	https://www.youtube.com/watch?v=...
+$ browser-daemon tabs --local --site meet.jit.si
+$ browser-daemon tabs --browser chromium
+$ browser-daemon tabs get gk4-firefox:42
+$ browser-daemon tabs clients
+gk4-firefox	local	firefox	57 tabs
+jolly-otter	session	chromium	2 tabs
 ```
+
+Filters: `--audible`, `--active`, `--pinned`, `--site` (URL contains),
+`--title`, `--browser` (a client name, a kind such as `firefox`, or a name
+prefix), and a free-text query after `list`. `--json` prints every field.
+Tab ids and `--browser` complete in bash, zsh and fish (`browser-daemon
+completions <shell>` registers dynamic completion).
 
 ## Why
 
@@ -150,7 +181,7 @@ HTTP/1.1 over the Unix socket, JSON, `Authorization: Bearer <token>`.
 | Method and path | Scope | |
 | --- | --- | --- |
 | `GET /v1/tabs` | `tabs:read` | filters: `audible`, `active`, `pinned`, `browser`, `window`, `url` (substring), `title`, `q` (either) |
-| `GET /v1/tabs/{id}` | `tabs:read` | ids are `<browser>.<window>.<tab>` like bruvtab's |
+| `GET /v1/tabs/{id}` | `tabs:read` | ids are `<client>:<tab>`, e.g. `gk4-firefox:42` |
 | `GET /v1/windows`, `GET /v1/clients` | `tabs:read` | windows with tab counts; connected browsers and profiles |
 | `POST /v1/tabs/{id}/activate` | `tabs:control` | also focuses the window |
 | `POST /v1/tabs/open` | `tabs:control` | URLs, target window, background |
@@ -201,7 +232,7 @@ media player sensor.
 
 | bruvtab | Here | Notes |
 | --- | --- | --- |
-| `list`, `query`, `active`, `windows`, `clients` | `tabs list/active/windows/clients`, `GET /v1/…` | from memory |
+| `list`, `query`, `active`, `windows`, `clients` | `tabs [list]`, `tabs active/get/clients`, `GET /v1/…` | all sources; local ones from memory |
 | `activate`, `close`, `open`, `new`, `navigate`, `update`, `move` | `tabs …`, `POST /v1/tabs/…` | |
 | `play`, `pause`, `mute`, `unmute` | `tabs media …` | mute with `tabs.update`; play/pause with a script in the page |
 | `text`, `html`, `words` | `tabs text/html/words` | `scripting.executeScript` |
