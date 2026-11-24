@@ -20,7 +20,8 @@ Before every release, try to land the open dependency PRs (Renovate,
 Dependabot): `gh pr list`, merge those whose checks are green (Renovate
 rebases the ones that conflict; wait for it), and let CI finish on the
 resulting `main` before tagging. Leave out PRs with failing checks or major
-bumps that need real work, and say which.
+bumps that need real work, and say which (`release-prepare` refuses while
+they are open; name skipped ones in `RELEASE_SKIP_PRS="#12 #34"`).
 
 The Home Assistant integration pins the Python client of this repo
 (`custom_components/browser_daemon/manifest.json`, `browser-daemon-client==X.Y.Z`).
