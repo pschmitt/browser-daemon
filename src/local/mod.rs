@@ -146,4 +146,5 @@ pub async fn local(args: LocalArgs) -> R<()> {
     }
 }
 
+pub(crate) use client::local_clients;
 pub use client::{tabs, TabsArgs};

@@ -2218,59 +2218,186 @@ async fn keep_recordings(c: &Client, recordings: &[String], keep: bool) -> R<()>
 
 // --------------------------------------------------------------------- nodes
 
-pub async fn node(args: NodeArgs) -> R<()> {
-    let c = Client::connect(&args.conn).await?;
-    match args.cmd {
-        NodeCmd::List => {
-            if c.json {
-                c.print_json(&json!({ "local": c.ov.local_node, "peers": c.ov.peers }));
-                return Ok(());
+/// A browser node: one of this machine's browsers (local tab API), a browser
+/// paired with the daemon, or both under the same name.
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+pub(crate) struct BrowserNode {
+    pub name: String,
+    pub browser: String,
+    pub online: bool,
+    /// `local`, `shared` or both.
+    pub sources: Vec<&'static str>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    pub tabs: usize,
+}
+
+/// Merge the local API's clients and the daemon's paired browsers by name.
+pub(crate) fn browser_nodes(local: &Value, paired: &Value) -> Vec<BrowserNode> {
+    let mut out: Vec<BrowserNode> = Vec::new();
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    for c in local.as_array().into_iter().flatten() {
+        out.push(BrowserNode {
+            name: text(c, "name"),
+            browser: text(c, "browser"),
+            online: true,
+            sources: vec!["local"],
+            version: text(c, "version"),
+            tabs: c.get("tabs").and_then(Value::as_u64).unwrap_or(0) as usize,
+        });
+    }
+    for n in paired["nodes"].as_array().into_iter().flatten() {
+        let name = text(n, "name");
+        let online = n.get("online").and_then(Value::as_bool).unwrap_or(false);
+        let tabs = n["tabs"].as_array().map_or(0, Vec::len);
+        match out.iter_mut().find(|b| b.name == name) {
+            Some(b) => {
+                b.sources.push("shared");
+                if b.version.is_empty() {
+                    b.version = text(n, "version");
+                }
             }
-            let l = &c.ov.local_node;
-            let mut rows = vec![vec![
-                l.name.clone(),
-                "online (asked)".to_string(),
-                format!("{}/{}", l.active_sessions, l.max_sessions),
-                l.profiles_count.to_string(),
-                "-".to_string(),
-                l.version.clone(),
-                duration(l.uptime_seconds),
-            ]];
-            for p in &c.ov.peers {
-                rows.push(vec![
-                    p.name.clone(),
-                    p.error
-                        .clone()
-                        .map_or_else(|| p.status.clone(), |e| format!("{} ({e})", p.status)),
-                    format!("{}/{}", p.active_sessions, p.max_sessions),
-                    p.profiles_count.to_string(),
-                    p.latency_ms.map_or("-".into(), |ms| format!("{ms} ms")),
-                    p.version.clone().unwrap_or_default(),
-                    duration(p.uptime_seconds),
-                ]);
-            }
-            for n in l
-                .ephemeral_nodes
-                .iter()
-                .chain(c.ov.peers.iter().flat_map(|p| &p.ephemeral_nodes))
-            {
-                rows.push(vec![
-                    n.name.clone(),
-                    format!("{} (ephemeral)", n.status),
-                    format!("{}/1", usize::from(n.session_id.is_some())),
-                    "-".into(),
-                    "-".into(),
-                    "-".into(),
-                    duration(crate::clients::now_secs().saturating_sub(n.created_at)),
-                ]);
-            }
-            table(
-                &[
-                    "NODE", "STATUS", "SESSIONS", "PROFILES", "LATENCY", "VERSION", "UP",
-                ],
-                &rows,
-            );
+            None => out.push(BrowserNode {
+                name,
+                browser: text(n, "browser"),
+                online,
+                sources: vec!["shared"],
+                version: text(n, "version"),
+                tabs,
+            }),
         }
+    }
+    out
+}
+
+/// `node list`: the mesh's daemons and the browser nodes. With `local`, only
+/// this machine's browsers (no daemon); otherwise an unreachable daemon still
+/// shows them, with a note.
+async fn node_list(conn: &Conn, local_only: bool) -> R<()> {
+    let local = tokio::task::block_in_place(crate::local::local_clients);
+    let local = match local {
+        Ok(v) => v,
+        Err(e) if local_only => return Err(e),
+        Err(_) => Value::Array(Vec::new()),
+    };
+    let remote = if local_only {
+        None
+    } else {
+        match Client::connect(conn).await {
+            Ok(c) => {
+                let paired = c.call(c.req(Method::GET, "/api/extension/nodes")).await?;
+                Some((c, paired))
+            }
+            Err(e) if local.as_array().is_some_and(|a| !a.is_empty()) => {
+                eprintln!("note: skipping the mesh ({}): {e}", conn.url);
+                None
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    let paired = remote.as_ref().map_or(Value::Null, |(_, p)| p.clone());
+    let browsers = browser_nodes(&local, &paired);
+    if conn.json {
+        let mut out = json!({ "browsers": browsers });
+        if let Some((c, _)) = &remote {
+            out["local"] = serde_json::to_value(&c.ov.local_node)?;
+            out["peers"] = serde_json::to_value(&c.ov.peers)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+    let mut rows = Vec::new();
+    if let Some((c, _)) = &remote {
+        let tabs_on = |node: &str| {
+            c.ov.targets
+                .iter()
+                .filter(|t| t.node_name == node && t.target.target_type == "page")
+                .count()
+                .to_string()
+        };
+        let l = &c.ov.local_node;
+        rows.push(vec![
+            l.name.clone(),
+            "daemon".into(),
+            "online (asked)".to_string(),
+            format!("{}/{}", l.active_sessions, l.max_sessions),
+            tabs_on(&l.name),
+            l.profiles_count.to_string(),
+            "-".to_string(),
+            l.version.clone(),
+            duration(l.uptime_seconds),
+        ]);
+        for p in &c.ov.peers {
+            rows.push(vec![
+                p.name.clone(),
+                "daemon".into(),
+                p.error
+                    .clone()
+                    .map_or_else(|| p.status.clone(), |e| format!("{} ({e})", p.status)),
+                format!("{}/{}", p.active_sessions, p.max_sessions),
+                tabs_on(&p.name),
+                p.profiles_count.to_string(),
+                p.latency_ms.map_or("-".into(), |ms| format!("{ms} ms")),
+                p.version.clone().unwrap_or_default(),
+                duration(p.uptime_seconds),
+            ]);
+        }
+        for n in l
+            .ephemeral_nodes
+            .iter()
+            .chain(c.ov.peers.iter().flat_map(|p| &p.ephemeral_nodes))
+        {
+            rows.push(vec![
+                n.name.clone(),
+                "ephemeral".into(),
+                n.status.clone(),
+                format!("{}/1", usize::from(n.session_id.is_some())),
+                tabs_on(&n.name),
+                "-".into(),
+                "-".into(),
+                "-".into(),
+                duration(crate::clients::now_secs().saturating_sub(n.created_at)),
+            ]);
+        }
+    }
+    for b in &browsers {
+        rows.push(vec![
+            b.name.clone(),
+            "browser".into(),
+            format!(
+                "{} ({})",
+                if b.online { "online" } else { "offline" },
+                b.sources.join(", ")
+            ),
+            "-".into(),
+            b.tabs.to_string(),
+            "-".into(),
+            "-".into(),
+            if b.version.is_empty() {
+                "-".into()
+            } else {
+                b.version.clone()
+            },
+            "-".into(),
+        ]);
+    }
+    table(
+        &[
+            "NODE", "KIND", "STATUS", "SESSIONS", "TABS", "PROFILES", "LATENCY", "VERSION", "UP",
+        ],
+        &rows,
+    );
+    Ok(())
+}
+
+pub async fn node(args: NodeArgs) -> R<()> {
+    let cmd = match args.cmd {
+        None | Some(NodeCmd::List) => return node_list(&args.conn, args.local).await,
+        Some(cmd) => cmd,
+    };
+    let c = Client::connect(&args.conn).await?;
+    match cmd {
+        NodeCmd::List => unreachable!("handled before connecting"),
         NodeCmd::Show { node } => {
             let node = c.node_or_local(node.as_deref())?;
             if node == c.ov.local_node.name {
@@ -2428,6 +2555,27 @@ mod tests {
     fn command_line_is_consistent() {
         // Catches clashing option names (e.g. a positional `url` against the global --url).
         crate::Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn browser_nodes_merge_local_and_shared_by_name() {
+        let local = serde_json::json!([
+            {"name": "gk4-firefox", "browser": "firefox", "version": "150", "tabs": 3},
+        ]);
+        let paired = serde_json::json!({"nodes": [
+            {"name": "gk4-firefox", "browser": "firefox", "online": true, "version": "0.22.1", "tabs": [{}]},
+            {"name": "ge2-firefox", "browser": "firefox", "online": false, "version": "0.22.0", "tabs": []},
+        ]});
+        let nodes = super::browser_nodes(&local, &paired);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].name, "gk4-firefox");
+        assert_eq!(nodes[0].sources, ["local", "shared"]);
+        assert_eq!(nodes[0].tabs, 3);
+        assert!(!nodes[1].online);
+        assert_eq!(nodes[1].sources, ["shared"]);
+        assert!(
+            super::browser_nodes(&serde_json::Value::Null, &serde_json::Value::Null).is_empty()
+        );
     }
 
     #[test]

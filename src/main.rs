@@ -138,6 +138,16 @@ pub struct Cli {
 /// `browser-daemon --url X session list` as well as `browser-daemon session --url X
 /// list`: the client options given before the command move to just after it, where
 /// clap reads them.
+/// The command line, where every (sub)command also answers to an unambiguous
+/// prefix of its name or alias: `browser-daemon no` is `node`, `p ls` is
+/// `profile list`.
+fn cli_command() -> clap::Command {
+    fn infer(cmd: clap::Command) -> clap::Command {
+        cmd.infer_subcommands(true).mut_subcommands(infer)
+    }
+    infer(<Cli as clap::CommandFactory>::command())
+}
+
 fn hoist_conn_args(argv: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
     const WITH_VALUE: [&str; 2] = ["--url", "--secret-file"];
     let mut out = argv.iter().take(1).cloned().collect::<Vec<_>>();
@@ -525,8 +535,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // `COMPLETE=<shell> browser-daemon ...`: answer the shell's completion
     // request (also with live values, such as tab ids) and exit.
-    clap_complete::CompleteEnv::with_factory(<Cli as clap::CommandFactory>::command).complete();
-    let command = Cli::parse_from(hoist_conn_args(std::env::args_os().collect())).command;
+    clap_complete::CompleteEnv::with_factory(cli_command).complete();
+    let matches = cli_command().get_matches_from(hoist_conn_args(std::env::args_os().collect()));
+    let command = match <Cli as clap::FromArgMatches>::from_arg_matches(&matches) {
+        Ok(cli) => cli.command,
+        Err(e) => e.exit(),
+    };
     // The server and the native host write to sockets and pipes that may close:
     // a closed peer is an error there, not a reason to die.
     if !matches!(command, Command::Run(_) | Command::Local(_)) {
@@ -1470,6 +1484,28 @@ async fn shutdown_on_signal(state: AppState) {
 
 #[cfg(test)]
 mod hoist_tests {
+    #[test]
+    fn subcommands_answer_to_unambiguous_prefixes() {
+        let parse = |args: &[&str]| {
+            let m = super::cli_command().try_get_matches_from(args)?;
+            <super::Cli as clap::FromArgMatches>::from_arg_matches(&m)
+        };
+        assert!(matches!(
+            parse(&["bd", "no"]).unwrap().command,
+            super::Command::Node(_)
+        ));
+        assert!(matches!(
+            parse(&["bd", "p", "ls"]).unwrap().command,
+            super::Command::Profile(_)
+        ));
+        assert!(matches!(
+            parse(&["bd", "ta", "--local"]).unwrap().command,
+            super::Command::Tabs(_)
+        ));
+        // `t` is tabs or tui: ambiguous, an error rather than a guess.
+        assert!(parse(&["bd", "t"]).is_err());
+    }
+
     use super::hoist_conn_args;
 
     fn run(args: &[&str]) -> Vec<String> {

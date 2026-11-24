@@ -54,10 +54,11 @@ gk4-firefox:42	Some video - YouTube	https://www.youtube.com/watch?v=...
 $ browser-daemon tabs --local --site meet.jit.si
 $ browser-daemon tabs --browser chromium
 $ browser-daemon tabs get gk4-firefox:42
-$ browser-daemon tabs clients
-gk4-firefox	local	firefox	57 tabs
-jolly-otter	session	chromium	2 tabs
 ```
+
+Browsers are nodes, next to the mesh's daemons: `browser-daemon nodes` lists
+both (kind `browser`, with `local`, `shared` or both), and `browser-daemon
+nodes --local` only this machine's browsers, without a daemon.
 
 Filters: `--audible`, `--active`, `--pinned`, `--site` (URL contains),
 `--title`, `--browser` (a client name, a kind such as `firefox`, or a name
@@ -232,7 +233,7 @@ media player sensor.
 
 | bruvtab | Here | Notes |
 | --- | --- | --- |
-| `list`, `query`, `active`, `windows`, `clients` | `tabs [list]`, `tabs active/get/clients`, `GET /v1/…` | all sources; local ones from memory |
+| `list`, `query`, `active`, `windows`, `clients` | `tabs [list]`, `tabs active/get`, `nodes [--local]`, `GET /v1/…` | all sources; local ones from memory |
 | `activate`, `close`, `open`, `new`, `navigate`, `update`, `move` | `tabs …`, `POST /v1/tabs/…` | |
 | `play`, `pause`, `mute`, `unmute` | `tabs media …` | mute with `tabs.update`; play/pause with a script in the page |
 | `text`, `html`, `words` | `tabs text/html/words` | `scripting.executeScript` |

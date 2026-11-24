@@ -117,8 +117,6 @@ enum TabsCommand {
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
     },
-    /// Browsers and sessions with tabs: name, source, kind, tab count.
-    Clients,
 }
 
 /// A tab from any source.
@@ -301,6 +299,15 @@ fn local_rows(list: &Value) -> Vec<Row> {
             window: t.get("window_id").and_then(Value::as_i64),
         })
         .collect()
+}
+
+/// The local tab API's clients, for `browser-daemon nodes`.
+pub(crate) fn local_clients() -> R<Value> {
+    let local = LocalConn {
+        socket: None,
+        token_file: std::env::var_os("BROWSER_DAEMON_LOCAL_TOKEN_FILE").map(PathBuf::from),
+    };
+    local_get(&local, "/v1/clients")
 }
 
 // --- the daemon: shared browsers and sessions ---------------------------------
@@ -501,28 +508,6 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 println!("{}", serde_json::to_string_pretty(&row)?);
             } else {
                 print_rows(&[row]);
-            }
-        }
-        TabsCommand::Clients => {
-            let mut clients: Vec<(String, &'static str, String, usize)> = Vec::new();
-            for r in rows.iter().filter(|r| args.filter.matches(r, None)) {
-                match clients.iter_mut().find(|c| c.0 == r.client) {
-                    Some(c) => c.3 += 1,
-                    None => clients.push((r.client.clone(), r.source, r.browser.clone(), 1)),
-                }
-            }
-            if json {
-                let list: Vec<Value> = clients
-                    .iter()
-                    .map(|(name, source, browser, tabs)| {
-                        serde_json::json!({"name": name, "source": source, "browser": browser, "tabs": tabs})
-                    })
-                    .collect();
-                println!("{}", serde_json::to_string_pretty(&list)?);
-            } else {
-                for (name, source, browser, tabs) in clients {
-                    println!("{name}\t{source}\t{browser}\t{tabs} tabs");
-                }
             }
         }
     }

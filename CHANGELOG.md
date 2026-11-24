@@ -12,9 +12,16 @@
   `a.1.42`; a local tab that is also shared is listed once. The URL filter is
   `--site`; `--browser` takes a client name, a kind or a prefix. The local
   API's ids and `/v1/clients` change accordingly (`name`, `product`).
+* `browser-daemon nodes` (the subcommand is optional now) also lists browser
+  nodes: this machine's browsers and browsers paired with the daemon (kind
+  `browser`, with a TABS column for every node); `nodes --local` lists only
+  this machine's browsers, without a daemon. `--json` adds `browsers`.
 
 ### Added
 
+* Every command and subcommand answers to an unambiguous prefix of its name:
+  `browser-daemon no` is `nodes`, `p ls` is `profile list`; an ambiguous one
+  (`t`: `tabs` or `tui`) is an error that names the candidates.
 * Shell completion of tab ids (with titles) and `--browser` values:
   `browser-daemon completions bash|zsh|fish` now registers clap's dynamic
   completion, which asks `browser-daemon` itself.
