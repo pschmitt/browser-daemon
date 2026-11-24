@@ -113,6 +113,7 @@ enum TabsCommand {
     /// The active tab of every window.
     Active,
     /// One tab by id (`gk4-firefox:42`).
+    #[command(visible_alias = "show")]
     Get {
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,

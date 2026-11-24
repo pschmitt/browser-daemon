@@ -89,6 +89,24 @@ pub async fn extension(args: ExtensionArgs) -> R<()> {
             .req(Method::POST, "/api/extension/pair")
             .json(&json!({"origin": origin, "lifetime_secs": lifetime_secs, "remember": remember})),
         ExtensionCmd::List => c.req(Method::GET, "/api/extension/nodes"),
+        ExtensionCmd::Show { browser } => {
+            let all = c.call(c.req(Method::GET, "/api/extension/nodes")).await?;
+            let found = all["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|n| {
+                    n["id"].as_str() == Some(&browser) || n["name"].as_str() == Some(&browser)
+                })
+                .cloned();
+            return match found {
+                Some(n) => {
+                    c.print_json(&n);
+                    Ok(())
+                }
+                None => fail(EXIT_NOT_FOUND, format!("no paired browser {browser}")),
+            };
+        }
         ExtensionCmd::Revoke { id } => c.req(Method::DELETE, &format!("/api/extension/nodes/{id}")),
         ExtensionCmd::Command {
             id,
@@ -1098,6 +1116,52 @@ pub async fn label(args: LabelArgs) -> R<()> {
     let c = Client::connect(&args.conn).await?;
     let local = c.ov.local_node.name.clone();
     match args.cmd {
+        LabelCmd::Show { name } => {
+            let carriers = |labels: &[String]| labels.contains(&name);
+            let mut nodes: Vec<&str> = Vec::new();
+            if carriers(&c.ov.local_node.labels) {
+                nodes.push(&c.ov.local_node.name);
+            }
+            nodes.extend(
+                c.ov.peers
+                    .iter()
+                    .filter(|p| carriers(&p.labels))
+                    .map(|p| p.name.as_str()),
+            );
+            let profiles: Vec<&str> =
+                c.ov.profiles
+                    .iter()
+                    .filter(|p| carriers(&p.profile.labels))
+                    .map(|p| p.profile.name.as_str())
+                    .collect();
+            let sessions: Vec<String> =
+                c.ov.sessions
+                    .iter()
+                    .filter(|s| carriers(&s.labels))
+                    .map(|s| s.session.id.to_string())
+                    .collect();
+            let recordings: Vec<String> =
+                c.ov.recordings
+                    .iter()
+                    .filter(|r| carriers(&r.labels))
+                    .map(|r| r.recording.id.to_string())
+                    .collect();
+            let def = c.ov.labels.defs.get(&name);
+            if def.is_none()
+                && nodes.is_empty()
+                && profiles.is_empty()
+                && sessions.is_empty()
+                && recordings.is_empty()
+            {
+                return fail(EXIT_NOT_FOUND, format!("no label {name}"));
+            }
+            c.print_json(&json!({
+                "label": name,
+                "icon": def.and_then(|d| d.icon.as_ref()),
+                "color": def.and_then(|d| d.color.as_ref()),
+                "nodes": nodes, "profiles": profiles, "sessions": sessions, "recordings": recordings,
+            }));
+        }
         LabelCmd::List => {
             // Every label with its users: the registry's, plus what carries one.
             let mut rows: std::collections::BTreeMap<String, [usize; 4]> = Default::default();
@@ -1683,6 +1747,34 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
 
 async fn backup(c: &Client, cmd: BackupCmd) -> R<()> {
     match cmd {
+        BackupCmd::Show {
+            profile,
+            backup,
+            node,
+        } => {
+            let p = c.profile(&profile, node.as_deref())?;
+            let path = c.api(
+                &p.node_name,
+                &format!("/profiles/{}/backups", enc(&p.profile.name)),
+            );
+            let v = c.call(c.req(Method::GET, &path)).await?;
+            let hits: Vec<&Value> = v
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|b| b["id"].as_str().is_some_and(|id| id.starts_with(&backup)))
+                .collect();
+            match hits.as_slice() {
+                [one] => c.print_json(one),
+                [] => return fail(EXIT_NOT_FOUND, format!("no backup {backup} of {profile}")),
+                _ => {
+                    return fail(
+                        EXIT_USAGE,
+                        format!("{backup} matches several backups of {profile}"),
+                    )
+                }
+            }
+        }
         BackupCmd::List { profile, node } => {
             let p = c.profile(&profile, node.as_deref())?;
             let path = c.api(
@@ -2270,6 +2362,40 @@ pub(crate) fn browser_nodes(local: &Value, paired: &Value) -> Vec<BrowserNode> {
     out
 }
 
+/// One browser node by name, with the paired browser's details when the daemon
+/// knows it; `None` when no browser has that name.
+async fn browser_node(conn: &Conn, name: &str, local_only: bool) -> R<Option<Value>> {
+    let local = tokio::task::block_in_place(crate::local::local_clients)
+        .unwrap_or(Value::Array(Vec::new()));
+    let paired = if local_only {
+        Value::Null
+    } else {
+        match Client::connect(conn).await {
+            Ok(c) => c
+                .call(c.req(Method::GET, "/api/extension/nodes"))
+                .await
+                .unwrap_or(Value::Null),
+            Err(_) => Value::Null,
+        }
+    };
+    let Some(node) = browser_nodes(&local, &paired)
+        .into_iter()
+        .find(|b| b.name == name)
+    else {
+        return Ok(None);
+    };
+    let mut out = serde_json::to_value(&node)?;
+    if let Some(p) = paired["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|n| n["name"].as_str() == Some(name))
+    {
+        out["paired"] = p.clone();
+    }
+    Ok(Some(out))
+}
+
 /// `node list`: the mesh's daemons and the browser nodes. With `local`, only
 /// this machine's browsers (no daemon); otherwise an unreachable daemon still
 /// shows them, with a note.
@@ -2393,6 +2519,18 @@ async fn node_list(conn: &Conn, local_only: bool) -> R<()> {
 pub async fn node(args: NodeArgs) -> R<()> {
     let cmd = match args.cmd {
         None | Some(NodeCmd::List) => return node_list(&args.conn, args.local).await,
+        Some(NodeCmd::Show { node: Some(name) }) => {
+            // A browser node (`gk4-firefox`)? Asked before the mesh, so a local
+            // browser shows without a daemon.
+            if let Some(found) = browser_node(&args.conn, &name, args.local).await? {
+                println!("{}", serde_json::to_string_pretty(&found)?);
+                return Ok(());
+            }
+            if args.local {
+                return fail(EXIT_NOT_FOUND, format!("no local browser {name}"));
+            }
+            NodeCmd::Show { node: Some(name) }
+        }
         Some(cmd) => cmd,
     };
     let c = Client::connect(&args.conn).await?;

@@ -22,6 +22,10 @@
 * Every command and subcommand answers to an unambiguous prefix of its name:
   `browser-daemon no` is `nodes`, `p ls` is `profile list`; an ambiguous one
   (`t`: `tabs` or `tui`) is an error that names the candidates.
+* `show` everywhere, with `get` as an alias (`tabs get` also answers to
+  `show`): new `extension show` (by id or name), `label show` (icon, color and
+  what carries it), `profile backup show`; `node show` also shows browser
+  nodes (`browser-daemon no get gk4-firefox`, `--local` without a daemon).
 * Shell completion of tab ids (with titles) and `--browser` values:
   `browser-daemon completions bash|zsh|fish` now registers clap's dynamic
   completion, which asks `browser-daemon` itself.

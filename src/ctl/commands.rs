@@ -22,6 +22,7 @@ pub enum SessionCmd {
         node: Option<String>,
     },
     /// Show one session.
+    #[command(visible_alias = "get")]
     Show {
         /// Id (or its start), or name.
         session: String,
@@ -317,6 +318,7 @@ pub enum ProfileCmd {
         labels: Vec<String>,
     },
     /// Show one profile.
+    #[command(visible_alias = "get")]
     Show {
         profile: String,
         #[arg(long)]
@@ -491,6 +493,14 @@ pub enum BackupCmd {
         #[arg(long)]
         node: Option<String>,
     },
+    /// Show one backup of a profile (by id or the start of it).
+    #[command(visible_alias = "get")]
+    Show {
+        profile: String,
+        backup: String,
+        #[arg(long)]
+        node: Option<String>,
+    },
     /// Back a profile up (it must not be in use).
     Create {
         profile: String,
@@ -536,6 +546,7 @@ pub enum RecordingCmd {
         node: Option<String>,
     },
     /// Show one recording's details.
+    #[command(visible_alias = "get")]
     Show { recording: String },
     /// Mark recordings as favorites: the cleanup (age, count and storage limits) never
     /// removes them. No recording is a favorite unless asked.
@@ -625,7 +636,9 @@ pub enum NodeCmd {
     /// machine's browsers, browsers paired with the daemon).
     #[command(visible_alias = "ls")]
     List,
-    /// A node's settings, version and proxies.
+    /// A node's settings, version and proxies; for a browser node (`gk4-firefox`),
+    /// where it is connected and how many tabs it has.
+    #[command(visible_alias = "get")]
     Show { node: Option<String> },
     /// Change a node's settings (proxy default, per-engine defaults).
     Set {
@@ -691,6 +704,9 @@ pub enum ExtensionCmd {
     },
     /// List connected browsers and explicitly shared tabs on this daemon.
     List,
+    /// Show one paired browser (by id or name, e.g. `gk4-firefox`).
+    #[command(visible_alias = "get")]
+    Show { browser: String },
     /// End a browser's grant now.
     Revoke { id: Uuid },
     /// Act on one shared tab. JSON params may be supplied on stdin with `-`.
@@ -725,6 +741,10 @@ pub enum LabelCmd {
     /// List the labels of the mesh, with their icon and what carries them.
     #[command(visible_alias = "ls")]
     List,
+    /// Show one label: its icon, color, and the nodes, profiles, sessions and
+    /// recordings that carry it.
+    #[command(visible_alias = "get")]
+    Show { name: String },
     /// Change a label's icon, or rename it (on every node, profile, session and recording).
     Set {
         name: String,
