@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-11-24
+
 ### Fixed
 
 * Chromium: the **Local tab API** switch stayed off and could not be clicked
