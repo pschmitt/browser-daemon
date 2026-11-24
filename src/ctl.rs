@@ -452,27 +452,72 @@ impl Tally {
 
 // -------------------------------------------------------------------- output
 
-fn table(head: &[&str], rows: &[Vec<String>]) {
+/// Colors for terminal output: only on a terminal, never with NO_COLOR or a
+/// dumb terminal.
+pub(crate) fn color_enabled() -> bool {
+    std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::env::var("TERM").map_or(true, |t| t != "dumb")
+}
+
+/// A cell's color (ANSI SGR), kubecolor-style: status words by meaning,
+/// otherwise the first column bold and the others alternating.
+fn cell_color(col: usize, cell: &str) -> &'static str {
+    let word = cell
+        .trim()
+        .split([' ', '('])
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    match word.as_str() {
+        "online" | "running" | "yes" | "true" | "ok" | "active" | "connected" | "ready" => "32",
+        "offline" | "unreachable" | "error" | "failed" | "no" | "false" | "stopped" | "dead"
+        | "expired" => "31",
+        "pending" | "starting" | "paused" | "ephemeral" | "idle" | "recording" | "stale" => "33",
+        "-" | "" => "2",
+        _ if col == 0 => "1",
+        _ if col % 2 == 1 => "36",
+        _ => "0",
+    }
+}
+
+/// A kubectl-style table: upper-case header, columns padded to their widest
+/// cell, colored on a terminal.
+pub(crate) fn table(head: &[&str], rows: &[Vec<String>]) {
+    let color = color_enabled();
     let mut width: Vec<usize> = head.iter().map(|h| h.chars().count()).collect();
     for row in rows {
         for (i, c) in row.iter().enumerate() {
             width[i] = width[i].max(c.chars().count());
         }
     }
-    let line = |cells: Vec<&str>| {
+    let line = |cells: Vec<&str>, header: bool| {
         let mut out = String::new();
         for (i, c) in cells.iter().enumerate() {
-            if i + 1 == cells.len() {
-                out.push_str(c);
+            let last = i + 1 == cells.len();
+            let padded = if last {
+                (*c).to_string()
             } else {
-                out.push_str(&format!("{:<w$}  ", c, w = width[i]));
+                format!("{:<w$}  ", c, w = width[i])
+            };
+            if color {
+                let sgr = if header { "1" } else { cell_color(i, c) };
+                // Color the text, not the padding after it.
+                let text_len = padded.trim_end().len();
+                out.push_str(&format!(
+                    "\x1b[{sgr}m{}\x1b[0m{}",
+                    &padded[..text_len],
+                    &padded[text_len..]
+                ));
+            } else {
+                out.push_str(&padded);
             }
         }
         println!("{}", out.trim_end());
     };
-    line(head.to_vec());
+    line(head.to_vec(), true);
     for row in rows {
-        line(row.iter().map(String::as_str).collect());
+        line(row.iter().map(String::as_str).collect(), false);
     }
 }
 

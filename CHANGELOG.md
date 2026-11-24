@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Lists are kubectl-style tables, colored like kubecolor on a terminal (bold
+  header and first column, status words by meaning: green online/running/yes,
+  red offline/error/no, yellow pending/paused; off with `NO_COLOR`, when piped
+  or on a dumb terminal). `browser-daemon tabs` prints a table (ID, BROWSER,
+  TITLE, URL) and takes `-o wide|json|name|tsv`; scripts use `-o tsv`
+  (`id<TAB>title<TAB>url`) or `--json`. `local token list` is a table too.
+
+### Fixed
+
+* A browser that disconnected no longer keeps its client name from others
+  (`ge2-chromium-2` after a short-lived connection); a browser that comes
+  back gets its earlier name when it is free.
+
 ## [0.23.0] - 2026-11-24
 
 ### Changed

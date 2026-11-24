@@ -292,9 +292,12 @@ pub fn command(cmd: TokenCommand) -> R<()> {
                     .collect();
                 println!("{}", serde_json::to_string_pretty(&list)?);
             } else {
-                for e in &f.tokens {
-                    println!("{}\t{}\t{}", e.id, e.name, e.scopes.join(","));
-                }
+                let rows: Vec<Vec<String>> = f
+                    .tokens
+                    .iter()
+                    .map(|e| vec![e.id.clone(), e.name.clone(), e.scopes.join(",")])
+                    .collect();
+                crate::ctl::table(&["ID", "NAME", "SCOPES"], &rows);
             }
             Ok(())
         }

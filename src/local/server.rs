@@ -102,21 +102,28 @@ fn slug(text: &str) -> String {
 
 impl Tabs {
     /// The client name for a browser profile: `label`, else `<host>-<browser>`;
-    /// `-2`, `-3`, ... when another profile has it. Kept across reconnects
-    /// while the server runs.
+    /// `-2`, `-3`, ... while another connected profile has it. A profile gets
+    /// its earlier name back when that is free; a disconnected one blocks none.
     fn name_for(&mut self, profile: &str, label: &str, browser: &str) -> String {
-        if let Some(p) = self.prefixes.get(profile) {
-            return p.clone();
+        let taken: Vec<String> = self
+            .clients
+            .values()
+            .filter(|c| c.profile != profile)
+            .map(|c| c.prefix.clone())
+            .collect();
+        if let Some(earlier) = self.prefixes.get(profile) {
+            if !taken.contains(earlier) {
+                return earlier.clone();
+            }
         }
         let base = if label.trim().is_empty() {
             slug(&format!("{}-{}", host_name(), browser))
         } else {
             slug(label)
         };
-        let taken: Vec<&String> = self.prefixes.values().collect();
         let name = std::iter::once(base.clone())
             .chain((2..).map(|n| format!("{base}-{n}")))
-            .find(|candidate| !taken.contains(&candidate))
+            .find(|candidate| !taken.contains(candidate))
             .unwrap_or(base);
         self.prefixes.insert(profile.to_owned(), name.clone());
         name
@@ -817,10 +824,21 @@ mod tests {
         let mut t = Tabs::default();
         let firefox = format!("{}-firefox", slug(&host_name()));
         assert_eq!(t.name_for("p1", "", "firefox"), firefox);
+        t.clients.insert(
+            1,
+            Client {
+                profile: "p1".into(),
+                ..client(&firefox, vec![], vec![])
+            },
+        );
+        // Another profile while p1 is connected: a suffix.
         assert_eq!(t.name_for("p2", "", "firefox"), format!("{firefox}-2"));
         assert_eq!(t.name_for("p1", "", "firefox"), firefox);
+        // p1 gone: its name is free for a newcomer.
+        t.clients.clear();
+        assert_eq!(t.name_for("p3", "", "firefox"), firefox);
         assert_eq!(
-            t.name_for("p3", "Work Chromium!", "chromium"),
+            t.name_for("p4", "Work Chromium!", "chromium"),
             "work-chromium"
         );
         assert_eq!(slug("--"), "browser");

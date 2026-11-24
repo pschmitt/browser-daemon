@@ -22,10 +22,29 @@ use serde_json::Value;
 use super::R;
 use crate::ctl::{Conn, ExitError, EXIT_NOT_FOUND, EXIT_UNAUTHORIZED, EXIT_UNREACHABLE};
 
+/// How lists print, as with kubectl's `-o`.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Output {
+    /// A table: id, browser, title, URL (colored on a terminal).
+    #[default]
+    Table,
+    /// The table with source, active, sound and node.
+    Wide,
+    /// Every field, as JSON (same as --json).
+    Json,
+    /// Only the ids, one per line.
+    Name,
+    /// `id<TAB>title<TAB>url` lines without a header: the stable format for scripts.
+    Tsv,
+}
+
 #[derive(Args, Debug)]
 pub struct TabsArgs {
     #[command(flatten)]
     conn: Conn,
+    /// Output format.
+    #[arg(short = 'o', long, global = true, value_enum)]
+    output: Option<Output>,
     #[command(flatten)]
     local: LocalConn,
     #[command(flatten)]
@@ -539,14 +558,72 @@ async fn act(args: &TabsArgs, row: &Row, action: &str) -> R<()> {
     Ok(())
 }
 
-fn print_rows(rows: &[Row]) {
-    for r in rows {
-        println!("{}\t{}\t{}", r.id, clean(&r.title), r.url);
+/// A title fit for a table on a terminal (piped output keeps it whole).
+fn short(text: &str, max: usize) -> String {
+    let text = clean(text);
+    if !crate::ctl::color_enabled() || text.chars().count() <= max {
+        return text;
     }
+    let mut s: String = text.chars().take(max - 1).collect();
+    s.push('…');
+    s
+}
+
+fn yes_no(b: bool) -> String {
+    (if b { "yes" } else { "no" }).into()
+}
+
+fn print_rows(rows: &[Row], output: Output) -> R<()> {
+    match output {
+        Output::Json => println!("{}", serde_json::to_string_pretty(rows)?),
+        Output::Name => rows.iter().for_each(|r| println!("{}", r.id)),
+        Output::Tsv => rows
+            .iter()
+            .for_each(|r| println!("{}\t{}\t{}", r.id, clean(&r.title), r.url)),
+        Output::Table => crate::ctl::table(
+            &["ID", "BROWSER", "TITLE", "URL"],
+            &rows
+                .iter()
+                .map(|r| {
+                    vec![
+                        r.id.clone(),
+                        r.client.clone(),
+                        short(&r.title, 60),
+                        r.url.clone(),
+                    ]
+                })
+                .collect::<Vec<_>>(),
+        ),
+        Output::Wide => crate::ctl::table(
+            &[
+                "ID", "SOURCE", "BROWSER", "ACTIVE", "SOUND", "NODE", "TITLE", "URL",
+            ],
+            &rows
+                .iter()
+                .map(|r| {
+                    vec![
+                        r.id.clone(),
+                        r.source.to_string(),
+                        r.client.clone(),
+                        yes_no(r.active),
+                        yes_no(r.audible),
+                        r.node.clone().unwrap_or_else(|| "-".into()),
+                        short(&r.title, 60),
+                        r.url.clone(),
+                    ]
+                })
+                .collect::<Vec<_>>(),
+        ),
+    }
+    Ok(())
 }
 
 pub async fn tabs(args: TabsArgs) -> R<()> {
-    let json = args.conn.json;
+    let output = if args.conn.json {
+        Output::Json
+    } else {
+        args.output.unwrap_or_default()
+    };
     if let Some(TabsCommand::Open { url, background }) = &args.command {
         let local = args.local.clone();
         let body = serde_json::json!({"url": url, "client": args.filter.browser, "background": background});
@@ -564,31 +641,23 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 .into_iter()
                 .filter(|r| args.filter.matches(r, query.as_deref()))
                 .collect();
-            if json {
-                println!("{}", serde_json::to_string_pretty(&rows)?);
-            } else {
-                print_rows(&rows);
-            }
+            print_rows(&rows, output)?;
         }
         TabsCommand::Active => {
             let rows: Vec<Row> = rows
                 .into_iter()
                 .filter(|r| r.active && args.filter.matches(r, None))
                 .collect();
-            if json {
-                println!("{}", serde_json::to_string_pretty(&rows)?);
-            } else {
-                print_rows(&rows);
-            }
+            print_rows(&rows, output)?;
         }
         TabsCommand::Get { id } => {
             let Some(row) = rows.into_iter().find(|r| r.id == *id) else {
                 return fail(EXIT_NOT_FOUND, format!("no tab {id}"));
             };
-            if json {
+            if output == Output::Json {
                 println!("{}", serde_json::to_string_pretty(&row)?);
             } else {
-                print_rows(&[row]);
+                print_rows(&[row], output)?;
             }
         }
         TabsCommand::Activate { id } => {
@@ -626,6 +695,7 @@ fn completion_args() -> TabsArgs {
             secret_file: std::env::var_os("BROWSER_DAEMON_SECRET_FILE").map(PathBuf::from),
             json: false,
         },
+        output: None,
         local: LocalConn {
             socket: None,
             token_file: std::env::var_os("BROWSER_DAEMON_LOCAL_TOKEN_FILE").map(PathBuf::from),
