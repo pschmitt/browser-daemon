@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.5] - 2026-11-24
+
 ### Added
 
 * TUI: recordings play right in the terminal. `Enter`/`p` hands the
