@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.4] - 2026-11-24
+
 ### Added
 
 * The daemon to talk to can come from a file: when neither `--url` nor
