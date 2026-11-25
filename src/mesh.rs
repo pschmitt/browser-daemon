@@ -138,7 +138,11 @@ pub(crate) async fn api_mesh_node(
         Ok(mut dir) => {
             let mut c = 0;
             while let Ok(Some(e)) = dir.next_entry().await {
-                if e.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                // Hidden directories (replicas, staging areas) are not profiles: the
+                // count must match the listing, or placement sees an incomplete inventory.
+                if !e.file_name().to_string_lossy().starts_with('.')
+                    && e.file_type().await.map(|t| t.is_dir()).unwrap_or(false)
+                {
                     c += 1;
                 }
             }
