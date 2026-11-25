@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.6] - 2026-11-25
+
 ### Added
 
 * Dashboard: on a phone, pull the search palette down to close it (a grab
