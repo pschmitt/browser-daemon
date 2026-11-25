@@ -918,6 +918,20 @@ test('ordinary remote and local opens can share a named group without agent owne
   assert.deepEqual(session.agentTabs ?? {}, {});
 });
 
+test('a requested foreground open activates the new tab and focuses its window', async () => {
+  const h = harness(false, {});
+  h.api.windows = {update: async (...args) => h.calls.push(['window', ...args])};
+  const socket = await h.pair();
+  await h.message({type: 'setControl', control: true});
+  for (const [id, activate] of [['background', false], ['foreground', true]]) {
+    socket.receive({type: 'command', id, tab: 0, action: 'open-tab', params: {url: 'https://new.example/', activate}});
+    await h.flush(); await h.flush();
+    const tab = socket.sent.find(m => m.id === id).result.tab;
+    assert.equal(h.calls.some(c => c[0] === 'update' && c[1] === tab && c[2].active), activate);
+  }
+  assert.equal(h.calls.filter(c => c[0] === 'window' && c[2].focused).length, 1);
+});
+
 test('without the tab group API tabs still open, ungrouped', async () => {
   const h = harness(false, {}); const s = await h.pair();
   await h.message({type: 'setControl', control: true});

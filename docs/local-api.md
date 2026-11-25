@@ -68,7 +68,9 @@ ones through this API (token scope `tabs:control`), shared ones through the
 daemon, session tabs through their node.
 
 Use `tabs new` with a URL or search terms. With no target flag, it opens a
-local tab. Use `--node` (alias `--daemon`) to select a browser node or start
+local tab. The new tab comes to the foreground by default. Pass
+`--background` (alias `--no-activate`) to keep the current tab and window in
+focus. Use `--node` (alias `--daemon`) to select a browser node or start
 a managed session on a daemon. The owner of an extension browser must allow
 remote tab opening. Add `--local` to look for a named browser only on this
 machine.
@@ -100,6 +102,10 @@ Tabs of private windows are listed (`-o wide` shows PRIVATE, `--json` has
 `private`) and can be used like any other when the browser lets the
 extension into private windows (Firefox: "Run in Private Windows";
 Chromium: "Allow in Incognito"). Signals never count them.
+
+Listing filters, such as `--active`, belong to `tabs list`. The bare
+`tabs` command defaults to listing, so `tabs --active` also works. To
+bring an existing tab forward, use `tabs activate ID`.
 
 Filters: `--audible`, `--active`, `--pinned`, `--site` (URL contains),
 `--title`, `--browser` (a client name, a kind such as `firefox`, or a name

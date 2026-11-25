@@ -171,6 +171,69 @@ fn hoist_conn_args(argv: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
     out
 }
 
+/// Keep implicit list calls and older flag placement working. Move options to
+/// the selected action before parsing, so its parser still checks every flag.
+fn scope_list_args(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let group = args.get(1).and_then(|arg| arg.to_str());
+    let commands = match group {
+        Some("ta" | "tab" | "tabs") => &[
+            "list",
+            "ls",
+            "active",
+            "get",
+            "show",
+            "activate",
+            "focus",
+            "close",
+            "screenshot",
+            "pdf",
+            "text",
+            "html",
+            "new",
+            "open",
+        ][..],
+        Some("n" | "no" | "nod" | "node" | "nodes") => {
+            &["list", "ls", "show", "get", "set", "add", "remove", "rm"][..]
+        }
+        _ => return args,
+    };
+    let value_flags = [
+        "--url",
+        "--secret-file",
+        "--socket",
+        "--token-file",
+        "--output",
+        "-o",
+        "--site",
+        "--title",
+        "--browser",
+        "--node",
+        "--daemon",
+        "--session",
+        "--tab-group",
+    ];
+    let mut index = 2;
+    while let Some(arg) = args.get(index).and_then(|arg| arg.to_str()) {
+        match arg {
+            "--help" | "-h" | "help" => return args,
+            "--" => break,
+            _ if value_flags.contains(&arg) => index += 2,
+            _ if arg.starts_with('-') => index += 1,
+            _ => {
+                if commands.iter().any(|cmd| cmd.starts_with(arg)) && index > 2 {
+                    let action = args.remove(index);
+                    args.insert(2, action);
+                }
+                return args;
+            }
+        }
+    }
+    if index <= args.len() {
+        args.insert(2, "list".into());
+    }
+    args
+}
+
 /// Options of `browser-daemon run`.
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -471,7 +534,7 @@ pub enum Command {
     /// Pair, list, control or disconnect temporary browser extensions.
     Extension(ctl::ExtensionArgs),
     /// Terminal UI for the mesh: sessions, profiles, recordings and nodes.
-    Tui(ctl::Conn),
+    Tui(ctl::Endpoint),
     /// MCP server for AI agents: one browser tool set for every node and profile.
     Mcp(mcp::McpArgs),
     /// Print a shell completion script (bash, zsh, fish, ...).
@@ -537,7 +600,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `COMPLETE=<shell> browser-daemon ...`: answer the shell's completion
     // request (also with live values, such as tab ids) and exit.
     clap_complete::CompleteEnv::with_factory(cli_command).complete();
-    let matches = cli_command().get_matches_from(hoist_conn_args(std::env::args_os().collect()));
+    let matches = cli_command().get_matches_from(scope_list_args(hoist_conn_args(
+        std::env::args_os().collect(),
+    )));
     let command = match <Cli as clap::FromArgMatches>::from_arg_matches(&matches) {
         Ok(cli) => cli.command,
         Err(e) => e.exit(),
@@ -1524,7 +1589,8 @@ mod hoist_tests {
     #[test]
     fn subcommands_answer_to_unambiguous_prefixes() {
         let parse = |args: &[&str]| {
-            let m = super::cli_command().try_get_matches_from(args)?;
+            let argv = super::scope_list_args(args.iter().map(Into::into).collect());
+            let m = super::cli_command().try_get_matches_from(argv)?;
             <super::Cli as clap::FromArgMatches>::from_arg_matches(&m)
         };
         assert!(matches!(
@@ -1541,6 +1607,41 @@ mod hoist_tests {
         ));
         // `t` is tabs or tui: ambiguous, an error rather than a guess.
         assert!(parse(&["bd", "t"]).is_err());
+    }
+
+    #[test]
+    fn tab_and_node_flags_are_validated_by_the_selected_action() {
+        let parse = |args: &[&str]| {
+            super::cli_command().try_get_matches_from(super::scope_list_args(
+                args.iter().map(Into::into).collect(),
+            ))
+        };
+        for args in [
+            &["bd", "tabs", "new", "--active", "example.org"][..],
+            &["bd", "tabs", "--active", "new", "example.org"],
+            &["bd", "tabs", "new", "--sessions", "example.org"],
+            &["bd", "tabs", "active", "--active"],
+            &["bd", "tabs", "close", "--json", "firefox:1"],
+            &["bd", "tui", "--json"],
+            &["bd", "mcp", "--json"],
+            &["bd", "tabs", "text", "--audible", "firefox:1"],
+            &["bd", "tabs", "close", "-o", "name", "firefox:1"],
+            &["bd", "node", "set", "--local"],
+            &["bd", "node", "--local", "remove", "peer"],
+        ] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
+        for args in [
+            &["bd", "tabs", "--local", "--active", "--json"][..],
+            &["bd", "tabs", "--site", "meet.jit.si", "list"],
+            &["bd", "tabs", "--local", "text", "firefox:1", "-"],
+            &["bd", "tabs", "new", "--no-activate", "example.org"],
+            &["bd", "tabs", "list", "--active"],
+            &["bd", "node", "--local", "--json"],
+            &["bd", "node", "show", "--local", "firefox"],
+        ] {
+            assert!(parse(args).is_ok(), "{args:?}");
+        }
     }
 
     use super::hoist_conn_args;

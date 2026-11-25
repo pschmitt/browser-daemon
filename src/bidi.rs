@@ -517,9 +517,12 @@ impl BidiHub {
         .await
     }
 
-    pub async fn create_tab(&self, url: &str) -> Result<BidiContext, String> {
+    pub async fn create_tab(&self, url: &str, background: bool) -> Result<BidiContext, String> {
         let res = self
-            .call("browsingContext.create", json!({ "type": "tab" }))
+            .call(
+                "browsingContext.create",
+                json!({ "type": "tab", "background": background }),
+            )
             .await?;
         let id = res["context"].as_str().unwrap_or_default().to_string();
         if url != "about:blank" {
@@ -529,7 +532,9 @@ impl BidiHub {
             )
             .await?;
         }
-        *self.last_active.lock().await = Some(id.clone());
+        if !background {
+            *self.last_active.lock().await = Some(id.clone());
+        }
         Ok(BidiContext {
             id,
             url: url.to_string(),

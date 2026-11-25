@@ -54,7 +54,7 @@ const UNAUTHORIZED: &str = "Unauthorized: pass --secret-file (or set BROWSER_DAE
 
 /// Which daemon to talk to, and how.
 #[derive(Args, Debug, Clone)]
-pub struct Conn {
+pub struct Endpoint {
     /// Daemon to talk to; its peers are reachable through it (default: the
     /// first line of ~/.config/browser-daemon/url, else /etc/browser-daemon/url,
     /// else http://127.0.0.1:3001).
@@ -71,7 +71,12 @@ pub struct Conn {
     /// /run/secrets/browser-daemon/cluster-secret when readable).
     #[arg(long, global = true, env = "BROWSER_DAEMON_SECRET_FILE")]
     pub secret_file: Option<PathBuf>,
+}
 
+#[derive(Args, Debug, Clone)]
+pub struct Conn {
+    #[command(flatten)]
+    pub endpoint: Endpoint,
     /// Print JSON instead of tables.
     #[arg(long, global = true)]
     pub json: bool,
@@ -224,33 +229,30 @@ pub(crate) async fn remote_tabs(conn: &Conn) -> R<(Value, Value, Value)> {
     ))
 }
 
+pub(crate) struct TabOpenOptions<'a> {
+    pub group: Option<&'a str>,
+    pub background: bool,
+}
+
 /// Open a tab on an explicitly chosen mesh browser or managed session.
 pub(crate) async fn new_remote_tab(
     conn: &Conn,
     node: Option<&str>,
-    browser: Option<&str>,
     session: Option<&str>,
     target: Option<&str>,
-    shared: bool,
-    tab_group: Option<&str>,
+    options: TabOpenOptions<'_>,
 ) -> R<Value> {
     let c = Client::connect(conn).await?;
-    let (node, browser) = match (node, browser, session) {
-        (Some(name), None, None) if shared || c.check_node(name).is_err() => (None, Some(name)),
-        _ => (node, browser),
-    };
+    let browser = node.filter(|name| session.is_none() && c.check_node(name).is_err());
     if let Some(browser) = browser {
-        let daemons = match node {
-            Some(name) => vec![c.node_or_local(Some(name))?],
-            None => std::iter::once(c.ov.local_node.name.clone())
-                .chain(
-                    c.ov.peers
-                        .iter()
-                        .filter(|p| p.status == "online")
-                        .map(|p| p.name.clone()),
-                )
-                .collect(),
-        };
+        let daemons: Vec<_> = std::iter::once(c.ov.local_node.name.clone())
+            .chain(
+                c.ov.peers
+                    .iter()
+                    .filter(|p| p.status == "online")
+                    .map(|p| p.name.clone()),
+            )
+            .collect();
         let reports = futures_util::future::join_all(
             daemons
                 .iter()
@@ -261,7 +263,6 @@ pub(crate) async fn new_remote_tab(
         for (daemon, report) in daemons.iter().zip(reports) {
             let report = match report {
                 Ok(report) => report,
-                Err(e) if node.is_some() => return Err(e),
                 Err(_) => continue,
             };
             let nodes: Vec<crate::extension::NodeInfo> =
@@ -288,7 +289,7 @@ pub(crate) async fn new_remote_tab(
                     format!("No online shared browser '{browser}'")
                 } else {
                     format!(
-                        "More than one shared browser matches '{browser}'; use a UUID or --node"
+                        "More than one shared browser matches '{browser}'; use its exact name or UUID"
                     )
                 },
             );
@@ -299,7 +300,7 @@ pub(crate) async fn new_remote_tab(
         let path = c.api(daemon, &format!("/extension/nodes/{}/command", browser.id));
         let reply = c
             .call(c.req(Method::POST, &path).json(&json!({
-                "tab": tab, "action": "open-tab", "params": { "url": target.unwrap_or("about:blank"), "tab_group": tab_group },
+                "tab": tab, "action": "open-tab", "params": { "url": target.unwrap_or("about:blank"), "tab_group": options.group, "activate": !options.background },
             })))
             .await?;
         let tab = reply["result"]["tab"].as_u64().ok_or_else(|| {
@@ -312,15 +313,15 @@ pub(crate) async fn new_remote_tab(
             json!({ "id": format!("{}:{tab}", browser.name), "browser": browser.id, "tab": tab, "node": daemon }),
         );
     }
-    if tab_group.is_some() {
+    if options.group.is_some() {
         return fail(
             2,
             "--tab-group requires a local or extension-backed browser",
         );
     }
-    let (node, id, created) = if let Some(session) = session {
+    let (node, id) = if let Some(session) = session {
         let s = c.session(session, node)?;
-        (s.node_name.clone(), s.session.id.to_string(), false)
+        (s.node_name.clone(), s.session.id.to_string())
     } else {
         let node = c.node_or_local(node)?;
         let response = c
@@ -333,13 +334,16 @@ pub(crate) async fn new_remote_tab(
             .as_str()
             .ok_or("The daemon did not return a session ID")?
             .into();
-        (node, id, true)
+        (node, id)
     };
-    if created && target.is_none() {
-        return Ok(json!({ "id": id, "session": id, "node": node }));
-    }
     let url = enc(target.unwrap_or("about:blank"));
-    let path = c.devtools(&node, &format!("/json/new?url={url}&session_id={id}"));
+    let path = c.devtools(
+        &node,
+        &format!(
+            "/json/new?url={url}&session_id={id}&background={}",
+            options.background
+        ),
+    );
     let result = c
         .call(c.req(Method::PUT, &path))
         .await
@@ -395,8 +399,8 @@ pub(crate) async fn session_tab_cdp(
     use futures_util::{SinkExt as _, StreamExt as _};
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest as _, Message};
     let http = reqwest::Client::new();
-    let base = conn.url.trim_end_matches('/').to_string();
-    let secret = crate::tui::find_secret(&http, &base, conn.secret_file.as_ref()).await?;
+    let base = conn.endpoint.url.trim_end_matches('/').to_string();
+    let secret = crate::tui::find_secret(&http, &base, conn.endpoint.secret_file.as_ref()).await?;
     let ws = node_url
         .trim_end_matches('/')
         .replacen("https://", "wss://", 1)
@@ -472,8 +476,9 @@ impl Client {
         let http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .build()?;
-        let base = conn.url.trim_end_matches('/').to_string();
-        let secret = crate::tui::find_secret(&http, &base, conn.secret_file.as_ref()).await?;
+        let base = conn.endpoint.url.trim_end_matches('/').to_string();
+        let secret =
+            crate::tui::find_secret(&http, &base, conn.endpoint.secret_file.as_ref()).await?;
         let mut req = http
             .get(format!("{base}/api/mesh/overview"))
             .timeout(Duration::from_secs(30));
@@ -2785,7 +2790,7 @@ async fn node_list(conn: &Conn, local_only: bool) -> R<()> {
                 Some((c, paired))
             }
             Err(e) if local.as_array().is_some_and(|a| !a.is_empty()) => {
-                eprintln!("note: skipping the mesh ({}): {e}", conn.url);
+                eprintln!("note: skipping the mesh ({}): {e}", conn.endpoint.url);
                 None
             }
             Err(e) => return Err(e),
@@ -2888,25 +2893,32 @@ async fn node_list(conn: &Conn, local_only: bool) -> R<()> {
 
 pub async fn node(args: NodeArgs) -> R<()> {
     let cmd = match args.cmd {
-        None | Some(NodeCmd::List) => return node_list(&args.conn, args.local).await,
-        Some(NodeCmd::Show { node: Some(name) }) => {
+        None => return node_list(&args.conn, false).await,
+        Some(NodeCmd::List { local }) => return node_list(&args.conn, local).await,
+        Some(NodeCmd::Show {
+            node: Some(name),
+            local,
+        }) => {
             // A browser node (`gk4-firefox`)? Asked before the mesh, so a local
             // browser shows without a daemon.
-            if let Some(found) = browser_node(&args.conn, &name, args.local).await? {
+            if let Some(found) = browser_node(&args.conn, &name, local).await? {
                 println!("{}", serde_json::to_string_pretty(&found)?);
                 return Ok(());
             }
-            if args.local {
+            if local {
                 return fail(EXIT_NOT_FOUND, format!("no local browser {name}"));
             }
-            NodeCmd::Show { node: Some(name) }
+            NodeCmd::Show {
+                node: Some(name),
+                local,
+            }
         }
         Some(cmd) => cmd,
     };
     let c = Client::connect(&args.conn).await?;
     match cmd {
-        NodeCmd::List => unreachable!("handled before connecting"),
-        NodeCmd::Show { node } => {
+        NodeCmd::List { .. } => unreachable!("handled before connecting"),
+        NodeCmd::Show { node, .. } => {
             let node = c.node_or_local(node.as_deref())?;
             if node == c.ov.local_node.name {
                 c.print_json(&serde_json::to_value(&c.ov.local_node)?);

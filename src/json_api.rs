@@ -184,6 +184,7 @@ pub(crate) async fn json_new(
     let mut target_url: Option<String> = None;
     let mut session_id: Option<Uuid> = None;
     let mut page: Option<String> = None;
+    let mut background = false;
 
     if !raw.is_empty() {
         for (k, v) in url::form_urlencoded::parse(raw.as_bytes()) {
@@ -191,6 +192,7 @@ pub(crate) async fn json_new(
                 "url" => target_url = Some(v.into_owned()),
                 "session_id" => session_id = Uuid::parse_str(&v).ok(),
                 "page" => page = Some(v.into_owned()),
+                "background" => background = v == "true",
                 _ => {}
             }
         }
@@ -243,17 +245,19 @@ pub(crate) async fn json_new(
     session.activity.touch();
     if let Some(ref hub) = session.bidi {
         // Like Chromium below: an untouched about:blank start tab gives way to the new one.
-        let start_tab =
-            if target_url != "about:blank" && session.client_count.load(Ordering::SeqCst) == 0 {
-                match hub.contexts().await.as_slice() {
-                    [only] if only.url == "about:blank" => Some(only.id.clone()),
-                    _ => None,
-                }
-            } else {
-                None
-            };
+        let start_tab = if !background
+            && target_url != "about:blank"
+            && session.client_count.load(Ordering::SeqCst) == 0
+        {
+            match hub.contexts().await.as_slice() {
+                [only] if only.url == "about:blank" => Some(only.id.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let ctx = hub
-            .create_tab(&target_url)
+            .create_tab(&target_url, background)
             .await
             .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
         if let Some(blank) = start_tab.filter(|id| *id != ctx.id) {
@@ -276,36 +280,80 @@ pub(crate) async fn json_new(
     // Chromium starts every session on an about:blank tab. When that is still the only
     // page and nothing is attached that might be about to use it, it is replaced by the
     // new tab instead of lingering as an empty second tab.
-    let start_tab =
-        if target_url != "about:blank" && session.client_count.load(Ordering::SeqCst) == 0 {
-            let pages: Vec<_> = session_targets(&state, &session)
-                .await
-                .into_iter()
-                .filter(|t| t.target_type == "page")
-                .collect();
-            match pages.as_slice() {
-                [only] if only.url == "about:blank" => Some(only.id.clone()),
-                _ => None,
-            }
-        } else {
-            None
-        };
+    let start_tab = if !background
+        && target_url != "about:blank"
+        && session.client_count.load(Ordering::SeqCst) == 0
+    {
+        let pages: Vec<_> = session_targets(&state, &session)
+            .await
+            .into_iter()
+            .filter(|t| t.target_type == "page")
+            .collect();
+        match pages.as_slice() {
+            [only] if only.url == "about:blank" => Some(only.id.clone()),
+            _ => None,
+        }
+    } else {
+        None
+    };
 
-    let mut dest_url = url::Url::parse(&format!("http://127.0.0.1:{}/json/new", session.port))
-        .map_err(|e| json_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    dest_url.set_query(Some(&target_url));
+    let mut target = if background {
+        let version: serde_json::Value = state
+            .http_client
+            .get(format!("http://127.0.0.1:{}/json/version", session.port))
+            .send()
+            .await
+            .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?
+            .json()
+            .await
+            .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
+        let ws = version["webSocketDebuggerUrl"]
+            .as_str()
+            .ok_or_else(|| json_err(StatusCode::BAD_GATEWAY, "No browser debugging endpoint"))?;
+        let mut cdp = autofill::Cdp::connect(ws)
+            .await
+            .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
+        let created = cdp
+            .call(
+                "Target.createTarget",
+                serde_json::json!({
+                    "url": target_url, "background": true,
+                }),
+            )
+            .await
+            .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
+        let id = created["targetId"]
+            .as_str()
+            .ok_or_else(|| json_err(StatusCode::BAD_GATEWAY, "No new tab ID"))?;
+        DevToolsTarget {
+            id: id.to_string(),
+            title: None,
+            target_type: "page".into(),
+            url: target_url.clone(),
+            devtools_frontend_url: None,
+            web_socket_debugger_url: None,
+            session_id: None,
+            profile: None,
+            engine: None,
+            audible: false,
+            owner: None,
+        }
+    } else {
+        let mut dest_url = url::Url::parse(&format!("http://127.0.0.1:{}/json/new", session.port))
+            .map_err(|e| json_err(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        dest_url.set_query(Some(&target_url));
 
-    let res = state
-        .http_client
-        .put(dest_url)
-        .send()
-        .await
-        .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
+        let res = state
+            .http_client
+            .put(dest_url)
+            .send()
+            .await
+            .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
 
-    let mut target = res
-        .json::<DevToolsTarget>()
-        .await
-        .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?;
+        res.json::<DevToolsTarget>()
+            .await
+            .map_err(|e| json_err(StatusCode::BAD_GATEWAY, e))?
+    };
 
     if let Some(blank) = start_tab.filter(|id| *id != target.id) {
         let close_url = format!("http://127.0.0.1:{}/json/close/{}", session.port, blank);

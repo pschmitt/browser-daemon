@@ -55,13 +55,19 @@ async function shareEverything() {
   if (!chromium) for (const [id, grant] of shared) if (grant.control && !grant.paused) void hookPasskeys(id).catch(() => hooked.delete(id));
   publishSoon();
 }
-async function openTab({url, tab_group: group, agent}, windowId) {
+async function openTab({url, tab_group: group, agent, activate}, windowId) {
   if (url !== 'about:blank' && !safeURL(url)) throw new ShimError('Local services and daemon pages cannot be opened remotely.');
-  // Opened in the background: a client never takes the owner's focus.
+  // Place the tab first, so a failed group operation leaves focus alone.
   const created = await api.tabs.create({url, active: false, ...(windowId ? {windowId} : {})});
   await applyNamedTabGroup(created, group);
   shared.set(created.id, {origin: null, control: true, paused: true});
   if (agent === true) await claimAgentTab(created.id);
+  if (activate === true && agent !== true) {
+    await api.tabs.update(created.id, {active: true});
+    if (api.windows && created.windowId !== undefined) {
+      await api.windows.update(created.windowId, {focused: true});
+    }
+  }
   publishSoon();
   return {tab: created.id};
 }

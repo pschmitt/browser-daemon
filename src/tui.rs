@@ -3333,7 +3333,7 @@ fn auth_cookie_token(set_cookies: &[&str]) -> Option<String> {
     })
 }
 
-pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(args: crate::ctl::Endpoint) -> Result<(), Box<dyn std::error::Error>> {
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .build()?;

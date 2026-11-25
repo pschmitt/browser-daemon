@@ -39,7 +39,6 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child as Proc, ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex};
 
-use crate::ctl::Conn;
 use crate::secrets;
 use crate::MeshOverview;
 
@@ -49,7 +48,7 @@ type Rpc = Result<Value, (i64, String)>;
 #[derive(Args, Debug)]
 pub struct McpArgs {
     #[command(flatten)]
-    pub conn: Conn,
+    pub conn: crate::ctl::Endpoint,
 
     /// A profile agents may open (repeat for several, `*` for all). Throwaway browsers need no permission.
     #[arg(long = "allow-profile")]

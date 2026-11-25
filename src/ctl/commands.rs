@@ -625,10 +625,6 @@ pub enum RecordingCmd {
 pub struct NodeArgs {
     #[command(flatten)]
     pub conn: Conn,
-    /// With `list` (the default): only this machine's browsers (local tab
-    /// API; no daemon needed).
-    #[arg(long, global = true)]
-    pub local: bool,
     #[command(subcommand)]
     pub cmd: Option<NodeCmd>,
 }
@@ -638,11 +634,20 @@ pub enum NodeCmd {
     /// List the nodes: the mesh's daemons and the browser nodes (this
     /// machine's browsers, browsers paired with the daemon).
     #[command(visible_alias = "ls")]
-    List,
+    List {
+        /// Only the browsers on this machine.
+        #[arg(long)]
+        local: bool,
+    },
     /// A node's settings, version and proxies; for a browser node (`gk4-firefox`),
     /// where it is connected and how many tabs it has.
     #[command(visible_alias = "get")]
-    Show { node: Option<String> },
+    Show {
+        node: Option<String>,
+        /// Find a browser on this machine without contacting a daemon.
+        #[arg(long, requires = "node")]
+        local: bool,
+    },
     /// Change a node's settings (proxy default, per-engine defaults).
     Set {
         /// Node (default: the one asked).

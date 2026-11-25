@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+
+* `tabs new` opens the new tab in the foreground. Use `--background` or
+  `--no-activate` to leave the current tab in focus. Tabs opened by MCP
+  stay in the background.
+* Tab listing filters now belong to listing commands. `tabs new --active`
+  is a usage error. `node --local` applies to listing and looking up local
+  browser nodes.
+
 ## [0.23.7] - 2026-11-25
 
 ### Added

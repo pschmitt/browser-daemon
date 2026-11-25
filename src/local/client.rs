@@ -20,7 +20,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::R;
-use crate::ctl::{Conn, ExitError, EXIT_NOT_FOUND, EXIT_UNAUTHORIZED, EXIT_UNREACHABLE};
+use crate::ctl::{Conn, Endpoint, ExitError, EXIT_NOT_FOUND, EXIT_UNAUTHORIZED, EXIT_UNREACHABLE};
 
 /// How lists print, as with kubectl's `-o`.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -41,18 +41,16 @@ enum Output {
 #[derive(Args, Debug)]
 pub struct TabsArgs {
     #[command(flatten)]
-    conn: Conn,
-    /// Output format.
-    #[arg(short = 'o', long, global = true, value_enum)]
-    output: Option<Output>,
+    endpoint: Endpoint,
     #[command(flatten)]
     local: LocalConn,
-    #[command(flatten)]
-    sources: Sources,
-    #[command(flatten)]
-    filter: Filter,
     #[command(subcommand)]
     command: Option<TabsCommand>,
+}
+
+struct TabClient {
+    conn: Conn,
+    local: LocalConn,
 }
 
 /// How to reach the local tab API.
@@ -71,13 +69,13 @@ struct LocalConn {
 #[derive(Args, Debug, Clone, Copy, Default)]
 struct Sources {
     /// Only this machine's browsers (local tab API; no network, for scripts).
-    #[arg(long, global = true)]
+    #[arg(long)]
     local: bool,
     /// Only tabs of browsers paired with the daemon.
-    #[arg(long, global = true)]
+    #[arg(long)]
     shared: bool,
     /// Only tabs of the daemon's browser sessions (mesh-wide).
-    #[arg(long, global = true)]
+    #[arg(long)]
     sessions: bool,
 }
 
@@ -102,24 +100,42 @@ impl Sources {
 #[derive(Args, Debug, Clone, Default)]
 struct Filter {
     /// Only tabs playing sound.
-    #[arg(long, global = true)]
+    #[arg(long)]
     audible: bool,
-    /// Only the active tab of each window.
-    #[arg(long, global = true)]
+    // The listing action or shell completion sets this.
+    #[arg(skip)]
     active: bool,
     /// Only pinned tabs.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pinned: bool,
     /// Only tabs whose URL contains this (case-insensitive), e.g. `meet.jit.si`.
-    #[arg(long, global = true)]
+    #[arg(long)]
     site: Option<String>,
     /// Only tabs whose title contains this (case-insensitive).
-    #[arg(long, global = true)]
+    #[arg(long)]
     title: Option<String>,
     /// Only this client (`gk4-firefox`, a session name) or kind (`firefox`,
     /// `chromium`), or names starting with it.
-    #[arg(long, global = true, add = ArgValueCompleter::new(complete_clients))]
+    #[arg(long, add = ArgValueCompleter::new(complete_clients))]
     browser: Option<String>,
+}
+
+#[derive(Args, Debug, Default)]
+struct Listing {
+    /// Output format.
+    #[arg(short = 'o', long, value_enum)]
+    output: Option<Output>,
+    #[command(flatten)]
+    filter: Filter,
+    #[command(flatten)]
+    format: JsonOutput,
+}
+
+#[derive(Args, Debug, Default)]
+struct JsonOutput {
+    /// Print the result as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -127,30 +143,55 @@ enum TabsCommand {
     /// List tabs: id, title and URL, tab-separated (the default).
     #[command(visible_alias = "ls")]
     List {
+        #[command(flatten)]
+        sources: Sources,
+        #[command(flatten)]
+        listing: Listing,
+        /// Only the active tab of each window.
+        #[arg(long)]
+        active: bool,
         /// Title or URL contains this (case-insensitive).
         query: Option<String>,
     },
     /// The active tab of every window.
-    Active,
+    Active {
+        #[command(flatten)]
+        sources: Sources,
+        #[command(flatten)]
+        listing: Listing,
+    },
     /// One tab by id (`gk4-firefox:42`).
     #[command(visible_alias = "show")]
     Get {
+        #[command(flatten)]
+        sources: Sources,
+        /// Render the tab in this format.
+        #[arg(short = 'o', long, value_enum)]
+        output: Option<Output>,
+        #[command(flatten)]
+        format: JsonOutput,
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
     },
     /// Bring a tab to the front (and its window).
     #[command(visible_alias = "focus")]
     Activate {
+        #[command(flatten)]
+        sources: Sources,
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
     },
     /// Close tabs.
     Close {
+        #[command(flatten)]
+        sources: Sources,
         #[arg(required = true, add = ArgValueCompleter::new(complete_tab_ids))]
         ids: Vec<String>,
     },
     /// A PNG screenshot of a tab; prints the file it wrote.
     Screenshot {
+        #[command(flatten)]
+        sources: Sources,
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
         /// Where to write it: a file, or `-` for stdout (piped or redirected;
@@ -163,6 +204,8 @@ enum TabsCommand {
     },
     /// A tab printed to PDF (Chromium tabs and sessions); prints the file it wrote.
     Pdf {
+        #[command(flatten)]
+        sources: Sources,
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
         /// Where to write it: a file, or `-` for stdout (piped or redirected;
@@ -175,6 +218,8 @@ enum TabsCommand {
     },
     /// A tab's visible text.
     Text {
+        #[command(flatten)]
+        sources: Sources,
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
         /// Write it to this file instead of stdout (`-`: stdout).
@@ -186,6 +231,8 @@ enum TabsCommand {
     },
     /// A tab's HTML.
     Html {
+        #[command(flatten)]
+        sources: Sources,
         #[arg(add = ArgValueCompleter::new(complete_tab_ids))]
         id: String,
         /// Write it to this file instead of stdout (`-`: stdout).
@@ -197,14 +244,22 @@ enum TabsCommand {
     },
     /// Open a tab on a local or shared browser, or start a session on a daemon.
     New {
+        #[command(flatten)]
+        format: JsonOutput,
         /// URL or search terms. Empty opens a blank tab or session.
         target: Vec<String>,
         /// Browser node or daemon name. With --local, selects a local browser.
-        #[arg(long, visible_alias = "daemon")]
+        #[arg(long, visible_alias = "daemon", alias = "browser", add = ArgValueCompleter::new(complete_clients))]
         node: Option<String>,
         /// Add a tab to the named running managed session.
-        #[arg(long, conflicts_with = "browser")]
+        #[arg(long, conflicts_with = "local")]
         session: Option<String>,
+        /// Look for the target only among this machine's browsers.
+        #[arg(long)]
+        local: bool,
+        /// Open without changing the active tab or focusing its window.
+        #[arg(long, visible_alias = "no-activate")]
+        background: bool,
         /// Reuse or create a named tab group in the target browser window.
         #[arg(long)]
         tab_group: Option<String>,
@@ -212,9 +267,17 @@ enum TabsCommand {
     /// Open a URL in a new tab of this machine's browser (`--browser NAME` to
     /// pick one); prints the new tab's id.
     Open {
+        #[command(flatten)]
+        format: JsonOutput,
         url: String,
+        /// Local browser name or kind.
+        #[arg(long, add = ArgValueCompleter::new(complete_clients))]
+        browser: Option<String>,
+        /// Use the local tab API, as this command always does.
+        #[arg(long, hide = true)]
+        local: bool,
         /// Open it without bringing it to the front.
-        #[arg(long)]
+        #[arg(long, visible_alias = "no-activate")]
         background: bool,
         /// Reuse or create a named tab group in the browser window.
         #[arg(long)]
@@ -588,8 +651,7 @@ impl Filter {
 /// Every row of the chosen sources. A source that fails is skipped with a
 /// note on stderr when all sources were asked for, and is an error when it
 /// was asked for by name.
-async fn collect(args: &TabsArgs, quiet: bool) -> R<Vec<Row>> {
-    let src = args.sources;
+async fn collect(args: &TabClient, src: Sources, quiet: bool) -> R<Vec<Row>> {
     let mut local = Vec::new();
     if src.local() {
         let local_conn = args.local.clone();
@@ -609,7 +671,7 @@ async fn collect(args: &TabsArgs, quiet: bool) -> R<Vec<Row>> {
         match crate::ctl::remote_tabs(&args.conn).await {
             Ok((targets, mesh_sessions, nodes)) => {
                 if src.shared() {
-                    shared = shared_rows(&nodes, &args.conn.url);
+                    shared = shared_rows(&nodes, &args.conn.endpoint.url);
                 }
                 if src.sessions() {
                     sessions = session_rows(&targets, &mesh_sessions);
@@ -617,7 +679,10 @@ async fn collect(args: &TabsArgs, quiet: bool) -> R<Vec<Row>> {
             }
             Err(e) if src.all() => {
                 if !quiet {
-                    eprintln!("note: skipping the daemon's tabs ({}): {e}", args.conn.url);
+                    eprintln!(
+                        "note: skipping the daemon's tabs ({}): {e}",
+                        args.conn.endpoint.url
+                    );
                 }
             }
             Err(e) => return Err(e),
@@ -628,7 +693,7 @@ async fn collect(args: &TabsArgs, quiet: bool) -> R<Vec<Row>> {
 
 /// Activate or close a tab where it lives: this machine's browser (local
 /// API), a paired browser (the daemon's extension command) or a session.
-async fn act(args: &TabsArgs, row: &Row, action: &str) -> R<()> {
+async fn act(args: &TabClient, row: &Row, action: &str) -> R<()> {
     match row.source {
         "local" => {
             let local = args.local.clone();
@@ -677,7 +742,7 @@ fn yes_no(b: bool) -> String {
 
 /// What a tab shows (`text`, `html`, `screenshot`, `pdf`), from where it
 /// lives: `{"kind", "text"}` or `{"kind", "format", "data"}` (base64).
-async fn content(args: &TabsArgs, row: &Row, kind: &str) -> R<Value> {
+async fn content(args: &TabClient, row: &Row, kind: &str) -> R<Value> {
     match row.source {
         "local" => {
             let local = args.local.clone();
@@ -850,15 +915,20 @@ fn print_rows(rows: &[Row], output: Output) -> R<()> {
 }
 
 pub async fn tabs(args: TabsArgs) -> R<()> {
-    let output = if args.conn.json {
-        Output::Json
-    } else {
-        args.output.unwrap_or_default()
+    let client = TabClient {
+        conn: Conn {
+            endpoint: args.endpoint,
+            json: false,
+        },
+        local: args.local,
     };
     if let Some(TabsCommand::New {
+        format,
         target,
         node,
         session,
+        local,
+        background,
         tab_group,
     }) = &args.command
     {
@@ -866,48 +936,28 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
             return fail(2, "Invalid or reserved tab group name");
         }
         let target = crate::extension::tab_target(&target.join(" "));
-        let node = node.as_deref();
-        let browser = args.filter.browser.as_deref();
-        let session = session.as_deref();
-        if args.sources.local && (session.is_some() || args.sources.shared || args.sources.sessions)
-        {
-            return fail(
-                2,
-                "--local cannot be combined with --shared, --sessions, or --session",
-            );
-        }
-        if args.sources.local && node.is_some() && browser.is_some() {
-            return fail(2, "Choose one local browser with --node or --browser");
-        }
-        if args.sources.shared
-            && (args.sources.sessions || session.is_some() || node.or(browser).is_none())
-        {
-            return fail(
-                2,
-                "--shared requires a browser target and cannot be combined with a managed session",
-            );
-        }
-        if args.sources.sessions && browser.is_some() {
-            return fail(2, "Use --session to target a managed session");
-        }
-        let opened = if !args.sources.local
-            && (node.or(browser).is_some() || session.is_some() || args.sources.sessions)
-        {
+        let opened = if !local && (node.is_some() || session.is_some()) {
             crate::ctl::new_remote_tab(
-                &args.conn,
-                node,
-                browser,
-                session,
+                &client.conn,
+                node.as_deref(),
+                session.as_deref(),
                 target.as_deref(),
-                args.sources.shared,
-                tab_group.as_deref(),
+                crate::ctl::TabOpenOptions {
+                    group: tab_group.as_deref(),
+                    background: *background,
+                },
             )
             .await?
         } else {
-            let body = serde_json::json!({"url": target.as_deref().unwrap_or("about:blank"), "client": node.or(browser), "tab_group": tab_group});
+            let body = serde_json::json!({
+                "url": target.as_deref().unwrap_or("about:blank"),
+                "client": node,
+                "background": background,
+                "tab_group": tab_group,
+            });
             tokio::task::block_in_place(|| {
                 local_request(
-                    &args.local,
+                    &client.local,
                     "POST",
                     "/v1/tabs/open",
                     Some(&body),
@@ -915,7 +965,7 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 )
             })?
         };
-        if output == Output::Json {
+        if format.json {
             println!("{}", serde_json::to_string_pretty(&opened)?);
         } else if let Some(id) = opened["id"].as_str() {
             println!("{id}");
@@ -923,37 +973,83 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
         return Ok(());
     }
     if let Some(TabsCommand::Open {
+        format,
         url,
+        browser,
         background,
         tab_group,
+        ..
     }) = &args.command
     {
-        let local = args.local.clone();
-        let body = serde_json::json!({"url": url, "client": args.filter.browser, "background": background, "tab_group": tab_group});
+        let local = client.local.clone();
+        let body = serde_json::json!({"url": url, "client": browser, "background": background, "tab_group": tab_group});
         let opened = tokio::task::block_in_place(|| {
             local_request(&local, "POST", "/v1/tabs/open", Some(&body), CONTROL_WAIT)
         })?;
-        println!("{}", s(&opened, "id"));
+        if format.json {
+            println!("{}", serde_json::to_string_pretty(&opened)?);
+        } else {
+            println!("{}", s(&opened, "id"));
+        }
         return Ok(());
     }
-    let rows = collect(&args, false).await?;
-    let list = TabsCommand::List { query: None };
-    match args.command.as_ref().unwrap_or(&list) {
-        TabsCommand::List { query } => {
+    let list = TabsCommand::List {
+        sources: Sources::default(),
+        listing: Listing::default(),
+        active: false,
+        query: None,
+    };
+    let command = args.command.as_ref().unwrap_or(&list);
+    let (sources, output, json) = match command {
+        TabsCommand::List {
+            sources, listing, ..
+        }
+        | TabsCommand::Active { sources, listing } => {
+            (*sources, listing.output, listing.format.json)
+        }
+        TabsCommand::Get {
+            sources,
+            output,
+            format,
+            ..
+        } => (*sources, *output, format.json),
+        TabsCommand::Activate { sources, .. }
+        | TabsCommand::Close { sources, .. }
+        | TabsCommand::Screenshot { sources, .. }
+        | TabsCommand::Pdf { sources, .. }
+        | TabsCommand::Text { sources, .. }
+        | TabsCommand::Html { sources, .. } => (*sources, None, false),
+        TabsCommand::Open { .. } | TabsCommand::New { .. } => {
+            unreachable!("handled before listing")
+        }
+    };
+    let output = if json {
+        Output::Json
+    } else {
+        output.unwrap_or_default()
+    };
+    let rows = collect(&client, sources, false).await?;
+    match command {
+        TabsCommand::List {
+            query,
+            listing,
+            active,
+            ..
+        } => {
             let rows: Vec<Row> = rows
                 .into_iter()
-                .filter(|r| args.filter.matches(r, query.as_deref()))
+                .filter(|r| (!active || r.active) && listing.filter.matches(r, query.as_deref()))
                 .collect();
             print_rows(&rows, output)?;
         }
-        TabsCommand::Active => {
+        TabsCommand::Active { listing, .. } => {
             let rows: Vec<Row> = rows
                 .into_iter()
-                .filter(|r| r.active && args.filter.matches(r, None))
+                .filter(|r| r.active && listing.filter.matches(r, None))
                 .collect();
             print_rows(&rows, output)?;
         }
-        TabsCommand::Get { id } => {
+        TabsCommand::Get { id, .. } => {
             let Some(row) = rows.into_iter().find(|r| r.id == *id) else {
                 return fail(EXIT_NOT_FOUND, format!("no tab {id}"));
             };
@@ -963,17 +1059,17 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 print_rows(&[row], output)?;
             }
         }
-        TabsCommand::Activate { id } => {
+        TabsCommand::Activate { id, .. } => {
             let Some(row) = rows.iter().find(|r| r.id == *id) else {
                 return fail(EXIT_NOT_FOUND, format!("no tab {id}"));
             };
-            act(&args, row, "activate").await?;
+            act(&client, row, "activate").await?;
         }
-        TabsCommand::Close { ids } => {
+        TabsCommand::Close { ids, .. } => {
             let mut missing = Vec::new();
             for id in ids {
                 match rows.iter().find(|r| r.id == *id) {
-                    Some(row) => act(&args, row, "close").await?,
+                    Some(row) => act(&client, row, "close").await?,
                     None => missing.push(id.as_str()),
                 }
             }
@@ -981,10 +1077,18 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
                 return fail(EXIT_NOT_FOUND, format!("no tab {}", missing.join(", ")));
             }
         }
-        TabsCommand::Screenshot { id, target, file }
-        | TabsCommand::Pdf { id, target, file }
-        | TabsCommand::Text { id, target, file }
-        | TabsCommand::Html { id, target, file } => {
+        TabsCommand::Screenshot {
+            id, target, file, ..
+        }
+        | TabsCommand::Pdf {
+            id, target, file, ..
+        }
+        | TabsCommand::Text {
+            id, target, file, ..
+        }
+        | TabsCommand::Html {
+            id, target, file, ..
+        } => {
             let kind = match args.command {
                 Some(TabsCommand::Screenshot { .. }) => "screenshot",
                 Some(TabsCommand::Pdf { .. }) => "pdf",
@@ -994,7 +1098,7 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
             let Some(row) = rows.iter().find(|r| r.id == *id) else {
                 return fail(EXIT_NOT_FOUND, format!("no tab {id}"));
             };
-            let got = content(&args, row, kind).await?;
+            let got = content(&client, row, kind).await?;
             write_content(row, &got, file.as_deref().or(target.as_deref()))?;
         }
         TabsCommand::Open { .. } | TabsCommand::New { .. } => {
@@ -1008,22 +1112,20 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
 
 /// The arguments a completer has: none of the command line, so the
 /// environment's defaults.
-fn completion_args() -> TabsArgs {
-    let (sources, filter) = typed_options(&completion_words());
-    TabsArgs {
+fn completion_args() -> TabClient {
+    TabClient {
         conn: Conn {
-            url: std::env::var("BROWSER_DAEMON_URL").unwrap_or_else(|_| crate::ctl::default_url()),
-            secret_file: std::env::var_os("BROWSER_DAEMON_SECRET_FILE").map(PathBuf::from),
+            endpoint: Endpoint {
+                url: std::env::var("BROWSER_DAEMON_URL")
+                    .unwrap_or_else(|_| crate::ctl::default_url()),
+                secret_file: std::env::var_os("BROWSER_DAEMON_SECRET_FILE").map(PathBuf::from),
+            },
             json: false,
         },
-        output: None,
         local: LocalConn {
             socket: None,
             token_file: std::env::var_os("BROWSER_DAEMON_LOCAL_TOKEN_FILE").map(PathBuf::from),
         },
-        sources,
-        filter,
-        command: None,
     }
 }
 
@@ -1071,7 +1173,8 @@ fn typed_options(words: &[String]) -> (Sources, Filter) {
 /// before the async runtime does any other work, from `main`.
 fn completion_rows() -> Vec<Row> {
     let args = completion_args();
-    let run = async { collect(&args, true).await.unwrap_or_default() };
+    let (sources, _) = typed_options(&completion_words());
+    let run = async { collect(&args, sources, true).await.unwrap_or_default() };
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(run)),
         Err(_) => tokio::runtime::Builder::new_current_thread()
@@ -1092,7 +1195,7 @@ fn tab_candidates(rows: &[Row], filter: &Filter, prefix: &str) -> Vec<Completion
 /// Shell completion for tab ids of the typed sources and filters; titles as
 /// hints.
 fn complete_tab_ids(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
-    let filter = completion_args().filter;
+    let (_, filter) = typed_options(&completion_words());
     tab_candidates(&completion_rows(), &filter, &current.to_string_lossy())
 }
 
@@ -1133,9 +1236,8 @@ mod tests {
             let crate::Command::Tabs(args) = cli.command else {
                 panic!("expected tabs command");
             };
-            assert!(args.sources.local);
             assert!(
-                matches!(args.command, Some(TabsCommand::New { node: Some(name), .. }) if name == "firefox")
+                matches!(args.command, Some(TabsCommand::New { local: true, node: Some(name), .. }) if name == "firefox")
             );
         }
     }
