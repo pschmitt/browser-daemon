@@ -118,7 +118,8 @@ cookies persist, e.g. `work` for Outlook and OpsGenie) call browser_use with its
 browser_status lists the profiles you may open and the nodes. For a shared profile, \
 browser_profile_tabs lists tabs and their owners; leave other clients' tabs alone. \
 Switching closes the current browser. \
-For the user's own running browsers, browser_shared_nodes lists temporary extension registrations \
+For the user's own running browsers, browser_shared_nodes lists temporary extension registrations. \
+browser_shared_open_tab opens a new tab when its owner allows it, \
 and browser_shared_command acts on their explicitly shared tabs; browser_use selects managed browsers. \
 Never type a password, token or TOTP code yourself: use browser_fill_secret when it is listed. \
 For a passkey sign-in call browser_passkey first; for a CAPTCHA, an approval on another device or \
@@ -539,6 +540,16 @@ fn own_tools_with(
         "description": "List temporary browsers registered through the Browser Daemon Node extension across the mesh. Only tabs explicitly shared by their owner appear. These are the user's real signed-in tabs. Use browser_shared_command to view or control them; browser_use still selects managed browsers.",
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
         "annotations": {"title": "Shared browsers", "readOnlyHint": true}
+    }));
+    tools.push(json!({
+        "name": "browser_shared_open_tab",
+        "description": "Open a new tab in an online browser from browser_shared_nodes. The browser owner must allow opening shared tabs. Supply the browser UUID and its hosting daemon. The URL or search terms open in that browser; the reply contains the new shared tab ID.",
+        "inputSchema": {"type": "object", "properties": {
+            "daemon": {"type": "string", "description": "Hosting daemon reported by browser_shared_nodes."},
+            "browser": {"type": "string", "description": "Browser UUID reported by browser_shared_nodes."},
+            "target": {"type": "string", "description": "URL or search terms."}
+        }, "required": ["browser", "target"], "additionalProperties": false},
+        "annotations": {"title": "Open tab in shared browser", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true}
     }));
     tools.push(json!({
         "name": "browser_shared_command",
@@ -1103,6 +1114,10 @@ impl State {
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
         match name {
             "browser_shared_nodes" => Ok(match self.shared_nodes().await {
+                Ok(value) => text_result(value.to_string(), false),
+                Err(error) => text_result(error, true),
+            }),
+            "browser_shared_open_tab" => Ok(match self.shared_open_tab(&args).await {
                 Ok(value) => text_result(value.to_string(), false),
                 Err(error) => text_result(error, true),
             }),
@@ -2018,6 +2033,56 @@ impl State {
         ))
         .await;
         Ok(json!({"daemons": reports}))
+    }
+
+    async fn shared_open_tab(&self, args: &Value) -> Result<Value, String> {
+        let id = args["browser"]
+            .as_str()
+            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            .ok_or("Expected a browser UUID")?;
+        let url = args["target"]
+            .as_str()
+            .and_then(crate::extension::tab_target)
+            .ok_or("Expected a URL or search terms")?;
+        let daemon = args["daemon"].as_str();
+        let overview = self.overview().await?;
+        let daemon = daemon.unwrap_or(&overview.local_node.name);
+        let prefix = if daemon == overview.local_node.name {
+            "/api".to_string()
+        } else if overview
+            .peers
+            .iter()
+            .any(|peer| peer.name == daemon && peer.status == "online")
+        {
+            format!("/api/peers/{}", url_component(daemon))
+        } else {
+            return Err("The hosting daemon is unknown or offline".into());
+        };
+        let report = self
+            .extension_request(&format!("{prefix}/extension/nodes"), None)
+            .await?;
+        let nodes: Vec<crate::extension::NodeInfo> =
+            serde_json::from_value(report["nodes"].clone()).map_err(|error| error.to_string())?;
+        let browser = nodes
+            .iter()
+            .find(|node| node.id == id && node.online)
+            .ok_or("The browser is offline or unknown")?;
+        let tab = browser
+            .opener()
+            .ok_or("The browser owner must allow opening shared tabs")?;
+        let reply = self
+            .extension_request(
+                &format!("{prefix}/extension/nodes/{id}/command"),
+                Some(json!({ "tab": tab, "action": "open", "params": { "url": url } })),
+            )
+            .await?;
+        let tab = reply["result"]["tab"].as_u64().ok_or_else(|| {
+            reply["error"]
+                .as_str()
+                .unwrap_or("The browser did not open a tab")
+                .to_string()
+        })?;
+        Ok(json!({ "daemon": daemon, "browser": id, "tab": tab }))
     }
 
     async fn shared_command(&self, args: &Value) -> Result<Value, String> {

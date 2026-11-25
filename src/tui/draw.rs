@@ -16,7 +16,7 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
             height: body.height + detail.height,
             ..body
         };
-        let rows = app.sessions().len() as u16 + 2;
+        let rows = app.session_count() as u16 + 2;
         let list = rows
             .clamp(4, (main.height * 2 / 5).max(4))
             .min(main.height.saturating_sub(8))
@@ -38,10 +38,10 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     // Tabs with counts, and the node summary on the right.
     let counts = app.ov.as_ref().map(|o| {
         [
-            app.sessions().len(),
+            app.session_count(),
             app.profiles().len(),
             app.recordings().len(),
-            1 + o.peers.len(),
+            1 + o.peers.len() + app.browsers.len(),
             app.engine_rows().len(),
         ]
     });
@@ -123,37 +123,66 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     match app.tab {
         Tab::Sessions => {
             let icon_col = Constraint::Length(if app.picker.is_some() { 3 } else { 0 });
-            let rows = sessions.iter().map(|s| {
-                let ss = &s.session;
-                let rec = if ss.is_recording {
-                    if ss.recording_paused {
-                        "paused"
+            let browsers: Vec<_> = app.browser_sessions().collect();
+            let rows = sessions
+                .iter()
+                .map(|s| {
+                    let ss = &s.session;
+                    let rec = if ss.is_recording {
+                        if ss.recording_paused {
+                            "paused"
+                        } else {
+                            "\u{f111} rec"
+                        }
                     } else {
-                        "\u{f111} rec"
-                    }
-                } else {
-                    ""
-                };
-                Row::new(vec![
-                    Cell::from(""),
-                    Cell::from(ss.name.clone()),
-                    Cell::from(ss.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
-                    node_cell(&s.node_name),
-                    Cell::from(engine_span(ss.engine)),
-                    Cell::from(
-                        ss.proxy
-                            .as_deref()
-                            .map(|p| app.proxy_name(&s.node_name, p))
-                            .unwrap_or_default(),
-                    ),
-                    Cell::from(ss.tabs_count.to_string()),
-                    Cell::from(dur(ss.uptime_seconds)),
-                    Cell::from(ss.viewer_count.to_string()),
-                    Cell::from(ss.client_count.to_string()),
-                    Cell::from(crate::ctl::agents(&ss.clients)),
-                    Cell::from(rec).fg(Color::Red),
-                ])
-            });
+                        ""
+                    };
+                    Row::new(vec![
+                        Cell::from(""),
+                        Cell::from(ss.name.clone()),
+                        Cell::from(ss.profile.clone().unwrap_or_else(|| "(throwaway)".into())),
+                        node_cell(&s.node_name),
+                        Cell::from(engine_span(ss.engine)),
+                        Cell::from(
+                            ss.proxy
+                                .as_deref()
+                                .map(|p| app.proxy_name(&s.node_name, p))
+                                .unwrap_or_default(),
+                        ),
+                        Cell::from(ss.tabs_count.to_string()),
+                        Cell::from(dur(ss.uptime_seconds)),
+                        Cell::from(ss.viewer_count.to_string()),
+                        Cell::from(ss.client_count.to_string()),
+                        Cell::from(crate::ctl::agents(&ss.clients)),
+                        Cell::from(rec).fg(Color::Red),
+                    ])
+                })
+                .chain(browsers.iter().map(|browser| {
+                    Row::new(vec![
+                        Cell::from(""),
+                        Cell::from(browser.node.name.clone()),
+                        Cell::from("Browser extension"),
+                        node_cell(&browser.daemon),
+                        Cell::from(browser.node.browser.clone()),
+                        Cell::from(""),
+                        Cell::from(browser.node.tabs.len().to_string()),
+                    ])
+                }));
+            let browser_lines = app.tables[i]
+                .selected()
+                .and_then(|n| n.checked_sub(sessions.len()))
+                .and_then(|n| browsers.get(n))
+                .map(|b| {
+                    vec![
+                        Line::from(format!(
+                            "{} via {} · {} shared tabs",
+                            b.node.name,
+                            b.daemon,
+                            b.node.tabs.len()
+                        )),
+                        Line::from("Enter open browser   t open a tab   i details").dim(),
+                    ]
+                });
             let table = Table::new(
                 rows,
                 [
@@ -195,6 +224,8 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
             draw_row_icons(f, app, body, i, &keys);
             if let Some(sel) = app.tables[i].selected().and_then(|n| sessions.get(n)) {
                 draw_session(f, app, &ov, sel, detail);
+            } else if browser_lines.is_some() {
+                draw_detail(f, detail, browser_lines);
             }
         }
         Tab::Profiles => {
@@ -370,6 +401,24 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
                     Cell::from(dur(p.uptime_seconds)),
                 ])
             }));
+            rows.extend(app.browsers.iter().map(|browser| {
+                Row::new(vec![
+                    Cell::from(format!(
+                        "{} (extension via {})",
+                        browser.node.name, browser.daemon
+                    )),
+                    if browser.node.online {
+                        Cell::from("online").fg(Color::Green)
+                    } else {
+                        Cell::from("offline").fg(Color::Red)
+                    },
+                    Cell::from(if browser.node.online { "1" } else { "0" }),
+                    Cell::from("–"),
+                    Cell::from("–"),
+                    Cell::from("–"),
+                    Cell::from("–"),
+                ])
+            }));
             let table = Table::new(
                 rows,
                 [
@@ -388,6 +437,21 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
             .row_highlight_style(highlight)
             .block(block);
             f.render_stateful_widget(table, body, &mut app.tables[i]);
+            let browser_lines = app.browser_at_selection().map(|browser| {
+                vec![
+                    Line::from(format!(
+                        "{} · {} shared tabs",
+                        browser.node.browser,
+                        browser.node.tabs.len()
+                    )),
+                    Line::from(if browser.node.online {
+                        "Enter open browser   N open a tab   i details"
+                    } else {
+                        "i details"
+                    })
+                    .dim(),
+                ]
+            });
             let node = app.tables[i].selected().and_then(|n| {
                 if n == 0 {
                     Some(ov.local_node.name.clone())
@@ -395,23 +459,26 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
                     ov.peers.get(n - 1).map(|p| p.name.clone())
                 }
             });
-            let lines = node.map(|n| {
-                let proxies = app.node_proxies(&n);
-                if proxies.is_empty() {
-                    vec![Line::from("No proxies").dim()]
-                } else {
-                    proxies
-                        .into_iter()
-                        .map(|p| {
-                            Line::from(vec![
-                                Span::raw("  "),
-                                Span::raw(glyph('\u{f0ac}')),
-                                Span::raw(p.name).bold(),
-                                Span::raw(format!("  {}://{}:{}", p.scheme, p.host, p.port)).dim(),
-                            ])
-                        })
-                        .collect()
-                }
+            let lines = browser_lines.or_else(|| {
+                node.map(|n| {
+                    let proxies = app.node_proxies(&n);
+                    if proxies.is_empty() {
+                        vec![Line::from("No proxies").dim()]
+                    } else {
+                        proxies
+                            .into_iter()
+                            .map(|p| {
+                                Line::from(vec![
+                                    Span::raw("  "),
+                                    Span::raw(glyph('\u{f0ac}')),
+                                    Span::raw(p.name).bold(),
+                                    Span::raw(format!("  {}://{}:{}", p.scheme, p.host, p.port))
+                                        .dim(),
+                                ])
+                            })
+                            .collect()
+                    }
+                })
             });
             draw_detail(f, detail, lines);
         }
@@ -933,11 +1000,10 @@ fn draw_modal(f: &mut Frame, modal: &Modal) -> Rect {
             popup(f, title, shown)
         }
         Modal::Form(form) => {
-            let mut lines: Vec<Line> = form
-                .fields
-                .iter()
-                .enumerate()
-                .map(|(i, field)| {
+            let mut lines: Vec<Line> = App::form_indices(form)
+                .into_iter()
+                .map(|i| {
+                    let field = &form.fields[i];
                     let value = match &field.kind {
                         FieldKind::Text(t) => {
                             if i == form.sel {
@@ -960,7 +1026,11 @@ fn draw_modal(f: &mut Frame, modal: &Modal) -> Rect {
                 })
                 .collect();
             lines.push(Line::from(""));
-            lines.push(hint("↑↓ field   ← → change   ⏎ create   Esc cancel"));
+            lines.push(hint(if App::browser_form(form) {
+                "↑↓ field   ← → change   ⏎ open   Esc cancel"
+            } else {
+                "↑↓ field   ← → change   ⏎ create   Esc cancel"
+            }));
             let title = match form.kind {
                 FormKind::Session => "New session",
                 FormKind::Profile => "New profile",

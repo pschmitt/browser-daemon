@@ -224,6 +224,120 @@ pub(crate) async fn remote_tabs(conn: &Conn) -> R<(Value, Value, Value)> {
     ))
 }
 
+/// Open a tab on an explicitly chosen mesh browser or managed session.
+pub(crate) async fn new_remote_tab(
+    conn: &Conn,
+    node: Option<&str>,
+    browser: Option<&str>,
+    session: Option<&str>,
+    target: Option<&str>,
+) -> R<Value> {
+    let c = Client::connect(conn).await?;
+    if let Some(browser) = browser {
+        let daemons = match node {
+            Some(name) => vec![c.node_or_local(Some(name))?],
+            None => std::iter::once(c.ov.local_node.name.clone())
+                .chain(
+                    c.ov.peers
+                        .iter()
+                        .filter(|p| p.status == "online")
+                        .map(|p| p.name.clone()),
+                )
+                .collect(),
+        };
+        let reports = futures_util::future::join_all(
+            daemons
+                .iter()
+                .map(|daemon| c.call(c.req(Method::GET, &c.api(daemon, "/extension/nodes")))),
+        )
+        .await;
+        let mut matches = Vec::new();
+        for (daemon, report) in daemons.iter().zip(reports) {
+            let report = match report {
+                Ok(report) => report,
+                Err(e) if node.is_some() => return Err(e),
+                Err(_) => continue,
+            };
+            let nodes: Vec<crate::extension::NodeInfo> =
+                serde_json::from_value(report["nodes"].clone())?;
+            matches.extend(
+                nodes
+                    .into_iter()
+                    .filter(|n| {
+                        n.online && (n.id.to_string() == browser || n.name.starts_with(browser))
+                    })
+                    .map(|n| (daemon, n)),
+            );
+        }
+        if matches
+            .iter()
+            .any(|(_, n)| n.id.to_string() == browser || n.name == browser)
+        {
+            matches.retain(|(_, n)| n.id.to_string() == browser || n.name == browser);
+        }
+        let [(daemon, browser)] = matches.as_slice() else {
+            return fail(
+                EXIT_NOT_FOUND,
+                if matches.is_empty() {
+                    format!("No online shared browser '{browser}'")
+                } else {
+                    format!(
+                        "More than one shared browser matches '{browser}'; use a UUID or --node"
+                    )
+                },
+            );
+        };
+        let tab = browser
+            .opener()
+            .ok_or("The browser owner must allow opening shared tabs")?;
+        let path = c.api(daemon, &format!("/extension/nodes/{}/command", browser.id));
+        let reply = c
+            .call(c.req(Method::POST, &path).json(&json!({
+                "tab": tab, "action": "open", "params": { "url": target.unwrap_or("about:blank") },
+            })))
+            .await?;
+        let tab = reply["result"]["tab"].as_u64().ok_or_else(|| {
+            reply["error"]
+                .as_str()
+                .unwrap_or("The browser did not open a tab")
+                .to_string()
+        })?;
+        return Ok(
+            json!({ "id": format!("{}:{tab}", browser.name), "browser": browser.id, "tab": tab, "node": daemon }),
+        );
+    }
+    let (node, id, created) = if let Some(session) = session {
+        let s = c.session(session, node)?;
+        (s.node_name.clone(), s.session.id.to_string(), false)
+    } else {
+        let node = c.node_or_local(node)?;
+        let response = c
+            .call(
+                c.req(Method::POST, &c.api(&node, "/sessions"))
+                    .json(&json!({ "persistent": true })),
+            )
+            .await?;
+        let id = response["id"]
+            .as_str()
+            .ok_or("The daemon did not return a session ID")?
+            .into();
+        (node, id, true)
+    };
+    if created && target.is_none() {
+        return Ok(json!({ "id": id, "session": id, "node": node }));
+    }
+    let url = enc(target.unwrap_or("about:blank"));
+    let path = c.devtools(&node, &format!("/json/new?url={url}&session_id={id}"));
+    let result = c
+        .call(c.req(Method::PUT, &path))
+        .await
+        .map_err(|error| format!("Could not open a tab in session {id} on {node}: {error}"))?;
+    let tab = result["id"]
+        .as_str()
+        .ok_or("The daemon did not return a tab ID")?;
+    Ok(json!({ "id": tab, "session": id, "node": node }))
+}
+
 /// For `browser-daemon tabs`: a command to a tab of a browser paired with the
 /// daemon (the extension's `focus`, `close`, `screenshot`, `content`, `pdf`),
 /// and its answer.

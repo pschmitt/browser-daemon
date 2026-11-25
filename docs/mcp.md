@@ -161,3 +161,7 @@ It fails closed: when the mask cannot be built (a script error, an unreadable fr
 ### Shared browsers
 
 `browser_shared_command` with `action: screenshot` is censored by default, with the same `censor` list (also as `params.censor`; default categories) unless the call passes `unsafe: true`. The extension of the user's browser blacks out the content with overlays; the server sends it the categories and, for `secrets`, the values filled in this session (`params.secrets`: they go to the user's own browser, which has them typed in already). Whatever `censor` asks for, the default categories are always added unless the call is `unsafe`; with `--censor-screenshots`, `unsafe: true` is refused. If the extension's reply is not marked `censored: true` (an old extension), the image is discarded and the agent gets an error that tells the user to update the extension. The extension fails closed as well.
+
+For a browser listed by `browser_shared_nodes`, use `browser_shared_open_tab`
+with its browser UUID, hosting daemon and URL or search terms. The browser
+owner must allow opening shared tabs. The tool returns the new tab ID.

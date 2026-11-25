@@ -182,6 +182,7 @@ enum Action {
     /// Several calls at once (one per node), reported as one.
     ApiAll(String, Vec<Call>),
     Open(String),
+    OpenBrowserTab(BrowserTarget, String),
     /// Play a recording (node, id): in this terminal (true) or in a player window.
     Play(String, String, bool),
     Say(String),
@@ -431,6 +432,8 @@ enum FormKind {
     Profile,
 }
 
+const SESSION_TARGET_FIELD: usize = 10;
+
 struct Field {
     label: &'static str,
     kind: FieldKind,
@@ -508,6 +511,8 @@ enum Msg {
     Overview(Result<MeshOverview, String>),
     /// An overview the daemon pushed (`/api/ws/overview`).
     Pushed(MeshOverview),
+    Browsers(Vec<BrowserTarget>),
+    BrowserTab(Result<String, String>),
     /// The push stream connected (true) or dropped (false): polling covers the gaps.
     Live(bool),
     /// An action finished: its message (empty: "done"), or its error.
@@ -527,6 +532,18 @@ enum Msg {
 }
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+#[derive(Clone, Debug)]
+struct BrowserTarget {
+    daemon: String,
+    node: crate::extension::NodeInfo,
+}
+
+impl BrowserTarget {
+    fn key(&self) -> String {
+        format!("browser:{}:{}", self.daemon, self.node.id)
+    }
+}
 
 struct App {
     tx: tokio::sync::mpsc::UnboundedSender<Msg>,
@@ -560,6 +577,9 @@ struct App {
     base: String,
     secret: Option<String>,
     ov: Option<MeshOverview>,
+    browsers: Vec<BrowserTarget>,
+    browsers_refresh: Option<Instant>,
+    browsers_pending: bool,
     tab: Tab,
     tables: [TableState; 5],
     status: String,
@@ -619,6 +639,59 @@ impl App {
         });
     }
 
+    fn refresh_browsers(&mut self) {
+        let Some(ov) = &self.ov else { return };
+        if self.browsers_pending
+            || self
+                .browsers_refresh
+                .is_some_and(|last| last.elapsed() < REFRESH)
+        {
+            return;
+        }
+        self.browsers_pending = true;
+        self.browsers_refresh = Some(Instant::now());
+        let requests: Vec<_> = std::iter::once(ov.local_node.name.as_str())
+            .chain(
+                ov.peers
+                    .iter()
+                    .filter(|p| p.status == "online")
+                    .map(|p| p.name.as_str()),
+            )
+            .map(|daemon| {
+                (
+                    daemon.to_string(),
+                    self.request(Method::GET, &self.api(daemon, "/extension/nodes")),
+                )
+            })
+            .collect();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            #[derive(serde::Deserialize)]
+            struct Nodes {
+                nodes: Vec<crate::extension::NodeInfo>,
+            }
+            let mut browsers: Vec<_> = futures_util::future::join_all(requests.into_iter().map(
+                |(daemon, req)| async move {
+                    let response = req.send().await.ok()?.error_for_status().ok()?;
+                    let nodes = response.json::<Nodes>().await.ok()?.nodes;
+                    Some(nodes.into_iter().map(move |node| BrowserTarget {
+                        daemon: daemon.clone(),
+                        node,
+                    }))
+                },
+            ))
+            .await
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect();
+            browsers.sort_by(|a, b| {
+                (&a.node.name, &a.daemon, a.node.id).cmp(&(&b.node.name, &b.daemon, b.node.id))
+            });
+            let _ = tx.send(Msg::Browsers(browsers));
+        });
+    }
+
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Pushed(ov) => {
@@ -626,6 +699,22 @@ impl App {
                 if self.refresh_error {
                     self.refresh_error = false;
                     self.set_status("", false);
+                }
+            }
+            Msg::Browsers(browsers) => {
+                let sessions = self.selected_key(Tab::Sessions);
+                let nodes = self.selected_key(Tab::Nodes);
+                self.browsers = browsers;
+                self.browsers_pending = false;
+                self.reselect(Tab::Sessions, sessions);
+                self.reselect(Tab::Nodes, nodes);
+                self.clamp_selection();
+            }
+            Msg::BrowserTab(result) => {
+                self.pending = self.pending.saturating_sub(1);
+                match result {
+                    Ok(url) => self.open(&url),
+                    Err(error) => self.set_status(error, true),
                 }
             }
             Msg::Live(live) => self.live = live,
@@ -724,6 +813,65 @@ impl App {
             .collect()
     }
 
+    fn browser_sessions(&self) -> impl Iterator<Item = &BrowserTarget> {
+        self.browsers
+            .iter()
+            .filter(|b| b.node.online && self.keep(&b.key()))
+    }
+
+    fn session_count(&self) -> usize {
+        self.sessions().len() + self.browser_sessions().count()
+    }
+
+    fn browser_at_selection(&mut self) -> Option<BrowserTarget> {
+        let i = self.selected_index()?;
+        match self.tab {
+            Tab::Sessions => self
+                .browser_sessions()
+                .nth(i.checked_sub(self.sessions().len())?)
+                .cloned(),
+            Tab::Nodes => self
+                .browsers
+                .get(i.checked_sub(1 + self.ov.as_ref()?.peers.len())?)
+                .cloned(),
+            _ => None,
+        }
+    }
+
+    fn browser_view(&self, browser: &BrowserTarget) -> String {
+        let daemon = if browser.daemon == self.local_node() {
+            String::new()
+        } else {
+            format!("&daemon={}", urlencode(&browser.daemon))
+        };
+        format!("{}/handoff/?browser={}{daemon}", self.base, browser.node.id)
+    }
+
+    fn browser_menu(&self, browser: BrowserTarget) -> Action {
+        let mut items = vec![item("Details", details(&browser.node.name, &browser.node))];
+        if browser.node.online {
+            items.insert(
+                0,
+                item("Open browser", Action::Open(self.browser_view(&browser))),
+            );
+            items.insert(
+                1,
+                item(
+                    "Open a tab",
+                    Action::Form(FormKind::Session, Some(browser.key())),
+                ),
+            );
+        }
+        items.push(item(
+            "Filter by browser",
+            Action::Filter(Some(browser.key())),
+        ));
+        Action::Menu {
+            title: browser.node.name,
+            items,
+        }
+    }
+
     fn profiles(&self) -> Vec<&MeshProfile> {
         self.ov
             .iter()
@@ -743,10 +891,10 @@ impl App {
     fn rows(&self) -> usize {
         let Some(ref ov) = self.ov else { return 0 };
         match self.tab {
-            Tab::Sessions => self.sessions().len(),
+            Tab::Sessions => self.session_count(),
             Tab::Profiles => self.profiles().len(),
             Tab::Recordings => self.recordings().len(),
-            Tab::Nodes => 1 + ov.peers.len(),
+            Tab::Nodes => 1 + ov.peers.len() + self.browsers.len(),
             Tab::Engines => self.engine_rows().len(),
         }
     }
@@ -759,6 +907,7 @@ impl App {
                 .sessions()
                 .iter()
                 .map(|s| format!("{}/{}", s.node_name, s.session.id))
+                .chain(self.browser_sessions().map(BrowserTarget::key))
                 .collect(),
             Tab::Profiles => self
                 .profiles()
@@ -777,7 +926,13 @@ impl App {
                 .iter()
                 .map(|r| format!("{}/{}", r.node_name, r.recording.id))
                 .collect(),
-            Tab::Nodes | Tab::Engines => return None,
+            Tab::Nodes => self.ov.as_ref().map(|ov| {
+                std::iter::once(ov.local_node.name.clone())
+                    .chain(ov.peers.iter().map(|p| p.name.clone()))
+                    .chain(self.browsers.iter().map(BrowserTarget::key))
+                    .collect()
+            })?,
+            Tab::Engines => return None,
         })
     }
 
@@ -1007,6 +1162,9 @@ impl App {
 
     /// The node of the selected row.
     fn selected_node(&mut self) -> Option<String> {
+        if let Some(browser) = self.browser_at_selection() {
+            return Some(browser.key());
+        }
         match self.tab {
             Tab::Sessions => self.session().map(|s| s.node_name),
             Tab::Profiles => self.profile().map(|p| p.node_name),
@@ -1045,6 +1203,25 @@ impl App {
 
     /// Hotkeys of the selected tab.
     fn tab_key(&mut self, k: KeyEvent) {
+        if let Some(browser) = self.browser_at_selection() {
+            let action = match k.code {
+                KeyCode::Enter | KeyCode::Char('o' | 'n') if browser.node.online => {
+                    Some(Action::Open(self.browser_view(&browser)))
+                }
+                KeyCode::Char('N' | 't') if browser.node.online => {
+                    Some(Action::Form(FormKind::Session, Some(browser.key())))
+                }
+                KeyCode::Char('i') => Some(details(&browser.node.name, &browser.node)),
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.run(action);
+                return;
+            }
+            if matches!(k.code, KeyCode::Char('n' | 'N' | 't')) {
+                return;
+            }
+        }
         let action = match (self.tab, k.code) {
             (Tab::Sessions, KeyCode::Enter | KeyCode::Char('o')) => self
                 .session()
@@ -1402,6 +1579,9 @@ impl App {
     // ----------------------------------------------------------------- menus
 
     fn item_menu(&mut self) -> Option<Action> {
+        if let Some(browser) = self.browser_at_selection() {
+            return Some(self.browser_menu(browser));
+        }
         match self.tab {
             Tab::Sessions => {
                 let s = self.session()?;
@@ -1821,6 +2001,7 @@ impl App {
             Action::Api(call) => self.call(call),
             Action::ApiAll(label, calls) => self.call_all(label, calls),
             Action::Open(url) => self.open(&url),
+            Action::OpenBrowserTab(browser, url) => self.open_browser_tab(browser, &url),
             Action::Play(node, id, here) => self.play(&node, &id, here),
             Action::Say(text) => self.set_status(text, false),
             Action::Menu { title, items } => {
@@ -1862,6 +2043,43 @@ impl App {
             }
             Action::DataMenu(p) => self.data_menu(p),
         }
+    }
+
+    fn open_browser_tab(&mut self, browser: BrowserTarget, url: &str) {
+        let Some(tab) = browser.node.opener() else {
+            self.set_status("The browser owner must allow opening shared tabs", true);
+            return;
+        };
+        let view = self.browser_view(&browser);
+        let path = self.api(
+            &browser.daemon,
+            &format!("/extension/nodes/{}/command", browser.node.id),
+        );
+        let req = self
+            .request(Method::POST, &path)
+            .json(&json!({ "tab": tab, "action": "open", "params": { "url": url } }));
+        let tx = self.tx.clone();
+        self.pending += 1;
+        self.set_status(format!("Opening a tab in {}…", browser.node.name), false);
+        tokio::spawn(async move {
+            let result = async {
+                let response = req.send().await.map_err(|e| e.to_string())?;
+                let status = response.status();
+                let reply: Value = response.json().await.map_err(|e| e.to_string())?;
+                reply["result"]["tab"]
+                    .as_u64()
+                    .filter(|_| status.is_success())
+                    .map(|tab| format!("{view}&page={tab}"))
+                    .ok_or_else(|| {
+                        reply["error"]
+                            .as_str()
+                            .unwrap_or("The browser did not open a tab")
+                            .to_string()
+                    })
+            }
+            .await;
+            let _ = tx.send(Msg::BrowserTab(result));
+        });
     }
 
     fn call(&mut self, call: Call) {
@@ -2178,13 +2396,25 @@ impl App {
 
     // ----------------------------------------------------------------- forms
 
-    fn node_choice(&self, preset: Option<&str>) -> Field {
-        let nodes = self.node_names();
+    fn node_choice(&self, kind: FormKind, preset: Option<&str>) -> Field {
+        let mut nodes: Vec<_> = self
+            .node_names()
+            .into_iter()
+            .map(|n| (n.clone(), n))
+            .collect();
+        if matches!(kind, FormKind::Session) {
+            nodes.extend(self.browsers.iter().filter(|b| b.node.online).map(|b| {
+                (
+                    b.key(),
+                    format!("{} (extension via {})", b.node.name, b.daemon),
+                )
+            }));
+        }
         let chosen = preset
             .or(self.filter.as_deref())
-            .and_then(|n| nodes.iter().position(|x| x == n))
+            .and_then(|n| nodes.iter().position(|(key, _)| key == n))
             .unwrap_or(0);
-        let mut f = Field::choice("Node", nodes.into_iter().map(|n| (n.clone(), n)).collect());
+        let mut f = Field::choice("Node", nodes);
         if let FieldKind::Choice { sel, .. } = &mut f.kind {
             *sel = chosen;
         }
@@ -2204,7 +2434,7 @@ impl App {
         if self.ov.is_none() {
             return;
         }
-        let node_field = self.node_choice(node.as_deref());
+        let node_field = self.node_choice(kind, node.as_deref());
         let node = node_field.value();
         let engines = || {
             Field::choice(
@@ -2261,6 +2491,7 @@ impl App {
                             ("false".into(), "don't".into()),
                         ],
                     ),
+                    Field::text("URL or search"),
                 ]
             }
             FormKind::Profile => vec![
@@ -2289,6 +2520,20 @@ impl App {
         f.fields[proxy_at] = self.proxy_field(&node);
     }
 
+    fn browser_form(f: &Form) -> bool {
+        matches!(f.kind, FormKind::Session) && f.fields[0].value().starts_with("browser:")
+    }
+
+    fn form_indices(f: &Form) -> Vec<usize> {
+        if Self::browser_form(f) {
+            vec![0, SESSION_TARGET_FIELD]
+        } else if matches!(f.kind, FormKind::Session) {
+            (0..SESSION_TARGET_FIELD).collect()
+        } else {
+            (0..f.fields.len()).collect()
+        }
+    }
+
     fn form_action(&self, f: &Form) -> Action {
         let v = |i: usize| f.fields[i].value();
         let flag = |s: String| match s.as_str() {
@@ -2299,6 +2544,20 @@ impl App {
         match f.kind {
             FormKind::Session => {
                 let mut node = v(0);
+                if Self::browser_form(f) {
+                    let Some(browser) = self
+                        .browsers
+                        .iter()
+                        .find(|b| b.node.online && b.key() == node)
+                    else {
+                        return Action::Say("The browser is offline".into());
+                    };
+                    return match crate::extension::tab_target(&v(SESSION_TARGET_FIELD)) {
+                        Some(url) => Action::OpenBrowserTab(browser.clone(), url),
+                        None => Action::Open(self.browser_view(browser)),
+                    };
+                }
+
                 let mut body = json!({ "persistent": true, "engine": v(1) });
                 if let Some((n, key)) = v(2).split_once('\u{1f}') {
                     node = n.to_string();
@@ -2470,7 +2729,9 @@ impl App {
                 });
             }
             Modal::Form(mut f) => {
-                let n = f.fields.len();
+                let fields = Self::form_indices(&f);
+                let n = fields.len();
+                let pos = fields.iter().position(|i| *i == f.sel).unwrap_or(0);
                 match k.code {
                     KeyCode::Esc => return,
                     KeyCode::Enter => {
@@ -2478,8 +2739,8 @@ impl App {
                         self.run(a);
                         return;
                     }
-                    KeyCode::Up | KeyCode::BackTab => f.sel = (f.sel + n - 1) % n,
-                    KeyCode::Down | KeyCode::Tab => f.sel = (f.sel + 1) % n,
+                    KeyCode::Up | KeyCode::BackTab => f.sel = fields[(pos + n - 1) % n],
+                    KeyCode::Down | KeyCode::Tab => f.sel = fields[(pos + 1) % n],
                     code => {
                         let at = f.sel;
                         let mut node_changed = false;
@@ -3100,6 +3361,9 @@ pub async fn run(args: crate::ctl::Conn) -> Result<(), Box<dyn std::error::Error
         base,
         secret,
         ov: None,
+        browsers: Vec::new(),
+        browsers_pending: false,
+        browsers_refresh: None,
         tab: Tab::Sessions,
         tables: Default::default(),
         status: String::new(),
@@ -3241,6 +3505,7 @@ fn event_loop(
             play_here(terminal, app, &file);
         }
         app.tick = app.tick.wrapping_add(1);
+        app.refresh_browsers();
         app.fetch_shot();
         app.fetch_icons();
         terminal.draw(|f| draw(f, app))?;

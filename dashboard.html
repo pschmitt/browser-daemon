@@ -5077,19 +5077,20 @@ function nodePills(container, selected, onPick, { onlineOnly = false, exclude = 
   };
 }
 
-// A connected browser (extension) has no sessions to start: the dialog only opens a tab in it.
+// A connected browser already has a live view. An address opens a tab there.
 function syncBrowserTarget() {
   const browser = extensionNodeOf(sessionNode);
   $('newSessionForm').classList.toggle('to-browser', !!browser);
   if (!browser) return false;
-  const opener = browserOpener(browser);
-  $('sessionBrowserHint').textContent = opener == null
-    ? `Opening tabs needs Remote control, and Share all tabs or Share new tabs, in ${browser.name}'s extension.`
-    : `Opens a tab in ${browser.name} (${browser.browser === 'firefox' ? 'Firefox' : 'Chromium'}), shared with control like the tab you take over.`;
-  $('sessionBrowserHint').style.color = opener == null ? 'var(--bad)' : '';
-  $('sessionUrl').required = true;
-  $('sessionSubmit').disabled = opener == null;
-  $('sessionSubmitText').textContent = 'Open tab';
+  const hasTarget = !!$('sessionUrl').value.trim();
+  const canOpen = browserOpener(browser) != null;
+  $('sessionBrowserHint').textContent = hasTarget
+    ? canOpen ? `Opens a tab in ${browser.name}.` : `Opening tabs needs Remote control and permission to share new tabs in ${browser.name}.`
+    : `Opens the live view for ${browser.name}.`;
+  $('sessionBrowserHint').style.color = hasTarget && !canOpen ? 'var(--bad)' : '';
+  $('sessionUrl').required = false;
+  $('sessionSubmit').disabled = browser.online === false || (hasTarget && !canOpen);
+  $('sessionSubmitText').textContent = hasTarget ? 'Open tab' : 'Open browser';
   return true;
 }
 // The tab to open from: 0 (the browser's own new tab) when new tabs are shared, else next to a controlled tab.
@@ -5131,6 +5132,7 @@ function syncUrlBar() {
   const isAddress = /^[a-z][\w+.-]*:\/\//i.test(v) || /^(localhost|[^\s/]+\.[a-z]{2,})(:\d+)?(\/\S*)?$/i.test(v);
   $('sessionUrlIcon').innerHTML = `<use href="#i-${isAddress ? 'globe' : 'search'}"/>`;
   $('sessionUrlClear').hidden = !v;
+  syncBrowserTarget();
 }
 $('sessionUrl').addEventListener('input', syncUrlBar);
 $('sessionUrlClear').addEventListener('click', () => { $('sessionUrl').value = ''; syncUrlBar(); $('sessionUrl').focus(); });
@@ -5511,17 +5513,24 @@ $('newSessionForm').addEventListener('submit', async (e) => {
 
 async function openBrowserTab(browser) {
   const target = toTarget($('sessionUrl').value);
-  if (!target) { $('sessionUrl').focus(); return; }
+  if (browser.online === false) return;
+  if (!target) {
+    closeModal('newSessionModal');
+    location.href = handoffUrl(extensionNodeKey(browser));
+    return;
+  }
+  const opener = browserOpener(browser);
+  if (opener == null) return;
   const btn = $('sessionSubmit');
   btn.disabled = true;
   try {
-    const res = await request('POST', extensionApi(browser, '/command'), { tab: browserOpener(browser) ?? 0, action: 'open', params: { url: target } });
+    const res = await request('POST', extensionApi(browser, '/command'), { tab: opener, action: 'open', params: { url: target } });
     const id = res?.result?.tab;
     if (!id) throw new Error(res?.error || 'The browser did not open the tab');
     closeModal('newSessionModal');
     const url = handoffUrl(extensionNodeKey(browser), { page: id });
     showToast('Tab opened', 'success', 5000, null, `In ${browser.name}`);
-    if ($('sessionHandoff').checked) setTimeout(() => { location.href = url; }, 300);
+    location.href = url;
   } catch (err) {
     showToast('Could not open the tab', 'danger', 6000, null, err.message);
   } finally {

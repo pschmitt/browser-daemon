@@ -291,7 +291,7 @@ impl Node {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tab {
     pub id: u32,
@@ -322,7 +322,7 @@ struct FaviconUpdate {
     favicon: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeInfo {
     pub id: Uuid,
     pub name: String,
@@ -332,13 +332,13 @@ pub struct NodeInfo {
     pub remembered: bool,
     pub online: bool,
     /// The extension's version; empty for releases before live views (0.3.0).
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
     /// When an offline remembered browser will be forgotten (Unix seconds).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forget_at: Option<u64>,
     /// Its owner lets controllers open tabs (they are shared with control).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub can_open: bool,
     /// Whether the owner lets live views activate the tab they are showing.
     pub follow: bool,
@@ -349,15 +349,47 @@ pub struct NodeInfo {
     pub public_share: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share: Option<crate::shares::ShareView>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recording: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recording_paused: bool,
     pub tabs: Vec<Tab>,
     /// Facts the browser derives from all its tabs, when its owner turned
     /// signals on (docs/local-api.md): `media`, `meeting`, own rules.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub signals: BTreeMap<String, Signal>,
+}
+
+impl NodeInfo {
+    pub(crate) fn opener(&self) -> Option<u32> {
+        if self.can_open {
+            Some(0)
+        } else {
+            self.tabs.iter().find(|tab| tab.control).map(|tab| tab.id)
+        }
+    }
+}
+
+pub(crate) fn tab_target(input: &str) -> Option<String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    if !input.chars().any(char::is_whitespace) {
+        let authority = input.split('/').next().unwrap_or(input);
+        let host = authority.split(':').next().unwrap_or(authority);
+        if !input.contains("://")
+            && (host.contains('.') || host == "localhost")
+            && url::Url::parse(&format!("https://{input}")).is_ok()
+        {
+            return Some(format!("https://{input}"));
+        }
+        if url::Url::parse(input).is_ok() {
+            return Some(input.to_string());
+        }
+    }
+    let query: String = url::form_urlencoded::byte_serialize(input.as_bytes()).collect();
+    Some(format!("https://www.google.com/search?q={query}"))
 }
 
 /// One signal: on or off, with a few short attributes (title, site, ...).
@@ -1944,6 +1976,25 @@ pub async fn stylesheet() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tab_targets_accept_addresses_search_terms_and_blank_input() {
+        use super::tab_target;
+        assert_eq!(tab_target("  "), None);
+        assert_eq!(tab_target("about:blank").as_deref(), Some("about:blank"));
+        assert_eq!(
+            tab_target("example.org:8443/path").as_deref(),
+            Some("https://example.org:8443/path")
+        );
+        assert_eq!(
+            tab_target("https://example.org/path?q=1").as_deref(),
+            Some("https://example.org/path?q=1")
+        );
+        assert_eq!(
+            tab_target("coffee & tea").as_deref(),
+            Some("https://www.google.com/search?q=coffee+%26+tea")
+        );
+    }
+
     use super::*;
     use futures_util::StreamExt;
 

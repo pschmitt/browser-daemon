@@ -195,6 +195,17 @@ enum TabsCommand {
         #[arg(short = 'f', long)]
         file: Option<String>,
     },
+    /// Open a tab on a local or shared browser, or start a session on a daemon.
+    New {
+        /// URL or search terms. Empty opens a blank tab or session.
+        target: Vec<String>,
+        /// Daemon hosting the shared browser or managed session.
+        #[arg(long)]
+        node: Option<String>,
+        /// Add a tab to the named running managed session.
+        #[arg(long, conflicts_with = "browser")]
+        session: Option<String>,
+    },
     /// Open a URL in a new tab of this machine's browser (`--browser NAME` to
     /// pick one); prints the new tab's id.
     Open {
@@ -838,6 +849,61 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
     } else {
         args.output.unwrap_or_default()
     };
+    if let Some(TabsCommand::New {
+        target,
+        node,
+        session,
+    }) = &args.command
+    {
+        let target = crate::extension::tab_target(&target.join(" "));
+        let browser = args.filter.browser.as_deref();
+        if args.sources.local
+            && (node.is_some() || session.is_some() || args.sources.shared || args.sources.sessions)
+        {
+            return fail(2, "--local cannot be combined with a remote target");
+        }
+        if args.sources.shared && (args.sources.sessions || session.is_some() || browser.is_none())
+        {
+            return fail(
+                2,
+                "--shared requires --browser and cannot be combined with a managed session",
+            );
+        }
+        if args.sources.sessions && browser.is_some() {
+            return fail(2, "Use --session to target a managed session");
+        }
+        let opened = if node.is_some()
+            || session.is_some()
+            || args.sources.shared
+            || args.sources.sessions
+        {
+            crate::ctl::new_remote_tab(
+                &args.conn,
+                node.as_deref(),
+                browser,
+                session.as_deref(),
+                target.as_deref(),
+            )
+            .await?
+        } else {
+            let body = serde_json::json!({"url": target.as_deref().unwrap_or("about:blank"), "client": browser});
+            tokio::task::block_in_place(|| {
+                local_request(
+                    &args.local,
+                    "POST",
+                    "/v1/tabs/open",
+                    Some(&body),
+                    CONTROL_WAIT,
+                )
+            })?
+        };
+        if output == Output::Json {
+            println!("{}", serde_json::to_string_pretty(&opened)?);
+        } else if let Some(id) = opened["id"].as_str() {
+            println!("{id}");
+        }
+        return Ok(());
+    }
     if let Some(TabsCommand::Open { url, background }) = &args.command {
         let local = args.local.clone();
         let body = serde_json::json!({"url": url, "client": args.filter.browser, "background": background});
@@ -908,7 +974,9 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
             let got = content(&args, row, kind).await?;
             write_content(row, &got, file.as_deref().or(target.as_deref()))?;
         }
-        TabsCommand::Open { .. } => unreachable!("handled before listing"),
+        TabsCommand::Open { .. } | TabsCommand::New { .. } => {
+            unreachable!("handled before listing")
+        }
     }
     Ok(())
 }
