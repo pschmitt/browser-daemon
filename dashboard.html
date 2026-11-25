@@ -1158,6 +1158,9 @@ pre.json { margin: 0; padding: 12px; border-radius: 10px; background: var(--bg);
   dialog.modal { padding: 0; align-items: flex-end; }
   .sheet { max-width: none; border-radius: 18px 18px 0 0; max-height: min(92vh, var(--vvh, 100vh)); padding-bottom: env(safe-area-inset-bottom); }
   dialog.modal.player { align-items: center; }
+  .pm { touch-action: pan-x; }
+  .pm::before { content: ""; align-self: center; flex: none; width: 36px; height: 4px; margin-top: 8px; border-radius: 2px; background: var(--line-strong); }
+  .pm-list { touch-action: pan-y; }
   .player-modal-card { border-radius: 0; max-height: 100vh; height: 100%; border: 0; }
   .player-top { padding-top: calc(10px + env(safe-area-inset-top)); }
   .player-frames-text { display: none; }
@@ -9348,6 +9351,30 @@ window.addEventListener('keydown', (e) => {
     if (dy > 48) { g = null; navigator.vibrate?.(8); openPalette(); }
   }, { passive: false });
   bar.addEventListener('touchend', () => { g = null; }, { passive: true });
+})();
+
+// Phones: pull the palette down to close it (from the list only when it is scrolled to the top).
+(() => {
+  const card = $('paletteModal').querySelector('.pm'), list = $('palList');
+  const phone = matchMedia('(max-width: 640px)');
+  let start = null, dy = 0;
+  card.addEventListener('touchstart', (e) => {
+    start = phone.matches && e.touches.length === 1 && (!list.contains(e.target) || list.scrollTop <= 0) ? e.touches[0].clientY : null;
+    dy = 0;
+  }, { passive: true });
+  card.addEventListener('touchmove', (e) => {
+    if (start === null) return;
+    dy = e.touches[0].clientY - start;
+    card.style.transform = dy > 0 ? `translateY(${dy}px)` : '';
+  }, { passive: true });
+  const finish = () => {
+    if (start === null) return;
+    start = null;
+    card.style.transform = '';
+    if (dy > 80) closeModal('paletteModal');
+  };
+  card.addEventListener('touchend', finish, { passive: true });
+  card.addEventListener('touchcancel', () => { dy = 0; finish(); }, { passive: true });
 })();
 
 // #nodes/add: the browser-pairing sheet (the extension's "Pair" button opens it).

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+* Dashboard: on a phone, pull the search palette down to close it (a grab
+  handle marks it), the counterpart of swiping up from the bottom bar.
+
 ## [0.23.5] - 2026-11-24
 
 ### Added
