@@ -31,6 +31,15 @@ the release publishes the client to PyPI. Renovate is told to leave the package
 alone, so there is no dependency PR for it to merge or wait for; if one shows up
 anyway, close it.
 
+For a Home Assistant rollout, check every installed integration that requires
+`browser-daemon-client`, including HR WORKS and Microsoft Teams. Align their
+dependency pins with the version being deployed and update their pinned
+revisions in the Home Assistant configuration. Home Assistant installs these
+requirements into one shared environment, so an older pin can replace the
+client during startup. Confirm the target version is on PyPI before deploying.
+After one coordinated restart, verify Home Assistant is running, each affected
+config entry is loaded, and the installed Python package has the target version.
+
 Release with `just release-prepare X.Y.Z`, then `just release-tag` (they run
 `nix run github:pschmitt/ci-workflows#release`); the tag must be GPG-signed, so unlock GPG first. The
 release workflow signs the browser extension, publishes it and then commits
