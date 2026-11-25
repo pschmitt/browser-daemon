@@ -17,6 +17,18 @@
   status and sets its pool.
   See [docs/profiles.md](docs/profiles.md#replication-within-a-pool).
 
+* Extension browsers appear in the TUI's Sessions and Nodes tabs. The TUI
+  and dashboard session dialogs can open a browser's live view or add a tab.
+* `tabs new --node NAME` (also `--daemon`) targets a browser or a managed
+  session host. `--local` restricts lookup to this machine. Use
+  `--tab-group NAME` to reuse or create a group in an extension browser.
+* MCP's `browser_shared_open_tab` opens tabs in extension browsers. Only
+  MCP-opened tabs use the Agents group and idle cleanup.
+
+### Fixed
+
+* The mesh excludes hidden directories from a node's profile count.
+
 ## [0.23.6] - 2026-11-25
 
 ### Added

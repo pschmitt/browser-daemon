@@ -109,9 +109,10 @@ globalThis.localApi = (() => {
           await ext.tabs.update(tab.id, {active: true});
           if (ext.windows) await ext.windows.update(tab.windowId, {focused: true});
         }
-      } else if (message.action === 'open') {
-        if (!/^https?:\/\//i.test(message.url || '')) throw new Error('Only http and https URLs open.');
+      } else if (message.action === 'open' || message.action === 'open-tab') {
+        if (message.url !== 'about:blank' && !/^https?:\/\//i.test(message.url || '')) throw new Error('Only http and https URLs open.');
         const tab = await ext.tabs.create({url: message.url, active: message.background !== true});
+        if (message.action === 'open-tab') await globalThis.applyNamedTabGroup(tab, message.tab_group);
         if (message.background !== true && ext.windows && tab.windowId !== undefined) {
           await ext.windows.update(tab.windowId, {focused: true});
         }

@@ -59,7 +59,7 @@ globalThis.NodePolicy = (() => {
     if (['screenshot', 'snapshot', 'publicAudio', 'pdf'].includes(command.action)) return true;
     if (command.action === 'content') return ['text', 'html'].includes(command.params.kind);
     if (!control) return false;
-    if (command.action === 'navigate' || command.action === 'open') return pageURL(command.params.url);
+    if (['navigate', 'open', 'open-tab'].includes(command.action)) return pageURL(command.params.url);
     if (command.action === 'move') return Number.isSafeInteger(command.params.index) && command.params.index >= 0;
     if (command.action === 'pointerMove') return Number.isFinite(command.params.x) && Number.isFinite(command.params.y);
     if (command.action === 'pin') return typeof command.params.pinned === 'boolean';

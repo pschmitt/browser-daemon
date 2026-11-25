@@ -595,6 +595,7 @@ struct OpenRequest {
     /// Do not bring it to the front.
     #[serde(default)]
     background: bool,
+    tab_group: Option<String>,
 }
 
 async fn open_tab(
@@ -608,20 +609,52 @@ async fn open_tab(
     if let Some(res) = app.reject(&headers, "tabs:control", &peer, &method, &uri) {
         return res;
     }
-    if !(req.url.starts_with("http://") || req.url.starts_with("https://")) {
+    if req.url != "about:blank"
+        && !(req.url.starts_with("http://") || req.url.starts_with("https://"))
+    {
         return error(StatusCode::BAD_REQUEST, "only http and https URLs open");
     }
-    let client = match req.client {
-        Some(c) => c,
-        None => {
-            let t = app.tabs.lock().expect("tabs");
-            match t.sorted_clients().first() {
-                Some(c) => c.prefix.clone(),
-                None => return error(StatusCode::NOT_FOUND, "no browser is connected"),
+    if !crate::extension::valid_tab_group(req.tab_group.as_deref()) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "invalid or reserved tab group name",
+        );
+    }
+    let client = {
+        let tabs = app.tabs.lock().expect("tabs");
+        let clients = tabs.sorted_clients();
+        let chosen = match req.client.as_deref() {
+            None => clients.first().copied(),
+            Some(name) => {
+                if let Some(exact) = clients.iter().copied().find(|client| client.prefix == name) {
+                    Some(exact)
+                } else {
+                    let mut matches = clients
+                        .iter()
+                        .copied()
+                        .filter(|client| client.browser == name || client.prefix.starts_with(name));
+                    let first = matches.next();
+                    if matches.next().is_some() {
+                        return error(StatusCode::CONFLICT, "more than one local browser matches");
+                    }
+                    first
+                }
             }
-        }
+        };
+        let Some(client) = chosen else {
+            return error(
+                StatusCode::NOT_FOUND,
+                "no matching local browser is connected",
+            );
+        };
+        client.prefix.clone()
     };
-    let cmd = json!({"action": "open", "url": req.url, "background": req.background});
+    let action = if req.tab_group.is_some() {
+        "open-tab"
+    } else {
+        "open"
+    };
+    let cmd = json!({"action": action, "url": req.url, "background": req.background, "tab_group": req.tab_group});
     match command(&app, &client, cmd).await {
         Ok(result) => {
             Json(json!({"ok": true, "id": format!("{client}:{}", result["tab"])})).into_response()

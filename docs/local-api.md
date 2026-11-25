@@ -67,19 +67,22 @@ to the front), `tabs close ID...` and `tabs open URL` (`--browser NAME`,
 ones through this API (token scope `tabs:control`), shared ones through the
 daemon, session tabs through their node.
 
-Use `tabs new` with a URL or search terms to open a tab. It opens locally by
-default. To choose a real browser elsewhere in the mesh, use `--shared` with
-`--browser NAME_OR_UUID` and optionally `--node DAEMON` to narrow the search.
-The browser owner must allow opening shared tabs.
+Use `tabs new` with a URL or search terms. With no target flag, it opens a
+local tab. Use `--node` (alias `--daemon`) to select a browser node or start
+a managed session on a daemon. The owner of an extension browser must allow
+remote tab opening. Add `--local` to look for a named browser only on this
+machine.
 
 ```sh
-browser-daemon tabs new --shared --browser my-firefox example.org
-browser-daemon tabs new --node my-daemon example.org
+browser-daemon tabs new --node my-firefox --tab-group Research example.org
+browser-daemon tabs new --daemon my-daemon example.org
+browser-daemon tabs new --local --node firefox example.org
 browser-daemon tabs new --session my-running-session example.org
 ```
 
-With a daemon and no browser or session selected, the command starts a new
-managed session. With `--session`, it adds a tab to that session.
+`--tab-group GROUP` reuses a group with that title in the browser window or
+creates one. It works with local and extension-backed browsers. The
+`Agents` group and idle cleanup apply to tabs opened by MCP.
 
 Read what a tab shows with `tabs text ID`, `tabs html ID`, `tabs screenshot
 ID` and `tabs pdf ID`. Text and HTML go to stdout (or a FILE). A screenshot (PNG) or PDF goes

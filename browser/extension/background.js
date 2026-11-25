@@ -55,17 +55,17 @@ async function shareEverything() {
   if (!chromium) for (const [id, grant] of shared) if (grant.control && !grant.paused) void hookPasskeys(id).catch(() => hooked.delete(id));
   publishSoon();
 }
-async function openTab(url, windowId) {
-  if (!safeURL(url)) throw new ShimError('Local services and daemon pages cannot be opened remotely.');
+async function openTab({url, tab_group: group, agent}, windowId) {
+  if (url !== 'about:blank' && !safeURL(url)) throw new ShimError('Local services and daemon pages cannot be opened remotely.');
   // Opened in the background: a client never takes the owner's focus.
   const created = await api.tabs.create({url, active: false, ...(windowId ? {windowId} : {})});
+  await applyNamedTabGroup(created, group);
   shared.set(created.id, {origin: null, control: true, paused: true});
-  await claimAgentTab(created.id);
+  if (agent === true) await claimAgentTab(created.id);
   publishSoon();
   return {tab: created.id};
 }
-// Tabs a client opened (tab 0 "open", or a popup of such a tab) belong to the
-// agent, not the owner: they go into one collapsed "Agents" group per window and
+// Tabs opened by MCP and their popups belong to the agent: they go into one collapsed "Agents" group per window and
 // close by themselves once nobody has touched them for a while. They are kept in
 // storage.session (the worker sleeps) as tab id -> {touch: ms, group: id}.
 // A tab the owner moves out of the group, unshares or takes over stops being one.
@@ -110,6 +110,32 @@ function agentGroupChanged(id, groupId) {
 // Tab groups: Chromium 89+ and Firefox 139+ (the manifest needs 142). Where the
 // API is missing (Firefox for Android) tabs stay ungrouped, and still close when idle.
 const groupsSupported = () => !!(api.tabs.group && api.tabGroups);
+async function applyNamedTabGroup(tab, name) {
+  if (name == null) return;
+  const placement = groupChain.then(() => placeInNamedTabGroup(tab, name));
+  groupChain = placement.catch(() => {});
+  return placement;
+}
+async function placeInNamedTabGroup(tab, name) {
+  try {
+    if (!groupsSupported()) throw new Error('This browser does not support tab groups.');
+    if (typeof name !== 'string' || !name.trim() || name.trim().toLowerCase() === 'agents') {
+      throw new Error('Invalid or reserved tab group name.');
+    }
+    const groups = await api.tabGroups.query({windowId: tab.windowId});
+    const group = groups.find(candidate => candidate.title === name);
+    if (group) {
+      await api.tabs.group({tabIds: [tab.id], groupId: group.id});
+    } else {
+      const id = await api.tabs.group({tabIds: [tab.id]});
+      await api.tabGroups.update(id, {title: name});
+    }
+  } catch (error) {
+    await api.tabs.remove(tab.id).catch(() => {});
+    throw error;
+  }
+}
+globalThis.applyNamedTabGroup = applyNamedTabGroup;
 let groupChain = Promise.resolve();
 function groupAgentTab(id) {
   if (!sharing.agentGroup || !groupsSupported()) return;
@@ -1786,9 +1812,9 @@ async function execute(command) {
     if (!safeURL(params.url)) throw new ShimError('Local services and daemon pages cannot be opened remotely.');
     await api.tabs.update(tab, {url: params.url});
     return {ok: true};
-  } else if (action === 'open') {
+  } else if (action === 'open' || action === 'open-tab') {
     // A controller opens a tab next to the one it controls; it is shared with control.
-    return openTab(params.url, (await api.tabs.get(tab)).windowId);
+    return openTab({...params, agent: action === 'open' && params.agent === true}, (await api.tabs.get(tab)).windowId);
   } else if (action === 'reload') { await api.tabs.reload(tab); return {ok: true}; }
   else if (action === 'back') { await api.tabs.goBack(tab); return {ok: true}; }
   else if (action === 'forward') { await api.tabs.goForward(tab); return {ok: true}; }
@@ -2334,9 +2360,9 @@ async function handleCommand(command, connection, currentGeneration) {
       return;
     }
     // Tab 0: the browser's first tab, where the owner lets controllers open tabs.
-    if (command.tab === 0 && command.action === 'open') {
+    if (command.tab === 0 && ['open', 'open-tab'].includes(command.action)) {
       if (!registration || !canOpen() || !NodePolicy.pageURL(command.params?.url)) throw new Error('Opening tabs is not allowed.');
-      const result = await openTab(command.params.url);
+      const result = await openTab({...command.params, agent: command.action === 'open' && command.params.agent === true});
       if (socket === connection && currentGeneration === generation) answer(JSON.stringify({type: 'result', id: command.id, result}));
       return;
     }

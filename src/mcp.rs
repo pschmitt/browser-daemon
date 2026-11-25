@@ -2073,7 +2073,7 @@ impl State {
         let reply = self
             .extension_request(
                 &format!("{prefix}/extension/nodes/{id}/command"),
-                Some(json!({ "tab": tab, "action": "open", "params": { "url": url } })),
+                Some(json!({ "tab": tab, "action": "open", "params": { "url": url, "agent": true } })),
             )
             .await?;
         let tab = reply["result"]["tab"].as_u64().ok_or_else(|| {

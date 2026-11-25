@@ -851,7 +851,7 @@ function groupMocks(h) {
   h.api.tabs.ungroup = async id => { log.ungroup = id; };
   const query = h.api.tabs.query;
   h.api.tabs.query = async filter => (await query(filter)).filter(t => filter?.pinned === undefined || !!t.pinned === filter.pinned);
-  h.api.tabGroups = {query: async ({title}) => log.groups.filter(g => g.title === title),
+  h.api.tabGroups = {query: async ({title}) => log.groups.filter(g => title === undefined || g.title === title),
     update: async (id, props) => { log.update.push([id, props]); Object.assign(log.groups.find(g => g.id === id), props); },
     move: async (id, props) => { log.move.push([id, props]); }};
   return log;
@@ -866,7 +866,7 @@ for (const firefox of [false, true]) {
     const h = harness(firefox, {}); const groups = groupMocks(h); const s = await h.pair();
     h.tabs.get(4).pinned = true;
     await h.message({type: 'setControl', control: true});
-    s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
+    s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {agent: true, url: 'https://new.example/'}});
     await h.flush(); await h.flush();
     assert.equal(h.calls.find(c => c[0] === 'create')[1].active, false);
     const first = s.sent.find(m => m.id === 'a').result.tab;
@@ -875,7 +875,7 @@ for (const firefox of [false, true]) {
     assert.equal(groups.move.length, 1);
     assert.equal(groups.move[0][1].index, 1, 'at the start, after the pinned tabs');
     // A second tab joins the existing group instead of starting another.
-    s.receive({type: 'command', id: 'b', tab: 0, action: 'open', params: {url: 'https://other.example/'}});
+    s.receive({type: 'command', id: 'b', tab: 0, action: 'open', params: {agent: true, url: 'https://other.example/'}});
     await h.flush(); await h.flush();
     assert.equal(groups.group.length, 2);
     assert.equal(groups.group[1].groupId, groups.groups[0].id);
@@ -895,10 +895,33 @@ for (const firefox of [false, true]) {
     assert.equal(groups.group.length, 0);
   });
 }
+test('ordinary remote and local opens can share a named group without agent ownership', async () => {
+  const session = {};
+  const h = harness(false, {localApi: true}, '', session);
+  const groups = groupMocks(h);
+  const socket = await h.pair();
+  await h.message({type: 'setControl', control: true});
+  socket.receive({type: 'command', id: 'ordinary', tab: 0, action: 'open-tab', params: {url: 'https://plain.example/'}});
+  socket.receive({type: 'command', id: 'named', tab: 0, action: 'open-tab', params: {url: 'https://named.example/', tab_group: 'Research'}});
+  await h.flush(); await h.flush();
+  const plain = socket.sent.find(m => m.id === 'ordinary').result.tab;
+  const grouped = socket.sent.find(m => m.id === 'named').result.tab;
+  assert.equal(h.tabs.get(plain).groupId, undefined);
+  const group = h.tabs.get(grouped).groupId;
+  assert.equal(groups.groups[0].title, 'Research');
+  const port = h.nativePorts.find(p => p.name === LOCAL_HOST);
+  port.receive({type: 'command', id: 33, action: 'open-tab', url: 'https://local.example/', tab_group: 'Research'});
+  await h.flush(); await h.flush();
+  const reply = port.posted.find(m => m.id === 33);
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(h.tabs.get(reply.tab).groupId, group);
+  assert.deepEqual(session.agentTabs ?? {}, {});
+});
+
 test('without the tab group API tabs still open, ungrouped', async () => {
   const h = harness(false, {}); const s = await h.pair();
   await h.message({type: 'setControl', control: true});
-  s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
+  s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {agent: true, url: 'https://new.example/'}});
   await h.flush(); await h.flush();
   assert.ok(s.sent.find(m => m.id === 'a').result.tab);
 });
@@ -1035,7 +1058,7 @@ test('the local tab API reads text, screenshots and (Firefox: raster) PDFs, priv
 test('the group setting turns grouping off', async () => {
   const h = harness(false, {agentGroup: false}); const groups = groupMocks(h); const s = await h.pair();
   await h.message({type: 'setControl', control: true});
-  s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {url: 'https://new.example/'}});
+  s.receive({type: 'command', id: 'a', tab: 0, action: 'open', params: {agent: true, url: 'https://new.example/'}});
   await h.flush(); await h.flush();
   assert.equal(groups.group.length, 0);
   const state = await h.message({type: 'state'});

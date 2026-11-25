@@ -2057,7 +2057,7 @@ impl App {
         );
         let req = self
             .request(Method::POST, &path)
-            .json(&json!({ "tab": tab, "action": "open", "params": { "url": url } }));
+            .json(&json!({ "tab": tab, "action": "open-tab", "params": { "url": url } }));
         let tx = self.tx.clone();
         self.pending += 1;
         self.set_status(format!("Opening a tab in {}…", browser.node.name), false);

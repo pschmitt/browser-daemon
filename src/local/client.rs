@@ -199,12 +199,15 @@ enum TabsCommand {
     New {
         /// URL or search terms. Empty opens a blank tab or session.
         target: Vec<String>,
-        /// Daemon hosting the shared browser or managed session.
-        #[arg(long)]
+        /// Browser node or daemon name. With --local, selects a local browser.
+        #[arg(long, visible_alias = "daemon")]
         node: Option<String>,
         /// Add a tab to the named running managed session.
         #[arg(long, conflicts_with = "browser")]
         session: Option<String>,
+        /// Reuse or create a named tab group in the target browser window.
+        #[arg(long)]
+        tab_group: Option<String>,
     },
     /// Open a URL in a new tab of this machine's browser (`--browser NAME` to
     /// pick one); prints the new tab's id.
@@ -213,6 +216,9 @@ enum TabsCommand {
         /// Open it without bringing it to the front.
         #[arg(long)]
         background: bool,
+        /// Reuse or create a named tab group in the browser window.
+        #[arg(long)]
+        tab_group: Option<String>,
     },
 }
 
@@ -853,40 +859,52 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
         target,
         node,
         session,
+        tab_group,
     }) = &args.command
     {
-        let target = crate::extension::tab_target(&target.join(" "));
-        let browser = args.filter.browser.as_deref();
-        if args.sources.local
-            && (node.is_some() || session.is_some() || args.sources.shared || args.sources.sessions)
-        {
-            return fail(2, "--local cannot be combined with a remote target");
+        if !crate::extension::valid_tab_group(tab_group.as_deref()) {
+            return fail(2, "Invalid or reserved tab group name");
         }
-        if args.sources.shared && (args.sources.sessions || session.is_some() || browser.is_none())
+        let target = crate::extension::tab_target(&target.join(" "));
+        let node = node.as_deref();
+        let browser = args.filter.browser.as_deref();
+        let session = session.as_deref();
+        if args.sources.local && (session.is_some() || args.sources.shared || args.sources.sessions)
         {
             return fail(
                 2,
-                "--shared requires --browser and cannot be combined with a managed session",
+                "--local cannot be combined with --shared, --sessions, or --session",
+            );
+        }
+        if args.sources.local && node.is_some() && browser.is_some() {
+            return fail(2, "Choose one local browser with --node or --browser");
+        }
+        if args.sources.shared
+            && (args.sources.sessions || session.is_some() || node.or(browser).is_none())
+        {
+            return fail(
+                2,
+                "--shared requires a browser target and cannot be combined with a managed session",
             );
         }
         if args.sources.sessions && browser.is_some() {
             return fail(2, "Use --session to target a managed session");
         }
-        let opened = if node.is_some()
-            || session.is_some()
-            || args.sources.shared
-            || args.sources.sessions
+        let opened = if !args.sources.local
+            && (node.or(browser).is_some() || session.is_some() || args.sources.sessions)
         {
             crate::ctl::new_remote_tab(
                 &args.conn,
-                node.as_deref(),
+                node,
                 browser,
-                session.as_deref(),
+                session,
                 target.as_deref(),
+                args.sources.shared,
+                tab_group.as_deref(),
             )
             .await?
         } else {
-            let body = serde_json::json!({"url": target.as_deref().unwrap_or("about:blank"), "client": browser});
+            let body = serde_json::json!({"url": target.as_deref().unwrap_or("about:blank"), "client": node.or(browser), "tab_group": tab_group});
             tokio::task::block_in_place(|| {
                 local_request(
                     &args.local,
@@ -904,9 +922,14 @@ pub async fn tabs(args: TabsArgs) -> R<()> {
         }
         return Ok(());
     }
-    if let Some(TabsCommand::Open { url, background }) = &args.command {
+    if let Some(TabsCommand::Open {
+        url,
+        background,
+        tab_group,
+    }) = &args.command
+    {
         let local = args.local.clone();
-        let body = serde_json::json!({"url": url, "client": args.filter.browser, "background": background});
+        let body = serde_json::json!({"url": url, "client": args.filter.browser, "background": background, "tab_group": tab_group});
         let opened = tokio::task::block_in_place(|| {
             local_request(&local, "POST", "/v1/tabs/open", Some(&body), CONTROL_WAIT)
         })?;
@@ -1091,6 +1114,31 @@ fn complete_clients(current: &std::ffi::OsStr) -> Vec<CompletionCandidate> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn tabs_new_accepts_node_and_daemon_as_aliases() {
+        use clap::Parser;
+
+        for flag in ["--node", "--daemon"] {
+            let cli = crate::Cli::try_parse_from([
+                "browser-daemon",
+                "tabs",
+                "new",
+                "--local",
+                flag,
+                "firefox",
+                "example.org",
+            ])
+            .unwrap();
+            let crate::Command::Tabs(args) = cli.command else {
+                panic!("expected tabs command");
+            };
+            assert!(args.sources.local);
+            assert!(
+                matches!(args.command, Some(TabsCommand::New { node: Some(name), .. }) if name == "firefox")
+            );
+        }
+    }
 
     fn row(id: &str, source: &'static str, title: &str) -> Row {
         let (client, tab) = id.split_once(':').unwrap();

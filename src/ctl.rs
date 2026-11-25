@@ -231,8 +231,14 @@ pub(crate) async fn new_remote_tab(
     browser: Option<&str>,
     session: Option<&str>,
     target: Option<&str>,
+    shared: bool,
+    tab_group: Option<&str>,
 ) -> R<Value> {
     let c = Client::connect(conn).await?;
+    let (node, browser) = match (node, browser, session) {
+        (Some(name), None, None) if shared || c.check_node(name).is_err() => (None, Some(name)),
+        _ => (node, browser),
+    };
     if let Some(browser) = browser {
         let daemons = match node {
             Some(name) => vec![c.node_or_local(Some(name))?],
@@ -293,7 +299,7 @@ pub(crate) async fn new_remote_tab(
         let path = c.api(daemon, &format!("/extension/nodes/{}/command", browser.id));
         let reply = c
             .call(c.req(Method::POST, &path).json(&json!({
-                "tab": tab, "action": "open", "params": { "url": target.unwrap_or("about:blank") },
+                "tab": tab, "action": "open-tab", "params": { "url": target.unwrap_or("about:blank"), "tab_group": tab_group },
             })))
             .await?;
         let tab = reply["result"]["tab"].as_u64().ok_or_else(|| {
@@ -304,6 +310,12 @@ pub(crate) async fn new_remote_tab(
         })?;
         return Ok(
             json!({ "id": format!("{}:{tab}", browser.name), "browser": browser.id, "tab": tab, "node": daemon }),
+        );
+    }
+    if tab_group.is_some() {
+        return fail(
+            2,
+            "--tab-group requires a local or extension-backed browser",
         );
     }
     let (node, id, created) = if let Some(session) = session {

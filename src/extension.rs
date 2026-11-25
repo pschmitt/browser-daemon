@@ -634,6 +634,13 @@ fn valid_command(command: &Command, control: bool) -> bool {
             .as_str()
             .is_some_and(|q| q.len() <= 200),
         "navigate" | "open" => command.params["url"].as_str().is_some_and(page_url),
+        "open-tab" => {
+            command.params["url"].as_str().is_some_and(page_url)
+                && (command.params["tab_group"].is_null()
+                    || command.params["tab_group"]
+                        .as_str()
+                        .is_some_and(|group| valid_tab_group(Some(group))))
+        }
         "click" | "type" | "key" | "scroll" | "reload" | "back" | "forward" | "focus" | "close"
         | "evaluate" => true,
         "move" => command.params["index"]
@@ -875,6 +882,12 @@ pub fn automation_allowed(method: &str, params: &Value) -> bool {
     )
 }
 
+pub(crate) fn valid_tab_group(group: Option<&str>) -> bool {
+    group.is_none_or(|name| {
+        !name.trim().is_empty() && name.len() <= 256 && !name.trim().eq_ignore_ascii_case("Agents")
+    })
+}
+
 /// A web page, or the blank page a CDP client opens before navigating.
 fn page_url(s: &str) -> bool {
     s == "about:blank" || web_url(s)
@@ -936,8 +949,9 @@ pub async fn command(
         return Err(failure(StatusCode::GONE, "Browser grant expired"));
     }
     // Tab 0: open the browser's first tab, where its owner allows that.
-    let tabless = command.tab == 0 && matches!(command.action.as_str(), "open" | "follow");
-    let control = if command.action == "open" && tabless {
+    let tabless =
+        command.tab == 0 && matches!(command.action.as_str(), "open" | "open-tab" | "follow");
+    let control = if matches!(command.action.as_str(), "open" | "open-tab") && tabless {
         node.info.lock().unwrap().can_open
     } else if command.action == "follow" && tabless {
         true

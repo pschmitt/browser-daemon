@@ -5524,7 +5524,7 @@ async function openBrowserTab(browser) {
   const btn = $('sessionSubmit');
   btn.disabled = true;
   try {
-    const res = await request('POST', extensionApi(browser, '/command'), { tab: opener, action: 'open', params: { url: target } });
+    const res = await request('POST', extensionApi(browser, '/command'), { tab: opener, action: 'open-tab', params: { url: target } });
     const id = res?.result?.tab;
     if (!id) throw new Error(res?.error || 'The browser did not open the tab');
     closeModal('newSessionModal');
