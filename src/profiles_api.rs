@@ -46,6 +46,9 @@ pub struct ProfileInfo {
     /// Sessions that ended on the profile; the copy with the highest count is newest.
     #[serde(default)]
     pub generation: u64,
+    /// How its replicas stand (pooled profiles, as their owner last saw them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replication: Option<Box<replication::Status>>,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -357,6 +360,11 @@ pub(crate) async fn profile_info(state: &AppState, profile: &Profile) -> Profile
         labels: profile.meta.labels.clone(),
         pool: profile.meta.pool.clone(),
         generation: profile.meta.generation,
+        replication: profile
+            .meta
+            .pool
+            .as_ref()
+            .map(|_| Box::new(replication::status_of(profile.meta.id).unwrap_or_default())),
     }
 }
 

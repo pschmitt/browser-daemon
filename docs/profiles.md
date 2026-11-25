@@ -64,9 +64,10 @@ replica in `<profiles>/.replicas/<id>/`.
 
 - **When it syncs.** Whenever the profile is free: right after a session of it
   ends (the browser has quit and written its data), and every five minutes for
-  nodes that were away and for changes without a session (a rename, notes). The
-  owner holds the profile's lock meanwhile, so a session waits for a sync in
-  progress.
+  nodes that were away and for changes without a session (a rename, notes).
+  A session that starts while its profile syncs does not wait: the sync stops,
+  the replica keeps what it had (an upload cut short is never swapped in), and
+  the sync runs again when the session ends.
 - **What it sends.** Only files whose size or modification time differ from the
   replica's, and never what a browser rebuilds by itself: caches (`Cache`,
   `Code Cache`, `GPUCache`, shader caches, Service Worker caches, Firefox's
@@ -78,7 +79,16 @@ replica in `<profiles>/.replicas/<id>/`.
 - **Opening it elsewhere.** When placement chooses another node of the pool, the
   owner hands the profile off: a last sync (usually small), then its copy
   becomes a replica and the target's replica becomes the profile. An active
-  profile stays where it is.
+  profile stays where it is. A session started directly on a node that holds a
+  replica (`?profile=NAME`, without placement) does the same instead of
+  creating an empty profile of that name; it is refused when the owner does not
+  answer and another node has a newer replica.
+- **Status.** The owner reports each replica's generation, when it last checked
+  it and why a sync failed (`replication` in the profile API). The dashboard
+  shows it as a chip on the profile (`cloud · 3/3 current`, `syncing…`),
+  details on hover, and sets the pool under **Replication** in the profile's
+  sheet. The status lives in the owner's memory; after a restart the first
+  round (a minute in) fills it again.
 - **The owner is unreachable.** Placement promotes the newest replica among the
   nodes that answer, instead of failing. What a session on the lost owner wrote
   after its last sync is lost. When that node is back, two nodes own the

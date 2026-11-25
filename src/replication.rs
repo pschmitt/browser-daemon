@@ -523,6 +523,77 @@ pub(crate) async fn api_promote_replica(
 // Owner side
 // ---------------------------------------------------------------------------
 
+/// How one replica of a profile stands, as its owner last saw it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ReplicaState {
+    pub node: String,
+    /// The generation the replica has (equal to the profile's when it is current).
+    pub generation: u64,
+    /// When the owner last made sure it is current.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at_secs: Option<u64>,
+    /// Why the last sync to it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// What the owner knows about a pooled profile's replicas (kept in memory: the
+/// next round rebuilds it after a restart).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Status {
+    /// A sync is running.
+    pub syncing: bool,
+    /// The last sync was stopped because a session of the profile started.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub interrupted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_sync_secs: Option<u64>,
+    pub replicas: Vec<ReplicaState>,
+}
+
+static STATUS: std::sync::LazyLock<std::sync::Mutex<HashMap<Uuid, Status>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Running syncs, by profile id: a session that starts stops its profile's.
+static RUNNING: std::sync::LazyLock<std::sync::Mutex<HashMap<Uuid, Arc<tokio::sync::Notify>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+pub fn status_of(id: Uuid) -> Option<Status> {
+    STATUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned()
+}
+
+fn update_status(id: Uuid, f: impl FnOnce(&mut Status)) {
+    f(STATUS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(id)
+        .or_default());
+}
+
+/// A session of the profile is about to start: stop a sync of it rather than
+/// make the session wait for it. The replica keeps what it had (an upload cut
+/// short is never swapped in), and the profile syncs again after the session.
+pub fn interrupt(id: Uuid) {
+    if let Some(stop) = RUNNING.lock().unwrap_or_else(|e| e.into_inner()).get(&id) {
+        stop.notify_one();
+    }
+}
+
+struct Running(Uuid);
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+        update_status(self.0, |s| s.syncing = false);
+    }
+}
+
 /// The listed files of `dir` as a gzipped tar, produced while it is read.
 fn tar_files(
     dir: &Path,
@@ -670,34 +741,98 @@ async fn sync_to(state: &AppState, profile: &Profile, url: &str) -> Result<bool,
 }
 
 /// Sync a free pooled profile to the other nodes of its pool. Returns false when
-/// the profile is in use (it syncs after its session ends).
+/// the profile is in use (it syncs after its session ends) or a session start
+/// interrupted the sync.
 pub async fn sync_profile(state: &AppState, id: Uuid) -> bool {
-    let _lock = state.profile_locks.lock(id).await;
-    let Some(profile) = profiles::find(&state.config.profiles_dir, &id.to_string()).await else {
-        return false;
-    };
-    let Some(pool) = profile.meta.pool.clone() else {
-        return false;
-    };
-    if profile_use(state, id).await.is_some() {
-        return false;
-    }
-    for (url, copies) in pool_peers(state, &pool).await {
-        // The other node owns it too: the reconcile settles that, not a sync.
-        if copies.primaries.iter().any(|c| c.id == id) {
-            continue;
+    let stop = Arc::new(tokio::sync::Notify::new());
+    // Registered before the lock: a session start that waits for the lock stops this.
+    RUNNING
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, stop.clone());
+    let running = Running(id);
+    let work = async {
+        let _lock = state.profile_locks.lock(id).await;
+        let Some(profile) = profiles::find(&state.config.profiles_dir, &id.to_string()).await
+        else {
+            return false;
+        };
+        let Some(pool) = profile.meta.pool.clone() else {
+            STATUS.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            return false;
+        };
+        if profile_use(state, id).await.is_some() {
+            return false;
         }
-        match sync_to(state, &profile, &url).await {
-            Ok(true) => {
-                info!(profile = %profile.meta.name, node = %copies.node, generation = profile.meta.generation, "Replica updated")
+        update_status(id, |s| {
+            s.syncing = true;
+            s.interrupted = false;
+        });
+        let peers = pool_peers(state, &pool).await;
+        let mut seen = Vec::new();
+        for (url, copies) in &peers {
+            // The other node owns it too: the reconcile settles that, not a sync.
+            if copies.primaries.iter().any(|c| c.id == id) {
+                continue;
             }
-            Ok(false) => {}
-            Err(e) => {
-                warn!(profile = %profile.meta.name, node = %copies.node, error = %e, "Could not update replica")
+            seen.push(copies.node.clone());
+            let result = sync_to(state, &profile, url).await;
+            let now = profiles::now_secs();
+            let had = copies
+                .replicas
+                .iter()
+                .find(|c| c.id == id)
+                .map_or(0, |c| c.generation);
+            let entry = match &result {
+                Ok(_) => ReplicaState {
+                    node: copies.node.clone(),
+                    generation: profile.meta.generation,
+                    synced_at_secs: Some(now),
+                    error: None,
+                },
+                Err(e) => ReplicaState {
+                    node: copies.node.clone(),
+                    generation: had,
+                    synced_at_secs: status_of(id)
+                        .and_then(|s| s.replicas.into_iter().find(|r| r.node == copies.node))
+                        .and_then(|r| r.synced_at_secs),
+                    error: Some(e.clone()),
+                },
+            };
+            update_status(id, |s| {
+                s.replicas.retain(|r| r.node != entry.node);
+                s.replicas.push(entry);
+                s.replicas.sort_by(|a, b| a.node.cmp(&b.node));
+            });
+            match result {
+                Ok(true) => {
+                    info!(profile = %profile.meta.name, node = %copies.node, generation = profile.meta.generation, "Replica updated")
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    warn!(profile = %profile.meta.name, node = %copies.node, error = %e, "Could not update replica")
+                }
             }
         }
-    }
-    true
+        // Nodes of the pool that did not answer stay listed, as unreachable.
+        update_status(id, |s| {
+            for r in s.replicas.iter_mut().filter(|r| !seen.contains(&r.node)) {
+                r.error = Some("unreachable".into());
+            }
+            s.last_sync_secs = Some(profiles::now_secs());
+        });
+        true
+    };
+    let done = tokio::select! {
+        done = work => done,
+        () = stop.notified() => {
+            info!(profile_id = %id, "Sync interrupted: a session of the profile starts");
+            update_status(id, |s| s.interrupted = true);
+            false
+        }
+    };
+    drop(running);
+    done
 }
 
 /// A session of the profile ended: count it and pass the result on.
@@ -920,6 +1055,47 @@ pub async fn reconcile(state: &AppState) {
             sync_profile(state, profile.meta.id).await;
         }
     }
+}
+
+/// A session wants a profile this node holds only a replica of: become its owner
+/// rather than create an empty profile of that name. The owner hands it off when
+/// it answers; otherwise this replica takes over if no answering node has a newer one.
+pub async fn take_over(state: &AppState, name: &str) -> Result<bool, (StatusCode, &'static str)> {
+    let Some(mine) = list_replicas(&state.config.profiles_dir)
+        .await
+        .into_iter()
+        .find(|c| c.name == name)
+    else {
+        return Ok(false);
+    };
+    let pool = mine.pool.clone().unwrap_or_default();
+    let owner = pool_peers(state, &pool)
+        .await
+        .into_iter()
+        .find(|(_, c)| c.primaries.iter().any(|p| p.id == mine.id));
+    if let Some((url, copies)) = owner {
+        handoff_on(state, &url, &mine.id.to_string(), &state.node_name)
+            .await
+            .map_err(|_| (StatusCode::CONFLICT, "The node that owns this profile could not hand it over (is a session of it running there?)"))?;
+        info!(profile = %name, from = %copies.node, "Profile handed over for a session here");
+    } else {
+        match newest_replica(state, name).await {
+            Some((node, _, _)) if node != state.node_name => {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "A newer copy of this profile is on another node: open it through placement",
+                ));
+            }
+            _ => warn!(profile = %name, "No reachable owner: this replica takes over"),
+        }
+    }
+    promote(state, mine.id).await.map_err(|_| {
+        (
+            StatusCode::CONFLICT,
+            "Could not make this node the profile's owner",
+        )
+    })?;
+    Ok(true)
 }
 
 /// Where the newest replica of a profile is, among the reachable nodes (this one included).

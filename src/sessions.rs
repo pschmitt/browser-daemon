@@ -62,7 +62,11 @@ pub(crate) async fn reserve_slot(
 ) -> Result<Slot, (StatusCode, &'static str)> {
     // Deleting or clearing a profile holds this while it checks for sessions.
     let _profile_guard = match id {
-        Some(id) => Some(profile_locks.lock(id).await),
+        Some(id) => {
+            // A sync of the profile gives way to the session (it runs again afterwards).
+            replication::interrupt(id);
+            Some(profile_locks.lock(id).await)
+        }
         None => None,
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
@@ -545,6 +549,13 @@ impl AppState {
         key: &str,
         engine: BrowserEngine,
     ) -> Result<Profile, (StatusCode, &'static str)> {
+        // A replica held here is the profile: take it over instead of starting an empty one.
+        if profiles::find(&self.config.profiles_dir, key)
+            .await
+            .is_none()
+        {
+            replication::take_over(self, key).await?;
+        }
         let _guard = self.profiles_lock.lock().await;
         if let Some(profile) = profiles::find(&self.config.profiles_dir, key).await {
             if profile.meta.engine != engine {

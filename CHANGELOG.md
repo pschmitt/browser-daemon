@@ -11,6 +11,10 @@
   without caches. Opening the profile on another node of its pool is a handoff
   instead of a full transfer; when its owner is unreachable, the newest
   replica takes over, and a returning older copy steps down after a backup.
+  A session that starts during a sync stops it instead of waiting, and one
+  started directly on a node with a replica takes the profile over instead of
+  creating an empty one. The dashboard shows each pooled profile's replica
+  status and sets its pool.
   See [docs/profiles.md](docs/profiles.md#replication-within-a-pool).
 
 ## [0.23.6] - 2026-11-25

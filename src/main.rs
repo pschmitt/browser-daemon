@@ -1078,10 +1078,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !state.ephemeral_node {
         let replication_state = state.clone();
         tokio::spawn(async move {
+            // Not right at startup: the peers are found first.
+            tokio::time::sleep(Duration::from_secs(60)).await;
             let mut interval = tokio::time::interval(replication::RECONCILE_EVERY);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // Not right at startup: the peers are found first.
-            interval.tick().await;
             loop {
                 interval.tick().await;
                 replication::reconcile(&replication_state).await;

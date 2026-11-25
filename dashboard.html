@@ -2448,6 +2448,35 @@ const nodeProxies = (node) => nodes.find((n) => n.name === node)?.proxies || [];
 const proxyName = (node, id) => nodeProxies(node).find((x) => x.id === id)?.name || id;
 const proxyChip = (node, id) => (id ? `<span class="chip proxy" title="Traffic goes through ${esc(proxyName(node, id))}">${icon('route')}${esc(proxyName(node, id))}</span>` : '');
 const nodeChip = (name) => `<span class="chip node" style="--node:${nodeColor(name)}">${esc(nodeLabel(name) || 'local')}</span>`;
+// A pooled profile's replicas, as its owner last saw them: how many are current.
+function replInfo(p) {
+  if (!p.pool) return null;
+  const r = p.replication || {};
+  const reps = r.replicas || [];
+  const current = reps.filter((x) => !x.error && x.generation === p.generation).length;
+  const state = r.syncing ? 'syncing' : !reps.length ? 'none' : current === reps.length ? 'ok' : 'behind';
+  const lines = reps.map((x) => `${nodeLabel(x.node) || x.node}: ${x.error === 'unreachable' ? 'unreachable' : x.error ? 'last sync failed' : x.generation === p.generation ? 'current' : `behind (${x.generation} of ${p.generation})`}${x.synced_at_secs ? `, checked ${relTime(x.synced_at_secs)}` : ''}`);
+  return { r, reps, current, state, lines };
+}
+const replChip = (p) => {
+  const i = replInfo(p);
+  if (!i) return '';
+  const cls = { ok: 'ok', behind: 'warn', syncing: 'accent', none: '' }[i.state];
+  const text = i.state === 'syncing' ? 'syncing…' : i.state === 'none' ? 'no replicas yet' : `${i.current}/${i.reps.length} current`;
+  const title = [`Replicated within the nodes labelled “${p.pool}” (generation ${p.generation})`,
+    i.r.interrupted ? 'The last sync gave way to a session; it runs again when the session ends.' : '', ...i.lines].filter(Boolean).join('\n');
+  return `<span class="chip ${cls}" title="${esc(title)}">${icon('refresh')}${esc(p.pool)} · ${esc(text)}</span>`;
+};
+// Labels a pool can name: those carried by at least two online nodes.
+function poolChoices() {
+  const count = new Map();
+  for (const n of nodes.filter((n) => n.status === 'online')) for (const l of (n.labels?.length ? n.labels : n.groups) || []) count.set(l, (count.get(l) || 0) + 1);
+  return [...count].filter(([, c]) => c > 1).sort(([a], [b]) => a.localeCompare(b));
+}
+function setProfilePool(p, pool) {
+  act('Setting replication', () => request('PATCH', api(p.node_name, `/profiles/${enc(p.key)}`), { pool }),
+    pool === 'none' ? `${p.display} is no longer replicated` : `${p.display} replicates to the nodes labelled “${pool}”`);
+}
 
 let ov = null;                                // last mesh overview
 let currentOverview = null;                   // same, for the player code
@@ -3103,7 +3132,7 @@ function profileSheetSpec(p) {
   const next = p.session ? ' (from the next launch)' : '';
   const status = p.session ? `<span class="run">● Running</span>&nbsp;up <span data-up data-start="${sessionStart(p.session)}"></span>` : 'Not running';
   return {
-    head: sheetHead(pic, esc(p.display), subLine(status, nodeChip(p.node_name), engine, formatBytes(p.size_bytes)), p.labels?.length ? `<div class="obj-facts">${lblChips(p.labels)}</div>` : ''),
+    head: sheetHead(pic, esc(p.display), subLine(status, nodeChip(p.node_name), engine, formatBytes(p.size_bytes)), p.labels?.length || p.pool ? `<div class="obj-facts">${replChip(p)}${lblChips(p.labels)}</div>` : ''),
     primary: p.session
       ? `<a class="btn primary big" href="${esc(handoffUrl(p.node_name, { session: p.session.id }))}"${drivenAttr(p.session)}>${icon('takeover')}Take over</a>`
       : `<button class="btn primary big" data-act="sheet-launch" data-key="${esc(key)}">${icon('play', 'fill')}Launch in ${engine}</button>${p.tabs?.length ? `<button class="btn big" data-act="sheet-launch-bare" data-key="${esc(key)}" title="Launch without the default tabs">Without tabs</button>` : ''}`,
@@ -3128,6 +3157,12 @@ function profileSheetSpec(p) {
       { label: 'Profile' },
       { icon: 'note', label: 'Notes', meta: p.notes ? String(p.notes.count) : '', more: true, run: () => openNotes('profile', p) },
       { icon: 'tag', label: 'Labels', meta: p.labels?.join(', ') || '', more: true, run: () => openItemLabels('profile', p) },
+      { icon: 'refresh', label: 'Replication', meta: p.pool || 'Off', more: true, run: () => openMenu(null, [
+        { label: 'Keep replicas on the nodes labelled' },
+        { label: 'Off', on: !p.pool, run: () => setProfilePool(p, 'none') },
+        ...poolChoices().map(([l, c]) => ({ label: l, meta: `${c} nodes`, on: p.pool === l, run: () => setProfilePool(p, l) })),
+        ...(replInfo(p)?.lines.length ? [{ label: 'Replicas' }, ...replInfo(p).lines.map((t) => ({ label: t }))] : []),
+      ]) },
       { icon: 'image', label: p.icon_rev ? 'Change picture' : 'Set picture', run: () => pickProfileIcon(p) },
       p.icon_rev && { icon: 'trash', label: 'Remove picture', run: () => act('Removing the picture', () => request('DELETE', api(p.node_name, `/profiles/${enc(p.key)}/icon`)), 'Picture removed') },
       !p.session && { icon: 'edit', label: 'Rename', run: () => renameProfile(p) },
@@ -4609,7 +4644,7 @@ function sessionCard(s) {
 
 let profQuery = '';
 $('profSearch').addEventListener('input', (e) => { profQuery = e.target.value; renderProfiles(); });
-const profHaystack = (p) => [p.display, p.node_name, nodeLabel(p.node_name), p.engine, p.proxy && proxyName(p.node_name, p.proxy), ...(p.labels || []), p.notes?.last].filter(Boolean).join(' ').toLowerCase();
+const profHaystack = (p) => [p.display, p.node_name, nodeLabel(p.node_name), p.engine, p.proxy && proxyName(p.node_name, p.proxy), p.pool && `pool ${p.pool} replicated`, ...(p.labels || []), p.notes?.last].filter(Boolean).join(' ').toLowerCase();
 function renderProfiles() {
   const sec = $('view-profiles');
   const words = profQuery.toLowerCase().split(/\s+/).filter(Boolean);
@@ -4642,7 +4677,7 @@ function profileRow(p) {
   return `
   <div class="row" role="row" data-key="${key}" tabindex="0" aria-label="${esc(`${p.display}: details and actions`)}">
     <div role="cell" class="main">${profIcon(p) ? `<div class="avatar pic"><img src="${esc(profIcon(p))}" alt=""></div>` : `<div class="avatar" style="color:${color};background:color-mix(in oklab, ${color} 16%, transparent)">${esc(p.display.slice(0, 2))}</div>`}
-      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${lblChips(p.labels)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
+      <div class="t"><b><span class="name">${esc(p.display)}</span>${p.engine === 'firefox' ? '<span class="chip firefox">Firefox</span>' : ''}${proxyChip(p.node_name, p.proxy)}${replChip(p)}${lblChips(p.labels)}${noteBadge('profile', key, p.notes)}</b><span>${status}${tabStrip(p)}</span></div></div>
     <div role="cell" class="c-node">${nodeChip(p.node_name)}</div>
     <div role="cell" class="num c-size">${formatBytes(p.size_bytes)}</div>
     <div role="cell" class="num c-mod" title="${esc(absTime(p.modified_at_secs))}">${relTime(p.modified_at_secs)}</div>
