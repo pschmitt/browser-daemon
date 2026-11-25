@@ -40,6 +40,12 @@ pub struct ProfileInfo {
     /// Tags that group profiles.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Node label whose nodes keep replicas of the profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    /// Sessions that ended on the profile; the copy with the highest count is newest.
+    #[serde(default)]
+    pub generation: u64,
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -120,6 +126,8 @@ pub struct UpdateProfileRequest {
     /// Labels to take off (after the others).
     #[serde(default, deserialize_with = "tabs_field")]
     pub remove_labels: Option<Vec<String>>,
+    /// Node label whose nodes keep replicas of the profile; "" or "none" stops that.
+    pub pool: Option<String>,
 }
 
 /// A field that may be set to null (Some(None)) as well as left out (None).
@@ -347,6 +355,8 @@ pub(crate) async fn profile_info(state: &AppState, profile: &Profile) -> Profile
         record_audio: profile.meta.record_audio,
         icon_rev: profile.meta.icon.as_ref().map(|i| i.rev),
         labels: profile.meta.labels.clone(),
+        pool: profile.meta.pool.clone(),
+        generation: profile.meta.generation,
     }
 }
 
@@ -592,6 +602,31 @@ pub(crate) async fn api_update_profile(
             info!(profile = %profile.meta.name, proxy = ?profile.meta.proxy, "Profile proxy changed");
         }
     }
+    if let Some(ref requested) = req.pool {
+        let pool = match requested.trim() {
+            "" | "none" => None,
+            label => Some(
+                profiles::normalize_label(label)
+                    .map_err(|e| api_error(StatusCode::BAD_REQUEST, e))?,
+            ),
+        };
+        if pool != profile.meta.pool {
+            let old = std::mem::replace(&mut profile.meta.pool, pool.clone());
+            profiles::write_meta(&profile.dir, &profile.meta)
+                .await
+                .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            info!(profile = %profile.meta.name, pool = ?pool, "Profile pool changed");
+            let (bg, id) = (state.clone(), profile.meta.id);
+            tokio::spawn(async move {
+                if let Some(old) = old {
+                    replication::drop_replicas(&bg, id, &old).await;
+                }
+                if pool.is_some() {
+                    replication::sync_profile(&bg, id).await;
+                }
+            });
+        }
+    }
     if let Some(scheme) = req.color_scheme {
         if Some(scheme) != profile.meta.color_scheme {
             profile.meta.color_scheme = Some(scheme);
@@ -781,6 +816,10 @@ pub(crate) async fn api_delete_profile(
 
     backups::remove_all(&state.config.profiles_dir, profile.meta.id).await;
     state.history.delete(&profile.meta.id.to_string()).await;
+    if let Some(pool) = profile.meta.pool.clone() {
+        let (bg, id) = (state.clone(), profile.meta.id);
+        tokio::spawn(async move { replication::drop_replicas(&bg, id, &pool).await });
+    }
     info!(profile = %profile.meta.name, id = %profile.meta.id, "Profile removed");
     Ok((
         StatusCode::OK,

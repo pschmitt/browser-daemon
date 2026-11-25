@@ -369,6 +369,9 @@ pub enum ProfileCmd {
         /// Proxy id for new sessions, or `none`.
         #[arg(long)]
         proxy: Option<String>,
+        /// Node label whose nodes keep a replica of the profile, or `none`.
+        #[arg(long)]
+        pool: Option<String>,
         #[arg(long, value_enum)]
         color_scheme: Option<Scheme>,
         /// Default tabs: pages its sessions open with (repeat for several; replaces the list).

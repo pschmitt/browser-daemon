@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+* Profiles can replicate within a pool: `profile set NAME --pool LABEL`
+  (`"pool"` in `PATCH /api/profiles/<name>`) keeps a replica on every other
+  node carrying that label, synced whenever the profile is free (after each of
+  its sessions, and every five minutes) with only the files that changed and
+  without caches. Opening the profile on another node of its pool is a handoff
+  instead of a full transfer; when its owner is unreachable, the newest
+  replica takes over, and a returning older copy steps down after a backup.
+  See [docs/profiles.md](docs/profiles.md#replication-within-a-pool).
+
 ## [0.23.6] - 2026-11-25
 
 ### Added

@@ -53,6 +53,42 @@ move, the profile stays on its destination.
 The CLI and dashboard's explicit transfer controls remain available; group
 placement is exposed through the API, MCP and Python client.
 
+### Replication within a pool
+
+A profile can name a **pool**: a node label whose nodes keep a replica of it
+(`browser-daemon profile set NAME --pool cloud`, `PATCH /api/profiles/<name>`
+with `{"pool": "cloud"}`; `none` stops it and removes the replicas). One node
+**owns** the profile: its copy is the one sessions use and the only one any
+listing shows. Every other node of the pool (ephemeral nodes never) keeps a
+replica in `<profiles>/.replicas/<id>/`.
+
+- **When it syncs.** Whenever the profile is free: right after a session of it
+  ends (the browser has quit and written its data), and every five minutes for
+  nodes that were away and for changes without a session (a rename, notes). The
+  owner holds the profile's lock meanwhile, so a session waits for a sync in
+  progress.
+- **What it sends.** Only files whose size or modification time differ from the
+  replica's, and never what a browser rebuilds by itself: caches (`Cache`,
+  `Code Cache`, `GPUCache`, shader caches, Service Worker caches, Firefox's
+  `cache2` and `startupCache`) and lock files. A replica is updated in a copy
+  and swapped in whole, so it is never half new.
+- **Generation.** A profile counts the sessions that ended on it
+  (`generation`, in the API and `profile.json`): the copy with the highest
+  count is the newest.
+- **Opening it elsewhere.** When placement chooses another node of the pool, the
+  owner hands the profile off: a last sync (usually small), then its copy
+  becomes a replica and the target's replica becomes the profile. An active
+  profile stays where it is.
+- **The owner is unreachable.** Placement promotes the newest replica among the
+  nodes that answer, instead of failing. What a session on the lost owner wrote
+  after its last sync is lost. When that node is back, two nodes own the
+  profile; within five minutes the older copy (lower generation, then the
+  earlier promotion) is backed up (backup label `replication conflict`) and
+  steps down to a replica. Until then, placement reports the duplicate.
+
+Replicas put the profile's logins on every node of the pool: give a pool only
+to profiles that should be there.
+
 ## Ephemeral nodes
 
 Configure both `--ephemeral-up` and `--ephemeral-down` (NixOS:

@@ -679,6 +679,10 @@ impl AppState {
                 info!(session_id = %id, "Session terminated");
                 terminated = true;
             }
+            // The profile is free now: its pool gets the result.
+            if let Some(profile_id) = session.profile_id {
+                tokio::spawn(replication::after_session(self.clone(), profile_id));
+            }
         }
         // After the browser is gone and out of the session: a periodic save can no
         // longer write the record again.

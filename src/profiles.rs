@@ -53,6 +53,15 @@ pub struct ProfileMeta {
     /// Short tags that group profiles ("ha", "work"): lowercase, sorted, no repeats.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Node label whose nodes keep a replica of the profile (see `replication`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+    /// Counts the sessions that ended on the profile: the copy with the highest one is newest.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub generation: u64,
+    /// When this copy became the one sessions use (created, promoted from a replica).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_since_secs: Option<u64>,
     /// The single start page of earlier versions: folded into `tabs` when read.
     #[serde(default, rename = "homepage", skip_serializing)]
     legacy_homepage: Option<String>,
@@ -105,7 +114,11 @@ pub struct Profile {
     pub dir: PathBuf,
 }
 
-fn now_secs() -> u64 {
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -192,6 +205,9 @@ pub async fn create(
         record_audio: None,
         icon: None,
         labels: Vec::new(),
+        pool: None,
+        generation: 0,
+        owner_since_secs: Some(now_secs()),
         legacy_homepage: None,
     };
     let dir = profiles_dir.join(meta.id.to_string());
@@ -215,6 +231,7 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
     let tabs = old.as_ref().map(|m| m.tabs.clone()).unwrap_or_default();
     let icon = old.as_ref().and_then(|m| m.icon.clone());
     let labels = old.as_ref().map(|m| m.labels.clone()).unwrap_or_default();
+    let pool = old.as_ref().and_then(|m| m.pool.clone());
     let color_scheme = old.and_then(|m| m.color_scheme);
     let id = dir
         .file_name()
@@ -232,6 +249,9 @@ pub async fn adopt(dir: PathBuf, name: &str, engine: BrowserEngine) -> std::io::
         record_audio,
         icon,
         labels,
+        pool,
+        generation: 0,
+        owner_since_secs: Some(now_secs()),
         legacy_homepage: None,
     };
     write_meta(&dir, &meta).await?;
@@ -332,6 +352,9 @@ pub async fn migrate(profiles_dir: &Path) {
             record_audio: None,
             icon: None,
             labels: Vec::new(),
+            pool: None,
+            generation: 0,
+            owner_since_secs: None,
             legacy_homepage: None,
         };
         let new = profiles_dir.join(id.to_string());

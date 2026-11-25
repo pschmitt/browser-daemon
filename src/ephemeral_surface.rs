@@ -52,6 +52,7 @@ const MESH_TREES: &[&str] = &[
     "/api/ephemeral",
     "/api/run",
     "/api/profiles",
+    "/api/replicas",
     "/api/label-sync",
     "/api/secret-agent",
     "/api/extension",

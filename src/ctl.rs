@@ -1734,6 +1734,7 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             node,
             name,
             proxy,
+            pool,
             color_scheme,
             tabs,
             clear_tabs,
@@ -1789,6 +1790,9 @@ pub async fn profile(args: ProfileArgs) -> R<()> {
             }
             if let Some(v) = proxy {
                 body["proxy"] = json!(v)
+            }
+            if let Some(v) = pool {
+                body["pool"] = json!(v)
             }
             if let Some(v) = color_scheme {
                 body["color_scheme"] = json!(format!("{v:?}").to_lowercase())

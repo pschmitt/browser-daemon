@@ -152,6 +152,10 @@ pub(crate) const IMPORT_PREFIX: &str = ".import-";
 pub(crate) struct StagingDir(Option<PathBuf>);
 
 impl StagingDir {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self(Some(path))
+    }
+
     pub(crate) fn path(&self) -> &Path {
         self.0.as_deref().unwrap_or(Path::new(""))
     }
@@ -554,7 +558,19 @@ pub(crate) async fn api_place_browser(
         }
         *text = trimmed.to_string();
     }
-    let ov = fetch_mesh_overview(&state).await;
+    let mut ov = fetch_mesh_overview(&state).await;
+    // No node that answers owns the profile, but one holds a replica of it: the
+    // newest replica takes over ("available"; whatever a lost owner wrote after
+    // its last sync is lost, and that copy steps down when its node is back).
+    if let Some(name) = req.profile.as_deref() {
+        if !ov.profiles.iter().any(|p| p.profile.name == name) {
+            if let Some((node, url, copy)) = replication::newest_replica(&state, name).await {
+                warn!(profile = %name, node = %node, generation = copy.generation, "No reachable owner: promoting the newest replica");
+                replication::promote_on(&state, &url, copy.id).await?;
+                ov = fetch_mesh_overview(&state).await;
+            }
+        }
+    }
     let down_holders = req
         .profile
         .as_deref()
@@ -565,7 +581,44 @@ pub(crate) async fn api_place_browser(
         let Some(source) = ov.profiles.iter().find(|p| p.profile.name == name) else {
             return Ok(Json(placement));
         };
-        if source.node_name != placement.node {
+        let target_labels = if placement.node == ov.local_node.name {
+            ov.local_node.labels.clone()
+        } else {
+            ov.peers
+                .iter()
+                .find(|p| p.name == placement.node)
+                .map(|p| p.labels.clone())
+                .unwrap_or_default()
+        };
+        let pool = source.profile.pool.as_deref();
+        if source.node_name != placement.node
+            && pool.is_some_and(|p| target_labels.iter().any(|l| l == p))
+        {
+            // Within its pool a profile is handed off: a last, small sync, then the
+            // target's replica becomes the profile.
+            let id = source
+                .profile
+                .id
+                .ok_or_else(|| api_error(StatusCode::CONFLICT, "Profile has no id"))?;
+            let owner_url = if source.is_local {
+                String::new()
+            } else {
+                source.node_url.clone()
+            };
+            let target_url = if placement.node == ov.local_node.name {
+                String::new()
+            } else {
+                placement.node_url.clone()
+            };
+            replication::handoff_on(&state, &owner_url, &id.to_string(), &placement.node).await?;
+            if let Err(e) = replication::promote_on(&state, &target_url, id).await {
+                // Back to where it was rather than nowhere.
+                if let Err(back) = replication::promote_on(&state, &owner_url, id).await {
+                    error!(profile = %name, error = %back.1.0, "Handoff failed and the profile could not be restored on its owner: it is a replica on both nodes");
+                }
+                return Err(e);
+            }
+        } else if source.node_name != placement.node {
             let transfer = TransferProfileRequest {
                 target_node: placement.node.clone(),
                 target_name: None,

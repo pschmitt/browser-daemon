@@ -53,6 +53,7 @@ mod rec_export;
 mod recorder;
 mod recordings_api;
 mod relay;
+mod replication;
 mod run_api;
 mod secret_agent;
 mod secrets;
@@ -1073,6 +1074,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Keep the replicas of pooled profiles current, and settle double owners.
+    if !state.ephemeral_node {
+        let replication_state = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(replication::RECONCILE_EVERY);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Not right at startup: the peers are found first.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                replication::reconcile(&replication_state).await;
+            }
+        });
+    }
+
     // Stop sessions that nobody has used for a while, and those whose browser is gone.
     let reaper_state = state.clone();
     tokio::spawn(async move {
@@ -1339,6 +1355,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             post(api_restore_backup),
         )
         .route("/api/profiles/{name}/transfer", post(api_transfer_profile))
+        .route(
+            "/api/profiles/{name}/handoff",
+            post(replication::api_handoff_profile),
+        )
+        .route("/api/replicas", get(replication::api_list_copies))
+        .route(
+            "/api/replicas/{id}",
+            put(replication::api_replica_apply).delete(replication::api_delete_replica),
+        )
+        .route(
+            "/api/replicas/{id}/plan",
+            post(replication::api_replica_plan),
+        )
+        .route(
+            "/api/replicas/{id}/promote",
+            post(replication::api_promote_replica),
+        )
         // Recording APIs
         .route("/api/recordings", get(api_list_recordings))
         .route(
