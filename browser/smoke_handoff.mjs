@@ -198,8 +198,10 @@ try {
   await until(() => dash.evaluate(`typeof extensionBrowserNodes !== 'undefined' && extensionBrowserNodes.length > 0 && !!ov`));
   await dash.evaluate(`openNewSession()`);
   await dash.evaluate(`document.querySelector('#sessionNodes button[data-node^="browser:"]').click()`);
-  assert.equal(await dash.evaluate(`[document.getElementById('newSessionForm').classList.contains('to-browser'), document.getElementById('sessionSubmitText').textContent, document.getElementById('sessionSubmit').disabled].join()`), 'true,Open tab,false');
-  await dash.evaluate(`(() => { document.getElementById('sessionUrl').value = ${JSON.stringify(`${pageURL}dash`)}; document.getElementById('sessionHandoff').checked = false; document.getElementById('newSessionForm').requestSubmit(); })()`);
+  assert.equal(await dash.evaluate(`[document.getElementById('newSessionForm').classList.contains('to-browser'), document.getElementById('sessionSubmitText').textContent, document.getElementById('sessionSubmit').disabled].join()`), 'true,Open browser,false');
+  await dash.evaluate(`(() => { const address = document.getElementById('sessionUrl'); address.value = ${JSON.stringify(`${pageURL}dash`)}; address.dispatchEvent(new Event('input', {bubbles: true})); })()`);
+  assert.equal(await dash.evaluate(`document.getElementById('sessionSubmitText').textContent`), 'Open tab');
+  await dash.evaluate(`document.getElementById('newSessionForm').requestSubmit()`);
   const fromDash = await until(async () => (await message({type: 'state'})).tabs.find(t => t.url === `${pageURL}dash`));
   assert.ok(fromDash.shared && fromDash.control, 'the dashboard opened a shared, controllable tab');
   // Vault logins: the live view asks, the secret agent (played here) fills, the
