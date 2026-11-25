@@ -1062,7 +1062,7 @@
   </div>
 </div>
 <div id="ownerSheet" hidden><div class="os-card" role="dialog" aria-modal="true" aria-label="Tab owner"></div></div>
-<div id="tabContextMenu" role="menu" hidden><button id="tabContextReload" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 1-2.3-5.7L20 9"/></svg><span>Reload tab</span></button><button id="tabContextPin" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m16 3 5 5-4 1-4 4v5l-2 2-2-7-5-5 2-2h5z"/></svg><span id="tabContextPinLabel"></span></button><button id="tabContextClose" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m18 6-12 12M6 6l12 12"/></svg><span>Close tab</span></button></div>
+<div id="tabContextMenu" role="menu" hidden><button id="tabContextReload" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7v5h-5M20 12a8 8 0 1 1-2.3-5.7L20 9"/></svg><span>Reload tab</span></button><button id="tabContextPin" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m16 3 5 5-4 1-4 4v5l-2 2-2-7-5-5 2-2h5z"/></svg><span id="tabContextPinLabel"></span></button><button id="tabContextClose" role="menuitem" type="button"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m18 6-12 12M6 6l12 12"/></svg><span>Close tab</span></button><hr><button id="tabCloseMultiple" role="menuitem" type="button" aria-expanded="false">Close multiple tabs ▸</button><div id="tabCloseMultipleOptions" role="group" hidden><button id="tabCloseBefore" role="menuitem" type="button">Close tabs to the left</button><button id="tabCloseAfter" role="menuitem" type="button">Close tabs to the right</button><button id="tabCloseOthers" role="menuitem" type="button">Close other tabs</button></div></div>
 <script>
 /* Fancy selects: every <select> here stays in the DOM (hidden) as the source of truth, a
    button shows its choice with an icon, a label and a detail, and opens the options as a
@@ -4093,6 +4093,8 @@ function tabOwnerLabel(owner) {
 function closeTabContextMenu() {
   E.tabContextMenu.hidden = true;
   contextTab = null;
+  $("tabCloseMultipleOptions").hidden = true;
+  $("tabCloseMultiple").setAttribute("aria-expanded", "false");
 }
 function showTabContextMenu(event, tab) {
   if (sharedBrowserId && !tab.control) return;
@@ -4100,7 +4102,7 @@ function showTabContextMenu(event, tab) {
   contextTab = tab;
   E.tabContextPinLabel.textContent = tab.pinned ? "Unpin tab" : "Pin tab";
   const width = 190;
-  const height = phoneMQ.matches ? 160 : 130;
+  const height = phoneMQ.matches ? 330 : 250;
   E.tabContextMenu.style.left = `${Math.max(4, Math.min(event.clientX, innerWidth - width - 4))}px`;
   E.tabContextMenu.style.top = `${Math.max(4, Math.min(event.clientY, innerHeight - height - 4))}px`;
   E.tabContextMenu.hidden = false;
@@ -4539,6 +4541,41 @@ E.tabContextClose.addEventListener("click", () => {
   if (contextTab) void closeTab(contextTab.id);
   closeTabContextMenu();
 });
+$("tabCloseMultiple").addEventListener("click", () => {
+  const options = $("tabCloseMultipleOptions");
+  options.hidden = !options.hidden;
+  $("tabCloseMultiple").setAttribute("aria-expanded", String(!options.hidden));
+});
+async function closeMultipleTabs(tab, direction) {
+  const pages = lastStripPages.slice();
+  const index = pages.findIndex(p => String(p.id) === String(tab.id));
+  if (index < 0) return;
+  // Pinned tabs and tabs without control stay open, as in a browser tab strip.
+  const selected = pages.filter((p, i) => i !== index && !p.pinned && (!sharedBrowserId || p.control) &&
+    (direction === "others" || (direction === "before" ? i < index : i > index)));
+  if (!selected.length) return;
+  if (!(await ask({ title: `Close ${selected.length} tabs?`, text: "Pinned tabs remain open.", ok: "Close tabs", danger: true }))) return;
+  let failed = 0;
+  for (const p of selected) {
+    try {
+      const res = sharedBrowserId
+        ? await fetch(`${sharedBase}/extension/nodes/${encodeURIComponent(sharedBrowserId)}/command`, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ tab: Number(p.id), action: "close", params: {} }) })
+        : await fetch(`/json/close/${encodeURIComponent(p.id)}`, { method: "PUT", headers: authHeaders() });
+      if (!res.ok) throw new Error("Close request failed");
+      if (sharedBrowserId) noteClosedTab(p);
+    } catch { failed++; }
+  }
+  if (selected.some(p => String(p.id) === String(pageId))) await switchTab(tab.id);
+  await loadTabs();
+  if (failed) toast(`Could not close ${failed} tabs`, 4000);
+}
+for (const [id, direction] of [["tabCloseBefore", "before"], ["tabCloseAfter", "after"], ["tabCloseOthers", "others"]]) {
+  $(id).addEventListener("click", () => {
+    const tab = contextTab;
+    closeTabContextMenu();
+    if (tab) void closeMultipleTabs(tab, direction);
+  });
+}
 E.tabContextPin.addEventListener("click", () => {
   if (contextTab) {
     if (sharedBrowserId) void setSharedTabPinned(contextTab.id, !contextTab.pinned);

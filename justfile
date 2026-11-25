@@ -26,7 +26,7 @@ browser-check:
   node --check browser/extension/background.js
   node --check browser/extension/popup.js
   node --check assets/extension.js
-  node --test browser/check.mjs
+  node --test browser/check.mjs browser/check_tab_close.mjs
   python3 browser/check_companion.py
 
 browser-smoke:
