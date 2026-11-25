@@ -1073,7 +1073,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Stop sessions that nobody has used for a while.
+    // Stop sessions that nobody has used for a while, and those whose browser is gone.
     let reaper_state = state.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -1089,6 +1089,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             for (id, idle) in expired {
                 info!(session_id = %id, idle_secs = idle, "Stopping idle session");
+                reaper_state.terminate_session(&id).await;
+            }
+            for id in reaper_state.sessions_with_exited_browser().await {
+                warn!(session_id = %id, "Stopping session whose browser exited");
                 reaper_state.terminate_session(&id).await;
             }
         }

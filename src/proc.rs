@@ -373,6 +373,14 @@ pub fn die_with_parent(cmd: &mut Command) {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn a_spawned_process_is_no_longer_alive_once_it_exits() {
+        let mut proc = Proc::spawned(Command::new("sleep").arg("0.2").spawn().unwrap()).unwrap();
+        assert!(proc.alive());
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert!(!proc.alive());
+    }
+
     #[test]
     fn session_main_processes_are_recognised() {
         assert!(is_session_main(

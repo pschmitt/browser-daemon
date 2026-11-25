@@ -123,6 +123,31 @@ impl ProfileLocks {
 }
 
 impl AppState {
+    /// Sessions whose browser process has exited on its own: it crashed, was
+    /// killed, or quit with its last window. Nothing can use them any more, yet
+    /// they keep their port and every request to them fails; a client that keeps
+    /// retrying also keeps them from ever going idle.
+    pub async fn sessions_with_exited_browser(&self) -> Vec<Uuid> {
+        let browsers: Vec<_> = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .map(|s| (s.id, s.browser.clone()))
+            .collect();
+        let mut exited = Vec::new();
+        for (id, browser) in browsers {
+            // A session that is busy (starting, stopping, a long call) waits for the next round.
+            let Ok(mut guard) = browser.try_lock() else {
+                continue;
+            };
+            if guard.as_mut().is_some_and(|b| !b.proc.alive()) {
+                exited.push(id);
+            }
+        }
+        exited
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn spawn_session(
         &self,
