@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.8] - 2026-11-25
+
 ### Changed
 
 * `tabs new` opens the new tab in the foreground. Use `--background` or
