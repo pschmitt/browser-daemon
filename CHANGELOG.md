@@ -6,6 +6,21 @@
 
 * Dashboard: on a phone, pull the search palette down to close it (a grab
   handle marks it), the counterpart of swiping up from the bottom bar.
+* Live view: the tab context menu can close several tabs at once (to the
+  left, to the right, or all others), after a confirmation; pinned tabs stay
+  open.
+
+### Changed
+
+* Dependencies: `clap` 4.6.10, `psl` 2.1.263.
+
+### Fixed
+
+* A session whose browser process exited on its own (crashed, was killed, or
+  quit with its last window) is now stopped within 30 s. Before, it stayed
+  listed with its old port and every request to it failed with HTTP 502; a
+  client that kept retrying also kept it from ever going idle, so it never
+  recovered.
 
 ## [0.23.5] - 2026-11-24
 
