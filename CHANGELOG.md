@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.7] - 2026-11-25
+
 ### Added
 
 * Profiles can replicate within a pool: `profile set NAME --pool LABEL`
