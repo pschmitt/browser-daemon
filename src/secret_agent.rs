@@ -119,10 +119,11 @@ fn valid_request(req: &Request) -> Result<(), String> {
     {
         return Err("Bad page address".into());
     }
-    if req
-        .fields
-        .iter()
-        .any(|f| !matches!(f.as_str(), "username" | "password" | "totp"))
+    if req.kind != "agent_lookup"
+        && req
+            .fields
+            .iter()
+            .any(|f| !matches!(f.as_str(), "username" | "password" | "totp"))
     {
         return Err("Bad field".into());
     }
@@ -237,6 +238,9 @@ async fn poll(
                 match req.kind.as_str() {
                     "find" => find(&req, &args).await.map(Some),
                     "logins" => logins(&node, &secret, &req, &client, &args).await.map(Some),
+                    "agent_lookup" => agent_lookup(&node, &secret, &req, &client, &args)
+                        .await
+                        .map(Some),
                     "fill" => fill(&node, &secret, &req, &client, &args).await.map(Some),
                     "copy" => copy(&node, &secret, &req, &client, &args).await.map(Some),
                     "assert" => assert(&node, &secret, &req, &client, &args).await.map(Some),
@@ -640,6 +644,40 @@ async fn unlock_with_password(
         .find(|l| !l.trim().is_empty())
         .unwrap_or("rbw refused the password");
     Err(said.trim().to_string())
+}
+
+/// Resolve an MCP fill on the vault controller, using the controller's API grants.
+async fn agent_lookup(
+    node: &str,
+    secret: &str,
+    req: &Request,
+    client: &reqwest::Client,
+    args: &SecretAgentArgs,
+) -> Result<serde_json::Value, String> {
+    let query: serde_json::Value =
+        serde_json::from_str(req.query.as_deref().ok_or("Missing lookup")?)
+            .map_err(|_| "Invalid lookup")?;
+    let entry = query["entry"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or("Missing entry")?;
+    let field = query["field"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .ok_or("Missing field")?;
+    let user = query["user"].as_str();
+    let card = query["card"].as_bool().unwrap_or(false);
+    if card {
+        return Err(
+            "Controller card fills are not enabled; configure a direct RBW API client".into(),
+        );
+    }
+    ensure_unlocked(node, secret, req, client, args).await?;
+    if args.api.is_empty() {
+        return Err("The controller needs its RBW API configured for agent fills".into());
+    }
+    let found = crate::rbw_api::lookup(&args.api, entry, user, field, card).await?;
+    serde_json::to_value(found).map_err(|_| "Could not encode vault lookup".into())
 }
 
 /// The login entries for the page's site (rp_id is its host), as rbw picks

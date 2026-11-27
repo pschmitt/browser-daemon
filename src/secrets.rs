@@ -17,6 +17,7 @@ pub const MASK: &str = "•••";
 pub const MAX_WEBAUTHN_B64URL: usize = 16 * 1024;
 
 /// A field of a vault entry and the sites the entry is for.
+#[derive(Serialize, Deserialize)]
 pub struct Secret {
     pub value: String,
     /// The entry's username, when it has one: `user:password` (HTTP Basic

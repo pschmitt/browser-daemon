@@ -208,9 +208,14 @@ pub(crate) async fn api_session_autofill(
     if password.is_some() {
         info!(session_id = %id, host = %host, "Vault unlock with the master password asked in the live view");
     }
+    let limit = if req.fields.first().is_some_and(|f| f == "__agent_lookup__") {
+        4096
+    } else {
+        100
+    };
     let query = req
         .query
-        .map(|q| q.trim().chars().take(100).collect::<String>())
+        .map(|q| q.trim().chars().take(limit).collect::<String>())
         .filter(|q| !q.is_empty());
     let fields = if req.fields.is_empty() {
         vec!["username".into(), "password".into()]

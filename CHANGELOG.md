@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+* MCP secret fills use the vault controller when no local RBW API credentials
+  are configured, so MCP clients can start on other machines. Card fills still
+  require a direct RBW API connection.
+
 ## [0.23.8] - 2026-11-25
 
 ### Changed

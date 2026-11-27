@@ -322,12 +322,7 @@ pub async fn run(args: McpArgs) -> R<()> {
             )
         }
     };
-    if rbw_api.is_empty() && (!args.allow_secrets.is_empty() || !args.allow_cards.is_empty()) {
-        return Err(
-            "Secret and card fills require the RBW agent API URL, CA, client certificate and key"
-                .into(),
-        );
-    }
+
     let http = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(30))
@@ -1340,8 +1335,12 @@ impl State {
         } else {
             None
         };
-        let secret =
-            { crate::rbw_api::lookup(&self.rbw_api, entry, arg("user"), field, card).await? };
+        let secret = if self.rbw_api.is_empty() {
+            self.controller_lookup(&child.target.url, &page_id, entry, arg("user"), field, card)
+                .await?
+        } else {
+            crate::rbw_api::lookup(&self.rbw_api, entry, arg("user"), field, card).await?
+        };
         // Masked from here on, whatever fails later.
         {
             let mut filled = self.filled.lock().unwrap();
@@ -1416,6 +1415,77 @@ impl State {
             "Typed the {field} of '{entry}' into {element} on {host}{}. The value is not shown; take a browser_snapshot to see the page.",
             if submit { " and pressed Enter" } else { "" }
         ))
+    }
+
+    /// Resolve a vault field through the node's controller without local RBW credentials.
+    async fn controller_lookup(
+        &self,
+        base: &str,
+        page_id: &str,
+        entry: &str,
+        user: Option<&str>,
+        field: &str,
+        card: bool,
+    ) -> Result<crate::secrets::Secret, String> {
+        let session = self
+            .page_session(base, page_id)
+            .await
+            .ok_or("Could not identify the page session")?;
+        let base = base.trim_end_matches('/');
+        let mut request = self
+            .http
+            .post(format!("{base}/api/sessions/{session}/autofill"))
+            .json(&json!({"page_id":page_id, "fields":["__agent_lookup__"],
+                "query":json!({"entry":entry,"user":user,"field":field,"card":card}).to_string()}));
+        if let Some(secret) = self.secret_for(base) {
+            request = request.header("X-Browser-Cluster-Secret", secret);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "Could not reach browser node")?;
+        if !response.status().is_success() {
+            return Err(format!("Vault lookup refused: HTTP {}", response.status()));
+        }
+        let result: Value = response
+            .json()
+            .await
+            .map_err(|_| "Invalid vault response")?;
+        let id = result["request"]
+            .as_str()
+            .ok_or("Missing vault request ID")?;
+        for _ in 0..420 {
+            let mut request = self.http.get(format!("{base}/api/passkey/{id}"));
+            if let Some(secret) = self.secret_for(base) {
+                request = request.header("X-Browser-Cluster-Secret", secret);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|_| "Could not reach browser node")?;
+            if !response.status().is_success() {
+                return Err("Vault lookup status unavailable".into());
+            }
+            let result: Value = response
+                .json()
+                .await
+                .map_err(|_| "Invalid vault response")?;
+            match result["state"].as_str() {
+                Some("ready") => {
+                    return serde_json::from_value(result["info"].clone())
+                        .map_err(|_| "Invalid vault lookup response".into())
+                }
+                Some("failed") => {
+                    return Err(result["error"]
+                        .as_str()
+                        .unwrap_or("Vault lookup failed")
+                        .to_string())
+                }
+                Some("pending") => tokio::time::sleep(Duration::from_secs(1)).await,
+                _ => return Err("Invalid vault lookup status".into()),
+            }
+        }
+        Err("Vault lookup timed out".into())
     }
 
     /// The page the agent is on: (child, target id, address, host).

@@ -195,6 +195,9 @@ impl Broker {
         a: Autofill,
     ) -> Result<Uuid, String> {
         let kind = match (&a.entry, a.copy) {
+            (None, _) if a.fields.first().is_some_and(|f| f == "__agent_lookup__") => {
+                "agent_lookup"
+            }
             (Some(_), true) => "copy",
             (Some(_), false) => "fill",
             (None, _) => "logins",
@@ -281,7 +284,9 @@ impl Broker {
         let status = t.status.clone();
         // A copied value is handed out once: it does not stay here until the
         // request is forgotten.
-        if t.kind == "copy" && matches!(status, Status::Ready { .. }) {
+        if matches!(t.kind.as_str(), "copy" | "agent_lookup")
+            && matches!(status, Status::Ready { .. })
+        {
             t.status = Status::Ready { info: None };
         }
         Some(status)
@@ -499,5 +504,38 @@ mod tests {
         assert!(!b.authorize_fill(id, "page", "x.test", Some(other)));
         assert!(!b.authorize_fill(id, "page", "x.test", None));
         assert!(b.authorize_fill(id, "page", "x.test", Some(mine)));
+    }
+    #[tokio::test]
+    async fn agent_lookup_result_is_delivered_only_once() {
+        let broker = Broker::default();
+        assert!(broker.next(Duration::from_millis(1), None).await.is_none());
+        let id = broker
+            .start_autofill(
+                "page".into(),
+                "example.test".into(),
+                Autofill {
+                    fields: vec!["__agent_lookup__".into()],
+                    query: Some("lookup".into()),
+                    ..Autofill::default()
+                },
+            )
+            .unwrap();
+        let request = broker.next(Duration::from_secs(1), None).await.unwrap();
+        assert_eq!(request.kind, "agent_lookup");
+        assert!(broker.complete(
+            id,
+            Outcome {
+                ok: true,
+                error: None,
+                info: Some(serde_json::json!({"value":"test-value"}))
+            }
+        ));
+        assert_eq!(
+            broker.status(id),
+            Some(Status::Ready {
+                info: Some(serde_json::json!({"value":"test-value"}))
+            })
+        );
+        assert_eq!(broker.status(id), Some(Status::Ready { info: None }));
     }
 }
