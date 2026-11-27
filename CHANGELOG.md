@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+* Updated rbw to 2.48.4 and refreshed Rust dependencies.
+
 ### Fixed
 
 * MCP secret fills use the vault controller when no local RBW API credentials
