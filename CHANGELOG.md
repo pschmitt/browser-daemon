@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.9] - 2026-11-27
+
 ### Changed
 
 * Updated rbw to 2.48.4 and refreshed Rust dependencies.
