@@ -1,7 +1,7 @@
 {
   "chromiumId": "cjbnnociajogjgnpihfkhnbehmkdpijf",
-  "version": "0.23.8",
-  "tag": "v0.23.8",
-  "firefoxSha256": "21e56142f3eb7d654caf73a862fa165ca6badaebf1ac9be3a0a7ede0796add1a",
-  "chromiumSha256": "e064679a10c48bb6adb745e8a1f71ea9dcabf3d47f1acdd2fc8305e2be34285d"
+  "version": "0.23.9",
+  "tag": "v0.23.9",
+  "firefoxSha256": "af3f132934fa28191c4647e8df8449c716469ad98a7073599cadbcb5c24d8be4",
+  "chromiumSha256": "064f4f5a450bd616cab05e8c53527943d5eb1dabd17c74cfcc531e78521493d8"
 }
