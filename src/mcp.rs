@@ -86,6 +86,10 @@ pub struct McpArgs {
     #[arg(long, requires = "rbw_api_url")]
     pub rbw_api_key: Vec<PathBuf>,
 
+    /// Use this rbw executable's read-only MCP server for local vault fills.
+    #[arg(long)]
+    pub rbw_mcp: Option<PathBuf>,
+
     /// Program that runs Playwright MCP on a CDP endpoint, called as `PROGRAM ENDPOINT OUTPUT_DIR`.
     #[arg(long, default_value = "browser-mcp")]
     pub playwright_cmd: PathBuf,
@@ -267,6 +271,7 @@ struct State {
     /// Files browser_export_auth wrote, removed when they expire or on exit.
     exports: std::sync::Mutex<Vec<PathBuf>>,
     rbw_api: Vec<crate::rbw_api::Client>,
+    rbw_mcp: Option<PathBuf>,
     /// Secrets filled in this session, masked in every tool result.
     filled: std::sync::Mutex<Vec<String>>,
     /// The credential of each ephemeral node (its base address, its secret or
@@ -348,6 +353,7 @@ pub async fn run(args: McpArgs) -> R<()> {
         allow_exports: args.allow_exports,
         exports: std::sync::Mutex::new(Vec::new()),
         rbw_api,
+        rbw_mcp: args.rbw_mcp,
         filled: std::sync::Mutex::new(Vec::new()),
         node_secrets: std::sync::Mutex::new(Vec::new()),
         cmd: args.playwright_cmd,
@@ -1335,7 +1341,9 @@ impl State {
         } else {
             None
         };
-        let secret = if self.rbw_api.is_empty() {
+        let secret = if let Some(rbw) = &self.rbw_mcp {
+            crate::rbw_mcp::lookup(rbw, entry, arg("user"), field, card).await?
+        } else if self.rbw_api.is_empty() {
             self.controller_lookup(&child.target.url, &page_id, entry, arg("user"), field, card)
                 .await?
         } else {

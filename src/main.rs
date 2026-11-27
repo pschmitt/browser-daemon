@@ -48,6 +48,7 @@ mod profiles_api;
 mod proxies;
 mod proxy;
 mod rbw_api;
+mod rbw_mcp;
 mod rec_audio;
 mod rec_export;
 mod recorder;

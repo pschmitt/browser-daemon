@@ -40,6 +40,15 @@ Typing a password with Playwright MCP's own tools puts it in the tool call, and 
 
 By default the MCP server asks the node’s [secret agent](rbw.md) to read the field through its RBW API connection. The node hands the result to the MCP server once and then discards it. The node, secret agent and MCP server must all be trusted with the value. An MCP server with its own RBW API configuration connects directly instead. This guards against accidents, not against an agent bent on reading the value back in another form (e.g. encoded by a script): only allow entries for agents you trust with them.
 
+### Local RBW MCP
+
+Set `--rbw-mcp /path/to/rbw` to start a read-only RBW MCP client for each
+fill. It uses the same local RBW agent as the user's RBW MCP server, reads
+redacted entry metadata, and transfers the requested field through a private
+temporary file. The browser MCP removes the file immediately after reading.
+The saved URI policy and card-origin rules remain in force. The local vault
+must be unlocked; no RBW API client certificate is needed.
+
 ### RBW agent API
 
 For a direct connection instead of the controller, configure all four options: `--rbw-api-url https://vault.example:PORT`, `--rbw-api-ca /path/ca.pem`, `--rbw-api-cert /path/client.pem`, and `--rbw-api-key /path/client-key.pem`. The key must be private to its owner. Provision a separate client certificate and grant it only the item IDs and fields needed using RBW's remote API policy. A named RBW policy can grant one certificate access to several accounts with independent rules for each. With older single-account clients, repeat `--rbw-api-cert` and `--rbw-api-key` in matching order. The client verifies the server against the supplied CA, presents its certificate and disables redirects. Without these options, secret fills use the controller; they fail if no compatible secret agent is available. Card fills require the direct connection. Login fills require an RBW agent with `uri_match/N` and `uri_all` API support.

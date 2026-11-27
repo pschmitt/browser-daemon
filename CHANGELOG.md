@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+* MCP secret and card fills can use the local read-only RBW MCP server,
+  sharing the local vault agent without RBW API client credentials.
+
 ## [0.23.9] - 2026-11-27
 
 ### Changed
