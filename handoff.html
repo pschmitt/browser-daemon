@@ -1507,8 +1507,8 @@ class CdpDriver {
   }
   isOpen() { return this.cdp.ws.readyState === WebSocket.OPEN || this.cdp.ws.readyState === WebSocket.CONNECTING; }
   close() { clearInterval(this.passkeyBeat); clearInterval(this.frameWatch); fileAsk?.finish(null); if (this === drv) { document.getElementById("captureFailure").hidden = true; document.getElementById("sharedInputMode").hidden = true; } this.cdp.close(); }
-  // A shared tab behind another tab of its window gets no screencast frames:
-  // show screenshots instead until it is painted again.
+  // An inactive tab or a newly opened window can stall its screencast.
+  // Use target screenshots until it starts painting again.
   watchFrames() {
     this.frameWatch = setInterval(async () => {
       if (!this.isOpen()) { clearInterval(this.frameWatch); return; }
@@ -1519,7 +1519,7 @@ class CdpDriver {
       this.polling = false;
       const v = m?.cssVisualViewport;
       const meta = v ? { deviceWidth: v.clientWidth, deviceHeight: v.clientHeight, pageScaleFactor: 1, offsetTop: 0 } : this.lastMeta;
-      if (r?.data && meta && performance.now() - (this.lastFrameAt || 0) >= 1500) await this.h.frame(r.data, meta, "image/jpeg");
+      if (r?.data && meta && performance.now() - (this.lastFrameAt || 0) >= 1500) await this.h.frame(this, r.data, meta, "image/jpeg");
     }, 1000);
   }
   async start() {
@@ -1528,8 +1528,9 @@ class CdpDriver {
     // Chromium only paints (and screencasts) the tab in front of its window.
     // A shared browser brings it forward only if its user lets views follow (and this view does).
     if (!this.shared || followFocus()) await this.cdp.call("Page.bringToFront").catch(() => {});
+    this.lastFrameAt = performance.now();
+    this.watchFrames();
     if (this.shared) {
-      this.watchFrames();
       // The owner's extension hooks passkeys in the tab; this view only says it is watching
       // (refused without control, and the page then uses its own passkey dialog).
       // It also offers conditional passkeys itself (see PASSKEY_HOOK).
@@ -1596,7 +1597,7 @@ class CdpDriver {
       const r = await this.cdp.call("Page.captureScreenshot", this.sharpFormat).catch(() => null);
       this.echoUntil = performance.now() + 400;
       // A real change arrived before the capture started: this picture is stale.
-      if (r?.data && seq === this.sharpSeq) await this.h.frame(r.data, meta, this.sharpFormat.format === "png" ? "image/png" : "image/jpeg");
+      if (r?.data && seq === this.sharpSeq) await this.h.frame(this, r.data, meta, this.sharpFormat.format === "png" ? "image/png" : "image/jpeg");
     }, 300);
   }
 
@@ -1697,6 +1698,7 @@ class CdpDriver {
     await this.cdp.call("Page.startScreencast", this.castParams);
   }
   onEvent(method, p) {
+    if (this !== drv || target?.id !== pageId) return;
     const h = this.h;
     if (method === "Page.captureStatus" && this.shared && this === drv) {
       document.getElementById("captureFailure").hidden = p.ok;
@@ -1716,7 +1718,7 @@ class CdpDriver {
     if (method === "Page.filesStopped") { this.filesActive = false; if (downloads.owner === this) clearSharedDownloads(); fileAsk?.finish(null); return; }
     if (method === "Page.audioChunk") { playSharedAudio(this, p); return; }
     if (method === "Page.audioStopped") { if (audio.sharedDriver === this) stopAudio(); return; }
-    if (method === "Page.windowOpen") { h.popup(p.url); return; }
+    if (method === "Page.windowOpen") { h.popup(this, p.url); return; }
     if (method === "Page.fileChooserOpened") { this.fileChooser(p); return; }
     if (method === "Page.screencastFrame") {
       const ack = () => this.cdp.send("Page.screencastFrameAck", { sessionId: p.sessionId });
@@ -1731,7 +1733,8 @@ class CdpDriver {
       else ack();
       this.drawing = (this.drawing || 0) + 1;
       this.lastFrameAt = performance.now(); this.lastMeta = p.metadata;
-      h.frame(p.data, p.metadata, p.format === "png" ? "image/png" : undefined).finally(() => {
+      if (!this.shared) clearInterval(this.frameWatch);
+      h.frame(this, p.data, p.metadata, p.format === "png" ? "image/png" : undefined).finally(() => {
         if (--this.drawing === 0 && this.deferredAcks?.length) this.deferredAcks.splice(0).forEach((a) => a());
       });
       this.scheduleSharp(p.metadata);
@@ -1932,8 +1935,9 @@ class BidiDriver {
     m.type === "success" ? p.res(m.result) : p.rej(new Error(m.message || m.error || "error"));
   }
   onEvent(method, p) {
+    if (this !== drv || this.ctx !== pageId) return;
     if (method === "browsingContext.contextCreated") {
-      if (!p.parent && p.originalOpener === this.ctx) this.h.popup(p.url, p.context);
+      if (!p.parent && p.originalOpener === this.ctx) this.h.popup(this, p.url, p.context);
       return;
     }
     if (method === "script.message") {
@@ -2004,13 +2008,14 @@ class BidiDriver {
       const t0 = performance.now();
       try {
         if (t0 - this.lastMeasure > 2000) await this.measure();
+        const context = this.ctx;
         const r = await this.rpc("browsingContext.captureScreenshot", {
-          context: this.ctx, origin: "viewport", format: { type: "image/jpeg", quality: this.quality || 0.65 },
+          context, origin: "viewport", format: { type: "image/jpeg", quality: this.quality || 0.65 },
         });
-        if (r.data !== this.lastFrame) {
+        if (context === this.ctx && r.data !== this.lastFrame) {
           this.lastFrame = r.data;
           this.interval = 60;
-          await this.h.frame(r.data, { deviceWidth: this.vp.w, deviceHeight: this.vp.h, pageScaleFactor: 1, offsetTop: 0 });
+          await this.h.frame(this, r.data, { deviceWidth: this.vp.w, deviceHeight: this.vp.h, pageScaleFactor: 1, offsetTop: 0 });
         } else {
           this.interval = Math.min(this.interval * 1.5, 400);   // idle page: back off
         }
@@ -2400,14 +2405,13 @@ async function recoverClosedTab(owner) {
 }
 
 const handlers = {
-  frame: (data, m, mime) => {
-    hadFrame = true;
-    const seq = ++frameSeq;
-    // Only frames of the settled tab are remembered: a late frame of the old tab must
-    // not end up as the new tab's picture.
-    if ($("switching").hidden) rememberFrame(pageId, data, m, mime);
-    endSwitching();
-    return drawFrame(data, m, mime, seq);
+  frame: (owner, data, m, mime) => {
+    if (owner !== drv || target?.id !== pageId || (owner instanceof BidiDriver && owner.ctx !== pageId)) return Promise.resolve();
+    return drawFrame(data, m, mime, undefined, () => {
+      hadFrame = true;
+      rememberFrame(pageId, data, m, mime);
+      endSwitching();
+    });
   },
   loading: () => { E.dot.className = "wait"; },
   navigated: (url) => {
@@ -2443,23 +2447,23 @@ const handlers = {
     if (owner) { if (owner === drv) recoverClosedTab(owner); return; }
     setState("bad", stopping ? "Session stopped" : why);
   },
-  // The page opened a popup or a new tab: the browser shows that one now, so the view
-  // follows (its address, tab and input), instead of driving the tab behind it.
-  popup: async (url, id = null) => {
-    const opener = pageId;
-    for (let i = 0; !id && i < 20; i++) {
+  popup: async (owner, url, id = null) => {
+    const opener = pageId, sid = target?.sessionId, request = tabRequest;
+    const before = new Set(tabsAll.map(t => t.id));
+    const stillHere = () => owner === drv && pageId === opener && tabRequest === request && activeTabRequest === request;
+    // Page.windowOpen reports an intention, even if the browser blocks it. Wait
+    // for an actual target. Prefer Chromium's opener ID, which survives redirects.
+    for (let i = 0; !id && i < 20 && stillHere(); i++) {
       await sleep(150);
       const tabs = await fetchTargets().catch(() => []);
-      const others = tabs.filter((t) => t.sessionId === target?.sessionId && t.id !== opener);
-      const fresh = others.filter((t) => !knownTabs.has(t.id));
-      const real = url && url !== "about:blank";
-      // The new tab: by its address, else the one not seen before (the tab list
-      // refreshes on a timer, so it may already count as seen).
-      id = (real && fresh.find((t) => t.url === url))?.id || fresh[0]?.id || (real && others.find((t) => t.url === url))?.id || null;
+      const fresh = tabs.filter(t => t.sessionId === sid && t.id !== opener && !before.has(t.id));
+      if (!fresh.length || !stillHere()) continue;
+      const info = !owner.shared && await owner.cdp.call("Target.getTargets").catch(() => null);
+      id = fresh.find(t => info?.targetInfos?.some(p => p.targetId === t.id && p.openerId === opener))?.id
+        || fresh.find(t => (t.url || "about:blank") === (url || "about:blank"))?.id;
     }
-    if (!id || pageId !== opener) return;
+    if (!id || !stillHere()) return;
     popupOpeners.set(id, opener);
-    toast("Switched to the new tab");
     switchTab(id);
   },
   // The page asks for a passkey (started from this view): from the vault, or the browser's own way.
@@ -2482,7 +2486,7 @@ let connecting = false;
 let hadFrame = false;
 // quiet: switching tabs keeps the last picture up instead of the "Connecting" overlay.
 function connect(opts) {
-  return connecting ? busy : track(doConnect(opts));
+  return connecting ? busy : enqueue(() => doConnect(opts));
 }
 async function doConnect({ quiet = false } = {}) {
   if (connecting) return;
@@ -2502,6 +2506,8 @@ async function doConnect({ quiet = false } = {}) {
   // Detach the old driver first: its close event must not look like the session ending.
   const previousSession = target?.sessionId;
   const old = drv;
+  stopVideo();
+  if (target?.id === pageId) drawnSeq = ++frameSeq;
   drv = null;
   if (old) old.close();
   // Retrying after an error keeps the error shown (no flicker); its line says it tries.
@@ -2547,6 +2553,10 @@ async function doConnect({ quiet = false } = {}) {
       setTimeout(() => location.replace("/"), 1200);
       return;
     }
+    // The popup may have appeared after the last strip refresh.
+    loadTabs();
+    currentUrl = target.url === "about:blank" ? "" : target.url || "";
+    if (document.activeElement !== E.urlInput) E.urlInput.value = currentUrl;
     // Remembered with this history entry: Back to it finds the session again.
     if (history.state?.session !== target.sessionId) history.replaceState({ ...history.state, session: target.sessionId }, "");
     const scheme = testHost || location.protocol === "https:" ? "wss://" : "ws://";
@@ -2689,7 +2699,7 @@ let lastBitmap = null;
 
 // Frames decode concurrently (two in flight): a slow one must not overwrite a newer one.
 let frameSeq = 0, drawnSeq = 0;
-async function drawFrame(data, frameMeta, mime = "image/jpeg", seq = ++frameSeq) {
+async function drawFrame(data, frameMeta, mime = "image/jpeg", seq = ++frameSeq, onDraw) {
   try {
     let img;
     if (typeof createImageBitmap === "function") {
@@ -2708,6 +2718,7 @@ async function drawFrame(data, frameMeta, mime = "image/jpeg", seq = ++frameSeq)
     ctx.drawImage(img, 0, 0);
     if (lastBitmap) lastBitmap.close();
     lastBitmap = img.close ? img : null;
+    onDraw?.();
   } catch { /* ignore frame decode errors */ }
 }
 
@@ -2784,12 +2795,12 @@ function checkPopups(delay = 200) {
 // window, ...): the page here went hidden. Follow the tab that came up meanwhile, as for
 // a popup the page opened. Tabs opened in the background leave this one visible.
 async function followFrontTab(before = xPop.tabsBefore) {
-  const opener = pageId;
-  if (!drv || !before) return;
-  if ((await drv.evaluate("document.visibilityState").catch(() => null)) !== "hidden") return;
+  const opener = pageId, owner = drv, request = tabRequest;
+  if (!owner || !before) return;
+  if ((await owner.evaluate("document.visibilityState").catch(() => null)) !== "hidden") return;
   const tabs = await fetchTargets().catch(() => []);
   const fresh = tabs.filter((t) => t.sessionId === target?.sessionId && !before.has(t.id));
-  if (!fresh.length || pageId !== opener) return;
+  if (!fresh.length || pageId !== opener || drv !== owner || tabRequest !== request) return;
   toast("Switched to the new tab");
   switchTab(fresh[fresh.length - 1].id);
 }
@@ -3625,9 +3636,9 @@ E.urlBar.onsubmit = async (e) => {
 };
 
 /* ---------------------------------------------------------------- tabs & sessions */
-// Opens a blank tab and focuses its URL bar, like a browser's new-tab button.
-// Settles once a tab switch or (re)connect in progress is done.
+// Settles once all queued tab switches and reconnects are done.
 let busy = Promise.resolve();
+let tabRequest = 0, activeTabRequest = 0;
 // The last picture of each tab seen, shown at once when switching back to it.
 const frameCache = new Map();
 function rememberFrame(id, data, m, mime) {
@@ -3637,7 +3648,7 @@ function rememberFrame(id, data, m, mime) {
   if (frameCache.size > 12) frameCache.delete(frameCache.keys().next().value);
 }
 // Shown from a tab switch until the new tab's first frame (slow on remote nodes):
-// over its last picture when there is one, else over the old tab's, dimmed.
+// over its last picture when there is one.
 let switchingTimer = 0;
 function startSwitching(title, cached) {
   $("switchingText").textContent = cached ? "Updating…" : title ? `Loading ${title}…` : "Loading tab…";
@@ -3651,11 +3662,20 @@ function endSwitching() {
   clearTimeout(switchingTimer);
   $("switching").hidden = true;
 }
-const track = (p) => { busy = p.catch(() => {}); return p; };
+function enqueue(work) {
+  const result = busy.then(work);
+  busy = result.catch(() => {});
+  return result;
+}
 
 // Switch to another tab without reloading this page.
 function switchTab(id, opts) {
-  return track(doSwitchTab(id, opts));
+  const request = ++tabRequest;
+  return enqueue(() => {
+    if (request !== tabRequest) return;
+    activeTabRequest = request;
+    return doSwitchTab(id, opts);
+  });
 }
 async function doSwitchTab(id, { push = true } = {}) {
   if (!id || id === pageId) return;
@@ -3665,35 +3685,35 @@ async function doSwitchTab(id, { push = true } = {}) {
     u.searchParams.delete("newtab");
     history.pushState(null, "", u.toString());
   }
+  stopVideo(true);
+  drawnSeq = ++frameSeq;
   pageId = id;
+  const known = tabsAll.find(t => t.id === id);
+  currentUrl = known?.url === "about:blank" ? "" : known?.url || "";
+  if (document.activeElement !== E.urlInput) E.urlInput.value = currentUrl;
   renderTabOwner();
-  currentUrl = "";
-  const label = document.querySelector(`.tab-strip-item[href*="page=${CSS.escape(id)}"]`)?.textContent.replace(/[✕×]/g, "").trim();
+  renderTabStrip(lastStripPages);
   const cached = frameCache.get(id);
-  startSwitching(label, !!cached);
+  startSwitching(known?.title, !!cached);
   if (cached) drawFrame(cached.data, cached.m, cached.mime);
-  loadTabs();
-  const next = (await fetchTargets().catch(() => [])).find((t) => t.id === id);
-  if (next?.url === "about:blank") {
-    ctx.fillStyle = getComputedStyle(E.stage).backgroundColor;
-    ctx.fillRect(0, 0, E.view.width, E.view.height);
-    endSwitching();
-  }
-  if (drv instanceof BidiDriver && drv.isOpen() && next && target && next.sessionId === target.sessionId) {
+  else ctx.clearRect(0, 0, E.view.width, E.view.height);
+  if (drv instanceof BidiDriver && drv.isOpen() && known && known.sessionId === target?.sessionId) {
     try {
-      target = next;
+      target = known;
       await drv.switchTo(id);
       if (fitLayout) await applyMetrics();
+      else if (canVideo()) startVideo();
       E.dot.className = "live";
       refreshInfo();
+      loadTabs();
       return;
     } catch { /* fall back to a fresh connection */ }
   }
-  await connect({ quiet: true });
+  await doConnect({ quiet: true });
 }
 addEventListener("popstate", () => {
   const id = new URLSearchParams(location.search).get("page");
-  if (id && id !== pageId) switchTab(id, { push: false });
+  if (id) switchTab(id, { push: false });
 });
 
 async function openNewTab() {
@@ -3871,8 +3891,6 @@ async function closeTab(id) {
 
 let tabsSig = "";
 let nativeControlSig = null;
-// Tabs seen so far: a popup is the one that wasn't there before.
-const knownTabs = new Set();
 // The last list of tabs: the dialog is drawn from it when it opens (it is not drawn
 // while closed, and a redraw is skipped when nothing changed).
 let tabsAll = [];
@@ -3900,11 +3918,10 @@ async function loadTabs() {
       all.sort((a, b) => Number(b.pinned) - Number(a.pinned));
     }
     const pages = all.filter((x) => !target?.sessionId || x.sessionId === target.sessionId);
-    for (const x of all) knownTabs.add(x.id);
     tabsAll = all;
     renderTabOwner();
     // Redrawn only when something shown changed: this also runs on a timer.
-    const sig = JSON.stringify([target?.id, sharedBrowser?.follow, all.map((x) => [x.id, x.title, x.url, x.favicon, x.audible, x.index, x.pinned, x.owner])]);
+    const sig = JSON.stringify([pageId, target?.sessionId, sharedBrowser?.follow, all.map((x) => [x.id, x.title, x.url, x.favicon, x.audible, x.index, x.pinned, x.owner])]);
     if (sig === tabsSig) return;
     tabsSig = sig;
     if (E.tabCountBadge) E.tabCountBadge.textContent = pages.length || 1;
@@ -4141,7 +4158,7 @@ function renderTabStrip(pages) {
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
       if (tabDragJustEnded) { e.preventDefault(); tabDragJustEnded = false; return; }
       e.preventDefault();
-      if (!isCurrent) switchTab(p.id);
+      switchTab(p.id);
     };
     if (item.draggable) {
       item.addEventListener("dragstart", (e) => {
@@ -5672,10 +5689,24 @@ function stopVideo(fallback = false) {
   if (fallback && drv) drv.setVideo(false);
 }
 async function startVideo() {
-  const d = drv;
-  if (!d || !target?.sessionId) return;
-  const m = await d.evaluate(`[...${VIEW_SIZE}, outerWidth === innerWidth ? outerHeight - innerHeight : null]`).catch(() => null);
-  if (!m || d !== drv) return;
+  const d = drv, id = pageId;
+  if (!d || !target?.sessionId || target.id !== id) return;
+  // Display capture starts at the screen origin. A separate popup window can
+  // sit elsewhere or fail to take OS focus, so use its target capture in that case.
+  if (d instanceof CdpDriver) {
+    const { bounds } = await d.cdp.call("Browser.getWindowForTarget").catch(() => ({}));
+    if (d !== drv || id !== pageId) return;
+    if (!bounds || bounds.left !== 0 || bounds.top !== 0) {
+      if (video.ws) stopVideo(true);
+      return;
+    }
+  }
+  const m = await d.evaluate(`[...${VIEW_SIZE}, outerWidth === innerWidth ? outerHeight - innerHeight : null, document.hasFocus()]`).catch(() => null);
+  if (d !== drv || id !== pageId) return;
+  if (!m || (d instanceof CdpDriver && !m[3])) {
+    if (video.ws) stopVideo(true);
+    return;
+  }
   // Window layout: no emulation, so the live value (follows bars that come and go).
   // The browser window was sized to exactly the fitted page (Native/Phone): capture that
   // area. What the emulated page reports (innerWidth, a mobile layout viewport wider than
@@ -5685,11 +5716,14 @@ async function startVideo() {
   const region = { x: 0, y: chromeHeight(target.sessionId, fitLayout ? d.chromeH : m[2]), w: fitted ? applied.w : m[0], h: fitted ? applied.h : m[1] };
   const same = video.ws && video.session === target.sessionId && video.region
     && ["x", "y", "w", "h"].every((k) => video.region[k] === region[k]);
-  // Same display and area (e.g. another tab): keep the stream, pause this driver's screencast.
+  // Same display and area: keep the stream, pause this driver's screencast.
   if (same) { await d.setVideo(true); return; }
   stopVideo();
   const decoder = new VideoDecoder({
-    output: (frame) => drawVideoFrame(frame),
+    output: (frame) => {
+      if (video.decoder === decoder && d === drv && pageId === id) drawVideoFrame(frame);
+      else frame.close();
+    },
     error: (e) => { console.warn("video decoder:", e); if (video.decoder === decoder) stopVideo(true); },
   });
   decoder.configure({ codec: "avc1.640033", optimizeForLatency: true });

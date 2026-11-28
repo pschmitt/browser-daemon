@@ -1260,3 +1260,91 @@ for (const firefox of [false, true]) {
     assert.ok(!JSON.stringify(s.sent).includes('hunter2'));
   });
 }
+
+test('switching back while a popup connects eventually connects the opener', async () => {
+  const html = readFileSync(new URL('../handoff.html', import.meta.url), 'utf8');
+  const start = html.indexOf('function enqueue(work)');
+  const end = html.indexOf('addEventListener("popstate"', start);
+  assert.ok(start >= 0 && end > start);
+
+  let finishPopup, popupStarted;
+  const popupConnecting = new Promise(resolve => { popupStarted = resolve; });
+  const popupReady = new Promise(resolve => { finishPopup = resolve; });
+  const attached = [];
+  const noop = () => {};
+  const context = vm.createContext({
+    busy: Promise.resolve(), tabRequest: 0, activeTabRequest: 0, pageId: 'opener', frameSeq: 0, drawnSeq: 0,
+    URL, location: {href: 'https://test.invalid/handoff?page=opener'}, history: {pushState: noop},
+    document: {}, E: {urlInput: {}, view: {}}, ctx: {clearRect: noop},
+    tabsAll: [{id: 'opener', url: 'https://test.invalid/'}, {id: 'popup', url: 'about:blank'}],
+    lastStripPages: [], frameCache: new Map(), BidiDriver: class {}, drv: null,
+    stopVideo: noop, renderTabOwner: noop, renderTabStrip: noop, startSwitching: noop,
+    doConnect: async () => {
+      const id = context.pageId;
+      if (id === 'popup') { popupStarted(); await popupReady; }
+      attached.push(id);
+    },
+  });
+  vm.runInContext(html.slice(start, end), context);
+  const opening = context.switchTab('popup');
+  await popupConnecting;
+  const back = context.switchTab('opener');
+  finishPopup();
+  await Promise.all([opening, back]);
+  assert.deepEqual(attached, ['popup', 'opener']);
+  assert.equal(context.pageId, 'opener');
+  assert.equal(context.E.urlInput.value, 'https://test.invalid/');
+});
+
+test('popup lookup prefers its opener ID and yields to manual tab switches', async () => {
+  const html = readFileSync(new URL('../handoff.html', import.meta.url), 'utf8');
+  const start = html.indexOf('  popup: async (owner');
+  const end = html.indexOf('  // The page asks', start);
+  assert.ok(start >= 0 && end > start);
+  const switched = [];
+  const options = {
+    pageId: 'opener', target: {sessionId: 'browser'}, tabRequest: 0, activeTabRequest: 0, tabsAll: [],
+    popupOpeners: new Map(), sleep: async () => {},
+    fetchTargets: async () => [
+      {id: 'unrelated', url: 'https://test.invalid/requested', sessionId: 'browser'},
+      {id: 'popup', url: 'https://test.invalid/redirected', sessionId: 'browser'},
+    ],
+    switchTab: id => switched.push(id),
+    drv: {cdp: {call: async () => ({targetInfos: [{targetId: 'popup', openerId: 'opener'}]})}},
+  };
+  const context = vm.createContext(options);
+  const {popup} = vm.runInContext(`({${html.slice(start, end)}})`, context);
+  await popup(context.drv, 'https://test.invalid/requested');
+  assert.deepEqual(switched, ['popup']);
+  assert.equal(context.popupOpeners.get('popup'), 'opener');
+
+  const late = popup(context.drv, 'https://test.invalid/requested');
+  context.tabRequest++;
+  await late;
+  assert.deepEqual(switched, ['popup']);
+});
+
+test('a frame decoded after a tab switch cannot replace the selected picture', async () => {
+  const html = readFileSync(new URL('../handoff.html', import.meta.url), 'utf8');
+  const start = html.indexOf('let frameSeq =');
+  const end = html.indexOf('async function refreshInfo()', start);
+  assert.ok(start >= 0 && end > start);
+  let finishOld, discarded = false;
+  const oldImage = new Promise(resolve => { finishOld = resolve; });
+  const rendered = [];
+  const context = vm.createContext({
+    createImageBitmap: data => data === 'old' ? oldImage : Promise.resolve({id: data}),
+    base64ToBlob: data => data,
+    refitting: false, sizeCanvas: () => {}, lastBitmap: null,
+    E: {view: {}}, ctx: {drawImage: img => rendered.push(img.id)},
+  });
+  vm.runInContext(html.slice(start, end), context);
+  const oldFrame = context.drawFrame('old', {});
+  vm.runInContext('drawnSeq = ++frameSeq', context);
+  finishOld({id: 'old', close: () => { discarded = true; }});
+  await oldFrame;
+  assert.equal(discarded, true);
+  assert.deepEqual(rendered, []);
+  await context.drawFrame('selected', {});
+  assert.deepEqual(rendered, ['selected']);
+});
