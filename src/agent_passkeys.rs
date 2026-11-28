@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -208,7 +208,6 @@ impl Watchers {
         let cdp = Arc::new(Conn {
             out,
             next: AtomicU64::new(1),
-            pending: Mutex::new(HashMap::new()),
         });
         // CDP session id -> target id, target id -> address (from the browser).
         let mut sessions: HashMap<String, String> = HashMap::new();
@@ -238,8 +237,10 @@ impl Watchers {
             let Ok(v) = serde_json::from_str::<Value>(&msg) else {
                 continue;
             };
-            if let Some(id) = v["id"].as_u64() {
-                cdp.answered(id, v);
+            if v["id"].is_u64() {
+                if let Some(message) = v["error"]["message"].as_str() {
+                    debug!("Agent passkey hook CDP error: {message}");
+                }
                 continue;
             }
             let cdp_session = v["sessionId"].as_str().map(str::to_string);
@@ -255,8 +256,7 @@ impl Watchers {
                             info["url"].as_str().unwrap_or_default().into(),
                         );
                         sessions.insert(child.clone(), target);
-                        let cdp = cdp.clone();
-                        tokio::spawn(async move { cdp.setup(&child).await });
+                        cdp.setup(&child);
                     } else {
                         cdp.send("Runtime.runIfWaitingForDebugger", json!({}), Some(&child));
                     }
@@ -415,47 +415,21 @@ async fn sign(
 struct Conn {
     out: mpsc::UnboundedSender<Value>,
     next: AtomicU64,
-    pending: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
 }
 
 impl Conn {
-    fn send(&self, method: &str, params: Value, session: Option<&str>) -> oneshot::Receiver<Value> {
+    fn send(&self, method: &str, params: Value, session: Option<&str>) {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id, tx);
         let mut msg = json!({ "id": id, "method": method, "params": params });
         if let Some(s) = session {
             msg["sessionId"] = json!(s);
         }
         let _ = self.out.send(msg);
-        rx
     }
 
-    async fn call(&self, method: &str, params: Value, session: &str) -> Result<Value, String> {
-        let answer = tokio::time::timeout(
-            Duration::from_secs(10),
-            self.send(method, params, Some(session)),
-        )
-        .await
-        .map_err(|_| format!("{method}: no answer"))?
-        .map_err(|_| format!("{method}: connection closed"))?;
-        match answer.get("error") {
-            Some(e) => Err(format!(
-                "{method}: {}",
-                e["message"].as_str().unwrap_or("error")
-            )),
-            None => Ok(answer["result"].clone()),
-        }
-    }
-
-    fn answered(&self, id: u64, answer: Value) {
-        if let Some(tx) = self.pending.lock().unwrap().remove(&id) {
-            let _ = tx.send(answer);
-        }
-    }
-
-    /// Hooks a page or frame (and its child frames), then lets it run.
-    async fn setup(&self, session: &str) {
+    /// Queues the hook before resuming a new page or frame. Chromium can hold
+    /// replies to renderer commands until the paused target starts navigating.
+    fn setup(&self, session: &str) {
         let steps = [
             ("Runtime.enable", json!({})), // bindings only fire once Runtime is enabled
             ("Runtime.addBinding", json!({ "name": BINDING })),
@@ -470,19 +444,39 @@ impl Conn {
             ),
         ];
         for (method, params) in steps {
-            if let Err(e) = self.call(method, params, session).await {
-                tracing::debug!("Agent passkey hook: {e}");
-            }
+            self.send(method, params, Some(session));
         }
-        let _ = self
-            .call("Runtime.runIfWaitingForDebugger", json!({}), session)
-            .await;
+        self.send("Runtime.runIfWaitingForDebugger", json!({}), Some(session));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_paused_target_is_resumed_without_waiting_for_replies() {
+        let (out, mut messages) = mpsc::unbounded_channel();
+        let cdp = Conn {
+            out,
+            next: AtomicU64::new(1),
+        };
+
+        cdp.setup("popup");
+
+        for method in [
+            "Runtime.enable",
+            "Runtime.addBinding",
+            "Page.enable",
+            "Page.addScriptToEvaluateOnNewDocument",
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            let message = messages.try_recv().unwrap();
+            assert_eq!(message["sessionId"], "popup");
+            assert_eq!(message["method"], method);
+        }
+    }
 
     #[test]
     fn a_hooked_session_signs_only_while_armed() {
