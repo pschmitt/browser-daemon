@@ -2,10 +2,23 @@
 
 ## [Unreleased]
 
+## [0.23.10] - 2026-11-28
+
 ### Added
 
 * MCP secret and card fills can use the local read-only RBW MCP server,
   sharing the local vault agent without RBW API client credentials.
+
+### Changed
+
+* Updated the Nixpkgs and RBW inputs and refreshed the public suffix list.
+
+### Fixed
+
+* The handover view keeps the selected tab, address and picture in sync when
+  a site opens a popup or you switch back while it loads.
+* Chromium popups can start navigating as soon as their passkey hook is queued,
+  avoiding a delay of about 40 seconds.
 
 ## [0.23.9] - 2026-11-27
 
